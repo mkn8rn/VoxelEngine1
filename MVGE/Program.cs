@@ -1,4 +1,5 @@
 ﻿using MVGE;
+using MVGE.Middleware;
 
 namespace GloriousTribesApp
 {
@@ -7,6 +8,7 @@ namespace GloriousTribesApp
     {
         static void Main(string[] args)
         {
+            ArgumentsMiddleware.Parse(args);
             using (GameManager game = new GameManager())
             {
                 game.Run();

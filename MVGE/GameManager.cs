@@ -3,6 +3,8 @@ using MVGE.Graphics;
 using MVGE.Graphics.Terrain;
 using MVGE.World;
 using MVGE.World.Terrain;
+using MVGE.Middleware;
+using MVGE.Models;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 using OpenTK.Windowing.Common;
@@ -56,25 +58,28 @@ namespace MVGE
         public string savesWorldDirectory;
         public string savesCharactersDirectory;
     }
+
     public class GameManager : GameWindow
     {
         // render pipeline
-        WorldManager world;
-        BlockTextureAtlas blockTextureAtlas;
-        ShaderProgram shaderProgram;
+        WorldManager world = null!;
+        BlockTextureAtlas blockTextureAtlas = null!;
+        ShaderProgram shaderProgram = null!;
 
         // data loaders
-        TerrainDataLoader blockDataLoader;
+        TerrainDataLoader blockDataLoader = null!;
 
         // Game state
         public static GameMode gameMode = GameMode.Menu;
         public static LaunchSettings settings = new LaunchSettings();
 
         // player
-        Player player;
+        Player player = null!;
+        private readonly CommandLineFlags flags;
 
         public GameManager() : base(GameWindowSettings.Default, NativeWindowSettings.Default)
         {
+            this.flags = ArgumentsMiddleware.Flags;
             // Load the settings
             SetDefaultSettings();
 
@@ -93,23 +98,22 @@ namespace MVGE
         protected override void OnLoad()
         {
             base.OnLoad();
-
             // Select game folder
-            string selectedGameFolder = SelectGameFolder();
+            string selectedGameFolder = SelectGameFolder(flags.game);
             LoadGameDefaultSettings(selectedGameFolder);
 
             // Initialize the Data Loaders
             Console.WriteLine("Data loaders initializing.");
-            this.blockDataLoader = new TerrainDataLoader();
+            this.blockDataLoader = new TerrainDataLoader() ?? throw new Exception("blockDataLoader is null");
 
             // Initialize the Texture Atlases
             Console.WriteLine("Texture atlases initializing.");
-            this.blockTextureAtlas = new BlockTextureAtlas();
-            MeshRender.terrainTextureAtlas = this.blockTextureAtlas;
+            this.blockTextureAtlas = new BlockTextureAtlas() ?? throw new Exception("blockTextureAtlas is null");
+            MeshRender.terrainTextureAtlas = this.blockTextureAtlas ?? throw new Exception("terrainTextureAtlas is null");
 
             // Initialize the Shaders
             Console.WriteLine("Shaders initializing.");
-            shaderProgram = new ShaderProgram("Default.vert", "Default.frag");
+            shaderProgram = new ShaderProgram("Default.vert", "Default.frag") ?? throw new Exception("shaderProgram is null");
 
             // Bind the texture atlas
             int textureLocation = GL.GetUniformLocation(shaderProgram.ID, "textureAtlas");
@@ -117,14 +121,14 @@ namespace MVGE
             this.blockTextureAtlas.Bind();
 
             // Initialize the World rendering
-            world = new WorldManager();
+            world = new WorldManager() ?? throw new Exception("world is null");
 
             // Enabling OpenGL options
             Console.WriteLine("Enabling OpenGL options.");
             GL.Enable(EnableCap.DepthTest);
             GL.FrontFace(FrontFaceDirection.Cw);
             GL.Enable(EnableCap.CullFace);
-            GL.CullFace(CullFaceMode.Back);
+            GL.CullFace(TriangleFace.Back);
 
             // Garbage collection
             System.Runtime.GCSettings.LargeObjectHeapCompactionMode = System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
@@ -134,7 +138,7 @@ namespace MVGE
 
             // Initialize the Player (and its Camera)
             Console.WriteLine("Initializing player.");
-            player = new Player();
+            player = new Player() ?? throw new Exception("player is null");
             CursorState = CursorState.Grabbed;
         }
 
@@ -181,34 +185,6 @@ namespace MVGE
         {
             var path = Path.GetDirectoryName(typeof(GameManager).Assembly.Location)!;
             settings.gamesDirectory = Path.Combine(path, "Games");
-            /*
-            settings.windowWidth = 1280;
-            settings.windowHeight = 720;
-
-            settings.blockTileWidth = 32;
-            settings.blockTileHeight = 32;
-            settings.textureFileExtension = ".png";
-
-            settings.lod1RenderDistance = 6;
-            settings.lod2RenderDistance = 18;
-            settings.lod3RenderDistance = 54;
-            settings.lod4RenderDistance = 162;
-            settings.lod5RenderDistance = 486;
-
-            settings.entityLoadRange = 12;
-            settings.entitySpawnMaxRange = 12;
-            settings.entityDespawnMaxRange = 12;
-
-            settings.loadedGameDirectory = "../../../Games/DefaultGame";
-            settings.loadedGameSettingsDirectory = "../../../Games/DefaultGame/Settings";
-
-            settings.assetsBaseBlockTexturesDirectory = "../../../Games/DefaultGame/Assets/Textures/Blocks/Base/";
-            settings.assetsBlockTexturesDirectory = "../../../Games/DefaultGame/Assets/Textures/Blocks/";
-            settings.dataBlockTypesDirectory = "../../../Games/DefaultGame/Data/Blocks/Types/";
-            settings.dataBiomeTypesDirectory = "../../../Games/DefaultGame/Data/Biomes/";
-            settings.savesWorldDirectory = "../../../Games/DefaultGame/Saves/Worlds/";
-            settings.savesCharactersDirectory = "../../../Games/DefaultGame/Saves/Characters/";
-            */
         }
 
         private void LoadGameDefaultSettings(string gameDirectory)
@@ -258,7 +234,7 @@ namespace MVGE
             settings.loadedGameDirectory = gameDirectory;
         }
 
-        private string SelectGameFolder()
+        private string SelectGameFolder(string? autoGameName = null)
         {
             string[] gameFolders = Directory.GetDirectories(settings.gamesDirectory);
             if (gameFolders.Length == 1)
@@ -280,6 +256,20 @@ namespace MVGE
             else
             {
                 orderedFolders.AddRange(gameFolders);
+            }
+
+            if (!string.IsNullOrEmpty(autoGameName))
+            {
+                var match = orderedFolders.FirstOrDefault(f => Path.GetFileName(f).Equals(autoGameName, StringComparison.OrdinalIgnoreCase));
+                if (match != null)
+                {
+                    Console.WriteLine($"Auto-selecting game: '{autoGameName}' via command-line flag.");
+                    return match;
+                }
+                else
+                {
+                    Console.WriteLine($"Game '{autoGameName}' not found. Proceeding with manual selection.");
+                }
             }
 
             Console.WriteLine("Select a game to load:");
