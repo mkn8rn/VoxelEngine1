@@ -261,6 +261,12 @@ namespace MVGE
         private string SelectGameFolder()
         {
             string[] gameFolders = Directory.GetDirectories(settings.gamesDirectory);
+            if (gameFolders.Length == 1)
+            {
+                string onlyGameName = Path.GetFileName(gameFolders[0]);
+                Console.WriteLine($"Only one game: '{onlyGameName}' detected. Skipping game selection.");
+                return gameFolders[0];
+            }
             var defaultIndex = Array.FindIndex(gameFolders, f => Path.GetFileName(f).Equals("Default", StringComparison.OrdinalIgnoreCase));
             List<string> orderedFolders = new List<string>();
             if (defaultIndex != -1)
