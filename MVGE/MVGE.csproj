@@ -8,6 +8,18 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="Games\Default\Assets\Images\**" />
+    <Compile Remove="Games\Default\Assets\Music\**" />
+    <Compile Remove="Games\Default\Assets\Sounds\**" />
+    <EmbeddedResource Remove="Games\Default\Assets\Images\**" />
+    <EmbeddedResource Remove="Games\Default\Assets\Music\**" />
+    <EmbeddedResource Remove="Games\Default\Assets\Sounds\**" />
+    <None Remove="Games\Default\Assets\Images\**" />
+    <None Remove="Games\Default\Assets\Music\**" />
+    <None Remove="Games\Default\Assets\Sounds\**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
     <PackageReference Include="OpenTK" Version="4.9.4" />
     <PackageReference Include="StbImageSharp" Version="2.30.15" />
@@ -15,15 +27,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Folder Include="Games\DefaultGame\Assets\Images\" />
-    <Folder Include="Games\DefaultGame\Assets\Music\" />
-    <Folder Include="Games\DefaultGame\Assets\Sounds\" />
-    <Folder Include="Games\DefaultGame\Assets\Textures\" />
-    <Folder Include="Games\DefaultGame\Data\" />
-    <Folder Include="Games\DefaultGame\Saves\Characters\" />
-    <Folder Include="Games\DefaultGame\Saves\Worlds\" />
-    <Folder Include="Graphics\Shaders\" />
-    <Folder Include="World\Entities\" />
+    <None Include="Games\**">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
 </Project>

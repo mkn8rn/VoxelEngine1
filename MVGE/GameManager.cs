@@ -94,9 +94,9 @@ namespace MVGE
         {
             base.OnLoad();
 
-            //todo: list available games in /Games
-            //and let the user select one to load
-            Console.WriteLine("Loading DefaultGame.");
+            // Select game folder
+            string selectedGameFolder = SelectGameFolder();
+            LoadGameDefaultSettings(selectedGameFolder);
 
             // Initialize the Data Loaders
             Console.WriteLine("Data loaders initializing.");
@@ -179,6 +179,9 @@ namespace MVGE
 
         private void SetDefaultSettings()
         {
+            var path = Path.GetDirectoryName(typeof(GameManager).Assembly.Location)!;
+            settings.gamesDirectory = Path.Combine(path, "Games");
+            /*
             settings.windowWidth = 1280;
             settings.windowHeight = 720;
 
@@ -196,7 +199,6 @@ namespace MVGE
             settings.entitySpawnMaxRange = 12;
             settings.entityDespawnMaxRange = 12;
 
-            settings.gamesDirectory = "../../../Games";
             settings.loadedGameDirectory = "../../../Games/DefaultGame";
             settings.loadedGameSettingsDirectory = "../../../Games/DefaultGame/Settings";
 
@@ -206,6 +208,89 @@ namespace MVGE
             settings.dataBiomeTypesDirectory = "../../../Games/DefaultGame/Data/Biomes/";
             settings.savesWorldDirectory = "../../../Games/DefaultGame/Saves/Worlds/";
             settings.savesCharactersDirectory = "../../../Games/DefaultGame/Saves/Characters/";
+            */
+        }
+
+        private void LoadGameDefaultSettings(string gameDirectory)
+        {
+            string defaultsPath = Path.Combine(gameDirectory, "Defaults.txt");
+            if (!File.Exists(defaultsPath))
+                throw new Exception($"Defaults.txt not found in {gameDirectory}");
+
+            var lines = File.ReadAllLines(defaultsPath);
+            var dict = new Dictionary<string, string>();
+            foreach (var line in lines)
+            {
+                var trimmed = line.Trim();
+                if (string.IsNullOrEmpty(trimmed) || trimmed.StartsWith("#")) continue;
+                var parts = trimmed.Split('=', 2);
+                if (parts.Length == 2)
+                    dict[parts[0].Trim()] = parts[1].Trim();
+            }
+
+            string GetSetting(string key)
+            {
+                if (!dict.TryGetValue(key, out var value) || string.IsNullOrEmpty(value))
+                    throw new Exception($"Missing or empty setting: {key}");
+                return value;
+            }
+
+            settings.windowWidth = int.Parse(GetSetting("windowWidth"));
+            settings.windowHeight = int.Parse(GetSetting("windowHeight"));
+            settings.blockTileWidth = int.Parse(GetSetting("blockTileWidth"));
+            settings.blockTileHeight = int.Parse(GetSetting("blockTileHeight"));
+            settings.textureFileExtension = GetSetting("textureFileExtension");
+            settings.lod1RenderDistance = int.Parse(GetSetting("lod1RenderDistance"));
+            settings.lod2RenderDistance = int.Parse(GetSetting("lod2RenderDistance"));
+            settings.lod3RenderDistance = int.Parse(GetSetting("lod3RenderDistance"));
+            settings.lod4RenderDistance = int.Parse(GetSetting("lod4RenderDistance"));
+            settings.lod5RenderDistance = int.Parse(GetSetting("lod5RenderDistance"));
+            settings.entityLoadRange = int.Parse(GetSetting("entityLoadRange"));
+            settings.entitySpawnMaxRange = int.Parse(GetSetting("entitySpawnMaxRange"));
+            settings.entityDespawnMaxRange = int.Parse(GetSetting("entityDespawnMaxRange"));
+            settings.loadedGameSettingsDirectory = Path.Combine(gameDirectory, GetSetting("loadedGameSettingsDirectory"));
+            settings.assetsBaseBlockTexturesDirectory = Path.Combine(gameDirectory, GetSetting("assetsBaseBlockTexturesDirectory"));
+            settings.assetsBlockTexturesDirectory = Path.Combine(gameDirectory, GetSetting("assetsBlockTexturesDirectory"));
+            settings.dataBlockTypesDirectory = Path.Combine(gameDirectory, GetSetting("dataBlockTypesDirectory"));
+            settings.dataBiomeTypesDirectory = Path.Combine(gameDirectory, GetSetting("dataBiomeTypesDirectory"));
+            settings.savesWorldDirectory = Path.Combine(gameDirectory, GetSetting("savesWorldDirectory"));
+            settings.savesCharactersDirectory = Path.Combine(gameDirectory, GetSetting("savesCharactersDirectory"));
+            settings.loadedGameDirectory = gameDirectory;
+        }
+
+        private string SelectGameFolder()
+        {
+            string[] gameFolders = Directory.GetDirectories(settings.gamesDirectory);
+            var defaultIndex = Array.FindIndex(gameFolders, f => Path.GetFileName(f).Equals("Default", StringComparison.OrdinalIgnoreCase));
+            List<string> orderedFolders = new List<string>();
+            if (defaultIndex != -1)
+            {
+                orderedFolders.Add(gameFolders[defaultIndex]);
+                for (int i = 0; i < gameFolders.Length; i++)
+                {
+                    if (i != defaultIndex) orderedFolders.Add(gameFolders[i]);
+                }
+            }
+            else
+            {
+                orderedFolders.AddRange(gameFolders);
+            }
+
+            Console.WriteLine("Select a game to load:");
+            for (int i = 0; i < orderedFolders.Count; i++)
+            {
+                Console.WriteLine($"{i + 1}: {Path.GetFileName(orderedFolders[i])}");
+            }
+            while (true)
+            {
+                Console.Write($"Enter a number (1-{orderedFolders.Count}): ");
+                string? input = Console.ReadLine();
+                if (int.TryParse(input, out int selectedIndex) && selectedIndex >= 1 && selectedIndex <= orderedFolders.Count)
+                {
+                    return orderedFolders[selectedIndex - 1];
+                }
+                Console.WriteLine("Invalid input. Please try again.");
+            }
         }
     }
 }
