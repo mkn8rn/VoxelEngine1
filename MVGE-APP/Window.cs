@@ -1,0 +1,153 @@
+﻿using MVGE.Gameplay;
+using MVGE.World;
+using MVGE.World.Terrain;
+using OpenTK.Graphics.OpenGL4;
+using OpenTK.Mathematics;
+using OpenTK.Windowing.Common;
+using OpenTK.Windowing.Desktop;
+using OpenTK.Windowing.GraphicsLibraryFramework;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Numerics;
+using System.Text;
+using System.Threading.Tasks;
+using MVGE_INF.Models;
+using MVGE_INF.Managers;
+using MVGE_GFX;
+using MVGE_GFX.Terrain;
+
+namespace MVGE
+{
+    public enum GameMode
+    {
+        Menu,
+        Survival,
+        Campaign
+    }
+
+    public class Window : GameWindow
+    {
+        // render pipeline
+        WorldManager world = null!;
+        BlockTextureAtlas blockTextureAtlas = null!;
+        ShaderProgram shaderProgram = null!;
+
+        // data loaders
+        TerrainDataLoader blockDataLoader = null!;
+
+        // Window settings
+        public int windowWidth;
+        public int windowHeight;
+
+        // player
+        Player player = null!;
+
+        public Window() : base(GameWindowSettings.Default, NativeWindowSettings.Default)
+        {
+            GameManager.LoadEnvironmentDefaultSettings();
+            if (FlagManager.Flags.windowWidth == null)
+                throw new Exception("windowWidth flag is null");
+            if (FlagManager.Flags.windowHeight == null)
+                throw new Exception("windowHeight flag is null");
+
+            windowWidth = FlagManager.Flags.windowWidth.Value;
+            windowHeight = FlagManager.Flags.windowHeight.Value;
+
+            CenterWindow(new Vector2i(windowWidth, windowHeight));
+        }
+
+        protected override void OnResize(ResizeEventArgs e)
+        {
+            base.OnResize(e);
+            GL.Viewport(0, 0, e.Width, e.Height);
+            windowWidth = e.Width;
+            windowHeight = e.Height;
+        }
+
+        protected override void OnLoad()
+        {
+            base.OnLoad();
+            // Select game folder
+            string selectedGameFolder = GameManager.SelectGameFolder(FlagManager.Flags.game);
+            GameManager.LoadGameDefaultSettings(selectedGameFolder);
+
+            // Initialize the Data Loaders
+            Console.WriteLine("Data loaders initializing.");
+            blockDataLoader = new TerrainDataLoader() ?? throw new Exception("blockDataLoader is null");
+
+            // Initialize the Texture Atlases
+            Console.WriteLine("Texture atlases initializing.");
+            blockTextureAtlas = new BlockTextureAtlas() ?? throw new Exception("blockTextureAtlas is null");
+            MeshRender.terrainTextureAtlas = blockTextureAtlas ?? throw new Exception("terrainTextureAtlas is null");
+
+            // Initialize the Shaders
+            Console.WriteLine("Shaders initializing.");
+            shaderProgram = new ShaderProgram("Default.vert", "Default.frag") ?? throw new Exception("shaderProgram is null");
+
+            // Bind the texture atlas
+            int textureLocation = GL.GetUniformLocation(shaderProgram.ID, "textureAtlas");
+            GL.Uniform1(textureLocation, 0);
+            blockTextureAtlas.Bind();
+
+            // Initialize the World rendering
+            world = new WorldManager() ?? throw new Exception("world is null");
+
+            // Enabling OpenGL options
+            Console.WriteLine("Enabling OpenGL options.");
+            GL.Enable(EnableCap.DepthTest);
+            GL.FrontFace(FrontFaceDirection.Cw);
+            GL.Enable(EnableCap.CullFace);
+            GL.CullFace(TriangleFace.Back);
+
+            // Garbage collection
+            System.Runtime.GCSettings.LargeObjectHeapCompactionMode = System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+
+            // Initialize the Player (and its Camera)
+            Console.WriteLine("Initializing player.");
+            player = new Player() ?? throw new Exception("player is null");
+            CursorState = CursorState.Grabbed;
+        }
+
+        protected override void OnUnload()
+        {
+            base.OnUnload();
+        }
+
+        protected override void OnRenderFrame(FrameEventArgs args)
+        {
+            GL.ClearColor(0.3f, 0f, 0.6f, 1f);
+            GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+
+            // transformation matrices
+            Matrix4 model = Matrix4.Identity;
+            Matrix4 view = player.camera.GetViewMatrix();
+            Matrix4 projection = player.camera.GetProjectionMatrix((float)windowWidth / windowHeight);
+
+            int modelLocation = GL.GetUniformLocation(shaderProgram.ID, "model");
+            int viewLocation = GL.GetUniformLocation(shaderProgram.ID, "view");
+            int projectionLocation = GL.GetUniformLocation(shaderProgram.ID, "projection");
+
+            GL.UniformMatrix4(modelLocation, true, ref model);
+            GL.UniformMatrix4(viewLocation, true, ref view);
+            GL.UniformMatrix4(projectionLocation, true, ref projection);
+
+            world.Render(shaderProgram);
+
+            Context.SwapBuffers();
+
+            base.OnRenderFrame(args);
+        }
+
+        protected override void OnUpdateFrame(FrameEventArgs args)
+        {
+            MouseState mouse = MouseState;
+            KeyboardState input = KeyboardState;
+
+            base.OnUpdateFrame(args);
+            player.Update(input, mouse, args);
+        }
+    }
+}
