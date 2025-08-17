@@ -4,9 +4,12 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace MVGE.Graphics.Terrain
+namespace MVGE_GFX.Models
 {
-    internal class RenderGroup
+    public struct ByteVector3
     {
+        public byte x;
+        public byte y;
+        public byte z;
     }
 }

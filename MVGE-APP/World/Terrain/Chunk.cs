@@ -1,7 +1,6 @@
-﻿using MVGE.Graphics;
-using MVGE.Graphics.Terrain;
-using MVGE.Tools;
+﻿using MVGE.Tools;
 using MVGE_GFX;
+using MVGE_GFX.Terrain;
 using MVGE_INF.Managers;
 using MVGE_INF.Models.Terrain;
 using Newtonsoft.Json;

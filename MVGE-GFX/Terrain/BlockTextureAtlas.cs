@@ -1,5 +1,4 @@
-﻿using MVGE.Graphics.Terrain;
-using MVGE.World.Terrain;
+﻿using MVGE_GFX.Models;
 using MVGE_INF.Managers;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
@@ -10,9 +9,9 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace MVGE.Graphics
+namespace MVGE_GFX.Terrain
 {
-    internal class BlockTextureAtlas
+    public class BlockTextureAtlas
     {
         public int ID;
         public int atlasWidth;

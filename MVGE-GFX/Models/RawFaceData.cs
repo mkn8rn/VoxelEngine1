@@ -4,37 +4,8 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace MVGE.Graphics.Terrain
+namespace MVGE_GFX.Models
 {
-    public enum Faces : byte
-    {
-        FRONT, // North
-        BACK, // South
-        LEFT, // West
-        RIGHT, // East
-        TOP, // Up
-        BOTTOM // Down
-    }
-
-    public struct FaceData
-    {
-        public List<ByteVector3> vertices;
-        public List<ByteVector2> uvs;
-    }
-
-    public struct ByteVector2
-    {
-        public byte x;
-        public byte y;
-    }
-
-    public struct ByteVector3
-    {
-        public byte x;
-        public byte y;
-        public byte z;
-    }
-
     public struct RawFaceData
     {
         public static readonly Dictionary<Faces, List<ByteVector3>> rawVertexData = new Dictionary<Faces, List<ByteVector3>>
