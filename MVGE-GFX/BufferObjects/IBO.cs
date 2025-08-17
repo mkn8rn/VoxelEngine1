@@ -17,6 +17,12 @@ namespace MVGE_GFX.BufferObjects
             GL.BindBuffer(BufferTarget.ElementArrayBuffer, ID);
             GL.BufferData(BufferTarget.ElementArrayBuffer, data.Count * sizeof(uint), data.ToArray(), BufferUsageHint.StaticDraw);
         }
+        public IBO(List<ushort> data)
+        {
+            ID = GL.GenBuffer();
+            GL.BindBuffer(BufferTarget.ElementArrayBuffer, ID);
+            GL.BufferData(BufferTarget.ElementArrayBuffer, data.Count * sizeof(ushort), data.ToArray(), BufferUsageHint.StaticDraw);
+        }
 
         public void Bind()
         {

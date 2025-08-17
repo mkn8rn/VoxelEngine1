@@ -13,7 +13,7 @@ namespace MVGE_INF.Models.Terrain
         public float z;
         public byte temperature;
         public byte humidity;
-        public ushort[,,] blocks;
+        // public ushort[,,] blocks;
         // new BlockData[TerrainDataLoader.CHUNK_SIZE, TerrainDataLoader.CHUNK_MAX_HEIGHT, TerrainDataLoader.CHUNK_SIZE]
     }
 }
