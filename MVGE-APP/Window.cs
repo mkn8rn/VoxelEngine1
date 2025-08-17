@@ -16,6 +16,7 @@ using MVGE_INF.Models;
 using MVGE_INF.Managers;
 using MVGE.Graphics;
 using MVGE.Graphics.Terrain;
+using MVGE_GFX;
 
 namespace MVGE
 {

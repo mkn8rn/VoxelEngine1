@@ -6,9 +6,9 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace MVGE.Graphics
+namespace MVGE_GFX
 {
-    internal class ShaderProgram
+    public class ShaderProgram
     {
         public int ID;
         public ShaderProgram(string vertexShaderFilePath, string fragmentShaderFilePath)
@@ -102,7 +102,9 @@ namespace MVGE.Graphics
 
             try
             {
-                using (StreamReader reader = new StreamReader("../../../Graphics/Shaders/" + filePath))
+                var assemblyDir = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
+                var shaderPath = Path.Combine(assemblyDir!, "Shaders", filePath);
+                using (StreamReader reader = new StreamReader(shaderPath))
                 {
                     shaderSource = reader.ReadToEnd();
                 }
