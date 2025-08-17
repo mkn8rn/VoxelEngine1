@@ -10,7 +10,12 @@ namespace MVGE_INF.Managers
     {
         public static GameSettings settings = new GameSettings();
 
-        public static void LoadEnvironmentDefaultSettings()
+        public static void Initialize()
+        {
+            LoadEnvironmentDefaultSettings();
+        }
+
+        private static void LoadEnvironmentDefaultSettings()
         {
             var flags = FlagManager.Flags;
             if (string.IsNullOrEmpty(flags.gamesDirectory))

@@ -17,7 +17,7 @@ void main()
 {
     vec3 worldPosition = aPosition + chunkPosition;
 
-	gl_Position = projection * view * model * vec4(worldPosition, 1.0);
+	gl_Position = vec4(worldPosition, 1.0) * model * view * projection;
 	
     texCoord = (aTexCoord) / vec2(tilesX, tilesY);
 }

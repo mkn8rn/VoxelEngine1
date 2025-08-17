@@ -1,7 +1,8 @@
-﻿using MVGE.Tools;
+﻿using MVGE.Graphics;
+using MVGE.Graphics.Terrain;
+using MVGE.Tools;
 using MVGE_INF.Managers;
 using MVGE_INF.Models.Terrain;
-using MVGE_GFX;
 using Newtonsoft.Json;
 using OpenTK.Mathematics;
 using System;
@@ -11,7 +12,6 @@ using System.IO.Compression;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
-using MVGE_GFX.Terrain;
 
 namespace MVGE.World.Terrain
 {

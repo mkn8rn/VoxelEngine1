@@ -5,11 +5,10 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
-using System.IO;
 
-namespace MVGE_GFX
+namespace MVGE.Graphics
 {
-    public class ShaderProgram
+    internal class ShaderProgram
     {
         public int ID;
         public ShaderProgram(string vertexShaderFilePath, string fragmentShaderFilePath)
@@ -100,11 +99,10 @@ namespace MVGE_GFX
         public static string LoadShaderSource(string filePath)
         {
             string shaderSource = "";
+
             try
             {
-                var assemblyDir = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
-                var shaderPath = Path.Combine(assemblyDir!, "Shaders", filePath);
-                using (StreamReader reader = new StreamReader(shaderPath))
+                using (StreamReader reader = new StreamReader("../../../Graphics/Shaders/" + filePath))
                 {
                     shaderSource = reader.ReadToEnd();
                 }
@@ -113,6 +111,7 @@ namespace MVGE_GFX
             {
                 Console.WriteLine("Failed to load shader source file: " + e.Message);
             }
+
             return shaderSource;
         }
     }

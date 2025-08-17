@@ -14,8 +14,8 @@ using System.Text;
 using System.Threading.Tasks;
 using MVGE_INF.Models;
 using MVGE_INF.Managers;
-using MVGE_GFX;
-using MVGE_GFX.Terrain;
+using MVGE.Graphics;
+using MVGE.Graphics.Terrain;
 
 namespace MVGE
 {
@@ -36,24 +36,25 @@ namespace MVGE
         // data loaders
         TerrainDataLoader blockDataLoader = null!;
 
-        // Window settings
-        public int windowWidth;
-        public int windowHeight;
-
         // player
         Player player = null!;
 
+        // settings
+        int windowWidth;
+        int windowHeight;
+
         public Window() : base(GameWindowSettings.Default, NativeWindowSettings.Default)
         {
-            GameManager.LoadEnvironmentDefaultSettings();
-            if (FlagManager.Flags.windowWidth == null)
-                throw new Exception("windowWidth flag is null");
-            if (FlagManager.Flags.windowHeight == null)
-                throw new Exception("windowHeight flag is null");
+            // Load the settings
+            LoadEnvironmentDefaultSettings();
 
+            if (FlagManager.Flags.windowWidth == null || FlagManager.Flags.windowHeight == null)
+            {
+                throw new Exception("windowWidth or windowHeight flag is null.");
+            }
             windowWidth = FlagManager.Flags.windowWidth.Value;
             windowHeight = FlagManager.Flags.windowHeight.Value;
-
+            // center window on monitor
             CenterWindow(new Vector2i(windowWidth, windowHeight));
         }
 
@@ -68,9 +69,13 @@ namespace MVGE
         protected override void OnLoad()
         {
             base.OnLoad();
-            // Select game folder
-            string selectedGameFolder = GameManager.SelectGameFolder(FlagManager.Flags.game);
-            GameManager.LoadGameDefaultSettings(selectedGameFolder);
+            // Load game manager
+            Console.WriteLine("Game manager initializing.");
+            GameManager.Initialize();
+
+            // Select game
+            string game = GameManager.SelectGameFolder();
+            GameManager.LoadGameDefaultSettings(game);
 
             // Initialize the Data Loaders
             Console.WriteLine("Data loaders initializing.");
@@ -148,6 +153,18 @@ namespace MVGE
 
             base.OnUpdateFrame(args);
             player.Update(input, mouse, args);
+        }
+
+        private void LoadEnvironmentDefaultSettings()
+        {
+            ProgramFlags flags = FlagManager.Flags;
+            if (flags.windowWidth == null)
+                throw new Exception("windowWidth flag is null.");
+            if (flags.windowHeight == null)
+                throw new Exception("windowHeight flag is null.");
+
+            windowWidth = flags.windowWidth.Value;
+            windowHeight = flags.windowHeight.Value;
         }
     }
 }

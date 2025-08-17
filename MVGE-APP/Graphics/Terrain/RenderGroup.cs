@@ -4,9 +4,9 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace MVGE_GFX.Terrain
+namespace MVGE.Graphics.Terrain
 {
-    public class RenderGroup
+    internal class RenderGroup
     {
     }
 }

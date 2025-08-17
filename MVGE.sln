@@ -11,11 +11,6 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MVGE-APP", "MVGE-APP\MVGE-A
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MVGE-INF", "MVGE-INF\MVGE-INF.csproj", "{3BCEFBF2-4B39-47F1-B1FD-6E38D9A46C02}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MVGE-GFX", "MVGE-GFX\MVGE-GFX.csproj", "{DF1D2003-F8BA-4A90-AD3B-FD43D1953743}"
-	ProjectSection(ProjectDependencies) = postProject
-		{3BCEFBF2-4B39-47F1-B1FD-6E38D9A46C02} = {3BCEFBF2-4B39-47F1-B1FD-6E38D9A46C02}
-	EndProjectSection
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU

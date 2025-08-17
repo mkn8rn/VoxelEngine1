@@ -1,4 +1,5 @@
-﻿using MVGE_GFX.BufferObjects;
+﻿using MVGE.Graphics.BufferObjects;
+using MVGE.World.Terrain;
 using MVGE_INF.Managers;
 using MVGE_INF.Models.Terrain;
 using OpenTK.Graphics.OpenGL4;
@@ -10,9 +11,9 @@ using System.Text;
 using System.Threading.Tasks;
 using static OpenTK.Graphics.OpenGL.GL;
 
-namespace MVGE_GFX.Terrain
+namespace MVGE.Graphics.Terrain
 {
-    public class MeshRender
+    internal class MeshRender
     {
         bool isBuilt = false;
         private Vector3 chunkWorldPosition;
