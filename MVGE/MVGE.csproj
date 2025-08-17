@@ -33,7 +33,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Folder Include="Gameplay\PlayerMechanics\" />
+    <None Include=".env.development">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
 </Project>

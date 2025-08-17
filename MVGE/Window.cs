@@ -16,6 +16,7 @@ using System.Linq;
 using System.Numerics;
 using System.Text;
 using System.Threading.Tasks;
+using MVGE.Managers;
 
 namespace MVGE
 {
@@ -59,7 +60,7 @@ namespace MVGE
         public string savesCharactersDirectory;
     }
 
-    public class GameManager : GameWindow
+    public class Window : GameWindow
     {
         // render pipeline
         WorldManager world = null!;
@@ -75,41 +76,39 @@ namespace MVGE
 
         // player
         Player player = null!;
-        private readonly CommandLineFlags flags;
 
-        public GameManager() : base(GameWindowSettings.Default, NativeWindowSettings.Default)
+        public Window() : base(GameWindowSettings.Default, NativeWindowSettings.Default)
         {
-            this.flags = FlagsMiddleware.Flags;
             // Load the settings
-            SetDefaultSettings();
+            LoadEnvironmentDefaultSettings();
 
             // center window on monitor
-            this.CenterWindow(new Vector2i(GameManager.settings.windowWidth, GameManager.settings.windowHeight));
+            CenterWindow(new Vector2i(settings.windowWidth, settings.windowHeight));
         }
 
         protected override void OnResize(ResizeEventArgs e)
         {
             base.OnResize(e);
             GL.Viewport(0, 0, e.Width, e.Height);
-            GameManager.settings.windowWidth = e.Width;
-            GameManager.settings.windowHeight = e.Height;
+            settings.windowWidth = e.Width;
+            settings.windowHeight = e.Height;
         }
 
         protected override void OnLoad()
         {
             base.OnLoad();
             // Select game folder
-            string selectedGameFolder = SelectGameFolder(flags.game);
+            string selectedGameFolder = SelectGameFolder(FlagManager.Flags.game);
             LoadGameDefaultSettings(selectedGameFolder);
 
             // Initialize the Data Loaders
             Console.WriteLine("Data loaders initializing.");
-            this.blockDataLoader = new TerrainDataLoader() ?? throw new Exception("blockDataLoader is null");
+            blockDataLoader = new TerrainDataLoader() ?? throw new Exception("blockDataLoader is null");
 
             // Initialize the Texture Atlases
             Console.WriteLine("Texture atlases initializing.");
-            this.blockTextureAtlas = new BlockTextureAtlas() ?? throw new Exception("blockTextureAtlas is null");
-            MeshRender.terrainTextureAtlas = this.blockTextureAtlas ?? throw new Exception("terrainTextureAtlas is null");
+            blockTextureAtlas = new BlockTextureAtlas() ?? throw new Exception("blockTextureAtlas is null");
+            MeshRender.terrainTextureAtlas = blockTextureAtlas ?? throw new Exception("terrainTextureAtlas is null");
 
             // Initialize the Shaders
             Console.WriteLine("Shaders initializing.");
@@ -118,7 +117,7 @@ namespace MVGE
             // Bind the texture atlas
             int textureLocation = GL.GetUniformLocation(shaderProgram.ID, "textureAtlas");
             GL.Uniform1(textureLocation, 0);
-            this.blockTextureAtlas.Bind();
+            blockTextureAtlas.Bind();
 
             // Initialize the World rendering
             world = new WorldManager() ?? throw new Exception("world is null");
@@ -180,10 +179,21 @@ namespace MVGE
             player.Update(input, mouse, args);
         }
 
-        private void SetDefaultSettings()
+        private void LoadEnvironmentDefaultSettings()
         {
-            var path = Path.GetDirectoryName(typeof(GameManager).Assembly.Location)!;
-            settings.gamesDirectory = Path.Combine(path, "Games");
+            ProgramFlags flags = FlagManager.Flags;
+            if (flags.windowWidth == null)
+                throw new Exception("windowWidth flag is null.");
+            if (flags.windowHeight == null)
+                throw new Exception("windowHeight flag is null.");
+            if (string.IsNullOrEmpty(flags.gamesDirectory))
+                throw new Exception("gamesDirectory flag is null or empty.");
+
+            var path = Path.GetDirectoryName(typeof(Window).Assembly.Location)!;
+            settings.gamesDirectory = Path.Combine(path, flags.gamesDirectory);
+
+            settings.windowWidth = flags.windowWidth.Value;
+            settings.windowHeight = flags.windowHeight.Value;
         }
 
         private void LoadGameDefaultSettings(string gameDirectory)
@@ -210,8 +220,6 @@ namespace MVGE
                 return value;
             }
 
-            settings.windowWidth = int.Parse(GetSetting("windowWidth"));
-            settings.windowHeight = int.Parse(GetSetting("windowHeight"));
             settings.blockTileWidth = int.Parse(GetSetting("blockTileWidth"));
             settings.blockTileHeight = int.Parse(GetSetting("blockTileHeight"));
             settings.textureFileExtension = GetSetting("textureFileExtension");

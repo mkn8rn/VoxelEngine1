@@ -39,8 +39,8 @@ namespace MVGE.Graphics
             Console.WriteLine($"Generating terrain texture atlas.");
 
             // Count the number of .png files in the base directory
-            var baseTextureFiles = Directory.GetFiles(GameManager.settings.assetsBaseBlockTexturesDirectory, "*" + GameManager.settings.textureFileExtension);
-            var textureFiles = Directory.GetFiles(GameManager.settings.assetsBlockTexturesDirectory, "*" + GameManager.settings.textureFileExtension);
+            var baseTextureFiles = Directory.GetFiles(Window.settings.assetsBaseBlockTexturesDirectory, "*" + Window.settings.textureFileExtension);
+            var textureFiles = Directory.GetFiles(Window.settings.assetsBlockTexturesDirectory, "*" + Window.settings.textureFileExtension);
             int baseTextureCount = baseTextureFiles.Length;
             int textureCount = baseTextureFiles.Length + textureFiles.Length;
 
@@ -51,8 +51,8 @@ namespace MVGE.Graphics
             tilesY = (int)Math.Ceiling((double)textureCount / tilesX);
 
             // Set the atlas width and height based on the number of rows and columns
-            atlasWidth = tilesX * GameManager.settings.blockTileWidth;
-            atlasHeight = tilesY * GameManager.settings.blockTileHeight;
+            atlasWidth = tilesX * Window.settings.blockTileWidth;
+            atlasHeight = tilesY * Window.settings.blockTileHeight;
 
             // Loading texture into buffer
             ID = GL.GenTexture();
@@ -69,9 +69,9 @@ namespace MVGE.Graphics
             StbImage.stbi_set_flip_vertically_on_load(1);
 
             // Load the fallback and missing textures
-            this.fallbackTexture = ImageResult.FromStream(File.OpenRead(GameManager.settings.assetsBaseBlockTexturesDirectory + fallbackTextureName + GameManager.settings.textureFileExtension),
+            this.fallbackTexture = ImageResult.FromStream(File.OpenRead(Window.settings.assetsBaseBlockTexturesDirectory + fallbackTextureName + Window.settings.textureFileExtension),
                 ColorComponents.RedGreenBlueAlpha);
-            this.missingTexture = ImageResult.FromStream(File.OpenRead(GameManager.settings.assetsBaseBlockTexturesDirectory + missingTextureName + GameManager.settings.textureFileExtension),
+            this.missingTexture = ImageResult.FromStream(File.OpenRead(Window.settings.assetsBaseBlockTexturesDirectory + missingTextureName + Window.settings.textureFileExtension),
                 ColorComponents.RedGreenBlueAlpha);
 
             // Load textures into the Atlas
@@ -111,8 +111,8 @@ namespace MVGE.Graphics
 
                 var loadedTexture = ImageResult.FromStream(File.OpenRead(texture), ColorComponents.RedGreenBlueAlpha);
 
-                if (loadedTexture.Width != GameManager.settings.blockTileWidth
-                    || loadedTexture.Height != GameManager.settings.blockTileHeight
+                if (loadedTexture.Width != Window.settings.blockTileWidth
+                    || loadedTexture.Height != Window.settings.blockTileHeight
                     || loadedTexture.Data == null
                     || loadedTexture.Data.Length == 0)
                 {
@@ -121,30 +121,30 @@ namespace MVGE.Graphics
                     loadedTexture = fallbackTexture;
                 }
 
-                if (currentX + GameManager.settings.blockTileWidth > atlasWidth)
+                if (currentX + Window.settings.blockTileWidth > atlasWidth)
                 {
                     currentX = 0;
-                    currentY += GameManager.settings.blockTileHeight;
+                    currentY += Window.settings.blockTileHeight;
                 }
 
-                if (currentY + GameManager.settings.blockTileHeight > atlasHeight)
+                if (currentY + Window.settings.blockTileHeight > atlasHeight)
                 {
                     throw new Exception("Texture atlas is too small to fit all textures.");
                 }
 
                 GL.TexSubImage2D(TextureTarget.Texture2D, 0, currentX, currentY,
-                    GameManager.settings.blockTileWidth, GameManager.settings.blockTileHeight,
+                    Window.settings.blockTileWidth, Window.settings.blockTileHeight,
                     PixelFormat.Rgba, PixelType.UnsignedByte, loadedTexture.Data);
 
-                var floatCoordsX = (float)currentX / (float)GameManager.settings.blockTileWidth;
-                var floatCoordsY = (float)currentY / (float)GameManager.settings.blockTileHeight;
+                var floatCoordsX = (float)currentX / (float)Window.settings.blockTileWidth;
+                var floatCoordsY = (float)currentY / (float)Window.settings.blockTileHeight;
 
                 textureCoordinates[textureName] = new Vector2(floatCoordsX, floatCoordsY);
 
                 Console.WriteLine($"Loaded texture: {textureName} - Position: ({currentX}, {currentY}), Width: {loadedTexture.Width}, Height: {loadedTexture.Height}, " +
                   $"UV Coordinates: ({floatCoordsX}, {floatCoordsY})");
 
-                currentX += GameManager.settings.blockTileWidth;
+                currentX += Window.settings.blockTileWidth;
             }
         }
 

@@ -7,17 +7,29 @@ using MVGE.Models;
 
 namespace MVGE.Middleware
 {
-    public static class FlagsMiddleware
+    public static class ConsoleFlagsMiddleware
     {
-        public static CommandLineFlags Flags { get; private set; } = new CommandLineFlags();
+        public static ProgramFlags Flags { get; private set; } = new ProgramFlags();
 
         public static void Parse(string[] args)
         {
-            var flags = new CommandLineFlags();
+            var flags = new ProgramFlags();
             for (int i = 0; i < args.Length - 1; i++)
             {
                 if (args[i] == "--game")
                     flags.game = args[i + 1];
+                else if (args[i] == "--gamesDirectory")
+                    flags.gamesDirectory = args[i + 1];
+                else if (args[i] == "--windowWidth")
+                {
+                    if (int.TryParse(args[i + 1], out var val))
+                        flags.windowWidth = val;
+                }
+                else if (args[i] == "--windowHeight")
+                {
+                    if (int.TryParse(args[i + 1], out var val))
+                        flags.windowHeight = val;
+                }
                 else if (args[i] == "--GCConcurrent")
                 {
                     if (Enum.TryParse<GCConcurrent>(args[i + 1], true, out var val))

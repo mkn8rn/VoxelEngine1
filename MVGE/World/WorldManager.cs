@@ -115,7 +115,7 @@ namespace MVGE.World
 
             Console.WriteLine("Generating world " + worldName + " with seed: " + this.seed.ToString() + ", id: " + ID.ToString());
 
-            this.currentWorldSaveDirectory = Path.Combine(GameManager.settings.savesWorldDirectory, ID.ToString());
+            this.currentWorldSaveDirectory = Path.Combine(Window.settings.savesWorldDirectory, ID.ToString());
             Directory.CreateDirectory(this.currentWorldSaveDirectory);
 
             string worldDataPath = Path.Combine(this.currentWorldSaveDirectory, this.currentWorldDataFile);
@@ -132,7 +132,7 @@ namespace MVGE.World
 
         public void DetectWorldSaves()
         {
-            string[] directories = Directory.GetDirectories(GameManager.settings.savesWorldDirectory);
+            string[] directories = Directory.GetDirectories(Window.settings.savesWorldDirectory);
             foreach (string directory in directories)
             {
                 string[] files = Directory.GetFiles(directory);
@@ -156,7 +156,7 @@ namespace MVGE.World
         public void LoadWorldSave(Guid id)
         {
             this.ID = id;
-            this.currentWorldSaveDirectory = Path.Combine(GameManager.settings.savesWorldDirectory, id.ToString());
+            this.currentWorldSaveDirectory = Path.Combine(Window.settings.savesWorldDirectory, id.ToString());
             string worldDataPath = Path.Combine(this.currentWorldSaveDirectory, this.currentWorldDataFile);
             string[] lines = File.ReadAllLines(worldDataPath);
 
@@ -177,13 +177,13 @@ namespace MVGE.World
 
             // Decided on this because I want renderDistance = 1 to only render 1 chunk
             // Just because it makes sense to me intuitively
-            int chunkDistance = (GameManager.settings.lod1RenderDistance - 1) * 2;
+            int chunkDistance = (Window.settings.lod1RenderDistance - 1) * 2;
             int chunksToRenderHorizontalRow = (chunkDistance + 1) * (chunkDistance + 1);
-            int verticalRows = GameManager.settings.lod1RenderDistance;
+            int verticalRows = Window.settings.lod1RenderDistance;
 
             // Start at the bottom left corner of the render distance
-            int startX = -(GameManager.settings.lod1RenderDistance - 1) * TerrainDataLoader.CHUNK_SIZE;
-            int startZ = -(GameManager.settings.lod1RenderDistance - 1) * TerrainDataLoader.CHUNK_SIZE;
+            int startX = -(Window.settings.lod1RenderDistance - 1) * TerrainDataLoader.CHUNK_SIZE;
+            int startZ = -(Window.settings.lod1RenderDistance - 1) * TerrainDataLoader.CHUNK_SIZE;
             int startY = 0;
             int currentX = startX;
             int currentZ = startZ;

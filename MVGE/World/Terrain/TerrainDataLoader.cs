@@ -41,7 +41,7 @@ namespace MVGE.World.Terrain
 
         internal void LoadOtherBlockTypes()
         {
-            string[] txtFiles = Directory.GetFiles(GameManager.settings.dataBlockTypesDirectory, "*.txt");
+            string[] txtFiles = Directory.GetFiles(Window.settings.dataBlockTypesDirectory, "*.txt");
 
             foreach (string txtFile in txtFiles)
             {

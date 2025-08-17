@@ -39,9 +39,12 @@ namespace MVGE.Models
         Enabled = 1
     }
 
-    public class CommandLineFlags
+    public class ProgramFlags
     {
         public string? game { get; set; }
+        public string? gamesDirectory { get; set; }
+        public int? windowWidth { get; set; }
+        public int? windowHeight { get; set; }
         public GCConcurrent? GCConcurrent { get; set; }
         public GCLatencyMode? GCLatencyMode { get; set; }
         public string? GCHeapHardLimit { get; set; }
