@@ -37,6 +37,37 @@ namespace MVGE_INF.Managers
                 GCMode = PreferValue(consoleFlags.GCMode, envFlags.GCMode)
             };
 
+            if (!string.IsNullOrEmpty(flags.game))
+                Console.WriteLine($"Set game: {flags.game}");
+            if (!string.IsNullOrEmpty(flags.gamesDirectory))
+                Console.WriteLine($"Set gamesDirectory: {flags.gamesDirectory}");
+            if (flags.windowWidth.HasValue)
+                Console.WriteLine($"Set windowWidth: {flags.windowWidth.Value}");
+            if (flags.windowHeight.HasValue)
+                Console.WriteLine($"Set windowHeight: {flags.windowHeight.Value}");
+            if (flags.GCConcurrent.HasValue)
+                Console.WriteLine($"Set GCConcurrent: {flags.GCConcurrent.Value}");
+            if (flags.GCLatencyMode.HasValue)
+                Console.WriteLine($"Set GCLatencyMode: {flags.GCLatencyMode.Value}");
+            if (!string.IsNullOrEmpty(flags.GCHeapHardLimit))
+                Console.WriteLine($"Set GCHeapHardLimit: {flags.GCHeapHardLimit}");
+            if (!string.IsNullOrEmpty(flags.GCHeapAffinitizeMask))
+                Console.WriteLine($"Set GCHeapAffinitizeMask: {flags.GCHeapAffinitizeMask}");
+            if (flags.GCLargeObjectHeapCompactionMode.HasValue)
+                Console.WriteLine($"Set GCLargeObjectHeapCompactionMode: {flags.GCLargeObjectHeapCompactionMode.Value}");
+            if (!string.IsNullOrEmpty(flags.GCHeapSegmentSize))
+                Console.WriteLine($"Set GCHeapSegmentSize: {flags.GCHeapSegmentSize}");
+            if (!string.IsNullOrEmpty(flags.GCStress))
+                Console.WriteLine($"Set GCStress: {flags.GCStress}");
+            if (flags.GCLogEnabled.HasValue)
+                Console.WriteLine($"Set GCLogEnabled: {flags.GCLogEnabled.Value}");
+            if (!string.IsNullOrEmpty(flags.GCLogFile))
+                Console.WriteLine($"Set GCLogFile: {flags.GCLogFile}");
+            if (!string.IsNullOrEmpty(flags.GCHeapCount))
+                Console.WriteLine($"Set GCHeapCount: {flags.GCHeapCount}");
+            if (flags.GCMode.HasValue)
+                Console.WriteLine($"Set GCMode: {flags.GCMode.Value}");
+
             if (flags.GCLatencyMode.HasValue)
                 GCSettings.LatencyMode = (System.Runtime.GCLatencyMode)flags.GCLatencyMode.Value;
 

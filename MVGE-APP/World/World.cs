@@ -1,12 +1,13 @@
-﻿using MVGE.World.Terrain;
-using MVGE_GFX;
+﻿using MVGE_GFX;
 using MVGE_INF.Managers;
+using MVGE_INF.Models.Terrain;
 using OpenTK.Mathematics;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
-using System.Text;
 using System.Threading.Tasks;
+using World;
 
 namespace MVGE.World
 {
@@ -19,33 +20,28 @@ namespace MVGE.World
         LoD5
     }
 
-    internal class WorldManager
+    internal class World
     {
         public Guid ID;
         public string worldName;
 
-        // Chunks
-        private List<Chunk> chunks;
+        private readonly Dictionary<(int cx, int cy, int cz), Chunk> chunks = new();
 
         // Settings
-        private Int32 seed;
+        private int seed;
 
-        // Subdirectories and paths
+        // Paths
         private string currentWorldSaveDirectory;
         private string currentWorldDataFile = "world.txt";
         private string currentWorldSavedChunksSubDirectory = "chunks";
 
-        // Existing world saves
         private static Dictionary<Guid, string> worldSaves = new Dictionary<Guid, string>();
 
-        public WorldManager()
+        public World()
         {
             Console.WriteLine("World manager initializing.");
 
-            chunks = new List<Chunk>();
-
             ChooseWorld();
-
             LoadChunks();
 
             Console.WriteLine("World manager loaded.");
@@ -73,8 +69,7 @@ namespace MVGE.World
 
             string input = Console.ReadLine();
 
-            int selectedWorldIndex;
-            if (int.TryParse(input, out selectedWorldIndex))
+            if (int.TryParse(input, out int selectedWorldIndex))
             {
                 if (selectedWorldIndex == 0)
                 {
@@ -99,7 +94,7 @@ namespace MVGE.World
 
         public void GenerateWorldSave()
         {
-            if (worldName == null || worldName == "" || worldName.Length < 1)
+            if (string.IsNullOrWhiteSpace(worldName))
             {
                 GetWorldName();
             }
@@ -114,12 +109,12 @@ namespace MVGE.World
                 ID = Guid.NewGuid();
             }
 
-            Console.WriteLine("Generating world " + worldName + " with seed: " + this.seed.ToString() + ", id: " + ID.ToString());
+            Console.WriteLine($"Generating world {worldName} with seed: {seed}, id: {ID}");
 
-            this.currentWorldSaveDirectory = Path.Combine(GameManager.settings.savesWorldDirectory, ID.ToString());
-            Directory.CreateDirectory(this.currentWorldSaveDirectory);
+            currentWorldSaveDirectory = Path.Combine(GameManager.settings.savesWorldDirectory, ID.ToString());
+            Directory.CreateDirectory(currentWorldSaveDirectory);
 
-            string worldDataPath = Path.Combine(this.currentWorldSaveDirectory, this.currentWorldDataFile);
+            string worldDataPath = Path.Combine(currentWorldSaveDirectory, currentWorldDataFile);
             using (StreamWriter writer = new StreamWriter(worldDataPath))
             {
                 writer.WriteLine(ID.ToString());
@@ -127,7 +122,7 @@ namespace MVGE.World
                 writer.WriteLine(seed);
             }
 
-            string chunkSaveFolderPath = Path.Combine(this.currentWorldSaveDirectory, this.currentWorldSavedChunksSubDirectory);
+            string chunkSaveFolderPath = Path.Combine(currentWorldSaveDirectory, currentWorldSavedChunksSubDirectory);
             Directory.CreateDirectory(chunkSaveFolderPath);
         }
 
@@ -145,9 +140,12 @@ namespace MVGE.World
                         if (lines.Length >= 2)
                         {
                             var id = Guid.Parse(lines[0]);
-                            var worldName = lines[1];
-                            worldSaves.Add(id, worldName);
-                            Console.WriteLine("Detected world save: " + worldName + ", id: " + id);
+                            var wn = lines[1];
+                            if (!worldSaves.ContainsKey(id))
+                            {
+                                worldSaves.Add(id, wn);
+                                Console.WriteLine("Detected world save: " + wn + ", id: " + id);
+                            }
                         }
                     }
                 }
@@ -156,35 +154,32 @@ namespace MVGE.World
 
         public void LoadWorldSave(Guid id)
         {
-            this.ID = id;
-            this.currentWorldSaveDirectory = Path.Combine(GameManager.settings.savesWorldDirectory, id.ToString());
-            string worldDataPath = Path.Combine(this.currentWorldSaveDirectory, this.currentWorldDataFile);
+            ID = id;
+            currentWorldSaveDirectory = Path.Combine(GameManager.settings.savesWorldDirectory, id.ToString());
+            string worldDataPath = Path.Combine(currentWorldSaveDirectory, currentWorldDataFile);
             string[] lines = File.ReadAllLines(worldDataPath);
 
             if (lines.Length >= 3)
             {
-                this.worldName = lines[1];
-                this.seed = Int32.Parse(lines[2]);
+                worldName = lines[1];
+                seed = int.Parse(lines[2]);
             }
 
-            Console.WriteLine("Loaded world save: " + worldName + ", id: " + id + ", seed: " + seed);
+            Console.WriteLine($"Loaded world save: {worldName}, id: {id}, seed: {seed}");
         }
 
         public void LoadChunks()
         {
             Console.WriteLine("Loading chunks.");
 
-            string chunkSaveDirectory = Path.Combine(this.currentWorldSaveDirectory, this.currentWorldSavedChunksSubDirectory);
+            string chunkSaveDirectory = Path.Combine(currentWorldSaveDirectory, currentWorldSavedChunksSubDirectory);
 
-            // Decided on this because I want renderDistance = 1 to only render 1 chunk
-            // Just because it makes sense to me intuitively
             int chunkDistance = (GameManager.settings.lod1RenderDistance - 1) * 2;
             int chunksToRenderHorizontalRow = (chunkDistance + 1) * (chunkDistance + 1);
             int verticalRows = GameManager.settings.lod1RenderDistance;
 
-            // Start at the bottom left corner of the render distance
-            int startX = -(GameManager.settings.lod1RenderDistance - 1) * TerrainDataLoader.CHUNK_SIZE;
-            int startZ = -(GameManager.settings.lod1RenderDistance - 1) * TerrainDataLoader.CHUNK_SIZE;
+            int startX = -(GameManager.settings.lod1RenderDistance - 1) * TerrainDataManager.CHUNK_MAX_X;
+            int startZ = -(GameManager.settings.lod1RenderDistance - 1) * TerrainDataManager.CHUNK_MAX_Z;
             int startY = 0;
             int currentX = startX;
             int currentZ = startZ;
@@ -192,48 +187,99 @@ namespace MVGE.World
 
             List<Task> tasks = new List<Task>();
 
+            object locker = new object();
+
             for (int j = 0; j < verticalRows; j++)
             {
                 for (int i = 0; i < chunksToRenderHorizontalRow; i++)
                 {
-                    // if i is divisible by chunkDistance + 1, we are at the end of a row
                     if (i % (chunkDistance + 1) == 0 && i != 0)
                     {
-                        currentZ += TerrainDataLoader.CHUNK_SIZE;
+                        currentZ += TerrainDataManager.CHUNK_MAX_Z;
                         currentX = startX;
                     }
 
                     Vector3 chunkPosition = new Vector3(currentX, currentY, currentZ);
-                    int chunkIndex = i; // Capture the current value of i
 
                     tasks.Add(Task.Run(() =>
                     {
                         Chunk chunk = new Chunk(chunkPosition, seed, chunkSaveDirectory);
-                        lock (chunks)
+                        var key = ChunkIndexKey((int)chunk.position.X, (int)chunk.position.Y, (int)chunk.position.Z);
+                        lock (locker)
                         {
-                            chunks.Add(chunk);
+                            chunks[key] = chunk;
                         }
-                        //Console.WriteLine("Chunk " + (chunkIndex + 1) + "/" + chunksToRenderHorizontalRow + " generated at: " + chunkPosition.ToString());
                     }));
 
-                    currentX += TerrainDataLoader.CHUNK_SIZE;
+                    currentX += TerrainDataManager.CHUNK_MAX_X;
                 }
                 currentX = startX;
                 currentZ = startZ;
-                currentY += TerrainDataLoader.CHUNK_SIZE;
+                currentY += TerrainDataManager.CHUNK_MAX_Y;
             }
 
-            Task.WaitAll(tasks.ToArray()); // Wait for all tasks to complete
+            Task.WaitAll(tasks.ToArray());
 
-            Console.WriteLine("Chunks loaded: " + chunks.Count());
+            BuildAllChunkMeshes();
+
+            Console.WriteLine("Chunks loaded: " + chunks.Count);
+        }
+
+        private void BuildAllChunkMeshes()
+        {
+            Func<int, int, int, ushort> accessor = GetBlock;
+            foreach (var kvp in chunks)
+            {
+                kvp.Value.BuildRender(accessor);
+            }
         }
 
         public void Render(ShaderProgram program)
         {
-            foreach (var chunk in chunks)
+            foreach (var chunk in chunks.Values)
             {
                 chunk.Render(program);
             }
+        }
+
+        public ushort GetBlock(int wx, int wy, int wz)
+        {
+            int sizeX = TerrainDataManager.CHUNK_MAX_X;
+            int sizeY = TerrainDataManager.CHUNK_MAX_Y;
+            int sizeZ = TerrainDataManager.CHUNK_MAX_Z;
+
+            int cx = FloorDiv(wx, sizeX);
+            int cy = FloorDiv(wy, sizeY);
+            int cz = FloorDiv(wz, sizeZ);
+
+            var key = (cx, cy, cz);
+            if (!chunks.TryGetValue(key, out var chunk))
+            {
+                return (ushort)BaseBlockType.Empty;
+            }
+
+            int localX = wx - cx * sizeX;
+            int localY = wy - cy * sizeY;
+            int localZ = wz - cz * sizeZ;
+
+            return chunk.GetBlockLocal(localX, localY, localZ);
+        }
+
+        private static int FloorDiv(int a, int b)
+        {
+            return (int)Math.Floor((double)a / b);
+        }
+
+        private static (int cx, int cy, int cz) ChunkIndexKey(int baseX, int baseY, int baseZ)
+        {
+            int sizeX = TerrainDataManager.CHUNK_MAX_X;
+            int sizeY = TerrainDataManager.CHUNK_MAX_Y;
+            int sizeZ = TerrainDataManager.CHUNK_MAX_Z;
+
+            int cx = FloorDiv(baseX, sizeX);
+            int cy = FloorDiv(baseY, sizeY);
+            int cz = FloorDiv(baseZ, sizeZ);
+            return (cx, cy, cz);
         }
 
         private bool IsLatinAlphabet(string input)
@@ -250,14 +296,10 @@ namespace MVGE.World
 
         public void GetWorldName()
         {
-            string input;
-            bool isValid = false;
-
-            while (!isValid)
+            while (true)
             {
                 Console.WriteLine("Please enter a name for the world: ");
-                input = Console.ReadLine();
-
+                string input = Console.ReadLine();
                 if (IsLatinAlphabet(input))
                 {
                     if (worldSaves.Values.Contains(input))
@@ -267,7 +309,7 @@ namespace MVGE.World
                     else
                     {
                         worldName = input;
-                        isValid = true;
+                        break;
                     }
                 }
                 else
@@ -281,15 +323,12 @@ namespace MVGE.World
         {
             Console.WriteLine("Please enter a seed for the world: ");
             string input = Console.ReadLine();
-            Int32 parsedSeed;
 
-            while (!Int32.TryParse(input, out parsedSeed))
+            while (!int.TryParse(input, out seed))
             {
                 Console.WriteLine("Invalid input. Please enter a valid seed: ");
                 input = Console.ReadLine();
             }
-
-            seed = parsedSeed;
         }
     }
 }

@@ -7,17 +7,17 @@ using System.Threading.Tasks;
 
 namespace MVGE_INF.Managers
 {
-    public class TerrainDataLoader
+    public class TerrainDataManager
     {
         // Constants
-        public const int CHUNK_SIZE = 100;
-        public const int CHUNK_MAX_HEIGHT = 100;
-        public const float BLOCK_SIZE = 0.2f;
+        public const int CHUNK_MAX_X = 100;
+        public const int CHUNK_MAX_Z = 100;
+        public const int CHUNK_MAX_Y = 100;
 
         // Loading
         private ushort blockTypeCounter = 0;
 
-        public TerrainDataLoader()
+        public TerrainDataManager()
         {
             Console.WriteLine("Terrain data loading.");
 

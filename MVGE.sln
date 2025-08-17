@@ -12,6 +12,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MVGE-INF", "MVGE-INF\MVGE-I
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MVGE-GFX", "MVGE-GFX\MVGE-GFX.csproj", "{B8FBAF69-FB52-4C3D-A149-2AED36543274}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MVGE-Tools", "MVGE-Tools\MVGE-Tools.csproj", "{D17340C6-0D89-42EA-B8EA-8599BC87C26C}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -30,6 +32,10 @@ Global
 		{B8FBAF69-FB52-4C3D-A149-2AED36543274}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{B8FBAF69-FB52-4C3D-A149-2AED36543274}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{B8FBAF69-FB52-4C3D-A149-2AED36543274}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D17340C6-0D89-42EA-B8EA-8599BC87C26C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D17340C6-0D89-42EA-B8EA-8599BC87C26C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D17340C6-0D89-42EA-B8EA-8599BC87C26C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D17340C6-0D89-42EA-B8EA-8599BC87C26C}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

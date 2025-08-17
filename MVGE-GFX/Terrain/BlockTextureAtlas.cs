@@ -151,7 +151,7 @@ namespace MVGE_GFX.Terrain
         private void InitializeBlockTypeUVCoordinates()
         {
             ushort count = 0;
-            foreach (string blockType in TerrainDataLoader.allBlockTypes)
+            foreach (string blockType in TerrainDataManager.allBlockTypes)
             {
                 blockTypeUVCoordinates[count] = new Dictionary<Faces, ByteVector2>();
 
@@ -169,7 +169,7 @@ namespace MVGE_GFX.Terrain
             Console.WriteLine($"Mapping texture coordinates.");
 
             ushort count = 0;
-            foreach (string blockType in TerrainDataLoader.allBlockTypesByBaseType.Keys)
+            foreach (string blockType in TerrainDataManager.allBlockTypesByBaseType.Keys)
             {
                 string textureName = blockType.ToString();
 

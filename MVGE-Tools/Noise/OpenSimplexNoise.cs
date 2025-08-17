@@ -7,7 +7,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace MVGE.Tools
+namespace MVGE_Tools.Noise
 {
     public class OpenSimplexNoise
     {
@@ -216,11 +216,11 @@ namespace MVGE.Tools
                 int r = (int)((seed + 31) % (i + 1));
                 if (r < 0)
                 {
-                    r += (i + 1);
+                    r += i + 1;
                 }
                 perm[i] = source[r];
                 perm2D[i] = (byte)(perm[i] & 0x0E);
-                perm3D[i] = (byte)((perm[i] % 24) * 3);
+                perm3D[i] = (byte)(perm[i] % 24 * 3);
                 perm4D[i] = (byte)(perm[i] & 0xFC);
                 source[r] = source[i];
             }
@@ -246,7 +246,7 @@ namespace MVGE.Tools
 
             var hash =
                (int)(xins - yins + 1) |
-               (int)(inSum) << 1 |
+               (int)inSum << 1 |
                (int)(inSum + yins) << 2 |
                (int)(inSum + xins) << 4;
 
@@ -263,7 +263,7 @@ namespace MVGE.Tools
                     var px = xsb + c.xsb;
                     var py = ysb + c.ysb;
 
-                    var i = perm2D[(perm[px & 0xFF] + py) & 0xFF];
+                    var i = perm2D[perm[px & 0xFF] + py & 0xFF];
                     var valuePart = gradients2D[i] * dx + gradients2D[i + 1] * dy;
 
                     attn *= attn;
@@ -320,7 +320,7 @@ namespace MVGE.Tools
                     var py = ysb + c.ysb;
                     var pz = zsb + c.zsb;
 
-                    var i = perm3D[(perm[(perm[px & 0xFF] + py) & 0xFF] + pz) & 0xFF];
+                    var i = perm3D[perm[perm[px & 0xFF] + py & 0xFF] + pz & 0xFF];
                     var valuePart = gradients3D[i] * dx + gradients3D[i + 1] * dy + gradients3D[i + 2] * dz;
 
                     attn *= attn;
@@ -388,7 +388,7 @@ namespace MVGE.Tools
                     var pz = zsb + c.zsb;
                     var pw = wsb + c.wsb;
 
-                    var i = perm4D[(perm[(perm[(perm[px & 0xFF] + py) & 0xFF] + pz) & 0xFF] + pw) & 0xFF];
+                    var i = perm4D[perm[perm[perm[px & 0xFF] + py & 0xFF] + pz & 0xFF] + pw & 0xFF];
                     var valuePart = gradients4D[i] * dx + gradients4D[i + 1] * dy + gradients4D[i + 2] * dz + gradients4D[i + 3] * dw;
 
                     attn *= attn;

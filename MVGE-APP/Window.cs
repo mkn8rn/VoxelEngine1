@@ -1,6 +1,4 @@
 ﻿using MVGE.Gameplay;
-using MVGE.World;
-using MVGE.World.Terrain;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 using OpenTK.Windowing.Common;
@@ -29,12 +27,12 @@ namespace MVGE
     public class Window : GameWindow
     {
         // render pipeline
-        WorldManager world = null!;
+        World.World world = null!;
         BlockTextureAtlas blockTextureAtlas = null!;
         ShaderProgram shaderProgram = null!;
 
         // data loaders
-        TerrainDataLoader blockDataLoader = null!;
+        TerrainDataManager blockDataLoader = null!;
 
         // player
         Player player = null!;
@@ -79,12 +77,12 @@ namespace MVGE
 
             // Initialize the Data Loaders
             Console.WriteLine("Data loaders initializing.");
-            blockDataLoader = new TerrainDataLoader() ?? throw new Exception("blockDataLoader is null");
+            blockDataLoader = new TerrainDataManager() ?? throw new Exception("blockDataLoader is null");
 
             // Initialize the Texture Atlases
             Console.WriteLine("Texture atlases initializing.");
             blockTextureAtlas = new BlockTextureAtlas() ?? throw new Exception("blockTextureAtlas is null");
-            MeshRender.terrainTextureAtlas = blockTextureAtlas ?? throw new Exception("terrainTextureAtlas is null");
+            ChunkRender.terrainTextureAtlas = blockTextureAtlas ?? throw new Exception("terrainTextureAtlas is null");
 
             // Initialize the Shaders
             Console.WriteLine("Shaders initializing.");
@@ -96,7 +94,7 @@ namespace MVGE
             blockTextureAtlas.Bind();
 
             // Initialize the World rendering
-            world = new WorldManager() ?? throw new Exception("world is null");
+            world = new World.World() ?? throw new Exception("world is null");
 
             // Enabling OpenGL options
             Console.WriteLine("Enabling OpenGL options.");
