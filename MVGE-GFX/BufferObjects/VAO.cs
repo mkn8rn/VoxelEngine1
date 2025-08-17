@@ -5,9 +5,9 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace MVGE.Graphics.BufferObjects
+namespace MVGE_GFX.BufferObjects
 {
-    internal class VAO
+    public class VAO
     {
         public int ID;
         public VAO()

@@ -1,4 +1,4 @@
-﻿using MVGE.Graphics.BufferObjects;
+﻿using MVGE_GFX.BufferObjects;
 using MVGE.World.Terrain;
 using MVGE_GFX;
 using MVGE_INF.Managers;
