@@ -79,7 +79,7 @@ namespace MVGE
 
         public GameManager() : base(GameWindowSettings.Default, NativeWindowSettings.Default)
         {
-            this.flags = ArgumentsMiddleware.Flags;
+            this.flags = FlagsMiddleware.Flags;
             // Load the settings
             SetDefaultSettings();
 
@@ -134,7 +134,6 @@ namespace MVGE
             System.Runtime.GCSettings.LargeObjectHeapCompactionMode = System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
             GC.Collect();
             GC.WaitForPendingFinalizers();
-            GC.Collect();
 
             // Initialize the Player (and its Camera)
             Console.WriteLine("Initializing player.");

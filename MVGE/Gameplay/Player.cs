@@ -17,20 +17,19 @@ namespace MVGE.Gameplay
 
     internal class Player
     {
-        private PlayerState gameMode;
+        private PlayerState playerMode;
         public Vector3 position = Vector3.Zero;
         public Vector3 velocity = Vector3.Zero;
         public Vector3 direction = -Vector3.UnitZ; // Facing forward
 
         private float SPEED = 12f;
         private float jumpStrength = 5f;
-        private bool isGrounded = true;
 
         public Camera camera;
 
         public Player()
         {
-            gameMode = PlayerState.Alive;
+            playerMode = PlayerState.Alive;
             camera = new Camera(position);
         }
 
