@@ -29,7 +29,7 @@ namespace World
         // Static noise cache per seed to avoid re-instantiation cost
         private static readonly Dictionary<long, OpenSimplexNoise> noiseCache = new();
 
-        private const int SECTION_SHIFT = 4; // since SECTION_SIZE = 16
+        private const int SECTION_SHIFT = 4;
         private const int SECTION_MASK = 0xF;
 
         public Chunk(Vector3 chunkPosition, long seed, string chunkDataDirectory, float[,] precomputedHeightmap = null)
@@ -37,7 +37,7 @@ namespace World
             position = chunkPosition;
             saveDirectory = chunkDataDirectory;
             generationSeed = seed;
-            this.precomputedHeightmap = precomputedHeightmap; // may be null
+            this.precomputedHeightmap = precomputedHeightmap;
 
             chunkData = new ChunkData
             {
@@ -251,7 +251,7 @@ namespace World
 
         internal void BuildRender(Func<int, int, int, ushort> worldBlockGetter)
         {
-            chunkRender?.Delete();
+            chunkRender?.ScheduleDelete();
             chunkRender = new ChunkRender(
                 chunkData,
                 worldBlockGetter,

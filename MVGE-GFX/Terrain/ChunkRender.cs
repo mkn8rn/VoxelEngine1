@@ -5,6 +5,7 @@ using MVGE_INF.Models.Terrain;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 
@@ -36,6 +37,9 @@ namespace MVGE_GFX.Terrain
         private IndexFormat indexFormat;
         private List<ushort> chunkIndicesUShort;
 
+        // Queue for GL deletions to be processed on render thread
+        private static readonly ConcurrentQueue<ChunkRender> pendingDeletion = new();
+
         public ChunkRender(
             ChunkData chunkData,
             Func<int, int, int, ushort> worldBlockGetter,
@@ -52,6 +56,21 @@ namespace MVGE_GFX.Terrain
             chunkWorldPosition = new Vector3(chunkData.x, chunkData.y, chunkData.z);
 
             GenerateFacesParallel();
+        }
+
+        public static void ProcessPendingDeletes()
+        {
+            while (pendingDeletion.TryDequeue(out var cr))
+            {
+                cr.DeleteGL();
+            }
+        }
+
+        public void ScheduleDelete()
+        {
+            // If never built yet (no GL objects), safe to ignore
+            if (!isBuilt) return;
+            pendingDeletion.Enqueue(this);
         }
 
         public void IntegrateFace(ushort block, Faces face, ByteVector3 blockPosition)
@@ -132,6 +151,9 @@ namespace MVGE_GFX.Terrain
 
         public void Render(ShaderProgram program)
         {
+            // Ensure pending deletions are processed each frame from GL thread
+            ProcessPendingDeletes();
+
             if (!isBuilt) Build();
 
             Vector3 adjustedChunkPosition = chunkWorldPosition + new Vector3(1f, 1f, 1f);
@@ -186,42 +208,36 @@ namespace MVGE_GFX.Terrain
                             int wy = (int)chunkWorldPosition.Y + y;
                             int wz = (int)chunkWorldPosition.Z + z;
 
-                            // Check if the left face is empty
-                            if ((x > 0 && getLocalBlock(x - 1, y, z) == emptyBlock) 
+                            if ((x > 0 && getLocalBlock(x - 1, y, z) == emptyBlock)
                                 || (x == 0 && getWorldBlock(wx - 1, wy, wz) == emptyBlock))
                             {
                                 local.Add(new PendingFace(block, Faces.LEFT, (byte)x, (byte)y, (byte)z));
                             }
 
-                            // Check if the right face is empty
-                            if ((x < maxX - 1 && getLocalBlock(x + 1, y, z) == emptyBlock) 
+                            if ((x < maxX - 1 && getLocalBlock(x + 1, y, z) == emptyBlock)
                                 || (x == maxX - 1 && getWorldBlock(wx + 1, wy, wz) == emptyBlock))
                             {
                                 local.Add(new PendingFace(block, Faces.RIGHT, (byte)x, (byte)y, (byte)z));
                             }
 
-                            // Check if the top face is empty
-                            if ((y < maxY - 1 && getLocalBlock(x, y + 1, z) == emptyBlock) 
+                            if ((y < maxY - 1 && getLocalBlock(x, y + 1, z) == emptyBlock)
                                 || (y == maxY - 1 && getWorldBlock(wx, wy + 1, wz) == emptyBlock))
-                            {  
+                            {
                                 local.Add(new PendingFace(block, Faces.TOP, (byte)x, (byte)y, (byte)z));
                             }
 
-                            // Check if the bottom face is empty
-                            if ((y > 0 && getLocalBlock(x, y - 1, z) == emptyBlock) 
+                            if ((y > 0 && getLocalBlock(x, y - 1, z) == emptyBlock)
                                 || (y == 0 && getWorldBlock(wx, wy - 1, wz) == emptyBlock))
                             {
                                 local.Add(new PendingFace(block, Faces.BOTTOM, (byte)x, (byte)y, (byte)z));
                             }
 
-                            // Check if the front face is empty
-                            if ((z < maxZ - 1 && getLocalBlock(x, y, z + 1) == emptyBlock) 
+                            if ((z < maxZ - 1 && getLocalBlock(x, y, z + 1) == emptyBlock)
                                 || (z == maxZ - 1 && getWorldBlock(wx, wy, wz + 1) == emptyBlock))
                             {
                                 local.Add(new PendingFace(block, Faces.FRONT, (byte)x, (byte)y, (byte)z));
                             }
 
-                            // Check if the back face is empty
                             if ((z > 0 && getLocalBlock(x, y, z - 1) == emptyBlock) ||
                                 (z == 0 && getWorldBlock(wx, wy, wz - 1) == emptyBlock))
                             {
@@ -269,59 +285,53 @@ namespace MVGE_GFX.Terrain
                 var bp = new ByteVector3 { x = (byte)x, y = (byte)y, z = (byte)z };
                 int faces = 0;
 
-                // Check if the left face is empty
-                if ((x > 0 && getLocalBlock(x - 1, y, z) == emptyBlock) 
+                if ((x > 0 && getLocalBlock(x - 1, y, z) == emptyBlock)
                    || (x == 0 && getWorldBlock(wx - 1, wy, wz) == emptyBlock))
-                { 
-                    IntegrateFace(block, Faces.LEFT, bp); 
-                    faces++; 
+                {
+                    IntegrateFace(block, Faces.LEFT, bp);
+                    faces++;
                 }
 
-                // Check if the right face is empty
-                if ((x < maxX - 1 && getLocalBlock(x + 1, y, z) == emptyBlock) 
+                if ((x < maxX - 1 && getLocalBlock(x + 1, y, z) == emptyBlock)
                    || (x == maxX - 1 && getWorldBlock(wx + 1, wy, wz) == emptyBlock))
-                { 
-                   IntegrateFace(block, Faces.RIGHT, bp); 
+                {
+                   IntegrateFace(block, Faces.RIGHT, bp);
                    faces++;
                 }
 
-                // Check if the top face is empty
-                if ((y < maxY - 1 && getLocalBlock(x, y + 1, z) == emptyBlock) 
+                if ((y < maxY - 1 && getLocalBlock(x, y + 1, z) == emptyBlock)
                    || (y == maxY - 1 && getWorldBlock(wx, wy + 1, wz) == emptyBlock))
-                { 
-                    IntegrateFace(block, Faces.TOP, bp); 
-                    faces++; 
+                {
+                    IntegrateFace(block, Faces.TOP, bp);
+                    faces++;
                 }
 
-                // Check if the bottom face is empty
-                if ((y > 0 && getLocalBlock(x, y - 1, z) == emptyBlock) 
+                if ((y > 0 && getLocalBlock(x, y - 1, z) == emptyBlock)
                    || (y == 0 && getWorldBlock(wx, wy - 1, wz) == emptyBlock))
-                { 
-                    IntegrateFace(block, Faces.BOTTOM, bp); 
-                    faces++; 
+                {
+                    IntegrateFace(block, Faces.BOTTOM, bp);
+                    faces++;
                 }
 
-                // Check if the front face is empty
-                if ((z < maxZ - 1 && getLocalBlock(x, y, z + 1) == emptyBlock) 
+                if ((z < maxZ - 1 && getLocalBlock(x, y, z + 1) == emptyBlock)
                    || (z == maxZ - 1 && getWorldBlock(wx, wy, wz + 1) == emptyBlock))
-                { 
-                    IntegrateFace(block, Faces.FRONT, bp); 
-                    faces++; 
+                {
+                    IntegrateFace(block, Faces.FRONT, bp);
+                    faces++;
                 }
-                
-                // Check if the back face is empty
-                if ((z > 0 && getLocalBlock(x, y, z - 1) == emptyBlock) 
+
+                if ((z > 0 && getLocalBlock(x, y, z - 1) == emptyBlock)
                    || (z == 0 && getWorldBlock(wx, wy, wz - 1) == emptyBlock))
-                { 
-                    IntegrateFace(block, Faces.BACK, bp); 
-                    faces++; 
+                {
+                    IntegrateFace(block, Faces.BACK, bp);
+                    faces++;
                 }
 
                 if (faces > 0) AddIndices(faces);
             }
         }
 
-        public void Delete()
+        private void DeleteGL()
         {
             if (!isBuilt) return;
             chunkVAO.Delete();

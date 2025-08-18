@@ -3,9 +3,11 @@ using MVGE_INF.Managers;
 using MVGE_INF.Models.Terrain;
 using OpenTK.Mathematics;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using World;
 
@@ -20,12 +22,13 @@ namespace MVGE.World
         LoD5
     }
 
-    internal class World
+    internal class World : IDisposable
     {
         public Guid ID;
         public string worldName;
 
-        private readonly Dictionary<(int cx, int cy, int cz), Chunk> chunks = new();
+        // Switched to concurrent dictionary for streaming writes/reads
+        private readonly ConcurrentDictionary<(int cx, int cy, int cz), Chunk> chunks = new();
 
         // Settings
         private int seed;
@@ -37,14 +40,172 @@ namespace MVGE.World
 
         private static Dictionary<Guid, string> worldSaves = new Dictionary<Guid, string>();
 
+        // Streaming pipeline structures
+        private BlockingCollection<Vector3> chunkPositionQueue;
+        private CancellationTokenSource streamingCts;
+        private Task[] generationWorkers;
+        private int workerCount;
+        private Func<int, int, int, ushort> worldBlockAccessor; // cached delegate
+
         public World()
         {
             Console.WriteLine("World manager initializing.");
 
             ChooseWorld();
-            LoadChunks();
-
             Console.WriteLine("World manager loaded.");
+
+            InitializeStreaming();
+            Console.WriteLine("Streaming chunk generation...");
+        }
+
+        private void InitializeStreaming()
+        {
+            worldBlockAccessor = GetBlock;
+
+            // Prepare queue & cancellation
+            streamingCts = new CancellationTokenSource();
+            chunkPositionQueue = new BlockingCollection<Vector3>(new ConcurrentQueue<Vector3>());
+
+            // Enqueue initial target chunk positions (spiral ordering) non-blocking
+            EnqueueInitialChunkPositions();
+
+            // Worker count: leave 1 core for render thread if possible
+            workerCount = Math.Max(1, Environment.ProcessorCount - 1);
+            generationWorkers = new Task[workerCount];
+            for (int i = 0; i < workerCount; i++)
+            {
+                generationWorkers[i] = Task.Run(() => ChunkGenerationWorker(streamingCts.Token));
+            }
+        }
+
+        private void EnqueueInitialChunkPositions()
+        {
+            int lodDist = GameManager.settings.lod1RenderDistance; 
+            int sizeX = GameManager.settings.chunkMaxX;
+            int sizeY = GameManager.settings.chunkMaxY;
+            int sizeZ = GameManager.settings.chunkMaxZ;
+            int verticalRows = lodDist; // current design: same count vertically
+
+            // Spiral over XZ plane for each vertical layer
+            for (int vy = 0; vy < verticalRows; vy++)
+            {
+                int baseY = vy * sizeY; // starting at 0 upward
+                // radius rings 0..lodDist-1
+                for (int radius = 0; radius < lodDist; radius++)
+                {
+                    if (radius == 0)
+                    {
+                        chunkPositionQueue.Add(new Vector3(0, baseY, 0));
+                        continue;
+                    }
+
+                    int minX = -radius;
+                    int maxX = radius;
+                    int minZ = -radius;
+                    int maxZ = radius;
+
+                    // Walk the perimeter clockwise
+                    for (int x = minX; x <= maxX; x++)
+                    {
+                        int zTop = maxZ;
+                        int zBottom = minZ;
+                        if (x == minX || x == maxX)
+                        {
+                            // full vertical edges
+                            for (int z = minZ; z <= maxZ; z++)
+                            {
+                                EnqueueChunkPosition(x * sizeX, baseY, z * sizeZ);
+                            }
+                        }
+                        else
+                        {
+                            // top and bottom rows
+                            EnqueueChunkPosition(x * sizeX, baseY, zTop * sizeZ);
+                            EnqueueChunkPosition(x * sizeX, baseY, zBottom * sizeZ);
+                        }
+                    }
+                }
+            }
+        }
+
+        private void EnqueueChunkPosition(int x, int y, int z)
+        {
+            chunkPositionQueue.Add(new Vector3(x, y, z));
+        }
+
+        private void ChunkGenerationWorker(CancellationToken token)
+        {
+            string chunkSaveDirectory = Path.Combine(currentWorldSaveDirectory, currentWorldSavedChunksSubDirectory);
+            try
+            {
+                foreach (var pos in chunkPositionQueue.GetConsumingEnumerable(token))
+                {
+                    if (token.IsCancellationRequested) break;
+
+                    // Heightmap reuse per (x,z)
+                    int baseX = (int)pos.X;
+                    int baseZ = (int)pos.Z;
+                    var heightmap = Chunk.GenerateHeightMap(seed, baseX, baseZ);
+
+                    var chunk = new Chunk(pos, seed, chunkSaveDirectory, heightmap);
+                    var key = ChunkIndexKey((int)pos.X, (int)pos.Y, (int)pos.Z);
+                    chunks[key] = chunk;
+
+                    // Build mesh CPU-side (face extraction) now (OpenGL build deferred until render)
+                    lock (chunk)
+                    {
+                        chunk.BuildRender(worldBlockAccessor);
+                    }
+
+                    // Rebuild neighbors (remove now hidden faces)
+                    RebuildNeighborMeshes(key);
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Chunk generation worker error: " + ex.Message);
+            }
+        }
+
+        private static readonly (int dx,int dy,int dz)[] NeighborDirs = new (int,int,int)[]
+        {
+            (-1,0,0),(1,0,0),(0,-1,0),(0,1,0),(0,0,-1),(0,0,1)
+        };
+
+        private void RebuildNeighborMeshes((int cx,int cy,int cz) key)
+        {
+            foreach (var (dx,dy,dz) in NeighborDirs)
+            {
+                var nk = (key.cx+dx, key.cy+dy, key.cz+dz);
+                if (chunks.TryGetValue(nk, out var neighbor))
+                {
+                    // Rebuild neighbor mesh to cull interior faces exposed by late neighbor arrival
+                    lock (neighbor)
+                    {
+                        neighbor.BuildRender(worldBlockAccessor);
+                    }
+                }
+            }
+        }
+
+        public void Dispose()
+        {
+            try
+            {
+                streamingCts?.Cancel();
+                chunkPositionQueue?.CompleteAdding();
+                if (generationWorkers != null)
+                {
+                    Task.WaitAll(generationWorkers, TimeSpan.FromSeconds(2));
+                }
+            }
+            catch { }
+            finally
+            {
+                streamingCts?.Dispose();
+                chunkPositionQueue?.Dispose();
+            }
         }
 
         private void ChooseWorld()
@@ -166,85 +327,6 @@ namespace MVGE.World
             }
 
             Console.WriteLine($"Loaded world save: {worldName}, id: {id}, seed: {seed}");
-        }
-
-        public void LoadChunks()
-        {
-            Console.WriteLine("Loading chunks.");
-
-            string chunkSaveDirectory = Path.Combine(currentWorldSaveDirectory, currentWorldSavedChunksSubDirectory);
-
-            int chunkDistance = (GameManager.settings.lod1RenderDistance - 1) * 2;
-            int chunksToRenderHorizontalRow = (chunkDistance + 1) * (chunkDistance + 1);
-            int verticalRows = GameManager.settings.lod1RenderDistance;
-
-            int startX = -(GameManager.settings.lod1RenderDistance - 1) * GameManager.settings.chunkMaxX;
-            int startZ = -(GameManager.settings.lod1RenderDistance - 1) * GameManager.settings.chunkMaxZ;
-            int startY = 0;
-            int currentX = startX;
-            int currentZ = startZ;
-            int currentY = startY;
-
-            List<Task> tasks = new List<Task>();
-            object locker = new object();
-
-            // Cache heightmaps for each horizontal (x,z) chunk coordinate so vertical stacks reuse it
-            var heightmapCache = new Dictionary<(int hx, int hz), float[,]>();
-
-            for (int j = 0; j < verticalRows; j++)
-            {
-                for (int i = 0; i < chunksToRenderHorizontalRow; i++)
-                {
-                    if (i % (chunkDistance + 1) == 0 && i != 0)
-                    {
-                        currentZ += GameManager.settings.chunkMaxZ;
-                        currentX = startX;
-                    }
-
-                    Vector3 chunkPosition = new Vector3(currentX, currentY, currentZ);
-                    int baseX = (int)chunkPosition.X;
-                    int baseZ = (int)chunkPosition.Z;
-                    var cacheKey = (baseX, baseZ);
-
-                    if (!heightmapCache.TryGetValue(cacheKey, out var heightmap))
-                    {
-                        heightmap = Chunk.GenerateHeightMap(seed, baseX, baseZ);
-                        heightmapCache[cacheKey] = heightmap;
-                    }
-
-                    var capturedHeightmap = heightmap; // capture for closure
-
-                    tasks.Add(Task.Run(() =>
-                    {
-                        Chunk chunk = new Chunk(chunkPosition, seed, chunkSaveDirectory, capturedHeightmap);
-                        var key = ChunkIndexKey((int)chunk.position.X, (int)chunk.position.Y, (int)chunk.position.Z);
-                        lock (locker)
-                        {
-                            chunks[key] = chunk;
-                        }
-                    }));
-
-                    currentX += GameManager.settings.chunkMaxX;
-                }
-                currentX = startX;
-                currentZ = startZ;
-                currentY += GameManager.settings.chunkMaxY;
-            }
-
-            Task.WaitAll(tasks.ToArray());
-
-            BuildAllChunkMeshes();
-
-            Console.WriteLine("Chunks loaded: " + chunks.Count);
-        }
-
-        private void BuildAllChunkMeshes()
-        {
-            Func<int, int, int, ushort> accessor = GetBlock;
-            foreach (var kvp in chunks)
-            {
-                kvp.Value.BuildRender(accessor);
-            }
         }
 
         public void Render(ShaderProgram program)
