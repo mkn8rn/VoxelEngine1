@@ -44,15 +44,15 @@ namespace World
         private void InitializeSectionGrid()
         {
             int S = ChunkSection.SECTION_SIZE;
-            if (TerrainDataManager.CHUNK_MAX_X % S != 0 ||
-                TerrainDataManager.CHUNK_MAX_Y % S != 0 ||
-                TerrainDataManager.CHUNK_MAX_Z % S != 0)
+            if (GameManager.settings.chunkMaxX % S != 0 ||
+                GameManager.settings.chunkMaxY % S != 0 ||
+                GameManager.settings.chunkMaxZ % S != 0)
             {
                 throw new InvalidOperationException("Chunk dimensions must be multiples of section size: " + ChunkSection.SECTION_SIZE.ToString());
             }
-            sectionsX = TerrainDataManager.CHUNK_MAX_X / S;
-            sectionsY = TerrainDataManager.CHUNK_MAX_Y / S;
-            sectionsZ = TerrainDataManager.CHUNK_MAX_Z / S;
+            sectionsX = GameManager.settings.chunkMaxX / S;
+            sectionsY = GameManager.settings.chunkMaxY / S;
+            sectionsZ = GameManager.settings.chunkMaxZ / S;
             sections = new ChunkSection[sectionsX, sectionsY, sectionsZ];
         }
 
@@ -63,12 +63,12 @@ namespace World
         public void GenerateInitialChunkData()
         {
             float[,] heightmap = GenerateHeightMap(generationSeed);
-            for (int x = 0; x < TerrainDataManager.CHUNK_MAX_X; x++)
+            for (int x = 0; x < GameManager.settings.chunkMaxX; x++)
             {
-                for (int z = 0; z < TerrainDataManager.CHUNK_MAX_Z; z++)
+                for (int z = 0; z < GameManager.settings.chunkMaxZ; z++)
                 {
                     int columnHeight = (int)heightmap[x, z];
-                    for (int y = 0; y < TerrainDataManager.CHUNK_MAX_Y; y++)
+                    for (int y = 0; y < GameManager.settings.chunkMaxY; y++)
                     {
                         ushort blockId = GenerateInitialBlockData(x, y, z, columnHeight);
                         if (blockId != (ushort)BaseBlockType.Empty)
@@ -101,15 +101,15 @@ namespace World
 
         public float[,] GenerateHeightMap(long seed)
         {
-            float[,] heightmap = new float[TerrainDataManager.CHUNK_MAX_X, TerrainDataManager.CHUNK_MAX_Z];
+            float[,] heightmap = new float[GameManager.settings.chunkMaxX, GameManager.settings.chunkMaxZ];
             var noise = new OpenSimplexNoise(seed);
             float scale = 0.005f;
             float minHeight = 1f;
             float maxHeight = 200f;
 
-            for (int x = 0; x < TerrainDataManager.CHUNK_MAX_X; x++)
+            for (int x = 0; x < GameManager.settings.chunkMaxX; x++)
             {
-                for (int z = 0; z < TerrainDataManager.CHUNK_MAX_Z; z++)
+                for (int z = 0; z < GameManager.settings.chunkMaxZ; z++)
                 {
                     float noiseValue = (float)noise.Evaluate((x + position.X) * scale, (z + position.Z) * scale);
                     float normalizedValue = (noiseValue + 1f) * 0.5f;
@@ -142,9 +142,9 @@ namespace World
         internal ushort GetBlockLocal(int lx, int ly, int lz)
         {
             if (lx < 0 || ly < 0 || lz < 0 ||
-                lx >= TerrainDataManager.CHUNK_MAX_X ||
-                ly >= TerrainDataManager.CHUNK_MAX_Y ||
-                lz >= TerrainDataManager.CHUNK_MAX_Z)
+                lx >= GameManager.settings.chunkMaxX ||
+                ly >= GameManager.settings.chunkMaxY ||
+                lz >= GameManager.settings.chunkMaxZ)
                 return (ushort)BaseBlockType.Empty;
 
             LocalToSection(lx, ly, lz, out int sx, out int sy, out int sz, out int ox, out int oy, out int oz);
@@ -155,9 +155,9 @@ namespace World
         internal void SetBlockLocal(int lx, int ly, int lz, ushort blockId)
         {
             if (lx < 0 || ly < 0 || lz < 0 ||
-                lx >= TerrainDataManager.CHUNK_MAX_X ||
-                ly >= TerrainDataManager.CHUNK_MAX_Y ||
-                lz >= TerrainDataManager.CHUNK_MAX_Z)
+                lx >= GameManager.settings.chunkMaxX ||
+                ly >= GameManager.settings.chunkMaxY ||
+                lz >= GameManager.settings.chunkMaxZ)
                 return;
 
             LocalToSection(lx, ly, lz, out int sx, out int sy, out int sz, out int ox, out int oy, out int oz);

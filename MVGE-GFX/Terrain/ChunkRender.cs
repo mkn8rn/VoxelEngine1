@@ -152,9 +152,9 @@ namespace MVGE_GFX.Terrain
 
         private void GenerateFacesParallel()
         {
-            int maxX = TerrainDataManager.CHUNK_MAX_X;
-            int maxY = TerrainDataManager.CHUNK_MAX_Y;
-            int maxZ = TerrainDataManager.CHUNK_MAX_Z;
+            int maxX = GameManager.settings.chunkMaxX;
+            int maxY = GameManager.settings.chunkMaxY;
+            int maxZ = GameManager.settings.chunkMaxZ;
 
             if (maxX * maxY * maxZ < 16_000)
             {
@@ -251,9 +251,9 @@ namespace MVGE_GFX.Terrain
 
         private void GenerateFacesSingle()
         {
-            int maxX = TerrainDataManager.CHUNK_MAX_X;
-            int maxY = TerrainDataManager.CHUNK_MAX_Y;
-            int maxZ = TerrainDataManager.CHUNK_MAX_Z;
+            int maxX = GameManager.settings.chunkMaxX;
+            int maxY = GameManager.settings.chunkMaxY;
+            int maxZ = GameManager.settings.chunkMaxZ;
 
             for (int x = 0; x < maxX; x++)
             for (int z = 0; z < maxZ; z++)

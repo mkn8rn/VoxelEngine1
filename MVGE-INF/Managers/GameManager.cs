@@ -49,6 +49,9 @@ namespace MVGE_INF.Managers
                 return value;
             }
 
+            settings.chunkMaxX = int.Parse(GetSetting("chunkMaxX"));
+            settings.chunkMaxZ = int.Parse(GetSetting("chunkMaxZ"));
+            settings.chunkMaxY = int.Parse(GetSetting("chunkMaxY"));
             settings.blockTileWidth = int.Parse(GetSetting("blockTileWidth"));
             settings.blockTileHeight = int.Parse(GetSetting("blockTileHeight"));
             settings.textureFileExtension = GetSetting("textureFileExtension");

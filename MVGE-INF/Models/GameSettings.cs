@@ -2,6 +2,11 @@ namespace MVGE_INF.Models
 {
     public struct GameSettings
     {
+        // Chunk settings
+        public int chunkMaxX;
+        public int chunkMaxZ;
+        public int chunkMaxY;
+
         // Block texture atlas settings
         public int blockTileWidth;
         public int blockTileHeight;

@@ -1,7 +1,10 @@
-﻿blockTileWidth=32
+﻿chunkMaxX=100
+chunkMaxZ=100
+chunkMaxY=100
+blockTileWidth=32
 blockTileHeight=32
 textureFileExtension=.png
-lod1RenderDistance=6
+lod1RenderDistance=9
 lod2RenderDistance=18
 lod3RenderDistance=54
 lod4RenderDistance=162

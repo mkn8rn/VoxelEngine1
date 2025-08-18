@@ -9,11 +9,6 @@ namespace MVGE_INF.Managers
 {
     public class TerrainDataManager
     {
-        // Constants
-        public const int CHUNK_MAX_X = 100;
-        public const int CHUNK_MAX_Z = 100;
-        public const int CHUNK_MAX_Y = 100;
-
         // Loading
         private ushort blockTypeCounter = 0;
 

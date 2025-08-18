@@ -178,8 +178,8 @@ namespace MVGE.World
             int chunksToRenderHorizontalRow = (chunkDistance + 1) * (chunkDistance + 1);
             int verticalRows = GameManager.settings.lod1RenderDistance;
 
-            int startX = -(GameManager.settings.lod1RenderDistance - 1) * TerrainDataManager.CHUNK_MAX_X;
-            int startZ = -(GameManager.settings.lod1RenderDistance - 1) * TerrainDataManager.CHUNK_MAX_Z;
+            int startX = -(GameManager.settings.lod1RenderDistance - 1) * GameManager.settings.chunkMaxX;
+            int startZ = -(GameManager.settings.lod1RenderDistance - 1) * GameManager.settings.chunkMaxZ;
             int startY = 0;
             int currentX = startX;
             int currentZ = startZ;
@@ -195,7 +195,7 @@ namespace MVGE.World
                 {
                     if (i % (chunkDistance + 1) == 0 && i != 0)
                     {
-                        currentZ += TerrainDataManager.CHUNK_MAX_Z;
+                        currentZ += GameManager.settings.chunkMaxZ;
                         currentX = startX;
                     }
 
@@ -211,11 +211,11 @@ namespace MVGE.World
                         }
                     }));
 
-                    currentX += TerrainDataManager.CHUNK_MAX_X;
+                    currentX += GameManager.settings.chunkMaxX;
                 }
                 currentX = startX;
                 currentZ = startZ;
-                currentY += TerrainDataManager.CHUNK_MAX_Y;
+                currentY += GameManager.settings.chunkMaxY;
             }
 
             Task.WaitAll(tasks.ToArray());
@@ -244,9 +244,9 @@ namespace MVGE.World
 
         public ushort GetBlock(int wx, int wy, int wz)
         {
-            int sizeX = TerrainDataManager.CHUNK_MAX_X;
-            int sizeY = TerrainDataManager.CHUNK_MAX_Y;
-            int sizeZ = TerrainDataManager.CHUNK_MAX_Z;
+            int sizeX = GameManager.settings.chunkMaxX;
+            int sizeY = GameManager.settings.chunkMaxY;
+            int sizeZ = GameManager.settings.chunkMaxZ;
 
             int cx = FloorDiv(wx, sizeX);
             int cy = FloorDiv(wy, sizeY);
@@ -272,9 +272,9 @@ namespace MVGE.World
 
         private static (int cx, int cy, int cz) ChunkIndexKey(int baseX, int baseY, int baseZ)
         {
-            int sizeX = TerrainDataManager.CHUNK_MAX_X;
-            int sizeY = TerrainDataManager.CHUNK_MAX_Y;
-            int sizeZ = TerrainDataManager.CHUNK_MAX_Z;
+            int sizeX = GameManager.settings.chunkMaxX;
+            int sizeY = GameManager.settings.chunkMaxY;
+            int sizeZ = GameManager.settings.chunkMaxZ;
 
             int cx = FloorDiv(baseX, sizeX);
             int cy = FloorDiv(baseY, sizeY);
