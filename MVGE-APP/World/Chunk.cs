@@ -29,6 +29,9 @@ namespace World
         // Static noise cache per seed to avoid re-instantiation cost
         private static readonly Dictionary<long, OpenSimplexNoise> noiseCache = new();
 
+        private const int SECTION_SHIFT = 4; // since SECTION_SIZE = 16
+        private const int SECTION_MASK = 0xF;
+
         public Chunk(Vector3 chunkPosition, long seed, string chunkDataDirectory, float[,] precomputedHeightmap = null)
         {
             position = chunkPosition;
@@ -94,12 +97,6 @@ namespace World
                         if (soilCapExclusive <= chunkBaseY) continue; // nothing in this vertical slice
                     }
 
-                    // Determine stone region intersection with this chunk
-                    if (columnHeight < chunkBaseY)
-                    {
-                        // No stone in this chunk
-                    }
-
                     int stoneWorldTop = Math.Min(columnHeight, chunkTopY);
                     int stoneLocalTop = stoneWorldTop - chunkBaseY; // inclusive
 
@@ -124,9 +121,9 @@ namespace World
                     if (maxNonAirLocalY < 0) continue; // nothing to place
 
                     // Pre-create needed sections for this (x,z) column
-                    int sx = x / S;
-                    int sz = z / S;
-                    for (int sy = 0; sy <= maxNonAirLocalY / S; sy++)
+                    int sx = x >> SECTION_SHIFT;
+                    int sz = z >> SECTION_SHIFT;
+                    for (int sy = 0; sy <= (maxNonAirLocalY >> SECTION_SHIFT); sy++)
                     {
                         if (sections[sx, sy, sz] == null)
                         {
@@ -200,7 +197,7 @@ namespace World
                 for (int z = 0; z < maxZ; z++)
                 {
                     float noiseValue = (float)noise.Evaluate((x + chunkBaseX) * scale, (z + chunkBaseZ) * scale);
-                    float normalizedValue = (noiseValue + 1f) * 0.5f;
+                    float normalizedValue = (noiseValue * 0.5f) + 0.5f; // (n+1)/2
                     heightmap[x, z] = normalizedValue * (maxHeight - minHeight) + minHeight;
                 }
             }
@@ -222,9 +219,8 @@ namespace World
             out int sx, out int sy, out int sz,
             out int ox, out int oy, out int oz)
         {
-            int S = ChunkSection.SECTION_SIZE;
-            sx = lx / S; sy = ly / S; sz = lz / S;
-            ox = lx % S; oy = ly % S; oz = lz % S;
+            sx = lx >> SECTION_SHIFT; sy = ly >> SECTION_SHIFT; sz = lz >> SECTION_SHIFT;
+            ox = lx & SECTION_MASK; oy = ly & SECTION_MASK; oz = lz & SECTION_MASK;
         }
 
         internal ushort GetBlockLocal(int lx, int ly, int lz)

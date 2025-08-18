@@ -4,7 +4,7 @@ namespace MVGE_INF.Models.Terrain
 {
     public sealed class ChunkSection
     {
-        public const int SECTION_SIZE = 20;
+        public const int SECTION_SIZE = 16;
         public const ushort AIR = 0;
 
         public bool IsAllAir = true;
