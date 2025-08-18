@@ -23,10 +23,9 @@ namespace World
         private int sectionsY;
         private int sectionsZ;
 
-        // Optional precomputed heightmap (shared across vertical stack)
-        private readonly float[,] precomputedHeightmap;
+        // Heightmap only needed during initial generation; release after use
+        private float[,] precomputedHeightmap;
 
-        // Static noise cache per seed to avoid re-instantiation cost
         private static readonly Dictionary<long, OpenSimplexNoise> noiseCache = new();
 
         private const int SECTION_SHIFT = 4;
@@ -76,8 +75,6 @@ namespace World
             int maxX = GameManager.settings.chunkMaxX;
             int maxY = GameManager.settings.chunkMaxY;
             int maxZ = GameManager.settings.chunkMaxZ;
-            int S = ChunkSection.SECTION_SIZE;
-
             float[,] heightmap = precomputedHeightmap ?? GenerateHeightMap(generationSeed);
 
             int chunkBaseY = (int)position.Y;
@@ -87,26 +84,20 @@ namespace World
             {
                 for (int z = 0; z < maxZ; z++)
                 {
-                    int columnHeight = (int)heightmap[x, z]; // absolute world height
-
-                    // If entire chunk is above soil/stone cap, skip
+                    int columnHeight = (int)heightmap[x, z];
                     if (columnHeight < chunkBaseY)
                     {
-                        // Potentially soil could extend slightly above columnHeight; compute soil cap to be sure
                         int soilCapExclusive = (int)Math.Floor((2.0 / 3.0) * (columnHeight + 100));
-                        if (soilCapExclusive <= chunkBaseY) continue; // nothing in this vertical slice
+                        if (soilCapExclusive <= chunkBaseY) continue;
                     }
 
                     int stoneWorldTop = Math.Min(columnHeight, chunkTopY);
-                    int stoneLocalTop = stoneWorldTop - chunkBaseY; // inclusive
-
+                    int stoneLocalTop = stoneWorldTop - chunkBaseY;
                     bool hasStone = columnHeight >= chunkBaseY && chunkBaseY <= stoneWorldTop;
 
-                    // Soil region derived from inequality currentHeight < (2/3)*(columnHeight + 100)
                     int soilCapExclusiveWorldY = (int)Math.Floor((2.0 / 3.0) * (columnHeight + 100));
-                    int soilLocalStart = (columnHeight + 1) - chunkBaseY; // first layer above stone
-                    int soilLocalEnd = soilCapExclusiveWorldY - 1 - chunkBaseY; // inclusive
-
+                    int soilLocalStart = (columnHeight + 1) - chunkBaseY;
+                    int soilLocalEnd = soilCapExclusiveWorldY - 1 - chunkBaseY;
                     bool hasSoil = soilLocalStart <= soilLocalEnd && soilLocalStart < maxY && soilLocalEnd >= 0;
                     if (hasSoil)
                     {
@@ -114,13 +105,11 @@ namespace World
                         if (soilLocalEnd >= maxY) soilLocalEnd = maxY - 1;
                     }
 
-                    // Determine highest local y with a non-air block
                     int maxNonAirLocalY = -1;
                     if (hasSoil) maxNonAirLocalY = Math.Max(maxNonAirLocalY, soilLocalEnd);
                     if (hasStone) maxNonAirLocalY = Math.Max(maxNonAirLocalY, stoneLocalTop);
-                    if (maxNonAirLocalY < 0) continue; // nothing to place
+                    if (maxNonAirLocalY < 0) continue;
 
-                    // Pre-create needed sections for this (x,z) column
                     int sx = x >> SECTION_SHIFT;
                     int sz = z >> SECTION_SHIFT;
                     for (int sy = 0; sy <= (maxNonAirLocalY >> SECTION_SHIFT); sy++)
@@ -131,7 +120,6 @@ namespace World
                         }
                     }
 
-                    // Place stone
                     if (hasStone)
                     {
                         for (int ly = 0; ly <= stoneLocalTop && ly < maxY; ly++)
@@ -140,7 +128,6 @@ namespace World
                         }
                     }
 
-                    // Place soil
                     if (hasSoil)
                     {
                         for (int ly = soilLocalStart; ly <= soilLocalEnd; ly++)
@@ -151,32 +138,23 @@ namespace World
                     }
                 }
             }
+
+            // release heightmap reference
+            precomputedHeightmap = null;
         }
 
         public ushort GenerateInitialBlockData(int lx, int ly, int lz, int columnHeight)
         {
             int currentHeight = (int)(position.Y + ly);
             ushort type = (ushort)BaseBlockType.Empty;
-
-            if (currentHeight <= columnHeight || currentHeight == 0)
-            {
-                type = (ushort)BaseBlockType.Stone;
-            }
-
+            if (currentHeight <= columnHeight || currentHeight == 0) type = (ushort)BaseBlockType.Stone;
             int soilModifier = 100 - currentHeight / 2;
-            if (type == (ushort)BaseBlockType.Empty &&
-                currentHeight < columnHeight + soilModifier)
-            {
-                type = (ushort)BaseBlockType.Soil;
-            }
+            if (type == (ushort)BaseBlockType.Empty && currentHeight < columnHeight + soilModifier) type = (ushort)BaseBlockType.Soil;
             return type;
         }
 
-        // Instance helper defers to static cached version
-        public float[,] GenerateHeightMap(long seed)
-            => GenerateHeightMap(seed, (int)position.X, (int)position.Z);
+        public float[,] GenerateHeightMap(long seed) => GenerateHeightMap(seed, (int)position.X, (int)position.Z);
 
-        // Static version used so world can reuse heightmaps across vertical chunk stacks
         internal static float[,] GenerateHeightMap(long seed, int chunkBaseX, int chunkBaseZ)
         {
             if (!noiseCache.TryGetValue(seed, out var noise))
@@ -184,20 +162,18 @@ namespace World
                 noise = new OpenSimplexNoise(seed);
                 noiseCache[seed] = noise;
             }
-
             int maxX = GameManager.settings.chunkMaxX;
             int maxZ = GameManager.settings.chunkMaxZ;
             float[,] heightmap = new float[maxX, maxZ];
             float scale = 0.005f;
             float minHeight = 1f;
             float maxHeight = 200f;
-
             for (int x = 0; x < maxX; x++)
             {
                 for (int z = 0; z < maxZ; z++)
                 {
                     float noiseValue = (float)noise.Evaluate((x + chunkBaseX) * scale, (z + chunkBaseZ) * scale);
-                    float normalizedValue = (noiseValue * 0.5f) + 0.5f; // (n+1)/2
+                    float normalizedValue = (noiseValue * 0.5f) + 0.5f;
                     heightmap[x, z] = normalizedValue * (maxHeight - minHeight) + minHeight;
                 }
             }
@@ -215,9 +191,7 @@ namespace World
             return sec;
         }
 
-        private void LocalToSection(int lx, int ly, int lz,
-            out int sx, out int sy, out int sz,
-            out int ox, out int oy, out int oz)
+        private void LocalToSection(int lx, int ly, int lz, out int sx, out int sy, out int sz, out int ox, out int oy, out int oz)
         {
             sx = lx >> SECTION_SHIFT; sy = ly >> SECTION_SHIFT; sz = lz >> SECTION_SHIFT;
             ox = lx & SECTION_MASK; oy = ly & SECTION_MASK; oz = lz & SECTION_MASK;
@@ -225,12 +199,8 @@ namespace World
 
         internal ushort GetBlockLocal(int lx, int ly, int lz)
         {
-            if (lx < 0 || ly < 0 || lz < 0 ||
-                lx >= GameManager.settings.chunkMaxX ||
-                ly >= GameManager.settings.chunkMaxY ||
-                lz >= GameManager.settings.chunkMaxZ)
+            if (lx < 0 || ly < 0 || lz < 0 || lx >= GameManager.settings.chunkMaxX || ly >= GameManager.settings.chunkMaxY || lz >= GameManager.settings.chunkMaxZ)
                 return (ushort)BaseBlockType.Empty;
-
             LocalToSection(lx, ly, lz, out int sx, out int sy, out int sz, out int ox, out int oy, out int oz);
             var sec = sections[sx, sy, sz];
             return SectionRender.GetBlock(sec, ox, oy, oz);
@@ -238,12 +208,8 @@ namespace World
 
         internal void SetBlockLocal(int lx, int ly, int lz, ushort blockId)
         {
-            if (lx < 0 || ly < 0 || lz < 0 ||
-                lx >= GameManager.settings.chunkMaxX ||
-                ly >= GameManager.settings.chunkMaxY ||
-                lz >= GameManager.settings.chunkMaxZ)
+            if (lx < 0 || ly < 0 || lz < 0 || lx >= GameManager.settings.chunkMaxX || ly >= GameManager.settings.chunkMaxY || lz >= GameManager.settings.chunkMaxZ)
                 return;
-
             LocalToSection(lx, ly, lz, out int sx, out int sy, out int sz, out int ox, out int oy, out int oz);
             var sec = GetOrCreateSection(sx, sy, sz);
             SectionRender.SetBlock(sec, ox, oy, oz, blockId);

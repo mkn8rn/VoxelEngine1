@@ -16,6 +16,7 @@ namespace MVGE_GFX.Terrain
         private bool isBuilt = false;
         private Vector3 chunkWorldPosition;
 
+        // CPU-side build buffers
         private readonly List<byte> chunkVerts;
         private readonly List<byte> chunkUVs;
         private readonly List<uint> chunkIndices;
@@ -145,6 +146,20 @@ namespace MVGE_GFX.Terrain
             chunkIBO = indexFormat == IndexFormat.UShort
                 ? new IBO(chunkIndicesUShort)
                 : new IBO(chunkIndices);
+
+            // Release CPU copies to reduce working set while keeping counts (lists trimmed not discarded)
+            chunkVerts.Clear(); 
+            chunkVerts.TrimExcess();
+            chunkUVs.Clear(); 
+            chunkUVs.TrimExcess();
+            if (indexFormat == IndexFormat.UShort)
+            {
+                chunkIndicesUShort.TrimExcess();
+            }
+            else
+            {
+                chunkIndices.TrimExcess();
+            }
 
             isBuilt = true;
         }
@@ -287,45 +302,22 @@ namespace MVGE_GFX.Terrain
 
                 if ((x > 0 && getLocalBlock(x - 1, y, z) == emptyBlock)
                    || (x == 0 && getWorldBlock(wx - 1, wy, wz) == emptyBlock))
-                {
-                    IntegrateFace(block, Faces.LEFT, bp);
-                    faces++;
-                }
-
+                { IntegrateFace(block, Faces.LEFT, bp); faces++; }
                 if ((x < maxX - 1 && getLocalBlock(x + 1, y, z) == emptyBlock)
                    || (x == maxX - 1 && getWorldBlock(wx + 1, wy, wz) == emptyBlock))
-                {
-                   IntegrateFace(block, Faces.RIGHT, bp);
-                   faces++;
-                }
-
+                { IntegrateFace(block, Faces.RIGHT, bp); faces++; }
                 if ((y < maxY - 1 && getLocalBlock(x, y + 1, z) == emptyBlock)
                    || (y == maxY - 1 && getWorldBlock(wx, wy + 1, wz) == emptyBlock))
-                {
-                    IntegrateFace(block, Faces.TOP, bp);
-                    faces++;
-                }
-
+                { IntegrateFace(block, Faces.TOP, bp); faces++; }
                 if ((y > 0 && getLocalBlock(x, y - 1, z) == emptyBlock)
                    || (y == 0 && getWorldBlock(wx, wy - 1, wz) == emptyBlock))
-                {
-                    IntegrateFace(block, Faces.BOTTOM, bp);
-                    faces++;
-                }
-
+                { IntegrateFace(block, Faces.BOTTOM, bp); faces++; }
                 if ((z < maxZ - 1 && getLocalBlock(x, y, z + 1) == emptyBlock)
                    || (z == maxZ - 1 && getWorldBlock(wx, wy, wz + 1) == emptyBlock))
-                {
-                    IntegrateFace(block, Faces.FRONT, bp);
-                    faces++;
-                }
-
+                { IntegrateFace(block, Faces.FRONT, bp); faces++; }
                 if ((z > 0 && getLocalBlock(x, y, z - 1) == emptyBlock)
                    || (z == 0 && getWorldBlock(wx, wy, wz - 1) == emptyBlock))
-                {
-                    IntegrateFace(block, Faces.BACK, bp);
-                    faces++;
-                }
+                { IntegrateFace(block, Faces.BACK, bp); faces++; }
 
                 if (faces > 0) AddIndices(faces);
             }

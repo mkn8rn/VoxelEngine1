@@ -29,6 +29,7 @@ namespace MVGE.World
 
         private readonly ConcurrentDictionary<(int cx, int cy, int cz), Chunk> chunks = new();
         private readonly ConcurrentDictionary<(int cx, int cy, int cz), byte> pendingChunks = new(); // track enqueued but not yet generated
+        private readonly ConcurrentDictionary<(int cx,int cy,int cz), byte> dirtyMeshes = new();
 
         private int seed;
         private string currentWorldSaveDirectory;
@@ -41,7 +42,7 @@ namespace MVGE.World
         private CancellationTokenSource streamingCts;
         private Task[] generationWorkers;
         private int workerCount;
-        private Func<int, int, int, ushort> worldBlockAccessor; // cached delegate
+        private Func<int, int, int, ushort> worldBlockAccessor;
 
         public World()
         {
@@ -192,8 +193,7 @@ namespace MVGE.World
                         chunk.BuildRender(worldBlockAccessor);
                     }
 
-                    // Rebuild neighbors (remove now hidden faces)
-                    RebuildNeighborMeshes(key);
+                    MarkNeighborsDirty(key);
                 }
             }
             catch (OperationCanceledException) { }
@@ -208,20 +208,15 @@ namespace MVGE.World
             (-1,0,0),(1,0,0),(0,-1,0),(0,1,0),(0,0,-1),(0,0,1)
         };
 
-        private void RebuildNeighborMeshes((int cx,int cy,int cz) key)
+        private void MarkNeighborsDirty((int cx,int cy,int cz) key)
         {
             foreach (var (dx,dy,dz) in NeighborDirs)
             {
                 var nk = (key.cx+dx, key.cy+dy, key.cz+dz);
-                if (chunks.TryGetValue(nk, out var neighbor))
-                {
-                    // Rebuild neighbor mesh to cull interior faces exposed by late neighbor arrival
-                    lock (neighbor)
-                    {
-                        neighbor.BuildRender(worldBlockAccessor);
-                    }
-                }
+                if (chunks.ContainsKey(nk)) dirtyMeshes.TryAdd(nk,0);
             }
+            // also mark self if any neighbor existed (to cull internal faces)
+            dirtyMeshes.TryAdd(key,0);
         }
 
         public void Dispose()
@@ -366,10 +361,18 @@ namespace MVGE.World
 
         public void Render(ShaderProgram program)
         {
-            foreach (var chunk in chunks.Values)
+            if (!dirtyMeshes.IsEmpty)
             {
-                chunk.Render(program);
+                foreach (var kv in dirtyMeshes.Keys)
+                {
+                    if (chunks.TryGetValue(kv, out var ch))
+                    {
+                        lock (ch) ch.BuildRender(worldBlockAccessor);
+                    }
+                    dirtyMeshes.TryRemove(kv, out _);
+                }
             }
+            foreach (var chunk in chunks.Values) chunk.Render(program);
         }
 
         public ushort GetBlock(int wx, int wy, int wz)
