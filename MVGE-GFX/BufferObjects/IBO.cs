@@ -1,9 +1,5 @@
 ﻿using OpenTK.Graphics.OpenGL4;
-using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace MVGE_GFX.BufferObjects
 {
@@ -24,19 +20,22 @@ namespace MVGE_GFX.BufferObjects
             GL.BufferData(BufferTarget.ElementArrayBuffer, data.Count * sizeof(ushort), data.ToArray(), BufferUsageHint.StaticDraw);
         }
 
-        public void Bind()
+        // New overloads for pooled buffers
+        public IBO(uint[] data, int count)
         {
+            ID = GL.GenBuffer();
             GL.BindBuffer(BufferTarget.ElementArrayBuffer, ID);
+            GL.BufferData(BufferTarget.ElementArrayBuffer, count * sizeof(uint), data, BufferUsageHint.StaticDraw);
+        }
+        public IBO(ushort[] data, int count)
+        {
+            ID = GL.GenBuffer();
+            GL.BindBuffer(BufferTarget.ElementArrayBuffer, ID);
+            GL.BufferData(BufferTarget.ElementArrayBuffer, count * sizeof(ushort), data, BufferUsageHint.StaticDraw);
         }
 
-        public void Unbind()
-        {
-            GL.BindBuffer(BufferTarget.ElementArrayBuffer, 0);
-        }
-
-        public void Delete()
-        {
-            GL.DeleteBuffer(ID);
-        }
+        public void Bind() => GL.BindBuffer(BufferTarget.ElementArrayBuffer, ID);
+        public void Unbind() => GL.BindBuffer(BufferTarget.ElementArrayBuffer, 0);
+        public void Delete() => GL.DeleteBuffer(ID);
     }
 }

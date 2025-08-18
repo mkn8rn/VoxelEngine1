@@ -32,6 +32,13 @@ namespace MVGE_GFX.BufferObjects
             GL.BufferData(BufferTarget.ArrayBuffer, data.Count * Vector3.SizeInBytes, data.ToArray(), BufferUsageHint.StaticDraw);
         }
 
+        public VBO(byte[] data, int length)
+        {
+            ID = GL.GenBuffer();
+            GL.BindBuffer(BufferTarget.ArrayBuffer, ID);
+            GL.BufferData(BufferTarget.ArrayBuffer, length, data, BufferUsageHint.StaticDraw);
+        }
+
         public void Bind()
         {
             GL.BindBuffer(BufferTarget.ArrayBuffer, ID);
