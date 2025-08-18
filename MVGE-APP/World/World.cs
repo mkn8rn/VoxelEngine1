@@ -27,17 +27,13 @@ namespace MVGE.World
         public Guid ID;
         public string worldName;
 
-        // Switched to concurrent dictionary for streaming writes/reads
         private readonly ConcurrentDictionary<(int cx, int cy, int cz), Chunk> chunks = new();
+        private readonly ConcurrentDictionary<(int cx, int cy, int cz), byte> pendingChunks = new(); // track enqueued but not yet generated
 
-        // Settings
         private int seed;
-
-        // Paths
         private string currentWorldSaveDirectory;
         private string currentWorldDataFile = "world.txt";
         private string currentWorldSavedChunksSubDirectory = "chunks";
-
         private static Dictionary<Guid, string> worldSaves = new Dictionary<Guid, string>();
 
         // Streaming pipeline structures
@@ -80,57 +76,97 @@ namespace MVGE.World
 
         private void EnqueueInitialChunkPositions()
         {
-            int lodDist = GameManager.settings.lod1RenderDistance; 
+            int lodDist = GameManager.settings.lod1RenderDistance;
             int sizeX = GameManager.settings.chunkMaxX;
             int sizeY = GameManager.settings.chunkMaxY;
             int sizeZ = GameManager.settings.chunkMaxZ;
-            int verticalRows = lodDist; // current design: same count vertically
+            int verticalRows = lodDist; // current behavior
 
-            // Spiral over XZ plane for each vertical layer
-            for (int vy = 0; vy < verticalRows; vy++)
+            // For each increasing radius ring, enqueue entire vertical stack for each (x,z) column before moving on.
+            for (int radius = 0; radius < lodDist; radius++)
             {
-                int baseY = vy * sizeY; // starting at 0 upward
-                // radius rings 0..lodDist-1
-                for (int radius = 0; radius < lodDist; radius++)
+                if (radius == 0)
                 {
-                    if (radius == 0)
+                    // Center column vertical stack
+                    for (int vy = 0; vy < verticalRows; vy++)
                     {
-                        chunkPositionQueue.Add(new Vector3(0, baseY, 0));
-                        continue;
+                        EnqueueChunkPosition(0, vy * sizeY, 0);
                     }
-
-                    int minX = -radius;
-                    int maxX = radius;
-                    int minZ = -radius;
-                    int maxZ = radius;
-
-                    // Walk the perimeter clockwise
-                    for (int x = minX; x <= maxX; x++)
+                    continue;
+                }
+                int min = -radius;
+                int max = radius;
+                for (int x = min; x <= max; x++)
+                {
+                    for (int z = min; z <= max; z++)
                     {
-                        int zTop = maxZ;
-                        int zBottom = minZ;
-                        if (x == minX || x == maxX)
+                        // Only perimeter cells (ring)
+                        if (Math.Abs(x) != radius && Math.Abs(z) != radius) continue;
+                        for (int vy = 0; vy < verticalRows; vy++)
                         {
-                            // full vertical edges
-                            for (int z = minZ; z <= maxZ; z++)
-                            {
-                                EnqueueChunkPosition(x * sizeX, baseY, z * sizeZ);
-                            }
-                        }
-                        else
-                        {
-                            // top and bottom rows
-                            EnqueueChunkPosition(x * sizeX, baseY, zTop * sizeZ);
-                            EnqueueChunkPosition(x * sizeX, baseY, zBottom * sizeZ);
+                            EnqueueChunkPosition(x * sizeX, vy * sizeY, z * sizeZ);
                         }
                     }
                 }
             }
         }
 
-        private void EnqueueChunkPosition(int x, int y, int z)
+        private void EnqueueChunkPosition(int worldX, int worldY, int worldZ, bool force = false) // force for priority
         {
-            chunkPositionQueue.Add(new Vector3(x, y, z));
+            var key = ChunkIndexKey(worldX, worldY, worldZ);
+            if (!force)
+            {
+                if (chunks.ContainsKey(key)) return; // already generated
+                if (!pendingChunks.TryAdd(key, 0)) return; // already queued
+            }
+            else
+            {
+                pendingChunks[key] = 0; // overwrite / ensure present
+            }
+            chunkPositionQueue.Add(new Vector3(worldX, worldY, worldZ));
+        }
+
+        // Public API to request additional rings dynamically (e.g. player moved)
+        public void RequestRingsAround(Vector3 playerPosition, int additionalRadius)
+        {
+            int sizeX = GameManager.settings.chunkMaxX;
+            int sizeY = GameManager.settings.chunkMaxY;
+            int sizeZ = GameManager.settings.chunkMaxZ;
+            int verticalRows = GameManager.settings.lod1RenderDistance; // maintain vertical stack count
+
+            // Determine current center chunk indices
+            int centerCX = FloorDiv((int)playerPosition.X, sizeX);
+            int centerCZ = FloorDiv((int)playerPosition.Z, sizeZ);
+            int baseY = 0; // assuming ground start (could adapt to player Y later)
+
+            for (int radius = 0; radius <= additionalRadius; radius++)
+            {
+                if (radius == 0)
+                {
+                    for (int vy = 0; vy < verticalRows; vy++)
+                    {
+                        int wy = vy * sizeY + baseY;
+                        EnqueueChunkPosition(centerCX * sizeX, wy, centerCZ * sizeZ);
+                    }
+                    continue;
+                }
+                int minX = centerCX - radius;
+                int maxX = centerCX + radius;
+                int minZ = centerCZ - radius;
+                int maxZ = centerCZ + radius;
+                for (int cx = minX; cx <= maxX; cx++)
+                {
+                    for (int cz = minZ; cz <= maxZ; cz++)
+                    {
+                        if (Math.Abs(cx - centerCX) != radius && Math.Abs(cz - centerCZ) != radius) continue;
+                        for (int vy = 0; vy < verticalRows; vy++)
+                        {
+                            int wy = vy * sizeY + baseY;
+                            EnqueueChunkPosition(cx * sizeX, wy, cz * sizeZ);
+                        }
+                    }
+                }
+            }
         }
 
         private void ChunkGenerationWorker(CancellationToken token)
@@ -146,7 +182,6 @@ namespace MVGE.World
                     int baseX = (int)pos.X;
                     int baseZ = (int)pos.Z;
                     var heightmap = Chunk.GenerateHeightMap(seed, baseX, baseZ);
-
                     var chunk = new Chunk(pos, seed, chunkSaveDirectory, heightmap);
                     var key = ChunkIndexKey((int)pos.X, (int)pos.Y, (int)pos.Z);
                     chunks[key] = chunk;
