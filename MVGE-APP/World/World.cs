@@ -47,6 +47,11 @@ namespace MVGE.World
         // Cache heightmaps for (baseX, baseZ) columns across vertical stacks
         private readonly ConcurrentDictionary<(int baseX,int baseZ), float[,]> heightmapCache = new();
 
+        // for tracking which chunks need mesh updates
+        private readonly ConcurrentQueue<(int cx, int cy, int cz)> dirtyMeshQueue = new();
+        private readonly ConcurrentDictionary<(int cx, int cy, int cz), byte> dirtyMeshSet = new();
+
+
         public World()
         {
             Console.WriteLine("World manager initializing.");
@@ -213,15 +218,19 @@ namespace MVGE.World
             (-1,0,0),(1,0,0),(0,-1,0),(0,1,0),(0,0,-1),(0,0,1)
         };
 
-        private void MarkNeighborsDirty((int cx,int cy,int cz) key)
+        private void MarkNeighborsDirty((int cx, int cy, int cz) key)
         {
-            foreach (var (dx,dy,dz) in NeighborDirs)
+            foreach (var (dx, dy, dz) in NeighborDirs)
             {
-                var nk = (key.cx+dx, key.cy+dy, key.cz+dz);
-                if (chunks.ContainsKey(nk)) dirtyMeshes.TryAdd(nk,0);
+                var nk = (key.cx + dx, key.cy + dy, key.cz + dz);
+                if (chunks.ContainsKey(nk))
+                {
+                    if (dirtyMeshSet.TryAdd(nk, 0))
+                        dirtyMeshQueue.Enqueue(nk);
+                }
             }
-            // also mark self if any neighbor existed (to cull internal faces)
-            dirtyMeshes.TryAdd(key,0);
+            if (dirtyMeshSet.TryAdd(key, 0))
+                dirtyMeshQueue.Enqueue(key);
         }
 
         public void Dispose()
