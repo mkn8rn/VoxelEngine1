@@ -186,8 +186,10 @@ namespace MVGE.World
             int currentY = startY;
 
             List<Task> tasks = new List<Task>();
-
             object locker = new object();
+
+            // Cache heightmaps for each horizontal (x,z) chunk coordinate so vertical stacks reuse it
+            var heightmapCache = new Dictionary<(int hx, int hz), float[,]>();
 
             for (int j = 0; j < verticalRows; j++)
             {
@@ -200,10 +202,21 @@ namespace MVGE.World
                     }
 
                     Vector3 chunkPosition = new Vector3(currentX, currentY, currentZ);
+                    int baseX = (int)chunkPosition.X;
+                    int baseZ = (int)chunkPosition.Z;
+                    var cacheKey = (baseX, baseZ);
+
+                    if (!heightmapCache.TryGetValue(cacheKey, out var heightmap))
+                    {
+                        heightmap = Chunk.GenerateHeightMap(seed, baseX, baseZ);
+                        heightmapCache[cacheKey] = heightmap;
+                    }
+
+                    var capturedHeightmap = heightmap; // capture for closure
 
                     tasks.Add(Task.Run(() =>
                     {
-                        Chunk chunk = new Chunk(chunkPosition, seed, chunkSaveDirectory);
+                        Chunk chunk = new Chunk(chunkPosition, seed, chunkSaveDirectory, capturedHeightmap);
                         var key = ChunkIndexKey((int)chunk.position.X, (int)chunk.position.Y, (int)chunk.position.Z);
                         lock (locker)
                         {

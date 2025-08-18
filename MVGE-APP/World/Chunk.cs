@@ -5,6 +5,7 @@ using MVGE_INF.Models.Terrain;
 using MVGE_Tools.Noise;
 using OpenTK.Mathematics;
 using System;
+using System.Collections.Generic;
 
 namespace World
 {
@@ -22,11 +23,18 @@ namespace World
         private int sectionsY;
         private int sectionsZ;
 
-        public Chunk(Vector3 chunkPosition, long seed, string chunkDataDirectory)
+        // Optional precomputed heightmap (shared across vertical stack)
+        private readonly float[,] precomputedHeightmap;
+
+        // Static noise cache per seed to avoid re-instantiation cost
+        private static readonly Dictionary<long, OpenSimplexNoise> noiseCache = new();
+
+        public Chunk(Vector3 chunkPosition, long seed, string chunkDataDirectory, float[,] precomputedHeightmap = null)
         {
             position = chunkPosition;
             saveDirectory = chunkDataDirectory;
             generationSeed = seed;
+            this.precomputedHeightmap = precomputedHeightmap; // may be null
 
             chunkData = new ChunkData
             {
@@ -62,18 +70,86 @@ namespace World
 
         public void GenerateInitialChunkData()
         {
-            float[,] heightmap = GenerateHeightMap(generationSeed);
-            for (int x = 0; x < GameManager.settings.chunkMaxX; x++)
+            int maxX = GameManager.settings.chunkMaxX;
+            int maxY = GameManager.settings.chunkMaxY;
+            int maxZ = GameManager.settings.chunkMaxZ;
+            int S = ChunkSection.SECTION_SIZE;
+
+            float[,] heightmap = precomputedHeightmap ?? GenerateHeightMap(generationSeed);
+
+            int chunkBaseY = (int)position.Y;
+            int chunkTopY = chunkBaseY + maxY - 1;
+
+            for (int x = 0; x < maxX; x++)
             {
-                for (int z = 0; z < GameManager.settings.chunkMaxZ; z++)
+                for (int z = 0; z < maxZ; z++)
                 {
-                    int columnHeight = (int)heightmap[x, z];
-                    for (int y = 0; y < GameManager.settings.chunkMaxY; y++)
+                    int columnHeight = (int)heightmap[x, z]; // absolute world height
+
+                    // If entire chunk is above soil/stone cap, skip
+                    if (columnHeight < chunkBaseY)
                     {
-                        ushort blockId = GenerateInitialBlockData(x, y, z, columnHeight);
-                        if (blockId != (ushort)BaseBlockType.Empty)
+                        // Potentially soil could extend slightly above columnHeight; compute soil cap to be sure
+                        int soilCapExclusive = (int)Math.Floor((2.0 / 3.0) * (columnHeight + 100));
+                        if (soilCapExclusive <= chunkBaseY) continue; // nothing in this vertical slice
+                    }
+
+                    // Determine stone region intersection with this chunk
+                    if (columnHeight < chunkBaseY)
+                    {
+                        // No stone in this chunk
+                    }
+
+                    int stoneWorldTop = Math.Min(columnHeight, chunkTopY);
+                    int stoneLocalTop = stoneWorldTop - chunkBaseY; // inclusive
+
+                    bool hasStone = columnHeight >= chunkBaseY && chunkBaseY <= stoneWorldTop;
+
+                    // Soil region derived from inequality currentHeight < (2/3)*(columnHeight + 100)
+                    int soilCapExclusiveWorldY = (int)Math.Floor((2.0 / 3.0) * (columnHeight + 100));
+                    int soilLocalStart = (columnHeight + 1) - chunkBaseY; // first layer above stone
+                    int soilLocalEnd = soilCapExclusiveWorldY - 1 - chunkBaseY; // inclusive
+
+                    bool hasSoil = soilLocalStart <= soilLocalEnd && soilLocalStart < maxY && soilLocalEnd >= 0;
+                    if (hasSoil)
+                    {
+                        if (soilLocalStart < 0) soilLocalStart = 0;
+                        if (soilLocalEnd >= maxY) soilLocalEnd = maxY - 1;
+                    }
+
+                    // Determine highest local y with a non-air block
+                    int maxNonAirLocalY = -1;
+                    if (hasSoil) maxNonAirLocalY = Math.Max(maxNonAirLocalY, soilLocalEnd);
+                    if (hasStone) maxNonAirLocalY = Math.Max(maxNonAirLocalY, stoneLocalTop);
+                    if (maxNonAirLocalY < 0) continue; // nothing to place
+
+                    // Pre-create needed sections for this (x,z) column
+                    int sx = x / S;
+                    int sz = z / S;
+                    for (int sy = 0; sy <= maxNonAirLocalY / S; sy++)
+                    {
+                        if (sections[sx, sy, sz] == null)
                         {
-                            SetBlockLocal(x, y, z, blockId);
+                            sections[sx, sy, sz] = new ChunkSection();
+                        }
+                    }
+
+                    // Place stone
+                    if (hasStone)
+                    {
+                        for (int ly = 0; ly <= stoneLocalTop && ly < maxY; ly++)
+                        {
+                            SetBlockLocal(x, ly, z, (ushort)BaseBlockType.Stone);
+                        }
+                    }
+
+                    // Place soil
+                    if (hasSoil)
+                    {
+                        for (int ly = soilLocalStart; ly <= soilLocalEnd; ly++)
+                        {
+                            if (ly < 0 || ly >= maxY) continue;
+                            SetBlockLocal(x, ly, z, (ushort)BaseBlockType.Soil);
                         }
                     }
                 }
@@ -99,19 +175,31 @@ namespace World
             return type;
         }
 
+        // Instance helper defers to static cached version
         public float[,] GenerateHeightMap(long seed)
+            => GenerateHeightMap(seed, (int)position.X, (int)position.Z);
+
+        // Static version used so world can reuse heightmaps across vertical chunk stacks
+        internal static float[,] GenerateHeightMap(long seed, int chunkBaseX, int chunkBaseZ)
         {
-            float[,] heightmap = new float[GameManager.settings.chunkMaxX, GameManager.settings.chunkMaxZ];
-            var noise = new OpenSimplexNoise(seed);
+            if (!noiseCache.TryGetValue(seed, out var noise))
+            {
+                noise = new OpenSimplexNoise(seed);
+                noiseCache[seed] = noise;
+            }
+
+            int maxX = GameManager.settings.chunkMaxX;
+            int maxZ = GameManager.settings.chunkMaxZ;
+            float[,] heightmap = new float[maxX, maxZ];
             float scale = 0.005f;
             float minHeight = 1f;
             float maxHeight = 200f;
 
-            for (int x = 0; x < GameManager.settings.chunkMaxX; x++)
+            for (int x = 0; x < maxX; x++)
             {
-                for (int z = 0; z < GameManager.settings.chunkMaxZ; z++)
+                for (int z = 0; z < maxZ; z++)
                 {
-                    float noiseValue = (float)noise.Evaluate((x + position.X) * scale, (z + position.Z) * scale);
+                    float noiseValue = (float)noise.Evaluate((x + chunkBaseX) * scale, (z + chunkBaseZ) * scale);
                     float normalizedValue = (noiseValue + 1f) * 0.5f;
                     heightmap[x, z] = normalizedValue * (maxHeight - minHeight) + minHeight;
                 }
