@@ -44,6 +44,9 @@ namespace MVGE.World
         private int workerCount;
         private Func<int, int, int, ushort> worldBlockAccessor;
 
+        // Cache heightmaps for (baseX, baseZ) columns across vertical stacks
+        private readonly ConcurrentDictionary<(int baseX,int baseZ), float[,]> heightmapCache = new();
+
         public World()
         {
             Console.WriteLine("World manager initializing.");
@@ -179,10 +182,12 @@ namespace MVGE.World
                 {
                     if (token.IsCancellationRequested) break;
 
-                    // Heightmap reuse per (x,z)
+                    // Heightmap reuse per (x,z) across vertical stack
                     int baseX = (int)pos.X;
                     int baseZ = (int)pos.Z;
-                    var heightmap = Chunk.GenerateHeightMap(seed, baseX, baseZ);
+                    var hmKey = (baseX, baseZ);
+                    float[,] heightmap = heightmapCache.GetOrAdd(hmKey, _ => Chunk.GenerateHeightMap(seed, baseX, baseZ));
+
                     var chunk = new Chunk(pos, seed, chunkSaveDirectory, heightmap);
                     var key = ChunkIndexKey((int)pos.X, (int)pos.Y, (int)pos.Z);
                     chunks[key] = chunk;

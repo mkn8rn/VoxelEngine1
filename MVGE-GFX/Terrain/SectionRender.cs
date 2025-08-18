@@ -1,5 +1,6 @@
 ﻿using MVGE_INF.Models.Terrain;
 using System.Runtime.CompilerServices;
+using System.Numerics; // for BitOperations
 
 namespace MVGE_GFX.Terrain
 {
@@ -87,8 +88,9 @@ namespace MVGE_GFX.Terrain
 
         private static void GrowBits(ChunkSection sec)
         {
-            int needed = 1;
-            while ((1 << needed) <= sec.Palette.Count - 1) needed++;
+            // Compute required bits for (Palette.Count - 1) distinct indices (excluding air at index 0)
+            int paletteCountMinusOne = sec.Palette.Count - 1;
+            int needed = paletteCountMinusOne <= 0 ? 1 : (int)BitOperations.Log2((uint)paletteCountMinusOne) + 1;
             if (needed <= sec.BitsPerIndex) return;
 
             int oldBits = sec.BitsPerIndex;

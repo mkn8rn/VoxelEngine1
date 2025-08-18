@@ -17,7 +17,7 @@ namespace MVGE_GFX.Terrain
         private bool isBuilt = false;
         private Vector3 chunkWorldPosition;
 
-        // Small-chunk fallback lists
+        // Small-chunk fallback lists 
         private List<byte> chunkVertsList;
         private List<byte> chunkUVsList;
         private List<uint> chunkIndicesList;
@@ -34,15 +34,13 @@ namespace MVGE_GFX.Terrain
         private bool useUShort;
         private bool usedPooling;
 
-        private uint vertexFaceStride = 12; // 4 verts * 3 bytes
-        private uint uvFaceStride = 8;      // 4 verts * 2 bytes
-
         private VAO chunkVAO;
         private VBO chunkVertexVBO;
         private VBO chunkUVVBO;
         private IBO chunkIBO;
 
         public static BlockTextureAtlas terrainTextureAtlas { get; set; }
+        private static readonly List<ByteVector2> EmptyUVList = new(4); // reusable empty list
 
         private readonly ChunkData chunkMeta;
         private readonly Func<int, int, int, ushort> getWorldBlock;
@@ -214,7 +212,7 @@ namespace MVGE_GFX.Terrain
                 chunkVertsList.Add((byte)(v.y + bp.y));
                 chunkVertsList.Add((byte)(v.z + bp.z));
             }
-            var blockUVs = block != emptyBlock ? terrainTextureAtlas.GetBlockUVs(block, face) : new List<ByteVector2>();
+            var blockUVs = block != emptyBlock ? terrainTextureAtlas.GetBlockUVs(block, face) : EmptyUVList;
             foreach (var uv in blockUVs)
             {
                 chunkUVsList.Add(uv.x);
@@ -296,7 +294,6 @@ namespace MVGE_GFX.Terrain
             foreach (var fl in faceLists) totalFaces += fl.Count;
             int totalVerts = totalFaces * 4;
             useUShort = totalVerts <= 65535;
-            useUShort = useUShort; // keep variable
             usedPooling = true;
             indexFormat = useUShort ? IndexFormat.UShort : IndexFormat.UInt;
 
