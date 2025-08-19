@@ -16,7 +16,7 @@ namespace MVGE_GFX.Utils
     {
         internal struct PooledFaceBuildResult
         {
-            public bool FullyOccluded;
+            public bool FullyOccluded; // preserved for compatibility (always false here because caller pre-checks)
             public bool UseUShort;
             public bool HasSingleOpaque;
             public byte[] VertBuffer;
@@ -191,6 +191,11 @@ namespace MVGE_GFX.Utils
             int baseWY = (int)chunkWorldPosition.Y;
             int baseWZ = (int)chunkWorldPosition.Z;
 
+            // Identical pair arrays (rent only if needed)
+            bool[] identicalPairX = null;
+            bool[] identicalPairY = null;
+            bool[] identicalPairZ = null;
+
             try
             {
                 for (int z = 0; z < maxZ; z++)
@@ -260,261 +265,267 @@ namespace MVGE_GFX.Utils
                 }
                 bool hasSingleOpaque = haveSolid && singleSolidType;
 
-                bool[] identicalPairX = ArrayPool<bool>.Shared.Rent(maxX > 0 ? maxX - 1 : 0);
-                bool[] identicalPairY = ArrayPool<bool>.Shared.Rent(maxY > 0 ? maxY - 1 : 0);
-                bool[] identicalPairZ = ArrayPool<bool>.Shared.Rent(maxZ > 0 ? maxZ - 1 : 0);
-                try
+                if (maxX > 1) identicalPairX = ArrayPool<bool>.Shared.Rent(maxX - 1);
+                if (maxY > 1) identicalPairY = ArrayPool<bool>.Shared.Rent(maxY - 1);
+                if (maxZ > 1) identicalPairZ = ArrayPool<bool>.Shared.Rent(maxZ - 1);
+
+                if (identicalPairX != null)
                 {
-                    if (maxX > 1)
-                        for (int x = 0; x < maxX - 1; x++)
-                        {
-                            if (!xSlabNonEmpty[x] || !xSlabNonEmpty[x + 1]) continue;
-                            int aOff = x * yzWC; int bOff = (x + 1) * yzWC; bool eq = true;
-                            for (int w = 0; w < yzWC; w++) { if (xSlabs[aOff + w] != xSlabs[bOff + w]) { eq = false; break; } }
-                            identicalPairX[x] = eq;
-                        }
-                    if (maxY > 1)
-                        for (int y = 0; y < maxY - 1; y++)
-                        {
-                            if (!ySlabNonEmpty[y] || !ySlabNonEmpty[y + 1]) continue;
-                            int aOff = y * xzWC; int bOff = (y + 1) * xzWC; bool eq = true;
-                            for (int w = 0; w < xzWC; w++) { if (ySlabs[aOff + w] != ySlabs[bOff + w]) { eq = false; break; } }
-                            identicalPairY[y] = eq;
-                        }
-                    if (maxZ > 1)
-                        for (int z = 0; z < maxZ - 1; z++)
-                        {
-                            if (!zSlabNonEmpty[z] || !zSlabNonEmpty[z + 1]) continue;
-                            int aOff = z * xyWC; int bOff = (z + 1) * xyWC; bool eq = true;
-                            for (int w = 0; w < xyWC; w++) { if (zSlabs[aOff + w] != zSlabs[bOff + w]) { eq = false; break; } }
-                            identicalPairZ[z] = eq;
-                        }
-
-                    int totalFaces = 0;
-                    for (int x = 0; x < maxX; x++)
+                    Array.Clear(identicalPairX, 0, identicalPairX.Length);
+                    for (int x = 0; x < maxX - 1; x++)
                     {
-                        if (!xSlabNonEmpty[x]) continue;
-                        bool skipLeft = x > 0 && identicalPairX[x - 1];
-                        bool skipRight = x < maxX - 1 && identicalPairX[x];
-                        if (skipLeft && skipRight) continue;
-                        int curOff = x * yzWC; int prevOff = (x - 1) * yzWC; int nextOff = (x + 1) * yzWC;
-                        for (int w = 0; w < yzWC; w++)
-                        {
-                            ulong cur = xSlabs[curOff + w]; if (cur == 0) continue;
-                            if (!skipLeft)
-                            {
-                                ulong leftBits = (x == 0) ? (cur & ~neighborLeft[w]) : (cur & ~xSlabs[prevOff + w]);
-                                if (leftBits != 0) totalFaces += BitOperations.PopCount(leftBits);
-                            }
-                            if (!skipRight)
-                            {
-                                ulong rightBits = (x == maxX - 1) ? (cur & ~neighborRight[w]) : (cur & ~xSlabs[nextOff + w]);
-                                if (rightBits != 0) totalFaces += BitOperations.PopCount(rightBits);
-                            }
-                        }
+                        if (!xSlabNonEmpty[x] || !xSlabNonEmpty[x + 1]) continue;
+                        int aOff = x * yzWC; int bOff = (x + 1) * yzWC; bool eq = true;
+                        for (int w = 0; w < yzWC; w++) { if (xSlabs[aOff + w] != xSlabs[bOff + w]) { eq = false; break; } }
+                        identicalPairX[x] = eq;
                     }
-                    for (int y = 0; y < maxY; y++)
-                    {
-                        if (!ySlabNonEmpty[y]) continue;
-                        bool skipBottom = y > 0 && identicalPairY[y - 1];
-                        bool skipTop = y < maxY - 1 && identicalPairY[y];
-                        if (skipBottom && skipTop) continue;
-                        int curOff = y * xzWC; int prevOff = (y - 1) * xzWC; int nextOff = (y + 1) * xzWC;
-                        for (int w = 0; w < xzWC; w++)
-                        {
-                            ulong cur = ySlabs[curOff + w]; if (cur == 0) continue;
-                            if (!skipBottom)
-                            {
-                                ulong bottomBits = (y == 0) ? (cur & ~neighborBottom[w]) : (cur & ~ySlabs[prevOff + w]);
-                                if (bottomBits != 0) totalFaces += BitOperations.PopCount(bottomBits);
-                            }
-                            if (!skipTop)
-                            {
-                                ulong topBits = (y == maxY - 1) ? (cur & ~neighborTop[w]) : (cur & ~ySlabs[nextOff + w]);
-                                if (topBits != 0) totalFaces += BitOperations.PopCount(topBits);
-                            }
-                        }
-                    }
-                    for (int z = 0; z < maxZ; z++)
-                    {
-                        if (!zSlabNonEmpty[z]) continue;
-                        bool skipBack = z > 0 && identicalPairZ[z - 1];
-                        bool skipFront = z < maxZ - 1 && identicalPairZ[z];
-                        if (skipBack && skipFront) continue;
-                        int curOff = z * xyWC; int prevOff = (z - 1) * xyWC; int nextOff = (z + 1) * xyWC;
-                        for (int w = 0; w < xyWC; w++)
-                        {
-                            ulong cur = zSlabs[curOff + w]; if (cur == 0) continue;
-                            if (!skipBack)
-                            {
-                                ulong backBits = (z == 0) ? (cur & ~neighborBack[w]) : (cur & ~zSlabs[prevOff + w]);
-                                if (backBits != 0) totalFaces += BitOperations.PopCount(backBits);
-                            }
-                            if (!skipFront)
-                            {
-                                ulong frontBits = (z == maxZ - 1) ? (cur & ~neighborFront[w]) : (cur & ~zSlabs[nextOff + w]);
-                                if (frontBits != 0) totalFaces += BitOperations.PopCount(frontBits);
-                            }
-                        }
-                    }
-
-                    int totalVerts = totalFaces * 4;
-                    bool useUShort = totalVerts <= 65535;
-                    byte[] vertBuffer = ArrayPool<byte>.Shared.Rent(totalVerts * 3);
-                    byte[] uvBuffer = ArrayPool<byte>.Shared.Rent(totalVerts * 2);
-                    uint[] indicesUIntBuffer = null; ushort[] indicesUShortBuffer = null;
-                    if (useUShort) indicesUShortBuffer = ArrayPool<ushort>.Shared.Rent(totalFaces * 6); else indicesUIntBuffer = ArrayPool<uint>.Shared.Rent(totalFaces * 6);
-
-                    byte[] singleSolidUVConcat = null;
-                    if (hasSingleOpaque)
-                    {
-                        singleSolidUVConcat = new byte[48];
-                        for (int f = 0; f < 6; f++)
-                        {
-                            var uvBytes = GetOrCreateUv(atlas, singleSolidId, (Faces)f);
-                            System.Buffer.BlockCopy(uvBytes, 0, singleSolidUVConcat, f * 8, 8);
-                        }
-                    }
-
-                    int faceIndex = 0;
-                    // Emit faces
-                    for (int x = 0; x < maxX; x++)
-                    {
-                        if (!xSlabNonEmpty[x]) continue;
-                        bool skipLeft = x > 0 && identicalPairX[x - 1];
-                        bool skipRight = x < maxX - 1 && identicalPairX[x];
-                        if (skipLeft && skipRight) continue;
-                        int curOff = x * yzWC; int prevOff = (x - 1) * yzWC; int nextOff = (x + 1) * yzWC;
-                        for (int w = 0; w < yzWC; w++)
-                        {
-                            ulong cur = xSlabs[curOff + w]; if (cur == 0) continue;
-                            if (!skipLeft)
-                            {
-                                ulong leftBits = (x == 0) ? (cur & ~neighborLeft[w]) : (cur & ~xSlabs[prevOff + w]);
-                                ulong bits = leftBits;
-                                while (bits != 0)
-                                {
-                                    int t = BitOperations.TrailingZeroCount(bits);
-                                    int yzIndex = (w << 6) + t; if (yzIndex >= yzPlaneBits) break;
-                                    int z = yzIndex / maxY; int y = yzIndex % maxY; int li = LocalIndex(x, y, z, maxY, maxZ);
-                                    WriteFace(localBlocks[li], Faces.LEFT, (byte)x, (byte)y, (byte)z, ref faceIndex, emptyBlock, hasSingleOpaque, singleSolidId, singleSolidUVConcat, atlas, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
-                                    bits &= bits - 1;
-                                }
-                            }
-                            if (!skipRight)
-                            {
-                                ulong rightBits = (x == maxX - 1) ? (cur & ~neighborRight[w]) : (cur & ~xSlabs[nextOff + w]);
-                                ulong bits = rightBits;
-                                while (bits != 0)
-                                {
-                                    int t = BitOperations.TrailingZeroCount(bits);
-                                    int yzIndex = (w << 6) + t; if (yzIndex >= yzPlaneBits) break;
-                                    int z = yzIndex / maxY; int y = yzIndex % maxY; int li = LocalIndex(x, y, z, maxY, maxZ);
-                                    WriteFace(localBlocks[li], Faces.RIGHT, (byte)x, (byte)y, (byte)z, ref faceIndex, emptyBlock, hasSingleOpaque, singleSolidId, singleSolidUVConcat, atlas, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
-                                    bits &= bits - 1;
-                                }
-                            }
-                        }
-                    }
-                    for (int y = 0; y < maxY; y++)
-                    {
-                        if (!ySlabNonEmpty[y]) continue;
-                        bool skipBottom = y > 0 && identicalPairY[y - 1];
-                        bool skipTop = y < maxY - 1 && identicalPairY[y];
-                        if (skipBottom && skipTop) continue;
-                        int curOff = y * xzWC; int prevOff = (y - 1) * xzWC; int nextOff = (y + 1) * xzWC;
-                        for (int w = 0; w < xzWC; w++)
-                        {
-                            ulong cur = ySlabs[curOff + w]; if (cur == 0) continue;
-                            if (!skipBottom)
-                            {
-                                ulong bottomBits = (y == 0) ? (cur & ~neighborBottom[w]) : (cur & ~ySlabs[prevOff + w]);
-                                ulong bits = bottomBits;
-                                while (bits != 0)
-                                {
-                                    int t = BitOperations.TrailingZeroCount(bits);
-                                    int xzIndex = (w << 6) + t; if (xzIndex >= xzPlaneBits) break;
-                                    int x = xzIndex / maxZ; int z = xzIndex % maxZ; int li = LocalIndex(x, y, z, maxY, maxZ);
-                                    WriteFace(localBlocks[li], Faces.BOTTOM, (byte)x, (byte)y, (byte)z, ref faceIndex, emptyBlock, hasSingleOpaque, singleSolidId, singleSolidUVConcat, atlas, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
-                                    bits &= bits - 1;
-                                }
-                            }
-                            if (!skipTop)
-                            {
-                                ulong topBits = (y == maxY - 1) ? (cur & ~neighborTop[w]) : (cur & ~ySlabs[nextOff + w]);
-                                ulong bits = topBits;
-                                while (bits != 0)
-                                {
-                                    int t = BitOperations.TrailingZeroCount(bits);
-                                    int xzIndex = (w << 6) + t; if (xzIndex >= xzPlaneBits) break;
-                                    int x = xzIndex / maxZ; int z = xzIndex % maxZ; int li = LocalIndex(x, y, z, maxY, maxZ);
-                                    WriteFace(localBlocks[li], Faces.TOP, (byte)x, (byte)y, (byte)z, ref faceIndex, emptyBlock, hasSingleOpaque, singleSolidId, singleSolidUVConcat, atlas, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
-                                    bits &= bits - 1;
-                                }
-                            }
-                        }
-                    }
-                    for (int z = 0; z < maxZ; z++)
-                    {
-                        if (!zSlabNonEmpty[z]) continue;
-                        bool skipBack = z > 0 && identicalPairZ[z - 1];
-                        bool skipFront = z < maxZ - 1 && identicalPairZ[z];
-                        if (skipBack && skipFront) continue;
-                        int curOff = z * xyWC; int prevOff = (z - 1) * xyWC; int nextOff = (z + 1) * xyWC;
-                        for (int w = 0; w < xyWC; w++)
-                        {
-                            ulong cur = zSlabs[curOff + w]; if (cur == 0) continue;
-                            if (!skipBack)
-                            {
-                                ulong backBits = (z == 0) ? (cur & ~neighborBack[w]) : (cur & ~zSlabs[prevOff + w]);
-                                ulong bits = backBits;
-                                while (bits != 0)
-                                {
-                                    int t = BitOperations.TrailingZeroCount(bits);
-                                    int xyIndex = (w << 6) + t; if (xyIndex >= xyPlaneBits) break;
-                                    int x = xyIndex / maxY; int y = xyIndex % maxY; int li = LocalIndex(x, y, z, maxY, maxZ);
-                                    WriteFace(localBlocks[li], Faces.BACK, (byte)x, (byte)y, (byte)z, ref faceIndex, emptyBlock, hasSingleOpaque, singleSolidId, singleSolidUVConcat, atlas, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
-                                    bits &= bits - 1;
-                                }
-                            }
-                            if (!skipFront)
-                            {
-                                ulong frontBits = (z == maxZ - 1) ? (cur & ~neighborFront[w]) : (cur & ~zSlabs[nextOff + w]);
-                                ulong bits = frontBits;
-                                while (bits != 0)
-                                {
-                                    int t = BitOperations.TrailingZeroCount(bits);
-                                    int xyIndex = (w << 6) + t; if (xyIndex >= xyPlaneBits) break;
-                                    int x = xyIndex / maxY; int y = xyIndex % maxY; int li = LocalIndex(x, y, z, maxY, maxZ);
-                                    WriteFace(localBlocks[li], Faces.FRONT, (byte)x, (byte)y, (byte)z, ref faceIndex, emptyBlock, hasSingleOpaque, singleSolidId, singleSolidUVConcat, atlas, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
-                                    bits &= bits - 1;
-                                }
-                            }
-                        }
-                    }
-
-                    return new PooledFaceBuildResult
-                    {
-                        FullyOccluded = false,
-                        UseUShort = useUShort,
-                        HasSingleOpaque = hasSingleOpaque,
-                        VertBuffer = vertBuffer,
-                        UVBuffer = uvBuffer,
-                        IndicesUIntBuffer = indicesUIntBuffer,
-                        IndicesUShortBuffer = indicesUShortBuffer,
-                        VertBytesUsed = totalVerts * 3,
-                        UVBytesUsed = totalVerts * 2,
-                        IndicesUsed = totalFaces * 6
-                    };
                 }
-                finally
+                if (identicalPairY != null)
                 {
-                    // Return temporary pair arrays
-                    // identicalPair arrays allocated inside nested try; ensure they are returned when scope exits
+                    Array.Clear(identicalPairY, 0, identicalPairY.Length);
+                    for (int y = 0; y < maxY - 1; y++)
+                    {
+                        if (!ySlabNonEmpty[y] || !ySlabNonEmpty[y + 1]) continue;
+                        int aOff = y * xzWC; int bOff = (y + 1) * xzWC; bool eq = true;
+                        for (int w = 0; w < xzWC; w++) { if (ySlabs[aOff + w] != ySlabs[bOff + w]) { eq = false; break; } }
+                        identicalPairY[y] = eq;
+                    }
                 }
+                if (identicalPairZ != null)
+                {
+                    Array.Clear(identicalPairZ, 0, identicalPairZ.Length);
+                    for (int z = 0; z < maxZ - 1; z++)
+                    {
+                        if (!zSlabNonEmpty[z] || !zSlabNonEmpty[z + 1]) continue;
+                        int aOff = z * xyWC; int bOff = (z + 1) * xyWC; bool eq = true;
+                        for (int w = 0; w < xyWC; w++) { if (zSlabs[aOff + w] != zSlabs[bOff + w]) { eq = false; break; } }
+                        identicalPairZ[z] = eq;
+                    }
+                }
+
+                int totalFaces = 0;
+                for (int x = 0; x < maxX; x++)
+                {
+                    if (!xSlabNonEmpty[x]) continue;
+                    bool skipLeft = x > 0 && identicalPairX != null && identicalPairX[x - 1];
+                    bool skipRight = x < maxX - 1 && identicalPairX != null && identicalPairX[x];
+                    if (skipLeft && skipRight) continue;
+                    int curOff = x * yzWC; int prevOff = (x - 1) * yzWC; int nextOff = (x + 1) * yzWC;
+                    for (int w = 0; w < yzWC; w++)
+                    {
+                        ulong cur = xSlabs[curOff + w]; if (cur == 0) continue;
+                        if (!skipLeft)
+                        {
+                            ulong leftBits = (x == 0) ? (cur & ~neighborLeft[w]) : (cur & ~xSlabs[prevOff + w]);
+                            if (leftBits != 0) totalFaces += BitOperations.PopCount(leftBits);
+                        }
+                        if (!skipRight)
+                        {
+                            ulong rightBits = (x == maxX - 1) ? (cur & ~neighborRight[w]) : (cur & ~xSlabs[nextOff + w]);
+                            if (rightBits != 0) totalFaces += BitOperations.PopCount(rightBits);
+                        }
+                    }
+                }
+                for (int y = 0; y < maxY; y++)
+                {
+                    if (!ySlabNonEmpty[y]) continue;
+                    bool skipBottom = y > 0 && identicalPairY != null && identicalPairY[y - 1];
+                    bool skipTop = y < maxY - 1 && identicalPairY != null && identicalPairY[y];
+                    if (skipBottom && skipTop) continue;
+                    int curOff = y * xzWC; int prevOff = (y - 1) * xzWC; int nextOff = (y + 1) * xzWC;
+                    for (int w = 0; w < xzWC; w++)
+                    {
+                        ulong cur = ySlabs[curOff + w]; if (cur == 0) continue;
+                        if (!skipBottom)
+                        {
+                            ulong bottomBits = (y == 0) ? (cur & ~neighborBottom[w]) : (cur & ~ySlabs[prevOff + w]);
+                            if (bottomBits != 0) totalFaces += BitOperations.PopCount(bottomBits);
+                        }
+                        if (!skipTop)
+                        {
+                            ulong topBits = (y == maxY - 1) ? (cur & ~neighborTop[w]) : (cur & ~ySlabs[nextOff + w]);
+                            if (topBits != 0) totalFaces += BitOperations.PopCount(topBits);
+                        }
+                    }
+                }
+                for (int z = 0; z < maxZ; z++)
+                {
+                    if (!zSlabNonEmpty[z]) continue;
+                    bool skipBack = z > 0 && identicalPairZ != null && identicalPairZ[z - 1];
+                    bool skipFront = z < maxZ - 1 && identicalPairZ != null && identicalPairZ[z];
+                    if (skipBack && skipFront) continue;
+                    int curOff = z * xyWC; int prevOff = (z - 1) * xyWC; int nextOff = (z + 1) * xyWC;
+                    for (int w = 0; w < xyWC; w++)
+                    {
+                        ulong cur = zSlabs[curOff + w]; if (cur == 0) continue;
+                        if (!skipBack)
+                        {
+                            ulong backBits = (z == 0) ? (cur & ~neighborBack[w]) : (cur & ~zSlabs[prevOff + w]);
+                            if (backBits != 0) totalFaces += BitOperations.PopCount(backBits);
+                        }
+                        if (!skipFront)
+                        {
+                            ulong frontBits = (z == maxZ - 1) ? (cur & ~neighborFront[w]) : (cur & ~zSlabs[nextOff + w]);
+                            if (frontBits != 0) totalFaces += BitOperations.PopCount(frontBits);
+                        }
+                    }
+                }
+
+                int totalVerts = totalFaces * 4;
+                bool useUShort = totalVerts <= 65535;
+                byte[] vertBuffer = ArrayPool<byte>.Shared.Rent(totalVerts * 3);
+                byte[] uvBuffer = ArrayPool<byte>.Shared.Rent(totalVerts * 2);
+                uint[] indicesUIntBuffer = null; ushort[] indicesUShortBuffer = null;
+                if (useUShort) indicesUShortBuffer = ArrayPool<ushort>.Shared.Rent(totalFaces * 6); else indicesUIntBuffer = ArrayPool<uint>.Shared.Rent(totalFaces * 6);
+
+                byte[] singleSolidUVConcat = null;
+                if (hasSingleOpaque)
+                {
+                    singleSolidUVConcat = new byte[48];
+                    for (int f = 0; f < 6; f++)
+                    {
+                        var uvBytes = GetOrCreateUv(atlas, singleSolidId, (Faces)f);
+                        System.Buffer.BlockCopy(uvBytes, 0, singleSolidUVConcat, f * 8, 8);
+                    }
+                }
+
+                int faceIndex = 0;
+                // Emit faces
+                for (int x = 0; x < maxX; x++)
+                {
+                    if (!xSlabNonEmpty[x]) continue;
+                    bool skipLeft = x > 0 && identicalPairX != null && identicalPairX[x - 1];
+                    bool skipRight = x < maxX - 1 && identicalPairX != null && identicalPairX[x];
+                    if (skipLeft && skipRight) continue;
+                    int curOff = x * yzWC; int prevOff = (x - 1) * yzWC; int nextOff = (x + 1) * yzWC;
+                    for (int w = 0; w < yzWC; w++)
+                    {
+                        ulong cur = xSlabs[curOff + w]; if (cur == 0) continue;
+                        if (!skipLeft)
+                        {
+                            ulong leftBits = (x == 0) ? (cur & ~neighborLeft[w]) : (cur & ~xSlabs[prevOff + w]);
+                            ulong bits = leftBits;
+                            while (bits != 0)
+                            {
+                                int t = BitOperations.TrailingZeroCount(bits);
+                                int yzIndex = (w << 6) + t; if (yzIndex >= yzPlaneBits) break;
+                                int z = yzIndex / maxY; int y = yzIndex % maxY; int li = LocalIndex(x, y, z, maxY, maxZ);
+                                WriteFace(localBlocks[li], Faces.LEFT, (byte)x, (byte)y, (byte)z, ref faceIndex, emptyBlock, hasSingleOpaque, singleSolidId, singleSolidUVConcat, atlas, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
+                                bits &= bits - 1;
+                            }
+                        }
+                        if (!skipRight)
+                        {
+                            ulong rightBits = (x == maxX - 1) ? (cur & ~neighborRight[w]) : (cur & ~xSlabs[nextOff + w]);
+                            ulong bits = rightBits;
+                            while (bits != 0)
+                            {
+                                int t = BitOperations.TrailingZeroCount(bits);
+                                int yzIndex = (w << 6) + t; if (yzIndex >= yzPlaneBits) break;
+                                int z = yzIndex / maxY; int y = yzIndex % maxY; int li = LocalIndex(x, y, z, maxY, maxZ);
+                                WriteFace(localBlocks[li], Faces.RIGHT, (byte)x, (byte)y, (byte)z, ref faceIndex, emptyBlock, hasSingleOpaque, singleSolidId, singleSolidUVConcat, atlas, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
+                                bits &= bits - 1;
+                            }
+                        }
+                    }
+                }
+                for (int y = 0; y < maxY; y++)
+                {
+                    if (!ySlabNonEmpty[y]) continue;
+                    bool skipBottom = y > 0 && identicalPairY != null && identicalPairY[y - 1];
+                    bool skipTop = y < maxY - 1 && identicalPairY != null && identicalPairY[y];
+                    if (skipBottom && skipTop) continue;
+                    int curOff = y * xzWC; int prevOff = (y - 1) * xzWC; int nextOff = (y + 1) * xzWC;
+                    for (int w = 0; w < xzWC; w++)
+                    {
+                        ulong cur = ySlabs[curOff + w]; if (cur == 0) continue;
+                        if (!skipBottom)
+                        {
+                            ulong bottomBits = (y == 0) ? (cur & ~neighborBottom[w]) : (cur & ~ySlabs[prevOff + w]);
+                            ulong bits = bottomBits;
+                            while (bits != 0)
+                            {
+                                int t = BitOperations.TrailingZeroCount(bits);
+                                int xzIndex = (w << 6) + t; if (xzIndex >= xzPlaneBits) break;
+                                int x = xzIndex / maxZ; int z = xzIndex % maxZ; int li = LocalIndex(x, y, z, maxY, maxZ);
+                                WriteFace(localBlocks[li], Faces.BOTTOM, (byte)x, (byte)y, (byte)z, ref faceIndex, emptyBlock, hasSingleOpaque, singleSolidId, singleSolidUVConcat, atlas, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
+                                bits &= bits - 1;
+                            }
+                        }
+                        if (!skipTop)
+                        {
+                            ulong topBits = (y == maxY - 1) ? (cur & ~neighborTop[w]) : (cur & ~ySlabs[nextOff + w]);
+                            ulong bits = topBits;
+                            while (bits != 0)
+                            {
+                                int t = BitOperations.TrailingZeroCount(bits);
+                                int xzIndex = (w << 6) + t; if (xzIndex >= xzPlaneBits) break;
+                                int x = xzIndex / maxZ; int z = xzIndex % maxZ; int li = LocalIndex(x, y, z, maxY, maxZ);
+                                WriteFace(localBlocks[li], Faces.TOP, (byte)x, (byte)y, (byte)z, ref faceIndex, emptyBlock, hasSingleOpaque, singleSolidId, singleSolidUVConcat, atlas, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
+                                bits &= bits - 1;
+                            }
+                        }
+                    }
+                }
+                for (int z = 0; z < maxZ; z++)
+                {
+                    if (!zSlabNonEmpty[z]) continue;
+                    bool skipBack = z > 0 && identicalPairZ != null && identicalPairZ[z - 1];
+                    bool skipFront = z < maxZ - 1 && identicalPairZ != null && identicalPairZ[z];
+                    if (skipBack && skipFront) continue;
+                    int curOff = z * xyWC; int prevOff = (z - 1) * xyWC; int nextOff = (z + 1) * xyWC;
+                    for (int w = 0; w < xyWC; w++)
+                    {
+                        ulong cur = zSlabs[curOff + w]; if (cur == 0) continue;
+                        if (!skipBack)
+                        {
+                            ulong backBits = (z == 0) ? (cur & ~neighborBack[w]) : (cur & ~zSlabs[prevOff + w]);
+                            ulong bits = backBits;
+                            while (bits != 0)
+                            {
+                                int t = BitOperations.TrailingZeroCount(bits);
+                                int xyIndex = (w << 6) + t; if (xyIndex >= xyPlaneBits) break;
+                                int x = xyIndex / maxY; int y = xyIndex % maxY; int li = LocalIndex(x, y, z, maxY, maxZ);
+                                WriteFace(localBlocks[li], Faces.BACK, (byte)x, (byte)y, (byte)z, ref faceIndex, emptyBlock, hasSingleOpaque, singleSolidId, singleSolidUVConcat, atlas, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
+                                bits &= bits - 1;
+                            }
+                        }
+                        if (!skipFront)
+                        {
+                            ulong frontBits = (z == maxZ - 1) ? (cur & ~neighborFront[w]) : (cur & ~zSlabs[nextOff + w]);
+                            ulong bits = frontBits;
+                            while (bits != 0)
+                            {
+                                int t = BitOperations.TrailingZeroCount(bits);
+                                int xyIndex = (w << 6) + t; if (xyIndex >= xyPlaneBits) break;
+                                int x = xyIndex / maxY; int y = xyIndex % maxY; int li = LocalIndex(x, y, z, maxY, maxZ);
+                                WriteFace(localBlocks[li], Faces.FRONT, (byte)x, (byte)y, (byte)z, ref faceIndex, emptyBlock, hasSingleOpaque, singleSolidId, singleSolidUVConcat, atlas, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
+                                bits &= bits - 1;
+                            }
+                        }
+                    }
+                }
+
+                return new PooledFaceBuildResult
+                {
+                    FullyOccluded = false,
+                    UseUShort = useUShort,
+                    HasSingleOpaque = hasSingleOpaque,
+                    VertBuffer = vertBuffer,
+                    UVBuffer = uvBuffer,
+                    IndicesUIntBuffer = indicesUIntBuffer,
+                    IndicesUShortBuffer = indicesUShortBuffer,
+                    VertBytesUsed = totalVerts * 3,
+                    UVBytesUsed = totalVerts * 2,
+                    IndicesUsed = totalFaces * 6
+                };
             }
             finally
             {
+                // Return identical pair arrays (if rented)
+                if (identicalPairX != null) ArrayPool<bool>.Shared.Return(identicalPairX, false);
+                if (identicalPairY != null) ArrayPool<bool>.Shared.Return(identicalPairY, false);
+                if (identicalPairZ != null) ArrayPool<bool>.Shared.Return(identicalPairZ, false);
                 // Return pooled working arrays
                 ArrayPool<ushort>.Shared.Return(localBlocks, false);
                 ArrayPool<ulong>.Shared.Return(xSlabs, false);
