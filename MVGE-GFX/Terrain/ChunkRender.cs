@@ -10,13 +10,13 @@ using System.Collections.Generic;
 using System.Buffers;
 using System.Threading.Tasks;
 using System.Runtime.CompilerServices;
-using System.Numerics; // for BitOperations
+using System.Numerics;
 
 namespace MVGE_GFX.Terrain
 {
     public class ChunkRender
     {
-        private bool isBuilt = false; // restored missing field
+        private bool isBuilt = false;
         private OpenTK.Mathematics.Vector3 chunkWorldPosition;
 
         // Small-chunk fallback lists 
@@ -256,9 +256,22 @@ namespace MVGE_GFX.Terrain
 
         private void GenerateFacesList(int maxX, int maxY, int maxZ)
         {
-            chunkVertsList = new List<byte>();
-            chunkUVsList = new List<byte>();
-            chunkIndicesList = new List<uint>();
+            // Optimization 16: preallocate list capacities for worst-case visible faces to avoid repeated reallocations
+            int blockCount = maxX * maxY * maxZ;
+            int worstFaces = blockCount * 6; // theoretical upper bound
+            // Each face => 4 verts * 3 position bytes = 12 bytes
+            int vertsCapacity = worstFaces * 12;
+            int uvsCapacity = worstFaces * 8;   // 4 verts * 2 uv bytes
+            int indicesCapacity = worstFaces * 6; // 6 indices per face
+            // Guard against extreme allocations (should be small path anyway)
+            const int MaxListBytes = 8 * 1024 * 1024; // 8MB safety ceiling
+            if (vertsCapacity > MaxListBytes) vertsCapacity = MaxListBytes; // still large enough
+            if (uvsCapacity > MaxListBytes) uvsCapacity = MaxListBytes;
+            if (indicesCapacity > (MaxListBytes / 4)) indicesCapacity = MaxListBytes / 4; // uint list
+
+            chunkVertsList = new List<byte>(vertsCapacity);
+            chunkUVsList = new List<byte>(uvsCapacity);
+            chunkIndicesList = new List<uint>(indicesCapacity);
 
             for (int x = 0; x < maxX; x++)
                 for (int z = 0; z < maxZ; z++)
@@ -326,14 +339,6 @@ namespace MVGE_GFX.Terrain
             else indexFormat = IndexFormat.UInt;
         }
 
-        // Bit positions in face mask
-        private const int FACE_LEFT = 1 << 0;
-        private const int FACE_RIGHT = 1 << 1;
-        private const int FACE_TOP = 1 << 2;
-        private const int FACE_BOTTOM = 1 << 3;
-        private const int FACE_FRONT = 1 << 4;
-        private const int FACE_BACK = 1 << 5;
-
         private static int LocalIndex(int x, int y, int z, int maxY, int maxZ) => (x * maxZ + z) * maxY + y; // x-major, then z, then y
 
         private void GenerateFacesPooled(int maxX, int maxY, int maxZ)
@@ -350,9 +355,9 @@ namespace MVGE_GFX.Terrain
             int planeSize = maxY * maxZ; // for linear index neighbor offset along x
             int voxelCount = maxX * planeSize;
 
-            // Block storage & single-solid detection
+            // Block storage & single-solid detection (Optimization 18: early disable detection once variety found)
             ushort[] localBlocks = new ushort[voxelCount];
-            bool haveSolid = false; bool singleSolidType = true; ushort singleSolidId = 0;
+            bool haveSolid = false; bool detectSingleSolid = true; ushort singleSolidId = 0;
 
             // Axis slabs (bitsets)
             ulong[] xSlabs = new ulong[maxX * yzWC];
@@ -425,13 +430,18 @@ namespace MVGE_GFX.Terrain
                             int xyIndex = x * maxY + y; int wxy = xyIndex >> 6; int bxy = xyIndex & 63;
                             zSlabs[z * xyWC + wxy] |= 1UL << bxy;
 
-                            if (!haveSolid) { haveSolid = true; singleSolidId = bId; }
-                            else if (singleSolidType && bId != singleSolidId) singleSolidType = false;
+                            if (detectSingleSolid)
+                            {
+                                if (!haveSolid) { haveSolid = true; singleSolidId = bId; }
+                                else if (bId != singleSolidId) { detectSingleSolid = false; }
+                            }
                         }
                     }
                 }
                 if (slabAccumX != 0) xSlabNonEmpty[x] = true;
             }
+            bool singleSolidType = detectSingleSolid; // final flag
+
             // ySlabNonEmpty and zSlabNonEmpty
             for (int y = 0; y < maxY; y++)
             {
@@ -470,17 +480,18 @@ namespace MVGE_GFX.Terrain
                 identicalPairZ[z] = eq;
             }
 
-            // Pass 1: count faces via differencing with skips
+            // Pass 1: count faces via differencing with skips (Optimization 17: skip slab entirely when both directions skipped)
             int totalFaces = 0;
             // X-axis
             for (int x = 0; x < maxX; x++)
             {
                 if (!xSlabNonEmpty[x]) continue; // empty slab produces no x faces
+                bool skipLeft = x > 0 && identicalPairX[x - 1];
+                bool skipRight = x < maxX - 1 && identicalPairX[x];
+                if (skipLeft && skipRight) continue; // no faces from this slab
                 int curOff = x * yzWC;
                 int prevOff = (x - 1) * yzWC;
                 int nextOff = (x + 1) * yzWC;
-                bool skipLeft = x > 0 && identicalPairX[x - 1];
-                bool skipRight = x < maxX - 1 && identicalPairX[x];
                 for (int w = 0; w < yzWC; w++)
                 {
                     ulong cur = xSlabs[curOff + w];
@@ -501,11 +512,12 @@ namespace MVGE_GFX.Terrain
             for (int y = 0; y < maxY; y++)
             {
                 if (!ySlabNonEmpty[y]) continue;
+                bool skipBottom = y > 0 && identicalPairY[y - 1];
+                bool skipTop = y < maxY - 1 && identicalPairY[y];
+                if (skipBottom && skipTop) continue;
                 int curOff = y * xzWC;
                 int prevOff = (y - 1) * xzWC;
                 int nextOff = (y + 1) * xzWC;
-                bool skipBottom = y > 0 && identicalPairY[y - 1];
-                bool skipTop = y < maxY - 1 && identicalPairY[y];
                 for (int w = 0; w < xzWC; w++)
                 {
                     ulong cur = ySlabs[curOff + w];
@@ -526,11 +538,12 @@ namespace MVGE_GFX.Terrain
             for (int z = 0; z < maxZ; z++)
             {
                 if (!zSlabNonEmpty[z]) continue;
+                bool skipBack = z > 0 && identicalPairZ[z - 1];
+                bool skipFront = z < maxZ - 1 && identicalPairZ[z];
+                if (skipBack && skipFront) continue;
                 int curOff = z * xyWC;
                 int prevOff = (z - 1) * xyWC;
                 int nextOff = (z + 1) * xyWC;
-                bool skipBack = z > 0 && identicalPairZ[z - 1];
-                bool skipFront = z < maxZ - 1 && identicalPairZ[z];
                 for (int w = 0; w < xyWC; w++)
                 {
                     ulong cur = zSlabs[curOff + w];
@@ -576,16 +589,17 @@ namespace MVGE_GFX.Terrain
                 WriteFace(block, face, x, y, z, ref faceIndex, null, singleSolidUVConcat);
             }
 
-            // Pass 2: emit faces by enumerating bits with skips
+            // Pass 2: emit faces by enumerating bits with skips (Optimization 17)
             // X-axis
             for (int x = 0; x < maxX; x++)
             {
                 if (!xSlabNonEmpty[x]) continue;
+                bool skipLeft = x > 0 && identicalPairX[x - 1];
+                bool skipRight = x < maxX - 1 && identicalPairX[x];
+                if (skipLeft && skipRight) continue;
                 int curOff = x * yzWC;
                 int prevOff = (x - 1) * yzWC;
                 int nextOff = (x + 1) * yzWC;
-                bool skipLeft = x > 0 && identicalPairX[x - 1];
-                bool skipRight = x < maxX - 1 && identicalPairX[x];
                 for (int w = 0; w < yzWC; w++)
                 {
                     ulong cur = xSlabs[curOff + w];
@@ -622,11 +636,12 @@ namespace MVGE_GFX.Terrain
             for (int y = 0; y < maxY; y++)
             {
                 if (!ySlabNonEmpty[y]) continue;
+                bool skipBottom = y > 0 && identicalPairY[y - 1];
+                bool skipTop = y < maxY - 1 && identicalPairY[y];
+                if (skipBottom && skipTop) continue;
                 int curOff = y * xzWC;
                 int prevOff = (y - 1) * xzWC;
                 int nextOff = (y + 1) * xzWC;
-                bool skipBottom = y > 0 && identicalPairY[y - 1];
-                bool skipTop = y < maxY - 1 && identicalPairY[y];
                 for (int w = 0; w < xzWC; w++)
                 {
                     ulong cur = ySlabs[curOff + w];
@@ -663,11 +678,12 @@ namespace MVGE_GFX.Terrain
             for (int z = 0; z < maxZ; z++)
             {
                 if (!zSlabNonEmpty[z]) continue;
+                bool skipBack = z > 0 && identicalPairZ[z - 1];
+                bool skipFront = z < maxZ - 1 && identicalPairZ[z];
+                if (skipBack && skipFront) continue;
                 int curOff = z * xyWC;
                 int prevOff = (z - 1) * xyWC;
                 int nextOff = (z + 1) * xyWC;
-                bool skipBack = z > 0 && identicalPairZ[z - 1];
-                bool skipFront = z < maxZ - 1 && identicalPairZ[z];
                 for (int w = 0; w < xyWC; w++)
                 {
                     ulong cur = zSlabs[curOff + w];
