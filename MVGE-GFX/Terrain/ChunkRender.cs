@@ -165,9 +165,6 @@ namespace MVGE_GFX.Terrain
             bool usePooling = false;
             if (FlagManager.flags.useFacePooling.GetValueOrDefault())
             {
-                // Testing reveals that facepooling takes up a lot more memory than expected
-                // but it is easier on the CPU, and sometimes faster with larger chunks
-                // Up to you when you want to use it
                 var threshold = FlagManager.flags.faceAmountToPool.GetValueOrDefault(int.MaxValue);
                 if (threshold != null || threshold >= 0)
                 {
@@ -262,13 +259,65 @@ namespace MVGE_GFX.Terrain
             int proc = Environment.ProcessorCount;
             int slices = Math.Min(proc, maxX);
             int sliceWidth = (int)Math.Ceiling(maxX / (double)slices);
-            var faceLists = new List<PendingFace>[slices];
 
+            // First pass: count faces per slice (parallel)
+            int[] faceCounts = new int[slices];
             Parallel.For(0, slices, s =>
             {
-                var local = new List<PendingFace>(4096);
                 int startX = s * sliceWidth;
                 int endX = Math.Min(maxX, startX + sliceWidth);
+                int count = 0;
+                for (int x = startX; x < endX; x++)
+                {
+                    for (int z = 0; z < maxZ; z++)
+                    {
+                        for (int y = 0; y < maxY; y++)
+                        {
+                            ushort block = getLocalBlock(x, y, z);
+                            if (block == emptyBlock) continue;
+                            int wx = (int)chunkWorldPosition.X + x;
+                            int wy = (int)chunkWorldPosition.Y + y;
+                            int wz = (int)chunkWorldPosition.Z + z;
+                            if ((x > 0 && getLocalBlock(x - 1, y, z) == emptyBlock) || (x == 0 && getWorldBlock(wx - 1, wy, wz) == emptyBlock)) count++;
+                            if ((x < maxX - 1 && getLocalBlock(x + 1, y, z) == emptyBlock) || (x == maxX - 1 && getWorldBlock(wx + 1, wy, wz) == emptyBlock)) count++;
+                            if ((y < maxY - 1 && getLocalBlock(x, y + 1, z) == emptyBlock) || (y == maxY - 1 && getWorldBlock(wx, wy + 1, wz) == emptyBlock)) count++;
+                            if ((y > 0 && getLocalBlock(x, y - 1, z) == emptyBlock) || (y == 0 && getWorldBlock(wx, wy - 1, wz) == emptyBlock)) count++;
+                            if ((z < maxZ - 1 && getLocalBlock(x, y, z + 1) == emptyBlock) || (z == maxZ - 1 && getWorldBlock(wx, wy, wz + 1) == emptyBlock)) count++;
+                            if ((z > 0 && getLocalBlock(x, y, z - 1) == emptyBlock) || (z == 0 && getWorldBlock(wx, wy, wz - 1) == emptyBlock)) count++;
+                        }
+                    }
+                }
+                faceCounts[s] = count;
+            });
+
+            // Prefix sums for face offsets
+            int totalFaces = 0;
+            int[] faceOffsets = new int[slices];
+            for (int i = 0; i < slices; i++)
+            {
+                faceOffsets[i] = totalFaces;
+                totalFaces += faceCounts[i];
+            }
+            int totalVerts = totalFaces * 4;
+
+            useUShort = totalVerts <= 65535;
+            usedPooling = true;
+            indexFormat = useUShort ? IndexFormat.UShort : IndexFormat.UInt;
+
+            // Allocate pooled buffers sized for all faces
+            vertBuffer = ArrayPool<byte>.Shared.Rent(totalVerts * 3);
+            uvBuffer = ArrayPool<byte>.Shared.Rent(totalVerts * 2);
+            if (useUShort)
+                indicesUShortBuffer = ArrayPool<ushort>.Shared.Rent(totalFaces * 6);
+            else
+                indicesUIntBuffer = ArrayPool<uint>.Shared.Rent(totalFaces * 6);
+
+            // Second pass: write faces directly in parallel using disjoint ranges
+            Parallel.For(0, slices, s =>
+            {
+                int startX = s * sliceWidth;
+                int endX = Math.Min(maxX, startX + sliceWidth);
+                int writeFaceIndex = faceOffsets[s]; // face slot we are writing next (global face index)
                 for (int x = startX; x < endX; x++)
                 {
                     for (int z = 0; z < maxZ; z++)
@@ -281,91 +330,80 @@ namespace MVGE_GFX.Terrain
                             int wy = (int)chunkWorldPosition.Y + y;
                             int wz = (int)chunkWorldPosition.Z + z;
 
+                            // For each visible face, emit it
                             if ((x > 0 && getLocalBlock(x - 1, y, z) == emptyBlock) || (x == 0 && getWorldBlock(wx - 1, wy, wz) == emptyBlock))
-                                local.Add(new PendingFace(block, Faces.LEFT, (byte)x, (byte)y, (byte)z));
+                                WriteFace(block, Faces.LEFT, (byte)x, (byte)y, (byte)z, ref writeFaceIndex);
                             if ((x < maxX - 1 && getLocalBlock(x + 1, y, z) == emptyBlock) || (x == maxX - 1 && getWorldBlock(wx + 1, wy, wz) == emptyBlock))
-                                local.Add(new PendingFace(block, Faces.RIGHT, (byte)x, (byte)y, (byte)z));
+                                WriteFace(block, Faces.RIGHT, (byte)x, (byte)y, (byte)z, ref writeFaceIndex);
                             if ((y < maxY - 1 && getLocalBlock(x, y + 1, z) == emptyBlock) || (y == maxY - 1 && getWorldBlock(wx, wy + 1, wz) == emptyBlock))
-                                local.Add(new PendingFace(block, Faces.TOP, (byte)x, (byte)y, (byte)z));
+                                WriteFace(block, Faces.TOP, (byte)x, (byte)y, (byte)z, ref writeFaceIndex);
                             if ((y > 0 && getLocalBlock(x, y - 1, z) == emptyBlock) || (y == 0 && getWorldBlock(wx, wy - 1, wz) == emptyBlock))
-                                local.Add(new PendingFace(block, Faces.BOTTOM, (byte)x, (byte)y, (byte)z));
+                                WriteFace(block, Faces.BOTTOM, (byte)x, (byte)y, (byte)z, ref writeFaceIndex);
                             if ((z < maxZ - 1 && getLocalBlock(x, y, z + 1) == emptyBlock) || (z == maxZ - 1 && getWorldBlock(wx, wy, wz + 1) == emptyBlock))
-                                local.Add(new PendingFace(block, Faces.FRONT, (byte)x, (byte)y, (byte)z));
+                                WriteFace(block, Faces.FRONT, (byte)x, (byte)y, (byte)z, ref writeFaceIndex);
                             if ((z > 0 && getLocalBlock(x, y, z - 1) == emptyBlock) || (z == 0 && getWorldBlock(wx, wy, wz - 1) == emptyBlock))
-                                local.Add(new PendingFace(block, Faces.BACK, (byte)x, (byte)y, (byte)z));
+                                WriteFace(block, Faces.BACK, (byte)x, (byte)y, (byte)z, ref writeFaceIndex);
                         }
                     }
                 }
-                faceLists[s] = local;
             });
 
-            int totalFaces = 0;
-            foreach (var fl in faceLists) totalFaces += fl.Count;
-            int totalVerts = totalFaces * 4;
-            useUShort = totalVerts <= 65535;
-            usedPooling = true;
-            indexFormat = useUShort ? IndexFormat.UShort : IndexFormat.UInt;
-
-            vertBuffer = ArrayPool<byte>.Shared.Rent(totalVerts * 3);
-            uvBuffer = ArrayPool<byte>.Shared.Rent(totalVerts * 2);
-            if (useUShort)
-                indicesUShortBuffer = ArrayPool<ushort>.Shared.Rent(totalFaces * 6);
-            else
-                indicesUIntBuffer = ArrayPool<uint>.Shared.Rent(totalFaces * 6);
-
-            vertBytesUsed = 0; uvBytesUsed = 0; indicesUsed = 0;
-            int currentVertIndex = 0; // in vertices (not bytes)
-
-            foreach (var list in faceLists)
-            {
-                foreach (var pf in list)
-                {
-                    WriteFacePooled(pf.Block, pf.Face, pf.X, pf.Y, pf.Z, ref currentVertIndex);
-                }
-            }
+            // Set used byte counts
+            vertBytesUsed = totalVerts * 3;
+            uvBytesUsed = totalVerts * 2;
+            indicesUsed = totalFaces * 6;
         }
 
-        private void WriteFacePooled(ushort block, Faces face, byte bx, byte by, byte bz, ref int currentVertIndex)
+        private void WriteFace(ushort block, Faces face, byte bx, byte by, byte bz, ref int faceIndex)
         {
+            int baseVertexIndex = faceIndex * 4;
+            int vertexByteOffset = baseVertexIndex * 3;
+            int uvByteOffset = baseVertexIndex * 2;
+            int indexOffset = faceIndex * 6;
+
             var verts = RawFaceData.rawVertexData[face];
+            // Vertices (12 bytes)
             for (int i = 0; i < 4; i++)
             {
-                vertBuffer[vertBytesUsed++] = (byte)(verts[i].x + bx);
-                vertBuffer[vertBytesUsed++] = (byte)(verts[i].y + by);
-                vertBuffer[vertBytesUsed++] = (byte)(verts[i].z + bz);
+                vertBuffer[vertexByteOffset + i * 3 + 0] = (byte)(verts[i].x + bx);
+                vertBuffer[vertexByteOffset + i * 3 + 1] = (byte)(verts[i].y + by);
+                vertBuffer[vertexByteOffset + i * 3 + 2] = (byte)(verts[i].z + bz);
             }
+
             var blockUVs = block != emptyBlock ? terrainTextureAtlas.GetBlockUVs(block, face) : null;
             if (blockUVs != null)
             {
                 for (int i = 0; i < blockUVs.Count; i++)
                 {
-                    uvBuffer[uvBytesUsed++] = blockUVs[i].x;
-                    uvBuffer[uvBytesUsed++] = blockUVs[i].y;
+                    uvBuffer[uvByteOffset + i * 2 + 0] = blockUVs[i].x;
+                    uvBuffer[uvByteOffset + i * 2 + 1] = blockUVs[i].y;
                 }
             }
             else
             {
-                for (int i = 0; i < 8; i++) uvBuffer[uvBytesUsed++] = 0;
+                for (int i = 0; i < 8; i++) uvBuffer[uvByteOffset + i] = 0;
             }
+
             if (useUShort)
             {
-                indicesUShortBuffer[indicesUsed++] = (ushort)(currentVertIndex + 0);
-                indicesUShortBuffer[indicesUsed++] = (ushort)(currentVertIndex + 1);
-                indicesUShortBuffer[indicesUsed++] = (ushort)(currentVertIndex + 2);
-                indicesUShortBuffer[indicesUsed++] = (ushort)(currentVertIndex + 2);
-                indicesUShortBuffer[indicesUsed++] = (ushort)(currentVertIndex + 3);
-                indicesUShortBuffer[indicesUsed++] = (ushort)(currentVertIndex + 0);
+                indicesUShortBuffer[indexOffset + 0] = (ushort)(baseVertexIndex + 0);
+                indicesUShortBuffer[indexOffset + 1] = (ushort)(baseVertexIndex + 1);
+                indicesUShortBuffer[indexOffset + 2] = (ushort)(baseVertexIndex + 2);
+                indicesUShortBuffer[indexOffset + 3] = (ushort)(baseVertexIndex + 2);
+                indicesUShortBuffer[indexOffset + 4] = (ushort)(baseVertexIndex + 3);
+                indicesUShortBuffer[indexOffset + 5] = (ushort)(baseVertexIndex + 0);
             }
             else
             {
-                indicesUIntBuffer[indicesUsed++] = (uint)(currentVertIndex + 0);
-                indicesUIntBuffer[indicesUsed++] = (uint)(currentVertIndex + 1);
-                indicesUIntBuffer[indicesUsed++] = (uint)(currentVertIndex + 2);
-                indicesUIntBuffer[indicesUsed++] = (uint)(currentVertIndex + 2);
-                indicesUIntBuffer[indicesUsed++] = (uint)(currentVertIndex + 3);
-                indicesUIntBuffer[indicesUsed++] = (uint)(currentVertIndex + 0);
+                indicesUIntBuffer[indexOffset + 0] = (uint)(baseVertexIndex + 0);
+                indicesUIntBuffer[indexOffset + 1] = (uint)(baseVertexIndex + 1);
+                indicesUIntBuffer[indexOffset + 2] = (uint)(baseVertexIndex + 2);
+                indicesUIntBuffer[indexOffset + 3] = (uint)(baseVertexIndex + 2);
+                indicesUIntBuffer[indexOffset + 4] = (uint)(baseVertexIndex + 3);
+                indicesUIntBuffer[indexOffset + 5] = (uint)(baseVertexIndex + 0);
             }
-            currentVertIndex += 4;
+
+            faceIndex++; // advance to next face slot
         }
 
         private void DeleteGL()
@@ -376,15 +414,6 @@ namespace MVGE_GFX.Terrain
             chunkUVVBO.Delete();
             chunkIBO.Delete();
             isBuilt = false;
-        }
-
-        private readonly struct PendingFace
-        {
-            public readonly ushort Block;
-            public readonly Faces Face;
-            public readonly byte X, Y, Z;
-            public PendingFace(ushort b, Faces f, byte x, byte y, byte z)
-            { Block = b; Face = f; X = x; Y = y; Z = z; }
         }
     }
 }
