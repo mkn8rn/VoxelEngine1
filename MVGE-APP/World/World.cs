@@ -28,23 +28,30 @@ namespace MVGE.World
     {
         public WorldLoader loader { get; private set; }
 
-        private readonly ConcurrentDictionary<(int cx, int cy, int cz), Chunk> chunks = new(); // track generated chunks
+        private readonly ConcurrentDictionary<(int cx, int cy, int cz), Chunk> chunks = new(); // track generated and built chunks
+        private readonly ConcurrentDictionary<(int cx, int cy, int cz), Chunk> unbuiltChunks = new(); // track generated but not yet built chunks
         private readonly ConcurrentDictionary<(int cx, int cy, int cz), byte> pendingChunks = new(); // track enqueued but not yet generated
 
-        // Streaming pipeline structures
-        private BlockingCollection<Vector3> chunkPositionQueue;
+        // Cancellation token for streaming operations
         private CancellationTokenSource streamingCts;
+
+        // Asynchronous generation pipeline
+        private int generationWorkerCount;
         private Task[] generationWorkers;
-        private int workerCount;
-        private Func<int, int, int, ushort> worldBlockAccessor;
+        private BlockingCollection<Vector3> chunkPositionQueue; // gen tasks
 
         // Cache heightmaps for (baseX, baseZ) columns across vertical stacks
         private readonly ConcurrentDictionary<(int baseX,int baseZ), float[,]> heightmapCache = new();
 
-        // for tracking which chunks need mesh updates
-        private readonly ConcurrentQueue<(int cx, int cy, int cz)> dirtyMeshQueue = new();
-        private readonly ConcurrentDictionary<(int cx, int cy, int cz), byte> dirtyMeshSet = new();
+        // World block accessor delegate
+        private Func<int, int, int, ushort> worldBlockAccessor;
 
+        // Asynchronous mesh build pipeline
+        private int meshWorkerCount;
+        private Task[] meshBuildWorkers;
+        private BlockingCollection<(int cx,int cy,int cz)> meshBuildQueue; // build tasks
+        private readonly ConcurrentDictionary<(int cx, int cy, int cz), byte> meshBuildSchedule = new(); // de-dupe keys in build queue
+        
         public World()
         {
             Console.WriteLine("World manager initializing.");
@@ -53,10 +60,12 @@ namespace MVGE.World
             loader.ChooseWorld();
             Console.WriteLine("World data loaded.");
 
-            InitializeStreaming();
-            Console.WriteLine("Streaming chunk generation...");
+            streamingCts = new CancellationTokenSource();
 
+            InitializeGeneration();
             WaitForInitialChunkGeneration();
+
+            InitializeBuilding();
             WaitForInitialChunkRenderBuild();
         }
 
@@ -64,24 +73,17 @@ namespace MVGE.World
         {
             Console.WriteLine("[World] Waiting for initial chunk generation...");
             var sw = Stopwatch.StartNew();
-            int lastPercent = -1;
 
-            int done = chunks.Count;
+            int done = unbuiltChunks.Count;
             int remaining = pendingChunks.Count;
             int total = pendingChunks.Count + done;
-            int percent = (int)(done * 100L / total);
 
             while (pendingChunks.Count > 0)
             {
-                done = chunks.Count;
+                done = unbuiltChunks.Count;
                 remaining = pendingChunks.Count;
-                percent = (int)(done * 100L / total);
 
-                if (percent != lastPercent)
-                {
-                    Console.WriteLine($"[World] Initial chunk generation: {done}/{total} ({percent}%), remaining: {remaining}");
-                    lastPercent = percent;
-                }
+                Console.WriteLine($"[World] Initial chunk generation: {done}/{total}, remaining: {remaining}");
                 Thread.Sleep(200);
             }
             sw.Stop();
@@ -90,21 +92,15 @@ namespace MVGE.World
 
         private void WaitForInitialChunkRenderBuild()
         {
-            Console.WriteLine("[World] Building chunk meshes...");
+            Console.WriteLine("[World] Building chunk meshes asynchronously...");
             var sw = Stopwatch.StartNew();
-            int initialTotal = dirtyMeshSet.Count;
-            int lastPercent = -1;
-            while (dirtyMeshSet.Count > 0)
+            int initialTotal = unbuiltChunks.Count; // number of chunks scheduled for initial mesh builds
+            while (meshBuildSchedule.Count > 0 || unbuiltChunks.Count > 0) // wait until all scheduled builds complete
             {
-                int remaining = dirtyMeshSet.Count;
-                int done = initialTotal - remaining;
-                int percent = done >= initialTotal ? 100 : (int)(done * 100L / initialTotal);
-                if (percent != lastPercent)
-                {
-                    Console.WriteLine($"[World] Chunk mesh build: {done}/{initialTotal} ({percent}%)");
-                    lastPercent = percent;
-                }
-                BuildChunks();
+                int remaining = unbuiltChunks.Count;
+                int built = initialTotal - remaining;
+                Console.WriteLine($"[World] Chunk mesh build: {built}/{initialTotal}, remaining: {remaining}");
+                    
                 Thread.Sleep(200);
             }
             sw.Stop();
@@ -113,28 +109,38 @@ namespace MVGE.World
 
         public void Render(ShaderProgram program)
         {
-            BuildChunks();
             foreach (var chunk in chunks.Values) chunk.Render(program);
         }
 
-        private void InitializeStreaming()
+        private void InitializeGeneration()
         {
             worldBlockAccessor = GetBlock;
-
-            // Prepare queue & cancellation
-            streamingCts = new CancellationTokenSource();
             chunkPositionQueue = new BlockingCollection<Vector3>(new ConcurrentQueue<Vector3>());
 
-            // Enqueue initial target chunk positions (spiral ordering) non-blocking
             EnqueueInitialChunkPositions();
 
-            // Worker count: leave 1 core for render thread if possible
-            workerCount = Math.Max(1, Environment.ProcessorCount - 1);
-            generationWorkers = new Task[workerCount];
-            for (int i = 0; i < workerCount; i++)
+            generationWorkerCount = Math.Max(1, Environment.ProcessorCount - 1);
+            generationWorkers = new Task[generationWorkerCount];
+            for (int i = 0; i < generationWorkerCount; i++)
             {
-                generationWorkers[i] = Task.Run(() => ChunkGenerationWorker(streamingCts.Token));
+                generationWorkers[i] = Task.Run(() => ChunkGenerationWorker(streamingCts.Token, true));
             }
+        }
+
+        private void InitializeBuilding()
+        {
+            meshBuildQueue = new BlockingCollection<(int cx,int cy,int cz)>(new ConcurrentQueue<(int,int,int)>());
+
+            Console.WriteLine("[World] Initializing mesh build workers...");
+            meshWorkerCount = Math.Max(1, Environment.ProcessorCount - 1);
+            meshBuildWorkers = new Task[meshWorkerCount];
+            for (int i = 0; i < meshWorkerCount; i++)
+            {
+                meshBuildWorkers[i] = Task.Run(() => MeshBuildWorker(streamingCts.Token));
+            }
+            Console.WriteLine($"[World] Initialized {meshWorkerCount} mesh build workers.");
+
+            EnqueueUnbuiltChunksForBuild();
         }
 
         private void EnqueueInitialChunkPositions()
@@ -180,12 +186,20 @@ namespace MVGE.World
             Console.WriteLine($"[World] Scheduled {count} initial chunks.");
         }
 
+        private void EnqueueUnbuiltChunksForBuild()
+        {
+            foreach (var key in unbuiltChunks.Keys)
+            {
+                EnqueueMeshBuild(key);
+            }
+        }
+
         private void EnqueueChunkPosition(int worldX, int worldY, int worldZ, bool force = false)
-        { // force is for priority, like prioritising chunks in camera view
+        {
             var key = ChunkIndexKey(worldX, worldY, worldZ);
             if (!force)
             {
-                if (chunks.ContainsKey(key)) return; // already generated
+                if (unbuiltChunks.ContainsKey(key) || chunks.ContainsKey(key)) return; // already generated or built
                 if (!pendingChunks.TryAdd(key, 0)) return; // already queued
             }
             else
@@ -195,7 +209,7 @@ namespace MVGE.World
             chunkPositionQueue.Add(new Vector3(worldX, worldY, worldZ));
         }
 
-        private void ChunkGenerationWorker(CancellationToken token)
+        private void ChunkGenerationWorker(CancellationToken token, bool initialBuild = false)
         {
             string chunkSaveDirectory = Path.Combine(loader.currentWorldSaveDirectory, loader.currentWorldSavedChunksSubDirectory);
             try
@@ -212,20 +226,17 @@ namespace MVGE.World
 
                     var chunk = new Chunk(pos, loader.seed, Path.Combine(loader.currentWorldSaveDirectory, loader.currentWorldSavedChunksSubDirectory), heightmap);
                     var key = ChunkIndexKey((int)pos.X, (int)pos.Y, (int)pos.Z);
-                    chunks[key] = chunk;
+                    unbuiltChunks[key] = chunk;
 
-                    // Reminder to self: 
-                    // Removed the buildrender call, re-add it somewhere else
-                    /*
-                    lock (chunk)
-                    {
-                        chunk.BuildRender(worldBlockAccessor);
-                    }*/
-
-                    // Remove from pending since generation complete
                     pendingChunks.TryRemove(key, out _);
 
-                    MarkNeighborsDirty(key);
+                    if(initialBuild == false) // We don't need to rebuild meshes during initial generation
+                    {
+                        // Enqueue self for initial mesh build
+                        EnqueueMeshBuild(key);
+                        // Mark neighbors so they can rebuild to hide now occluded faces
+                        MarkNeighborsDirty(key);
+                    }
                 }
             }
             catch (OperationCanceledException) { }
@@ -245,26 +256,61 @@ namespace MVGE.World
             foreach (var (dx, dy, dz) in NeighborDirs)
             {
                 var nk = (key.cx + dx, key.cy + dy, key.cz + dz);
-                if (chunks.ContainsKey(nk))
+                if (unbuiltChunks.ContainsKey(nk) || chunks.ContainsKey(nk))
                 {
-                    if (dirtyMeshSet.TryAdd(nk, 0))
-                        dirtyMeshQueue.Enqueue(nk);
+                    EnqueueMeshBuild(nk);
                 }
             }
         }
 
-        private void BuildChunks()
+        private void EnqueueMeshBuild((int cx,int cy,int cz) key)
         {
-            while (dirtyMeshQueue.TryDequeue(out var key))
+            if (!unbuiltChunks.ContainsKey(key) && !chunks.ContainsKey(key)) return;
+            if (meshBuildSchedule.TryAdd(key, 0))
             {
-                dirtyMeshSet.TryRemove(key, out _);
-                if (chunks.TryGetValue(key, out var ch))
+                meshBuildQueue.Add(key);
+            }
+        }
+
+        private void MeshBuildWorker(CancellationToken token)
+        {
+            try
+            {
+                foreach (var key in meshBuildQueue.GetConsumingEnumerable(token))
                 {
-                    lock (ch)
+                    if (token.IsCancellationRequested) break;
+
+                    meshBuildSchedule.TryRemove(key, out _);
+
+                    // Acquire chunk from either dictionary
+                    if (!unbuiltChunks.TryGetValue(key, out var ch))
                     {
-                        ch.BuildRender(worldBlockAccessor);
+                        if (!chunks.TryGetValue(key, out ch)) continue; // disappeared
+                    }
+
+                    try
+                    {
+                        lock (ch)
+                        {
+                            ch.BuildRender(worldBlockAccessor);
+                        }
+
+                        // If this was first-time build (in unbuilt), move to built dictionary
+                        if (unbuiltChunks.TryRemove(key, out var builtChunk))
+                        {
+                            chunks[key] = builtChunk;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Mesh build error for chunk {key}: {ex.Message}");
                     }
                 }
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Mesh build worker error: " + ex.Message);
             }
         }
 
@@ -274,9 +320,14 @@ namespace MVGE.World
             {
                 streamingCts?.Cancel();
                 chunkPositionQueue?.CompleteAdding();
+                meshBuildQueue?.CompleteAdding();
                 if (generationWorkers != null)
                 {
                     Task.WaitAll(generationWorkers, TimeSpan.FromSeconds(2));
+                }
+                if (meshBuildWorkers != null)
+                {
+                    Task.WaitAll(meshBuildWorkers, TimeSpan.FromSeconds(2));
                 }
             }
             catch { }
@@ -284,6 +335,7 @@ namespace MVGE.World
             {
                 streamingCts?.Dispose();
                 chunkPositionQueue?.Dispose();
+                meshBuildQueue?.Dispose();
             }
         }
 
@@ -298,9 +350,12 @@ namespace MVGE.World
             int cz = FloorDiv(wz, sizeZ);
 
             var key = (cx, cy, cz);
-            if (!chunks.TryGetValue(key, out var chunk))
+            if (!unbuiltChunks.TryGetValue(key, out var chunk))
             {
-                return (ushort)BaseBlockType.Empty;
+                if (!chunks.TryGetValue(key, out chunk))
+                {
+                    return (ushort)BaseBlockType.Empty;
+                }
             }
 
             int localX = wx - cx * sizeX;
