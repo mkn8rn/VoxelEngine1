@@ -27,10 +27,8 @@ namespace MVGE.World
         public Guid ID;
         public string worldName;
 
-        private readonly ConcurrentDictionary<(int cx, int cy, int cz), Chunk> chunks = new();
+        private readonly ConcurrentDictionary<(int cx, int cy, int cz), Chunk> chunks = new(); // track generated chunks
         private readonly ConcurrentDictionary<(int cx, int cy, int cz), byte> pendingChunks = new(); // track enqueued but not yet generated
-        private readonly ConcurrentDictionary<(int cx,int cy,int cz), byte> dirtyMeshes = new();
-
         private int seed;
         private string currentWorldSaveDirectory;
         private string currentWorldDataFile = "world.txt";
@@ -61,6 +59,12 @@ namespace MVGE.World
 
             InitializeStreaming();
             Console.WriteLine("Streaming chunk generation...");
+        }
+
+        public void Render(ShaderProgram program)
+        {
+            ProcessDirtyMeshes();
+            foreach (var chunk in chunks.Values) chunk.Render(program);
         }
 
         private void InitializeStreaming()
@@ -193,7 +197,7 @@ namespace MVGE.World
                     var hmKey = (baseX, baseZ);
                     float[,] heightmap = heightmapCache.GetOrAdd(hmKey, _ => Chunk.GenerateHeightMap(seed, baseX, baseZ));
 
-                    var chunk = new Chunk(pos, seed, chunkSaveDirectory, heightmap);
+                    var chunk = new Chunk(pos, seed, Path.Combine(currentWorldSaveDirectory, currentWorldSavedChunksSubDirectory), heightmap);
                     var key = ChunkIndexKey((int)pos.X, (int)pos.Y, (int)pos.Z);
                     chunks[key] = chunk;
 
@@ -229,8 +233,21 @@ namespace MVGE.World
                         dirtyMeshQueue.Enqueue(nk);
                 }
             }
-            if (dirtyMeshSet.TryAdd(key, 0))
-                dirtyMeshQueue.Enqueue(key);
+        }
+
+        private void ProcessDirtyMeshes()
+        {
+            while (dirtyMeshQueue.TryDequeue(out var key))
+            {
+                dirtyMeshSet.TryRemove(key, out _);
+                if (chunks.TryGetValue(key, out var ch))
+                {
+                    lock (ch)
+                    {
+                        ch.BuildRender(worldBlockAccessor);
+                    }
+                }
+            }
         }
 
         public void Dispose()
@@ -371,22 +388,6 @@ namespace MVGE.World
             }
 
             Console.WriteLine($"Loaded world save: {worldName}, id: {id}, seed: {seed}");
-        }
-
-        public void Render(ShaderProgram program)
-        {
-            if (!dirtyMeshes.IsEmpty)
-            {
-                foreach (var kv in dirtyMeshes.Keys)
-                {
-                    if (chunks.TryGetValue(kv, out var ch))
-                    {
-                        lock (ch) ch.BuildRender(worldBlockAccessor);
-                    }
-                    dirtyMeshes.TryRemove(kv, out _);
-                }
-            }
-            foreach (var chunk in chunks.Values) chunk.Render(program);
         }
 
         public ushort GetBlock(int wx, int wy, int wz)
