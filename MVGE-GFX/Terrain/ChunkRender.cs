@@ -177,6 +177,10 @@ namespace MVGE_GFX.Terrain
             int maxX = GameManager.settings.chunkMaxX;
             int maxY = GameManager.settings.chunkMaxY;
             int maxZ = GameManager.settings.chunkMaxZ;
+
+            // Perform occlusion test once regardless of strategy
+            if (CheckFullyOccluded(maxX, maxY, maxZ)) { fullyOccluded = true; return; }
+
             long volume = (long)maxX * maxY * maxZ;
             bool usePooling = false;
             if (FlagManager.flags.useFacePooling.GetValueOrDefault())
@@ -197,10 +201,6 @@ namespace MVGE_GFX.Terrain
                     getWorldBlock,
                     getLocalBlock,
                     terrainTextureAtlas);
-                if (res.FullyOccluded)
-                {
-                    fullyOccluded = true; return;
-                }
                 usedPooling = true;
                 useUShort = res.UseUShort;
                 vertBuffer = res.VertBuffer;
@@ -214,7 +214,6 @@ namespace MVGE_GFX.Terrain
             }
             else
             {
-                if (CheckFullyOccluded(maxX, maxY, maxZ)) { fullyOccluded = true; return; }
                 GenerateFacesList(maxX, maxY, maxZ);
             }
         }
