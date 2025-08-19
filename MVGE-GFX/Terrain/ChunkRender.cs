@@ -34,6 +34,8 @@ namespace MVGE_GFX.Terrain
         private bool useUShort;
         private bool usedPooling;
 
+        private int drawIndexCount;
+
         private VAO chunkVAO;
         private VBO chunkVertexVBO;
         private VBO chunkUVVBO;
@@ -113,6 +115,11 @@ namespace MVGE_GFX.Terrain
                 // List fallback path (small volume)
                 TryFinalizeIndexFormatList();
 
+                // Cache index count BEFORE clearing the lists later
+                drawIndexCount = indexFormat == IndexFormat.UShort
+                    ? chunkIndicesUShortList.Count
+                    : chunkIndicesList.Count;
+
                 chunkVertexVBO = new VBO(chunkVertsList);
                 chunkVertexVBO.Bind();
                 chunkVAO.LinkToVAO(0, 3, VertexAttribPointerType.UnsignedByte, false, chunkVertexVBO);
@@ -125,7 +132,7 @@ namespace MVGE_GFX.Terrain
                     ? new IBO(chunkIndicesUShortList)
                     : new IBO(chunkIndicesList);
 
-                // Release list storage
+                // Release list storage (safe now that drawIndexCount is cached)
                 chunkVertsList.Clear(); chunkVertsList.TrimExcess();
                 chunkUVsList.Clear(); chunkUVsList.TrimExcess();
                 if (chunkIndicesList != null) { chunkIndicesList.Clear(); chunkIndicesList.TrimExcess(); }
@@ -149,9 +156,15 @@ namespace MVGE_GFX.Terrain
             chunkVAO.Bind();
             chunkIBO.Bind();
 
+            int count = usedPooling
+                ? indicesUsed
+                : drawIndexCount; // use cached count
+
+            if (count <= 0) return;
+
             GL.DrawElements(
                 PrimitiveType.Triangles,
-                usedPooling ? indicesUsed : (indexFormat == IndexFormat.UShort ? chunkIndicesUShortList.Count : chunkIndicesList.Count),
+                count,
                 (usedPooling && useUShort) || (!usedPooling && indexFormat == IndexFormat.UShort)
                     ? DrawElementsType.UnsignedShort
                     : DrawElementsType.UnsignedInt,
@@ -164,9 +177,24 @@ namespace MVGE_GFX.Terrain
             int maxY = GameManager.settings.chunkMaxY;
             int maxZ = GameManager.settings.chunkMaxZ;
             long volume = (long)maxX * maxY * maxZ;
-            bool usePoolingPath = volume >= 16_000; // threshold consistent with previous parallel switch
+            bool usePooling = false;
+            if (FlagManager.flags.useFacePooling.GetValueOrDefault())
+            {
+                // Testing reveals that facepooling takes up a lot more memory than expected
+                // but it is easier on the CPU, and sometimes faster with larger chunks
+                // Up to you when you want to use it
+                var threshold = FlagManager.flags.faceAmountToPool.GetValueOrDefault(int.MaxValue);
+                if (threshold == null || threshold <= 0)
+                {
+                    usedPooling = false;
+                }
+                else
+                {
+                    usePooling = volume >= threshold;
+                }
+            }
 
-            if (usePoolingPath)
+            if (usePooling)
             {
                 GenerateFacesPooled(maxX, maxY, maxZ);
             }
@@ -183,24 +211,24 @@ namespace MVGE_GFX.Terrain
             chunkIndicesList = new List<uint>();
 
             for (int x = 0; x < maxX; x++)
-            for (int z = 0; z < maxZ; z++)
-            for (int y = 0; y < maxY; y++)
-            {
-                ushort block = getLocalBlock(x, y, z);
-                if (block == emptyBlock) continue;
-                int wx = (int)chunkWorldPosition.X + x;
-                int wy = (int)chunkWorldPosition.Y + y;
-                int wz = (int)chunkWorldPosition.Z + z;
-                var bp = new ByteVector3 { x = (byte)x, y = (byte)y, z = (byte)z };
-                int localFaces = 0;
-                if ((x > 0 && getLocalBlock(x - 1, y, z) == emptyBlock) || (x == 0 && getWorldBlock(wx - 1, wy, wz) == emptyBlock)) { IntegrateFaceList(block, Faces.LEFT, bp); localFaces++; }
-                if ((x < maxX - 1 && getLocalBlock(x + 1, y, z) == emptyBlock) || (x == maxX - 1 && getWorldBlock(wx + 1, wy, wz) == emptyBlock)) { IntegrateFaceList(block, Faces.RIGHT, bp); localFaces++; }
-                if ((y < maxY - 1 && getLocalBlock(x, y + 1, z) == emptyBlock) || (y == maxY - 1 && getWorldBlock(wx, wy + 1, wz) == emptyBlock)) { IntegrateFaceList(block, Faces.TOP, bp); localFaces++; }
-                if ((y > 0 && getLocalBlock(x, y - 1, z) == emptyBlock) || (y == 0 && getWorldBlock(wx, wy - 1, wz) == emptyBlock)) { IntegrateFaceList(block, Faces.BOTTOM, bp); localFaces++; }
-                if ((z < maxZ - 1 && getLocalBlock(x, y, z + 1) == emptyBlock) || (z == maxZ - 1 && getWorldBlock(wx, wy, wz + 1) == emptyBlock)) { IntegrateFaceList(block, Faces.FRONT, bp); localFaces++; }
-                if ((z > 0 && getLocalBlock(x, y, z - 1) == emptyBlock) || (z == 0 && getWorldBlock(wx, wy, wz - 1) == emptyBlock)) { IntegrateFaceList(block, Faces.BACK, bp); localFaces++; }
-                if (localFaces > 0) AddIndicesList(localFaces);
-            }
+                for (int z = 0; z < maxZ; z++)
+                    for (int y = 0; y < maxY; y++)
+                    {
+                        ushort block = getLocalBlock(x, y, z);
+                        if (block == emptyBlock) continue;
+                        int wx = (int)chunkWorldPosition.X + x;
+                        int wy = (int)chunkWorldPosition.Y + y;
+                        int wz = (int)chunkWorldPosition.Z + z;
+                        var bp = new ByteVector3 { x = (byte)x, y = (byte)y, z = (byte)z };
+                        int localFaces = 0;
+                        if ((x > 0 && getLocalBlock(x - 1, y, z) == emptyBlock) || (x == 0 && getWorldBlock(wx - 1, wy, wz) == emptyBlock)) { IntegrateFaceList(block, Faces.LEFT, bp); localFaces++; }
+                        if ((x < maxX - 1 && getLocalBlock(x + 1, y, z) == emptyBlock) || (x == maxX - 1 && getWorldBlock(wx + 1, wy, wz) == emptyBlock)) { IntegrateFaceList(block, Faces.RIGHT, bp); localFaces++; }
+                        if ((y < maxY - 1 && getLocalBlock(x, y + 1, z) == emptyBlock) || (y == maxY - 1 && getWorldBlock(wx, wy + 1, wz) == emptyBlock)) { IntegrateFaceList(block, Faces.TOP, bp); localFaces++; }
+                        if ((y > 0 && getLocalBlock(x, y - 1, z) == emptyBlock) || (y == 0 && getWorldBlock(wx, wy - 1, wz) == emptyBlock)) { IntegrateFaceList(block, Faces.BOTTOM, bp); localFaces++; }
+                        if ((z < maxZ - 1 && getLocalBlock(x, y, z + 1) == emptyBlock) || (z == maxZ - 1 && getWorldBlock(wx, wy, wz + 1) == emptyBlock)) { IntegrateFaceList(block, Faces.FRONT, bp); localFaces++; }
+                        if ((z > 0 && getLocalBlock(x, y, z - 1) == emptyBlock) || (z == 0 && getWorldBlock(wx, wy, wz - 1) == emptyBlock)) { IntegrateFaceList(block, Faces.BACK, bp); localFaces++; }
+                        if (localFaces > 0) AddIndicesList(localFaces);
+                    }
         }
 
         private void IntegrateFaceList(ushort block, Faces face, ByteVector3 bp)

@@ -14,7 +14,7 @@ namespace MVGE_INF.Middleware
         private static readonly string EnvFileName = IsDevelopment() ? ".env.development" : ".env";
         private static readonly string EnvFilePath = Path.Combine(EnvFolder, EnvFileName);
 
-        public static ProgramFlags EnvironmentFlags { get; private set; } = new ProgramFlags();
+        public static ProgramFlags environmentFlags { get; private set; } = new ProgramFlags();
 
         public static bool IsDevelopment()
         {
@@ -47,14 +47,18 @@ namespace MVGE_INF.Middleware
 
             string? GetEnv(string key) => env.TryGetValue(key.ToUpperInvariant(), out var value) ? value : null;
 
-            if (GetEnv("GAME") is string game)
+            if (GetEnv("game") is string game)
                 flags.game = game;
-            if (GetEnv("GAMESDIRECTORY") is string gamesDirectory)
+            if (GetEnv("gamesDirectory") is string gamesDirectory)
                 flags.gamesDirectory = gamesDirectory;
-            if (GetEnv("WINDOWWIDTH") is string windowWidth && int.TryParse(windowWidth, out var windowWidthVal))
+            if (GetEnv("windowWidth") is string windowWidth && int.TryParse(windowWidth, out var windowWidthVal))
                 flags.windowWidth = windowWidthVal;
-            if (GetEnv("WINDOWHEIGHT") is string windowHeight && int.TryParse(windowHeight, out var windowHeightVal))
+            if (GetEnv("windowHeight") is string windowHeight && int.TryParse(windowHeight, out var windowHeightVal))
                 flags.windowHeight = windowHeightVal;
+            if (GetEnv("useFacePooling") is string useFacePooling && bool.TryParse(useFacePooling, out var useFacePoolingVal))
+                flags.useFacePooling = useFacePoolingVal;
+            if (GetEnv("faceAmountToPool") is string faceAmountToPool && int.TryParse(faceAmountToPool, out var faceAmountToPoolVal))
+                flags.faceAmountToPool = faceAmountToPoolVal;
             if (GetEnv("GCConcurrent") is string gcConcurrent && Enum.TryParse<GCConcurrent>(gcConcurrent, true, out var gcConcurrentVal))
                 flags.GCConcurrent = gcConcurrentVal;
             if (GetEnv("GCLatencyMode") is string gcLatencyMode && Enum.TryParse<GCLatencyMode>(gcLatencyMode, true, out var gcLatencyModeVal))
@@ -78,7 +82,7 @@ namespace MVGE_INF.Middleware
             if (GetEnv("GCMode") is string gcMode && Enum.TryParse<GCMode>(gcMode, true, out var gcModeVal))
                 flags.GCMode = gcModeVal;
 
-            EnvironmentFlags = flags;
+            environmentFlags = flags;
         }
     }
 }

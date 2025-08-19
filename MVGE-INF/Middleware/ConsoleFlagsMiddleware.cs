@@ -9,7 +9,7 @@ namespace MVGE_INF.Middleware
 {
     public static class ConsoleFlagsMiddleware
     {
-        public static ProgramFlags Flags { get; private set; } = new ProgramFlags();
+        public static ProgramFlags consoleFlags { get; private set; } = new ProgramFlags();
 
         public static void Parse(string[] args)
         {
@@ -67,8 +67,18 @@ namespace MVGE_INF.Middleware
                     if (Enum.TryParse<GCMode>(args[i + 1], true, out var val))
                         flags.GCMode = val;
                 }
+                else if (args[i] == "--useFacePooling")
+                {
+                    if (bool.TryParse(args[i + 1], out var val))
+                        flags.useFacePooling = val;
+                }
+                else if (args[i] == "--faceAmountToPool")
+                {
+                    if (int.TryParse(args[i + 1], out var val))
+                        flags.faceAmountToPool = val;
+                }
             }
-            Flags = flags;
+            consoleFlags = flags;
         }
     }
 }

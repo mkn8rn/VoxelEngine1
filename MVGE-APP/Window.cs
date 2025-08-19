@@ -47,12 +47,12 @@ namespace MVGE
             // Load the settings
             LoadEnvironmentDefaultSettings();
 
-            if (FlagManager.Flags.windowWidth == null || FlagManager.Flags.windowHeight == null)
+            if (FlagManager.flags.windowWidth == null || FlagManager.flags.windowHeight == null)
             {
                 throw new Exception("windowWidth or windowHeight flag is null.");
             }
-            windowWidth = FlagManager.Flags.windowWidth.Value;
-            windowHeight = FlagManager.Flags.windowHeight.Value;
+            windowWidth = FlagManager.flags.windowWidth.Value;
+            windowHeight = FlagManager.flags.windowHeight.Value;
             // center window on monitor
             CenterWindow(new Vector2i(windowWidth, windowHeight));
         }
@@ -156,7 +156,7 @@ namespace MVGE
 
         private void LoadEnvironmentDefaultSettings()
         {
-            ProgramFlags flags = FlagManager.Flags;
+            ProgramFlags flags = FlagManager.flags;
             if (flags.windowWidth == null)
                 throw new Exception("windowWidth flag is null.");
             if (flags.windowHeight == null)

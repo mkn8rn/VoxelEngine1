@@ -41,20 +41,28 @@ namespace MVGE_INF.Models
 
     public class ProgramFlags
     {
-        public string? game { get; set; }
-        public string? gamesDirectory { get; set; }
-        public int? windowWidth { get; set; }
-        public int? windowHeight { get; set; }
-        public GCConcurrent? GCConcurrent { get; set; }
-        public GCLatencyMode? GCLatencyMode { get; set; }
-        public string? GCHeapHardLimit { get; set; }
-        public string? GCHeapAffinitizeMask { get; set; }
-        public GCLargeObjectHeapCompactionMode? GCLargeObjectHeapCompactionMode { get; set; }
-        public string? GCHeapSegmentSize { get; set; }
-        public string? GCStress { get; set; }
-        public GCLogEnabled? GCLogEnabled { get; set; }
-        public string? GCLogFile { get; set; }
-        public string? GCHeapCount { get; set; }
-        public GCMode? GCMode { get; set; }
+        public string? game;
+        public string? gamesDirectory;
+
+        // Window settings
+        public int? windowWidth;
+        public int? windowHeight;
+
+        // Face pooling
+        public bool? useFacePooling;
+        public int? faceAmountToPool;
+
+        // GC settings
+        public GCConcurrent? GCConcurrent;
+        public GCLatencyMode? GCLatencyMode;
+        public string? GCHeapHardLimit;
+        public string? GCHeapAffinitizeMask;
+        public GCLargeObjectHeapCompactionMode? GCLargeObjectHeapCompactionMode;
+        public string? GCHeapSegmentSize;
+        public string? GCStress;
+        public GCLogEnabled? GCLogEnabled;
+        public string? GCLogFile;
+        public string? GCHeapCount;
+        public GCMode? GCMode;
     }
 }

@@ -17,7 +17,7 @@ namespace MVGE_INF.Managers
 
         private static void LoadEnvironmentDefaultSettings()
         {
-            var flags = FlagManager.Flags;
+            var flags = FlagManager.flags;
             if (string.IsNullOrEmpty(flags.gamesDirectory))
                 throw new Exception("gamesDirectory flag is null or empty.");
 

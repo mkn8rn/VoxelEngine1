@@ -7,11 +7,11 @@ namespace MVGE_INF.Managers
 {
     public class FlagManager
     {
-        public static ProgramFlags Flags { get; private set; } = new ProgramFlags();
+        public static ProgramFlags flags { get; private set; } = new ProgramFlags();
         public static void ApplyFlags(string[] args)
         {
-            var consoleFlags = ConsoleFlagsMiddleware.Flags;
-            var envFlags = EnvironmentFlagsMiddleware.EnvironmentFlags;
+            var consoleFlags = ConsoleFlagsMiddleware.consoleFlags;
+            var envFlags = EnvironmentFlagsMiddleware.environmentFlags;
 
             T? PreferValue<T>(T? console, T? env) where T : struct
                 => console.HasValue ? console : env;
@@ -24,6 +24,8 @@ namespace MVGE_INF.Managers
                 gamesDirectory = PreferString(consoleFlags.gamesDirectory, envFlags.gamesDirectory),
                 windowWidth = PreferValue(consoleFlags.windowWidth, envFlags.windowWidth),
                 windowHeight = PreferValue(consoleFlags.windowHeight, envFlags.windowHeight),
+                useFacePooling = PreferValue(consoleFlags.useFacePooling, envFlags.useFacePooling),
+                faceAmountToPool = PreferValue(consoleFlags.faceAmountToPool, envFlags.faceAmountToPool),
                 GCConcurrent = PreferValue(consoleFlags.GCConcurrent, envFlags.GCConcurrent),
                 GCLatencyMode = PreferValue(consoleFlags.GCLatencyMode, envFlags.GCLatencyMode),
                 GCHeapHardLimit = PreferString(consoleFlags.GCHeapHardLimit, envFlags.GCHeapHardLimit),
@@ -101,7 +103,7 @@ namespace MVGE_INF.Managers
             if (!string.IsNullOrEmpty(flags.GCHeapCount))
                 Environment.SetEnvironmentVariable("COMPlus_GCHeapCount", flags.GCHeapCount);
 
-            Flags = flags;
+            FlagManager.flags = flags;
         }
     }
 }
