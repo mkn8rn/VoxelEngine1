@@ -30,7 +30,7 @@ namespace MVGE_GFX.Terrain
         private ushort[] indicesUShortBuffer;
         private int vertBytesUsed;
         private int uvBytesUsed;
-        private int indicesUsed; // used only during pooled face generation
+        private int indicesUsed;
         private bool useUShort;
         private bool usedPooling;
 

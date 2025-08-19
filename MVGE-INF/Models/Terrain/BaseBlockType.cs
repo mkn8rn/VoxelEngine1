@@ -9,7 +9,7 @@ namespace MVGE_INF.Models.Terrain
     public enum BaseBlockType : byte
     {
         Empty,
-        Air,
+        Gas,
         Living,
         Mineral,
         Liquid,

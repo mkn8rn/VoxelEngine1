@@ -32,6 +32,9 @@ namespace MVGE.World
         private readonly ConcurrentDictionary<(int cx, int cy, int cz), Chunk> unbuiltChunks = new(); // track generated but not yet built chunks
         private readonly ConcurrentDictionary<(int cx, int cy, int cz), byte> pendingChunks = new(); // track enqueued but not yet generated
 
+        // Track chunks marked dirty (needing rebuild) so we can coalesce multiple requests before building
+        private readonly ConcurrentDictionary<(int cx, int cy, int cz), byte> dirtyChunks = new();
+
         // Cancellation token for streaming operations
         private CancellationTokenSource streamingCts;
 
@@ -190,7 +193,7 @@ namespace MVGE.World
         {
             foreach (var key in unbuiltChunks.Keys)
             {
-                EnqueueMeshBuild(key);
+                EnqueueMeshBuild(key, markDirty:false); // initial builds are not dirty rebuilds
             }
         }
 
@@ -233,9 +236,9 @@ namespace MVGE.World
                     if(initialBuild == false) // We don't need to rebuild meshes during initial generation
                     {
                         // Enqueue self for initial mesh build
-                        EnqueueMeshBuild(key);
-                        // Mark neighbors so they can rebuild to hide now occluded faces
-                        MarkNeighborsDirty(key);
+                        EnqueueMeshBuild(key, markDirty:false);
+                        // Mark neighbors so they can rebuild to hide now occluded faces (only if boundary overlap has solids)
+                        MarkNeighborsDirty(key, chunk);
                     }
                 }
             }
@@ -251,21 +254,67 @@ namespace MVGE.World
             (-1,0,0),(1,0,0),(0,-1,0),(0,1,0),(0,0,-1),(0,0,1)
         };
 
-        private void MarkNeighborsDirty((int cx, int cy, int cz) key)
+        private bool HasAnySolidOnBoundary(Chunk chunk, (int dx,int dy,int dz) dir)
         {
-            foreach (var (dx, dy, dz) in NeighborDirs)
+            int sizeX = GameManager.settings.chunkMaxX;
+            int sizeY = GameManager.settings.chunkMaxY;
+            int sizeZ = GameManager.settings.chunkMaxZ;
+            ushort empty = (ushort)BaseBlockType.Empty;
+
+            if (dir.dx != 0)
             {
-                var nk = (key.cx + dx, key.cy + dy, key.cz + dz);
-                if (unbuiltChunks.ContainsKey(nk) || chunks.ContainsKey(nk))
+                int x = dir.dx < 0 ? 0 : sizeX - 1; // plane x=0 or x=max-1
+                for (int y = 0; y < sizeY; y++)
+                    for (int z = 0; z < sizeZ; z++)
+                        if (chunk.GetBlockLocal(x, y, z) != empty) return true;
+                return false;
+            }
+            if (dir.dy != 0)
+            {
+                int y = dir.dy < 0 ? 0 : sizeY - 1;
+                for (int x = 0; x < sizeX; x++)
+                    for (int z = 0; z < sizeZ; z++)
+                        if (chunk.GetBlockLocal(x, y, z) != empty) return true;
+                return false;
+            }
+            if (dir.dz != 0)
+            {
+                int z = dir.dz < 0 ? 0 : sizeZ - 1;
+                for (int x = 0; x < sizeX; x++)
+                    for (int y = 0; y < sizeY; y++)
+                        if (chunk.GetBlockLocal(x, y, z) != empty) return true;
+                return false;
+            }
+            return false;
+        }
+
+        private void MarkNeighborsDirty((int cx, int cy, int cz) key, Chunk newChunk)
+        {
+            foreach (var dir in NeighborDirs)
+            {
+                var nk = (key.cx + dir.dx, key.cy + dir.dy, key.cz + dir.dz);
+                // Only consider already present neighbor chunks
+                bool neighborExists = unbuiltChunks.ContainsKey(nk) || chunks.ContainsKey(nk);
+                if (!neighborExists) continue;
+
+                if (!HasAnySolidOnBoundary(newChunk, dir)) continue;
+
+                // Mark dirty & enqueue (coalesce multiple marks by using dirtyChunks)
+                if (dirtyChunks.TryAdd(nk, 0))
                 {
-                    EnqueueMeshBuild(nk);
+                    EnqueueMeshBuild(nk, markDirty:true);
                 }
             }
         }
 
-        private void EnqueueMeshBuild((int cx,int cy,int cz) key)
+        private void EnqueueMeshBuild((int cx,int cy,int cz) key, bool markDirty = true)
         {
             if (!unbuiltChunks.ContainsKey(key) && !chunks.ContainsKey(key)) return;
+            if (markDirty)
+            {
+                // Ensure dirty flag exists (idempotent)
+                dirtyChunks.TryAdd(key, 0);
+            }
             if (meshBuildSchedule.TryAdd(key, 0))
             {
                 meshBuildQueue.Add(key);
@@ -297,6 +346,9 @@ namespace MVGE.World
                         {
                             chunks[key] = builtChunk;
                         }
+
+                        // Clear dirty flag after successful build
+                        dirtyChunks.TryRemove(key, out _);
                     }
                     catch (Exception ex)
                     {
