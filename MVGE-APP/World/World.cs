@@ -59,6 +59,12 @@ namespace MVGE.World
         {
             Console.WriteLine("World manager initializing.");
 
+            int proc = Environment.ProcessorCount;
+            int desired = proc + proc / 2 + 2; // 1.5x cores + cushion
+            ThreadPool.SetMinThreads(desired, desired);
+            generationWorkerCount = proc - 1;
+            meshWorkerCount = proc * 2;
+
             loader = new WorldLoader();
             loader.ChooseWorld();
             Console.WriteLine("World data loaded.");
@@ -122,7 +128,7 @@ namespace MVGE.World
 
             EnqueueInitialChunkPositions();
 
-            generationWorkerCount = Math.Max(1, Environment.ProcessorCount - 1);
+            int proc = Environment.ProcessorCount;
             generationWorkers = new Task[generationWorkerCount];
             for (int i = 0; i < generationWorkerCount; i++)
             {
@@ -135,7 +141,6 @@ namespace MVGE.World
             meshBuildQueue = new BlockingCollection<(int cx,int cy,int cz)>(new ConcurrentQueue<(int,int,int)>());
 
             Console.WriteLine("[World] Initializing mesh build workers...");
-            meshWorkerCount = Math.Max(1, Environment.ProcessorCount - 1);
             meshBuildWorkers = new Task[meshWorkerCount];
             for (int i = 0; i < meshWorkerCount; i++)
             {
