@@ -25,8 +25,4 @@
 	<ItemGroup>
 	  <ProjectReference Include="..\MVGE-INF\MVGE-INF.csproj" />
 	</ItemGroup>
-
-	<ItemGroup>
-	  <Folder Include="Utils\" />
-	</ItemGroup>
 </Project>
