@@ -104,10 +104,11 @@ namespace MVGE
             GL.Enable(EnableCap.CullFace);
             GL.CullFace(TriangleFace.Back);
 
-            // Garbage collection
+            // Garbage collection before starting the camera
             System.Runtime.GCSettings.LargeObjectHeapCompactionMode = System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
             GC.Collect();
             GC.WaitForPendingFinalizers();
+            GC.Collect();
 
             // Initialize the Player (and its Camera)
             Console.WriteLine("Initializing player.");

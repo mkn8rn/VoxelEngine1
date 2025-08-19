@@ -30,11 +30,9 @@ namespace MVGE_GFX.Terrain
         private ushort[] indicesUShortBuffer;
         private int vertBytesUsed;
         private int uvBytesUsed;
-        private int indicesUsed;
+        private int indicesUsed; // used only during pooled face generation
         private bool useUShort;
         private bool usedPooling;
-
-        private int drawIndexCount;
 
         private VAO chunkVAO;
         private VBO chunkVertexVBO;
@@ -95,14 +93,9 @@ namespace MVGE_GFX.Terrain
                 chunkUVVBO.Bind();
                 chunkVAO.LinkToVAO(1, 2, VertexAttribPointerType.UnsignedByte, false, chunkUVVBO);
 
-                if (useUShort)
-                {
-                    chunkIBO = new IBO(indicesUShortBuffer, indicesUsed);
-                }
-                else
-                {
-                    chunkIBO = new IBO(indicesUIntBuffer, indicesUsed);
-                }
+                chunkIBO = useUShort
+                    ? new IBO(indicesUShortBuffer, indicesUsed)
+                    : new IBO(indicesUIntBuffer, indicesUsed);
 
                 // Return pooled arrays AFTER upload
                 ArrayPool<byte>.Shared.Return(vertBuffer, false);
@@ -114,11 +107,6 @@ namespace MVGE_GFX.Terrain
             {
                 // List fallback path (small volume)
                 TryFinalizeIndexFormatList();
-
-                // Cache index count BEFORE clearing the lists later
-                drawIndexCount = indexFormat == IndexFormat.UShort
-                    ? chunkIndicesUShortList.Count
-                    : chunkIndicesList.Count;
 
                 chunkVertexVBO = new VBO(chunkVertsList);
                 chunkVertexVBO.Bind();
@@ -132,7 +120,7 @@ namespace MVGE_GFX.Terrain
                     ? new IBO(chunkIndicesUShortList)
                     : new IBO(chunkIndicesList);
 
-                // Release list storage (safe now that drawIndexCount is cached)
+                // Release list storage after buffer upload
                 chunkVertsList.Clear(); chunkVertsList.TrimExcess();
                 chunkUVsList.Clear(); chunkUVsList.TrimExcess();
                 if (chunkIndicesList != null) { chunkIndicesList.Clear(); chunkIndicesList.TrimExcess(); }
@@ -156,10 +144,7 @@ namespace MVGE_GFX.Terrain
             chunkVAO.Bind();
             chunkIBO.Bind();
 
-            int count = usedPooling
-                ? indicesUsed
-                : drawIndexCount; // use cached count
-
+            int count = chunkIBO.Count;
             if (count <= 0) return;
 
             GL.DrawElements(
@@ -184,11 +169,7 @@ namespace MVGE_GFX.Terrain
                 // but it is easier on the CPU, and sometimes faster with larger chunks
                 // Up to you when you want to use it
                 var threshold = FlagManager.flags.faceAmountToPool.GetValueOrDefault(int.MaxValue);
-                if (threshold == null || threshold <= 0)
-                {
-                    usedPooling = false;
-                }
-                else
+                if (threshold != null || threshold >= 0)
                 {
                     usePooling = volume >= threshold;
                 }
@@ -364,10 +345,8 @@ namespace MVGE_GFX.Terrain
             }
             else
             {
-                // If empty (shouldn't happen for non-empty block), fill zeros
                 for (int i = 0; i < 8; i++) uvBuffer[uvBytesUsed++] = 0;
             }
-            // Indices (two triangles)
             if (useUShort)
             {
                 indicesUShortBuffer[indicesUsed++] = (ushort)(currentVertIndex + 0);
