@@ -67,6 +67,9 @@ namespace MVGE_GFX.Terrain
             }
         }
 
+        // Fast-path flag when chunk fully enclosed (no visible faces)
+        private bool fullyOccluded;
+
         public ChunkRender(
             ChunkData chunkData,
             Func<int, int, int, ushort> worldBlockGetter,
@@ -93,6 +96,21 @@ namespace MVGE_GFX.Terrain
         public void Build()
         {
             if (isBuilt) return;
+
+            // If fully occluded we still create minimal empty buffers so rendering path is uniform
+            if (fullyOccluded)
+            {
+                chunkVAO = new VAO();
+                chunkVAO.Bind();
+                chunkVertexVBO = new VBO(Array.Empty<byte>(), 0);
+                chunkVertexVBO.Bind();
+                chunkVAO.LinkToVAO(0, 3, VertexAttribPointerType.UnsignedByte, false, chunkVertexVBO);
+                chunkUVVBO = new VBO(Array.Empty<byte>(), 0);
+                chunkUVVBO.Bind();
+                chunkVAO.LinkToVAO(1, 2, VertexAttribPointerType.UnsignedByte, false, chunkUVVBO);
+                chunkIBO = new IBO(Array.Empty<uint>(), 0);
+                isBuilt = true; return;
+            }
 
             chunkVAO = new VAO();
             chunkVAO.Bind();
@@ -149,6 +167,7 @@ namespace MVGE_GFX.Terrain
         {
             ProcessPendingDeletes();
             if (!isBuilt) Build();
+            if (fullyOccluded) return; // nothing to draw
 
             Vector3 adjustedChunkPosition = chunkWorldPosition + new Vector3(1f, 1f, 1f);
             program.Bind();
@@ -193,8 +212,45 @@ namespace MVGE_GFX.Terrain
             }
             else
             {
+                if (CheckFullyOccluded(maxX, maxY, maxZ)) { fullyOccluded = true; return; }
                 GenerateFacesList(maxX, maxY, maxZ);
             }
+        }
+
+        // Quick full occlusion test used by both paths
+        private bool CheckFullyOccluded(int maxX, int maxY, int maxZ)
+        {
+            int baseWX = (int)chunkWorldPosition.X;
+            int baseWY = (int)chunkWorldPosition.Y;
+            int baseWZ = (int)chunkWorldPosition.Z;
+            // Boundary shell local
+            for (int x = 0; x < maxX; x++)
+                for (int y = 0; y < maxY; y++)
+                    for (int z = 0; z < maxZ; z++)
+                    {
+                        if (x != 0 && x != maxX - 1 && y != 0 && y != maxY - 1 && z != 0 && z != maxZ - 1) continue;
+                        if (getLocalBlock(x, y, z) == emptyBlock) return false;
+                    }
+            // External shell
+            for (int y = 0; y < maxY; y++)
+                for (int z = 0; z < maxZ; z++)
+                {
+                    if (getWorldBlock(baseWX - 1, baseWY + y, baseWZ + z) == emptyBlock) return false;
+                    if (getWorldBlock(baseWX + maxX, baseWY + y, baseWZ + z) == emptyBlock) return false;
+                }
+            for (int x = 0; x < maxX; x++)
+                for (int z = 0; z < maxZ; z++)
+                {
+                    if (getWorldBlock(baseWX + x, baseWY - 1, baseWZ + z) == emptyBlock) return false;
+                    if (getWorldBlock(baseWX + x, baseWY + maxY, baseWZ + z) == emptyBlock) return false;
+                }
+            for (int x = 0; x < maxX; x++)
+                for (int y = 0; y < maxY; y++)
+                {
+                    if (getWorldBlock(baseWX + x, baseWY + y, baseWZ - 1) == emptyBlock) return false;
+                    if (getWorldBlock(baseWX + x, baseWY + y, baseWZ + maxZ) == emptyBlock) return false;
+                }
+            return true;
         }
 
         private void GenerateFacesList(int maxX, int maxY, int maxZ)
@@ -281,6 +337,8 @@ namespace MVGE_GFX.Terrain
 
         private void GenerateFacesPooled(int maxX, int maxY, int maxZ)
         {
+            if (CheckFullyOccluded(maxX, maxY, maxZ)) { fullyOccluded = true; return; }
+
             int planeSize = maxY * maxZ;
             int voxelCount = maxX * planeSize;
             ushort[] localBlocks = new ushort[voxelCount];
@@ -361,72 +419,13 @@ namespace MVGE_GFX.Terrain
                         int wi = li >> 6; int bi = li & 63;
                         if ((occupancy[wi] & (1UL << bi)) == 0) continue; // air
                         int mask = 0;
-                        // LEFT
-                        if (x == 0)
-                        {
-                            if (leftEmpty[y, z]) mask |= FACE_LEFT;
-                        }
-                        else
-                        {
-                            int lLi = li - planeSize; // x-1
-                            if ((occupancy[lLi >> 6] & (1UL << (lLi & 63))) == 0) mask |= FACE_LEFT;
-                        }
-                        // RIGHT
-                        if (x == maxX - 1)
-                        {
-                            if (rightEmpty[y, z]) mask |= FACE_RIGHT;
-                        }
-                        else
-                        {
-                            int rLi = li + planeSize;
-                            if ((occupancy[rLi >> 6] & (1UL << (rLi & 63))) == 0) mask |= FACE_RIGHT;
-                        }
-                        // TOP
-                        if (y == maxY - 1)
-                        {
-                            if (topEmpty[x, z]) mask |= FACE_TOP;
-                        }
-                        else
-                        {
-                            int tLi = li + 1;
-                            if ((occupancy[tLi >> 6] & (1UL << (tLi & 63))) == 0) mask |= FACE_TOP;
-                        }
-                        // BOTTOM
-                        if (y == 0)
-                        {
-                            if (bottomEmpty[x, z]) mask |= FACE_BOTTOM;
-                        }
-                        else
-                        {
-                            int bLi = li - 1;
-                            if ((occupancy[bLi >> 6] & (1UL << (bLi & 63))) == 0) mask |= FACE_BOTTOM;
-                        }
-                        // FRONT
-                        if (z == maxZ - 1)
-                        {
-                            if (frontEmpty[x, y]) mask |= FACE_FRONT;
-                        }
-                        else
-                        {
-                            int fLi = li + maxY; // z+1
-                            if ((occupancy[fLi >> 6] & (1UL << (fLi & 63))) == 0) mask |= FACE_FRONT;
-                        }
-                        // BACK
-                        if (z == 0)
-                        {
-                            if (backEmpty[x, y]) mask |= FACE_BACK;
-                        }
-                        else
-                        {
-                            int baLi = li - maxY; // z-1
-                            if ((occupancy[baLi >> 6] & (1UL << (baLi & 63))) == 0) mask |= FACE_BACK;
-                        }
-
-                        if (mask != 0)
-                        {
-                            faceMask[li] = (byte)mask;
-                            totalFaces += popCount6[mask];
-                        }
+                        if (x == 0) { if (leftEmpty[y, z]) mask |= FACE_LEFT; } else { int lLi = li - planeSize; if ((occupancy[lLi >> 6] & (1UL << (lLi & 63))) == 0) mask |= FACE_LEFT; }
+                        if (x == maxX - 1) { if (rightEmpty[y, z]) mask |= FACE_RIGHT; } else { int rLi = li + planeSize; if ((occupancy[rLi >> 6] & (1UL << (rLi & 63))) == 0) mask |= FACE_RIGHT; }
+                        if (y == maxY - 1) { if (topEmpty[x, z]) mask |= FACE_TOP; } else { int tLi = li + 1; if ((occupancy[tLi >> 6] & (1UL << (tLi & 63))) == 0) mask |= FACE_TOP; }
+                        if (y == 0) { if (bottomEmpty[x, z]) mask |= FACE_BOTTOM; } else { int bLi = li - 1; if ((occupancy[bLi >> 6] & (1UL << (bLi & 63))) == 0) mask |= FACE_BOTTOM; }
+                        if (z == maxZ - 1) { if (frontEmpty[x, y]) mask |= FACE_FRONT; } else { int fLi = li + maxY; if ((occupancy[fLi >> 6] & (1UL << (fLi & 63))) == 0) mask |= FACE_FRONT; }
+                        if (z == 0) { if (backEmpty[x, y]) mask |= FACE_BACK; } else { int baLi = li - maxY; if ((occupancy[baLi >> 6] & (1UL << (baLi & 63))) == 0) mask |= FACE_BACK; }
+                        if (mask != 0) { faceMask[li] = (byte)mask; totalFaces += popCount6[mask]; }
                     }
                 }
             }
@@ -440,17 +439,16 @@ namespace MVGE_GFX.Terrain
             uvBuffer = ArrayPool<byte>.Shared.Rent(totalVerts * 2);
             if (useUShort) indicesUShortBuffer = ArrayPool<ushort>.Shared.Rent(totalFaces * 6); else indicesUIntBuffer = ArrayPool<uint>.Shared.Rent(totalFaces * 6);
 
-            // Precompute UV arrays once if single solid type
-            byte[][] singleSolidFaceUV = null;
+            // Precompute UV arrays once if single solid type (concatenated 48 bytes)
+            byte[] singleSolidUVConcat = null;
             if (hasSingleOpaque)
             {
-                singleSolidFaceUV = new byte[6][];
-                singleSolidFaceUV[(int)Faces.LEFT] = GetOrCreateUv(singleSolidId, Faces.LEFT);
-                singleSolidFaceUV[(int)Faces.RIGHT] = GetOrCreateUv(singleSolidId, Faces.RIGHT);
-                singleSolidFaceUV[(int)Faces.TOP] = GetOrCreateUv(singleSolidId, Faces.TOP);
-                singleSolidFaceUV[(int)Faces.BOTTOM] = GetOrCreateUv(singleSolidId, Faces.BOTTOM);
-                singleSolidFaceUV[(int)Faces.FRONT] = GetOrCreateUv(singleSolidId, Faces.FRONT);
-                singleSolidFaceUV[(int)Faces.BACK] = GetOrCreateUv(singleSolidId, Faces.BACK);
+                singleSolidUVConcat = new byte[48];
+                for (int f = 0; f < 6; f++)
+                {
+                    var uvBytes = GetOrCreateUv(singleSolidId, (Faces)f);
+                    System.Buffer.BlockCopy(uvBytes, 0, singleSolidUVConcat, f * 8, 8);
+                }
             }
 
             int faceIndex = 0;
@@ -464,13 +462,13 @@ namespace MVGE_GFX.Terrain
                         byte mask = faceMask[li];
                         if (mask == 0) continue;
                         ushort block = localBlocks[li];
-                        if (hasSingleOpaque) block = singleSolidId; // override to ensure consistent UV path
-                        if ((mask & FACE_LEFT) != 0) WriteFace(block, Faces.LEFT, (byte)x, (byte)y, (byte)z, ref faceIndex, singleSolidFaceUV); 
-                        if ((mask & FACE_RIGHT) != 0) WriteFace(block, Faces.RIGHT, (byte)x, (byte)y, (byte)z, ref faceIndex, singleSolidFaceUV);
-                        if ((mask & FACE_TOP) != 0) WriteFace(block, Faces.TOP, (byte)x, (byte)y, (byte)z, ref faceIndex, singleSolidFaceUV);
-                        if ((mask & FACE_BOTTOM) != 0) WriteFace(block, Faces.BOTTOM, (byte)x, (byte)y, (byte)z, ref faceIndex, singleSolidFaceUV);
-                        if ((mask & FACE_FRONT) != 0) WriteFace(block, Faces.FRONT, (byte)x, (byte)y, (byte)z, ref faceIndex, singleSolidFaceUV);
-                        if ((mask & FACE_BACK) != 0) WriteFace(block, Faces.BACK, (byte)x, (byte)y, (byte)z, ref faceIndex, singleSolidFaceUV);
+                        if (hasSingleOpaque) block = singleSolidId;
+                        if ((mask & FACE_LEFT) != 0) WriteFace(block, Faces.LEFT, (byte)x, (byte)y, (byte)z, ref faceIndex, null, singleSolidUVConcat);
+                        if ((mask & FACE_RIGHT) != 0) WriteFace(block, Faces.RIGHT, (byte)x, (byte)y, (byte)z, ref faceIndex, null, singleSolidUVConcat);
+                        if ((mask & FACE_TOP) != 0) WriteFace(block, Faces.TOP, (byte)x, (byte)y, (byte)z, ref faceIndex, null, singleSolidUVConcat);
+                        if ((mask & FACE_BOTTOM) != 0) WriteFace(block, Faces.BOTTOM, (byte)x, (byte)y, (byte)z, ref faceIndex, null, singleSolidUVConcat);
+                        if ((mask & FACE_FRONT) != 0) WriteFace(block, Faces.FRONT, (byte)x, (byte)y, (byte)z, ref faceIndex, null, singleSolidUVConcat);
+                        if ((mask & FACE_BACK) != 0) WriteFace(block, Faces.BACK, (byte)x, (byte)y, (byte)z, ref faceIndex, null, singleSolidUVConcat);
                     }
                 }
             }
@@ -497,7 +495,7 @@ namespace MVGE_GFX.Terrain
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void WriteFace(ushort block, Faces face, byte bx, byte by, byte bz, ref int faceIndex, byte[][] singleSolidFaceUV = null)
+        private void WriteFace(ushort block, Faces face, byte bx, byte by, byte bz, ref int faceIndex, byte[][] singleSolidFaceUV = null, byte[] singleSolidUVConcat = null)
         {
             int baseVertexIndex = faceIndex * 4;
             int vertexByteOffset = baseVertexIndex * 3;
@@ -514,15 +512,30 @@ namespace MVGE_GFX.Terrain
 
             if (block != emptyBlock)
             {
-                byte[] uvBytes = singleSolidFaceUV != null ? singleSolidFaceUV[(int)face] : GetOrCreateUv(block, face);
-                uvBuffer[uvByteOffset + 0] = uvBytes[0];
-                uvBuffer[uvByteOffset + 1] = uvBytes[1];
-                uvBuffer[uvByteOffset + 2] = uvBytes[2];
-                uvBuffer[uvByteOffset + 3] = uvBytes[3];
-                uvBuffer[uvByteOffset + 4] = uvBytes[4];
-                uvBuffer[uvByteOffset + 5] = uvBytes[5];
-                uvBuffer[uvByteOffset + 6] = uvBytes[6];
-                uvBuffer[uvByteOffset + 7] = uvBytes[7];
+                if (singleSolidUVConcat != null)
+                {
+                    int off = ((int)face) * 8;
+                    uvBuffer[uvByteOffset + 0] = singleSolidUVConcat[off + 0];
+                    uvBuffer[uvByteOffset + 1] = singleSolidUVConcat[off + 1];
+                    uvBuffer[uvByteOffset + 2] = singleSolidUVConcat[off + 2];
+                    uvBuffer[uvByteOffset + 3] = singleSolidUVConcat[off + 3];
+                    uvBuffer[uvByteOffset + 4] = singleSolidUVConcat[off + 4];
+                    uvBuffer[uvByteOffset + 5] = singleSolidUVConcat[off + 5];
+                    uvBuffer[uvByteOffset + 6] = singleSolidUVConcat[off + 6];
+                    uvBuffer[uvByteOffset + 7] = singleSolidUVConcat[off + 7];
+                }
+                else
+                {
+                    byte[] uvBytes = singleSolidFaceUV != null ? singleSolidFaceUV[(int)face] : GetOrCreateUv(block, face);
+                    uvBuffer[uvByteOffset + 0] = uvBytes[0];
+                    uvBuffer[uvByteOffset + 1] = uvBytes[1];
+                    uvBuffer[uvByteOffset + 2] = uvBytes[2];
+                    uvBuffer[uvByteOffset + 3] = uvBytes[3];
+                    uvBuffer[uvByteOffset + 4] = uvBytes[4];
+                    uvBuffer[uvByteOffset + 5] = uvBytes[5];
+                    uvBuffer[uvByteOffset + 6] = uvBytes[6];
+                    uvBuffer[uvByteOffset + 7] = uvBytes[7];
+                }
             }
             else
             {
