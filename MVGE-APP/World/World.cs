@@ -45,9 +45,6 @@ namespace MVGE.World
         private readonly ConcurrentQueue<(int cx, int cy, int cz)> dirtyMeshQueue = new();
         private readonly ConcurrentDictionary<(int cx, int cy, int cz), byte> dirtyMeshSet = new();
 
-        // Initial generation tracking
-        private volatile bool initialDirtyPhaseComplete;  // flag once initial dirty mesh rebuild done
-
         public World()
         {
             Console.WriteLine("World manager initializing.");
@@ -60,12 +57,63 @@ namespace MVGE.World
             Console.WriteLine("Streaming chunk generation...");
 
             WaitForInitialChunkGeneration();
-            WaitForInitialDirtyMeshRebuild();
+            WaitForInitialChunkRenderBuild();
+        }
+
+        private void WaitForInitialChunkGeneration()
+        {
+            Console.WriteLine("[World] Waiting for initial chunk generation...");
+            var sw = Stopwatch.StartNew();
+            int lastPercent = -1;
+
+            int done = chunks.Count;
+            int remaining = pendingChunks.Count;
+            int total = pendingChunks.Count + done;
+            int percent = (int)(done * 100L / total);
+
+            while (pendingChunks.Count > 0)
+            {
+                done = chunks.Count;
+                remaining = pendingChunks.Count;
+                percent = (int)(done * 100L / total);
+
+                if (percent != lastPercent)
+                {
+                    Console.WriteLine($"[World] Initial chunk generation: {done}/{total} ({percent}%), remaining: {remaining}");
+                    lastPercent = percent;
+                }
+                Thread.Sleep(200);
+            }
+            sw.Stop();
+            Console.WriteLine($"[World] Initial chunk generation complete: {total} chunks in {sw.ElapsedMilliseconds} ms.");
+        }
+
+        private void WaitForInitialChunkRenderBuild()
+        {
+            Console.WriteLine("[World] Building chunk meshes...");
+            var sw = Stopwatch.StartNew();
+            int initialTotal = dirtyMeshSet.Count;
+            int lastPercent = -1;
+            while (dirtyMeshSet.Count > 0)
+            {
+                int remaining = dirtyMeshSet.Count;
+                int done = initialTotal - remaining;
+                int percent = done >= initialTotal ? 100 : (int)(done * 100L / initialTotal);
+                if (percent != lastPercent)
+                {
+                    Console.WriteLine($"[World] Chunk mesh build: {done}/{initialTotal} ({percent}%)");
+                    lastPercent = percent;
+                }
+                BuildChunks();
+                Thread.Sleep(200);
+            }
+            sw.Stop();
+            Console.WriteLine($"[World] Chunk mesh build complete in {sw.ElapsedMilliseconds} ms.");
         }
 
         public void Render(ShaderProgram program)
         {
-            ProcessDirtyMeshes();
+            BuildChunks();
             foreach (var chunk in chunks.Values) chunk.Render(program);
         }
 
@@ -132,8 +180,8 @@ namespace MVGE.World
             Console.WriteLine($"[World] Scheduled {count} initial chunks.");
         }
 
-        private void EnqueueChunkPosition(int worldX, int worldY, int worldZ, bool force = false) // force for priority
-        {
+        private void EnqueueChunkPosition(int worldX, int worldY, int worldZ, bool force = false)
+        { // force is for priority, like prioritising chunks in camera view
             var key = ChunkIndexKey(worldX, worldY, worldZ);
             if (!force)
             {
@@ -145,49 +193,6 @@ namespace MVGE.World
                 pendingChunks[key] = 0; // overwrite / ensure present
             }
             chunkPositionQueue.Add(new Vector3(worldX, worldY, worldZ));
-        }
-
-        // Public API to request additional rings dynamically (e.g. player moved)
-        public void RequestRingsAround(Vector3 playerPosition, int additionalRadius)
-        {
-            int sizeX = GameManager.settings.chunkMaxX;
-            int sizeY = GameManager.settings.chunkMaxY;
-            int sizeZ = GameManager.settings.chunkMaxZ;
-            int verticalRows = GameManager.settings.lod1RenderDistance; // maintain vertical stack count
-
-            // Determine current center chunk indices
-            int centerCX = FloorDiv((int)playerPosition.X, sizeX);
-            int centerCZ = FloorDiv((int)playerPosition.Z, sizeZ);
-            int baseY = 0; // assuming ground start (could adapt to player Y later)
-
-            for (int radius = 0; radius <= additionalRadius; radius++)
-            {
-                if (radius == 0)
-                {
-                    for (int vy = 0; vy < verticalRows; vy++)
-                    {
-                        int wy = vy * sizeY + baseY;
-                        EnqueueChunkPosition(centerCX * sizeX, wy, centerCZ * sizeZ);
-                    }
-                    continue;
-                }
-                int minX = centerCX - radius;
-                int maxX = centerCX + radius;
-                int minZ = centerCZ - radius;
-                int maxZ = centerCZ + radius;
-                for (int cx = minX; cx <= maxX; cx++)
-                {
-                    for (int cz = minZ; cz <= maxZ; cz++)
-                    {
-                        if (Math.Abs(cx - centerCX) != radius && Math.Abs(cz - centerCZ) != radius) continue;
-                        for (int vy = 0; vy < verticalRows; vy++)
-                        {
-                            int wy = vy * sizeY + baseY;
-                            EnqueueChunkPosition(cx * sizeX, wy, cz * sizeZ);
-                        }
-                    }
-                }
-            }
         }
 
         private void ChunkGenerationWorker(CancellationToken token)
@@ -209,11 +214,13 @@ namespace MVGE.World
                     var key = ChunkIndexKey((int)pos.X, (int)pos.Y, (int)pos.Z);
                     chunks[key] = chunk;
 
-                    // Build mesh CPU-side (face extraction) now (OpenGL build deferred until render)
+                    // Reminder to self: 
+                    // Removed the buildrender call, re-add it somewhere else
+                    /*
                     lock (chunk)
                     {
                         chunk.BuildRender(worldBlockAccessor);
-                    }
+                    }*/
 
                     // Remove from pending since generation complete
                     pendingChunks.TryRemove(key, out _);
@@ -246,7 +253,7 @@ namespace MVGE.World
             }
         }
 
-        private void ProcessDirtyMeshes()
+        private void BuildChunks()
         {
             while (dirtyMeshQueue.TryDequeue(out var key))
             {
@@ -259,64 +266,6 @@ namespace MVGE.World
                     }
                 }
             }
-        }
-
-        private void WaitForInitialChunkGeneration()
-        {
-            Console.WriteLine("[World] Waiting for initial chunk generation...");
-            var sw = Stopwatch.StartNew();
-            int lastPercent = -1;
-
-            int done = chunks.Count;
-            int remaining = pendingChunks.Count;
-            int total = pendingChunks.Count + done;
-            int percent = (int)(done * 100L / total);
-
-            while (pendingChunks.Count > 0)
-            {
-                done = chunks.Count;
-                remaining = pendingChunks.Count;
-                percent = (int)(done * 100L / total);
-
-                if (percent != lastPercent)
-                {
-                    Console.WriteLine($"[World] Initial chunk generation: {done}/{total} ({percent}%), remaining: {remaining}");
-                    lastPercent = percent;
-                }
-                Thread.Sleep(200);
-            }
-            sw.Stop();
-            Console.WriteLine($"[World] Initial chunk generation complete: {total} chunks in {sw.ElapsedMilliseconds} ms.");
-        }
-
-        private void WaitForInitialDirtyMeshRebuild()
-        {
-            Console.WriteLine("[World] Rebuilding dirty neighbor meshes...");
-            var sw = Stopwatch.StartNew();
-            int initialTotal = dirtyMeshSet.Count;
-            if (initialTotal == 0)
-            {
-                initialDirtyPhaseComplete = true;
-                Console.WriteLine("[World] No dirty neighbor meshes to rebuild.");
-                return;
-            }
-            int lastPercent = -1;
-            while (dirtyMeshSet.Count > 0)
-            {
-                int remaining = dirtyMeshSet.Count;
-                int done = initialTotal - remaining;
-                int percent = done >= initialTotal ? 100 : (int)(done * 100L / initialTotal);
-                if (percent != lastPercent)
-                {
-                    Console.WriteLine($"[World] Dirty mesh rebuild: {done}/{initialTotal} ({percent}%)");
-                    lastPercent = percent;
-                }
-                ProcessDirtyMeshes();
-                Thread.Sleep(200);
-            }
-            sw.Stop();
-            initialDirtyPhaseComplete = true;
-            Console.WriteLine($"[World] Dirty mesh rebuild complete in {sw.ElapsedMilliseconds} ms.");
         }
 
         public void Dispose()
