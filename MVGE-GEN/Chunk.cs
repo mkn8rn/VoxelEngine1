@@ -1,4 +1,5 @@
-﻿using MVGE_GFX;
+﻿using MVGE_GEN.Utils;
+using MVGE_GFX;
 using MVGE_GFX.Terrain;
 using MVGE_INF.Managers;
 using MVGE_INF.Models.Terrain;
@@ -6,30 +7,31 @@ using MVGE_Tools.Noise;
 using OpenTK.Mathematics;
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 
-namespace World
+namespace MVGE_GEN
 {
-    internal class Chunk
+    public class Chunk
     {
         public Vector3 position { get; set; }
 
-        private ChunkRender chunkRender;
-        private ChunkData chunkData;
-        private string saveDirectory;
-        private long generationSeed;
+        public ChunkRender chunkRender;
+        public ChunkData chunkData;
+        public string saveDirectory;
+        public long generationSeed;
 
-        private ChunkSection[,,] sections;
-        private int sectionsX;
-        private int sectionsY;
-        private int sectionsZ;
+        public ChunkSection[,,] sections;
+        public int sectionsX;
+        public int sectionsY;
+        public int sectionsZ;
 
         // Heightmap only needed during initial generation; release after use
-        private float[,] precomputedHeightmap;
+        public float[,] precomputedHeightmap;
 
-        private static readonly Dictionary<long, OpenSimplexNoise> noiseCache = new();
+        public static readonly Dictionary<long, OpenSimplexNoise> noiseCache = new();
 
-        private const int SECTION_SHIFT = 4;
-        private const int SECTION_MASK = 0xF;
+        public const int SECTION_SHIFT = 4;
+        public const int SECTION_MASK = 0xF;
 
         public Chunk(Vector3 chunkPosition, long seed, string chunkDataDirectory, float[,] precomputedHeightmap = null)
         {
@@ -51,7 +53,7 @@ namespace World
             InitializeChunkData();
         }
 
-        private void InitializeSectionGrid()
+        public void InitializeSectionGrid()
         {
             int S = ChunkSection.SECTION_SIZE;
             if (GameManager.settings.chunkMaxX % S != 0 ||
@@ -155,7 +157,7 @@ namespace World
 
         public float[,] GenerateHeightMap(long seed) => GenerateHeightMap(seed, (int)position.X, (int)position.Z);
 
-        internal static float[,] GenerateHeightMap(long seed, int chunkBaseX, int chunkBaseZ)
+        public static float[,] GenerateHeightMap(long seed, int chunkBaseX, int chunkBaseZ)
         {
             if (!noiseCache.TryGetValue(seed, out var noise))
             {
@@ -180,7 +182,7 @@ namespace World
             return heightmap;
         }
 
-        private ChunkSection GetOrCreateSection(int sx, int sy, int sz)
+        public ChunkSection GetOrCreateSection(int sx, int sy, int sz)
         {
             var sec = sections[sx, sy, sz];
             if (sec == null)
@@ -191,31 +193,31 @@ namespace World
             return sec;
         }
 
-        private void LocalToSection(int lx, int ly, int lz, out int sx, out int sy, out int sz, out int ox, out int oy, out int oz)
+        public void LocalToSection(int lx, int ly, int lz, out int sx, out int sy, out int sz, out int ox, out int oy, out int oz)
         {
             sx = lx >> SECTION_SHIFT; sy = ly >> SECTION_SHIFT; sz = lz >> SECTION_SHIFT;
             ox = lx & SECTION_MASK; oy = ly & SECTION_MASK; oz = lz & SECTION_MASK;
         }
 
-        internal ushort GetBlockLocal(int lx, int ly, int lz)
+        public ushort GetBlockLocal(int lx, int ly, int lz)
         {
             if (lx < 0 || ly < 0 || lz < 0 || lx >= GameManager.settings.chunkMaxX || ly >= GameManager.settings.chunkMaxY || lz >= GameManager.settings.chunkMaxZ)
                 return (ushort)BaseBlockType.Empty;
             LocalToSection(lx, ly, lz, out int sx, out int sy, out int sz, out int ox, out int oy, out int oz);
             var sec = sections[sx, sy, sz];
-            return SectionRender.GetBlock(sec, ox, oy, oz);
+            return SectionUtils.GetBlock(sec, ox, oy, oz);
         }
 
-        internal void SetBlockLocal(int lx, int ly, int lz, ushort blockId)
+        public void SetBlockLocal(int lx, int ly, int lz, ushort blockId)
         {
             if (lx < 0 || ly < 0 || lz < 0 || lx >= GameManager.settings.chunkMaxX || ly >= GameManager.settings.chunkMaxY || lz >= GameManager.settings.chunkMaxZ)
                 return;
             LocalToSection(lx, ly, lz, out int sx, out int sy, out int sz, out int ox, out int oy, out int oz);
             var sec = GetOrCreateSection(sx, sy, sz);
-            SectionRender.SetBlock(sec, ox, oy, oz, blockId);
+            SectionUtils.SetBlock(sec, ox, oy, oz, blockId);
         }
 
-        internal void BuildRender(Func<int, int, int, ushort> worldBlockGetter)
+        public void BuildRender(Func<int, int, int, ushort> worldBlockGetter)
         {
             chunkRender?.ScheduleDelete();
             chunkRender = new ChunkRender(

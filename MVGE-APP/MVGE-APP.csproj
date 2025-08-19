@@ -26,6 +26,7 @@
 	
   <ItemGroup>
     <ProjectReference Include="..\MVGE-INF\MVGE-INF.csproj" />
+	  <ProjectReference Include="..\MVGE-GEN\MVGE-GEN.csproj" />
 	<ProjectReference Include="..\MVGE-GFX\MVGE-GFX.csproj" />
 	<ProjectReference Include="..\MVGE-Tools\MVGE-Tools.csproj" />
   </ItemGroup>

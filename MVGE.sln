@@ -14,6 +14,12 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MVGE-GFX", "MVGE-GFX\MVGE-G
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MVGE-Tools", "MVGE-Tools\MVGE-Tools.csproj", "{D17340C6-0D89-42EA-B8EA-8599BC87C26C}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MVGE-GEN", "MVGE-GEN\MVGE-GEN.csproj", "{7D0E10CF-91BC-479D-A628-1C46ACE90B79}"
+	ProjectSection(ProjectDependencies) = postProject
+		{3BCEFBF2-4B39-47F1-B1FD-6E38D9A46C02} = {3BCEFBF2-4B39-47F1-B1FD-6E38D9A46C02}
+		{D17340C6-0D89-42EA-B8EA-8599BC87C26C} = {D17340C6-0D89-42EA-B8EA-8599BC87C26C}
+	EndProjectSection
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -36,6 +42,10 @@ Global
 		{D17340C6-0D89-42EA-B8EA-8599BC87C26C}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{D17340C6-0D89-42EA-B8EA-8599BC87C26C}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{D17340C6-0D89-42EA-B8EA-8599BC87C26C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7D0E10CF-91BC-479D-A628-1C46ACE90B79}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7D0E10CF-91BC-479D-A628-1C46ACE90B79}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7D0E10CF-91BC-479D-A628-1C46ACE90B79}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7D0E10CF-91BC-479D-A628-1C46ACE90B79}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

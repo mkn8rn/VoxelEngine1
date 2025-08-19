@@ -1,10 +1,15 @@
 ﻿using MVGE_INF.Models.Terrain;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Numerics;
 using System.Runtime.CompilerServices;
-using System.Numerics; // for BitOperations
+using System.Text;
+using System.Threading.Tasks;
 
-namespace MVGE_GFX.Terrain
+namespace MVGE_GEN.Utils
 {
-    public static class SectionRender
+    public static class SectionUtils
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static ushort GetBlock(ChunkSection sec, int x, int y, int z)
@@ -55,36 +60,12 @@ namespace MVGE_GFX.Terrain
             WriteBits(sec, lin, newPaletteIndex);
         }
 
-        private static void Initialize(ChunkSection sec)
-        {
-            sec.IsAllAir = false;
-            sec.VoxelCount = ChunkSection.SECTION_SIZE * ChunkSection.SECTION_SIZE * ChunkSection.SECTION_SIZE;
-            sec.Palette = new List<ushort>(8) { ChunkSection.AIR };
-            sec.PaletteLookup = new Dictionary<ushort, int> { { ChunkSection.AIR, 0 } };
-            sec.BitsPerIndex = 1;
-            AllocateBitData(sec);
-            sec.NonAirCount = 0;
-        }
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static int LinearIndex(int x, int y, int z)
+            => (y * ChunkSection.SECTION_SIZE + z) * ChunkSection.SECTION_SIZE + x;
 
-        private static void Collapse(ChunkSection sec)
-        {
-            sec.IsAllAir = true;
-            sec.Palette = null;
-            sec.PaletteLookup = null;
-            sec.BitData = null;
-            sec.BitsPerIndex = 0;
-            sec.NonAirCount = 0;
-        }
-
-        private static int GetOrAddPaletteIndex(ChunkSection sec, ushort blockId)
-        {
-            if (sec.PaletteLookup.TryGetValue(blockId, out int idx))
-                return idx;
-            idx = sec.Palette.Count;
-            sec.Palette.Add(blockId);
-            sec.PaletteLookup[blockId] = idx;
-            return idx;
-        }
+        private static int ReadBits(ChunkSection sec, int voxelIndex)
+            => ReadBits(sec.BitData, sec.BitsPerIndex, voxelIndex);
 
         private static void GrowBits(ChunkSection sec)
         {
@@ -117,12 +98,6 @@ namespace MVGE_GFX.Terrain
             sec.BitData = new uint[uintCount];
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static int LinearIndex(int x, int y, int z)
-            => (y * ChunkSection.SECTION_SIZE + z) * ChunkSection.SECTION_SIZE + x;
-
-        private static int ReadBits(ChunkSection sec, int voxelIndex)
-            => ReadBits(sec.BitData, sec.BitsPerIndex, voxelIndex);
 
         private static int ReadBits(uint[] data, int bpi, int voxelIndex)
         {
@@ -159,5 +134,35 @@ namespace MVGE_GFX.Terrain
                 sec.BitData[dataIndex + 1] |= (uint)paletteIndex >> remaining;
             }
         }
+        private static void Collapse(ChunkSection sec)
+        {
+            sec.IsAllAir = true;
+            sec.Palette = null;
+            sec.PaletteLookup = null;
+            sec.BitData = null;
+            sec.BitsPerIndex = 0;
+            sec.NonAirCount = 0;
+        }
+
+        private static int GetOrAddPaletteIndex(ChunkSection sec, ushort blockId)
+        {
+            if (sec.PaletteLookup.TryGetValue(blockId, out int idx))
+                return idx;
+            idx = sec.Palette.Count;
+            sec.Palette.Add(blockId);
+            sec.PaletteLookup[blockId] = idx;
+            return idx;
+        }
+        private static void Initialize(ChunkSection sec)
+        {
+            sec.IsAllAir = false;
+            sec.VoxelCount = ChunkSection.SECTION_SIZE * ChunkSection.SECTION_SIZE * ChunkSection.SECTION_SIZE;
+            sec.Palette = new List<ushort>(8) { ChunkSection.AIR };
+            sec.PaletteLookup = new Dictionary<ushort, int> { { ChunkSection.AIR, 0 } };
+            sec.BitsPerIndex = 1;
+            AllocateBitData(sec);
+            sec.NonAirCount = 0;
+        }
+
     }
 }
