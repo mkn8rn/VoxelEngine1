@@ -1,6 +1,5 @@
 ﻿using MVGE_GFX.BufferObjects;
 using MVGE_GFX.Models;
-using MVGE_GFX.Utils;
 using MVGE_INF.Managers;
 using MVGE_INF.Models.Terrain;
 using OpenTK.Graphics.OpenGL4;
@@ -16,7 +15,7 @@ namespace MVGE_GFX.Terrain
     public class ChunkRender
     {
         private bool isBuilt = false;
-        private OpenTK.Mathematics.Vector3 chunkWorldPosition;
+        private Vector3 chunkWorldPosition;
 
         // Small-chunk fallback lists 
         private List<byte> chunkVertsList;
@@ -52,9 +51,6 @@ namespace MVGE_GFX.Terrain
         private IndexFormat indexFormat;
 
         private static readonly ConcurrentQueue<ChunkRender> pendingDeletion = new();
-
-        // UV cache: key = (blockId << 3) | face (face fits in 3 bits). Value = 8-byte array (4 UV pairs)
-        private static readonly ConcurrentDictionary<int, byte[]> uvByteCache = new();
 
         // Fast-path flag when chunk fully enclosed (no visible faces)
         private bool fullyOccluded;
@@ -153,7 +149,7 @@ namespace MVGE_GFX.Terrain
             if (!isBuilt) Build();
             if (fullyOccluded) return;
 
-            OpenTK.Mathematics.Vector3 adjustedChunkPosition = chunkWorldPosition + new OpenTK.Mathematics.Vector3(1f, 1f, 1f);
+            Vector3 adjustedChunkPosition = chunkWorldPosition + new Vector3(1f, 1f, 1f);
             program.Bind();
             program.SetUniform("chunkPosition", adjustedChunkPosition);
             program.SetUniform("tilesX", terrainTextureAtlas.tilesX);
@@ -193,19 +189,16 @@ namespace MVGE_GFX.Terrain
 
             if (usePooling)
             {
-                var res = RenderPooledFacesUtils.BuildPooledFaces(
-                    chunkWorldPosition,
-                    maxX, maxY, maxZ,
-                    emptyBlock,
-                    getWorldBlock,
-                    getLocalBlock,
-                    terrainTextureAtlas);
+                var builder = new PooledFacesRender(chunkWorldPosition, maxX, maxY, maxZ, emptyBlock, getWorldBlock, getLocalBlock, terrainTextureAtlas);
+                var res = builder.Build();
                 usedPooling = true;
                 useUShort = res.UseUShort;
+
                 vertBuffer = res.VertBuffer;
                 uvBuffer = res.UVBuffer;
                 indicesUIntBuffer = res.IndicesUIntBuffer;
                 indicesUShortBuffer = res.IndicesUShortBuffer;
+
                 vertBytesUsed = res.VertBytesUsed;
                 uvBytesUsed = res.UVBytesUsed;
                 indicesUsed = res.IndicesUsed;
