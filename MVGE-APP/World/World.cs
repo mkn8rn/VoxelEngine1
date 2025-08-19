@@ -60,10 +60,10 @@ namespace MVGE.World
             Console.WriteLine("World manager initializing.");
 
             int proc = Environment.ProcessorCount;
-            int desired = proc * 4;
+            int desired = proc + (proc / 2);
             ThreadPool.SetMinThreads(desired, desired);
             generationWorkerCount = proc - 1;
-            meshWorkerCount = proc * 4;
+            meshWorkerCount = proc * 2;
 
             loader = new WorldLoader();
             loader.ChooseWorld();
@@ -93,7 +93,7 @@ namespace MVGE.World
                 remaining = pendingChunks.Count;
 
                 Console.WriteLine($"[World] Initial chunk generation: {done}/{total}, remaining: {remaining}");
-                Thread.Sleep(250);
+                Thread.Sleep(500);
             }
             sw.Stop();
             Console.WriteLine($"[World] Initial chunk generation complete: {total} chunks in {sw.ElapsedMilliseconds} ms.");
@@ -110,7 +110,7 @@ namespace MVGE.World
                 int built = initialTotal - remaining;
                 Console.WriteLine($"[World] Chunk mesh build: {built}/{initialTotal}, remaining: {remaining}");
                     
-                Thread.Sleep(250);
+                Thread.Sleep(500);
             }
             sw.Stop();
             Console.WriteLine($"[World] Chunk mesh build complete in {sw.ElapsedMilliseconds} ms.");
