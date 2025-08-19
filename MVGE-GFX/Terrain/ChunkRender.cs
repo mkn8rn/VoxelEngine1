@@ -355,12 +355,14 @@ namespace MVGE_GFX.Terrain
             bool haveSolid = false; bool singleSolidType = true; ushort singleSolidId = 0;
 
             // Axis slabs (bitsets)
-            // xSlabs: maxX slabs each yzWC words
             ulong[] xSlabs = new ulong[maxX * yzWC];
-            // ySlabs: maxY slabs each xzWC words (plane order x*maxZ + z)
             ulong[] ySlabs = new ulong[maxY * xzWC];
-            // zSlabs: maxZ slabs each xyWC words (plane order x*maxY + y)
             ulong[] zSlabs = new ulong[maxZ * xyWC];
+
+            // Slab non-empty flags
+            bool[] xSlabNonEmpty = new bool[maxX];
+            bool[] ySlabNonEmpty = new bool[maxY];
+            bool[] zSlabNonEmpty = new bool[maxZ];
 
             // Neighbor boundary slabs
             ulong[] neighborLeft = new ulong[yzWC];
@@ -376,40 +378,32 @@ namespace MVGE_GFX.Terrain
 
             // Build neighbor slabs (outside solid = bit 1 if not empty)
             for (int z = 0; z < maxZ; z++)
-            {
                 for (int y = 0; y < maxY; y++)
                 {
-                    int yzIndex = z * maxY + y;
-                    int w = yzIndex >> 6; int b = yzIndex & 63;
+                    int yzIndex = z * maxY + y; int w = yzIndex >> 6; int b = yzIndex & 63;
                     if (getWorldBlock(baseWX - 1, baseWY + y, baseWZ + z) != emptyBlock) neighborLeft[w] |= 1UL << b;
                     if (getWorldBlock(baseWX + maxX, baseWY + y, baseWZ + z) != emptyBlock) neighborRight[w] |= 1UL << b;
                 }
-            }
             for (int x = 0; x < maxX; x++)
-            {
                 for (int z = 0; z < maxZ; z++)
                 {
-                    int xzIndex = x * maxZ + z;
-                    int w = xzIndex >> 6; int b = xzIndex & 63;
+                    int xzIndex = x * maxZ + z; int w = xzIndex >> 6; int b = xzIndex & 63;
                     if (getWorldBlock(baseWX + x, baseWY - 1, baseWZ + z) != emptyBlock) neighborBottom[w] |= 1UL << b;
                     if (getWorldBlock(baseWX + x, baseWY + maxY, baseWZ + z) != emptyBlock) neighborTop[w] |= 1UL << b;
                 }
-            }
             for (int x = 0; x < maxX; x++)
-            {
                 for (int y = 0; y < maxY; y++)
                 {
-                    int xyIndex = x * maxY + y;
-                    int w = xyIndex >> 6; int b = xyIndex & 63;
+                    int xyIndex = x * maxY + y; int w = xyIndex >> 6; int b = xyIndex & 63;
                     if (getWorldBlock(baseWX + x, baseWY + y, baseWZ - 1) != emptyBlock) neighborBack[w] |= 1UL << b;
                     if (getWorldBlock(baseWX + x, baseWY + y, baseWZ + maxZ) != emptyBlock) neighborFront[w] |= 1UL << b;
                 }
-            }
 
             // Populate slabs & block IDs
             for (int x = 0; x < maxX; x++)
             {
                 int xSlabOffset = x * yzWC;
+                ulong slabAccumX = 0UL; // track non-empty
                 for (int z = 0; z < maxZ; z++)
                 {
                     for (int y = 0; y < maxY; y++)
@@ -420,10 +414,13 @@ namespace MVGE_GFX.Terrain
                         if (bId != emptyBlock)
                         {
                             int yzIndex = z * maxY + y; int wy = yzIndex >> 6; int by = yzIndex & 63;
-                            xSlabs[xSlabOffset + wy] |= 1UL << by;
+                            ulong bit = 1UL << by;
+                            xSlabs[xSlabOffset + wy] |= bit;
+                            slabAccumX |= bit;
 
                             int xzIndex = x * maxZ + z; int wxz = xzIndex >> 6; int bxz = xzIndex & 63;
-                            ySlabs[y * xzWC + wxz] |= 1UL << bxz;
+                            ulong bitXZ = 1UL << bxz;
+                            ySlabs[y * xzWC + wxz] |= bitXZ; // accumulate implicitly
 
                             int xyIndex = x * maxY + y; int wxy = xyIndex >> 6; int bxy = xyIndex & 63;
                             zSlabs[z * xyWC + wxy] |= 1UL << bxy;
@@ -433,57 +430,121 @@ namespace MVGE_GFX.Terrain
                         }
                     }
                 }
+                if (slabAccumX != 0) xSlabNonEmpty[x] = true;
             }
+            // ySlabNonEmpty and zSlabNonEmpty
+            for (int y = 0; y < maxY; y++)
+            {
+                int off = y * xzWC; ulong acc = 0UL; for (int w = 0; w < xzWC; w++) acc |= ySlabs[off + w]; ySlabNonEmpty[y] = acc != 0;
+            }
+            for (int z = 0; z < maxZ; z++)
+            {
+                int off = z * xyWC; ulong acc = 0UL; for (int w = 0; w < xyWC; w++) acc |= zSlabs[off + w]; zSlabNonEmpty[z] = acc != 0;
+            }
+
             bool hasSingleOpaque = haveSolid && singleSolidType;
 
-            // Pass 1: count faces via differencing
+            // Precompute identical adjacent slab pairs (non-empty & equal)
+            bool[] identicalPairX = new bool[maxX - 1];
+            for (int x = 0; x < maxX - 1; x++)
+            {
+                if (!xSlabNonEmpty[x] || !xSlabNonEmpty[x + 1]) continue;
+                int aOff = x * yzWC; int bOff = (x + 1) * yzWC; bool eq = true;
+                for (int w = 0; w < yzWC; w++) { if (xSlabs[aOff + w] != xSlabs[bOff + w]) { eq = false; break; } }
+                identicalPairX[x] = eq;
+            }
+            bool[] identicalPairY = new bool[maxY - 1];
+            for (int y = 0; y < maxY - 1; y++)
+            {
+                if (!ySlabNonEmpty[y] || !ySlabNonEmpty[y + 1]) continue;
+                int aOff = y * xzWC; int bOff = (y + 1) * xzWC; bool eq = true;
+                for (int w = 0; w < xzWC; w++) { if (ySlabs[aOff + w] != ySlabs[bOff + w]) { eq = false; break; } }
+                identicalPairY[y] = eq;
+            }
+            bool[] identicalPairZ = new bool[maxZ - 1];
+            for (int z = 0; z < maxZ - 1; z++)
+            {
+                if (!zSlabNonEmpty[z] || !zSlabNonEmpty[z + 1]) continue;
+                int aOff = z * xyWC; int bOff = (z + 1) * xyWC; bool eq = true;
+                for (int w = 0; w < xyWC; w++) { if (zSlabs[aOff + w] != zSlabs[bOff + w]) { eq = false; break; } }
+                identicalPairZ[z] = eq;
+            }
+
+            // Pass 1: count faces via differencing with skips
             int totalFaces = 0;
-            // X-axis (LEFT/RIGHT)
+            // X-axis
             for (int x = 0; x < maxX; x++)
             {
+                if (!xSlabNonEmpty[x]) continue; // empty slab produces no x faces
                 int curOff = x * yzWC;
                 int prevOff = (x - 1) * yzWC;
                 int nextOff = (x + 1) * yzWC;
+                bool skipLeft = x > 0 && identicalPairX[x - 1];
+                bool skipRight = x < maxX - 1 && identicalPairX[x];
                 for (int w = 0; w < yzWC; w++)
                 {
                     ulong cur = xSlabs[curOff + w];
                     if (cur == 0) continue;
-                    ulong leftBits = (x == 0) ? (cur & ~neighborLeft[w]) : (cur & ~xSlabs[prevOff + w]);
-                    ulong rightBits = (x == maxX - 1) ? (cur & ~neighborRight[w]) : (cur & ~xSlabs[nextOff + w]);
-                    if (leftBits != 0) totalFaces += BitOperations.PopCount(leftBits);
-                    if (rightBits != 0) totalFaces += BitOperations.PopCount(rightBits);
+                    if (!skipLeft)
+                    {
+                        ulong leftBits = (x == 0) ? (cur & ~neighborLeft[w]) : (cur & ~xSlabs[prevOff + w]);
+                        if (leftBits != 0) totalFaces += BitOperations.PopCount(leftBits);
+                    }
+                    if (!skipRight)
+                    {
+                        ulong rightBits = (x == maxX - 1) ? (cur & ~neighborRight[w]) : (cur & ~xSlabs[nextOff + w]);
+                        if (rightBits != 0) totalFaces += BitOperations.PopCount(rightBits);
+                    }
                 }
             }
-            // Y-axis (BOTTOM/TOP)
+            // Y-axis
             for (int y = 0; y < maxY; y++)
             {
+                if (!ySlabNonEmpty[y]) continue;
                 int curOff = y * xzWC;
                 int prevOff = (y - 1) * xzWC;
                 int nextOff = (y + 1) * xzWC;
+                bool skipBottom = y > 0 && identicalPairY[y - 1];
+                bool skipTop = y < maxY - 1 && identicalPairY[y];
                 for (int w = 0; w < xzWC; w++)
                 {
                     ulong cur = ySlabs[curOff + w];
                     if (cur == 0) continue;
-                    ulong bottomBits = (y == 0) ? (cur & ~neighborBottom[w]) : (cur & ~ySlabs[prevOff + w]);
-                    ulong topBits = (y == maxY - 1) ? (cur & ~neighborTop[w]) : (cur & ~ySlabs[nextOff + w]);
-                    if (bottomBits != 0) totalFaces += BitOperations.PopCount(bottomBits);
-                    if (topBits != 0) totalFaces += BitOperations.PopCount(topBits);
+                    if (!skipBottom)
+                    {
+                        ulong bottomBits = (y == 0) ? (cur & ~neighborBottom[w]) : (cur & ~ySlabs[prevOff + w]);
+                        if (bottomBits != 0) totalFaces += BitOperations.PopCount(bottomBits);
+                    }
+                    if (!skipTop)
+                    {
+                        ulong topBits = (y == maxY - 1) ? (cur & ~neighborTop[w]) : (cur & ~ySlabs[nextOff + w]);
+                        if (topBits != 0) totalFaces += BitOperations.PopCount(topBits);
+                    }
                 }
             }
-            // Z-axis (BACK/FRONT)
+            // Z-axis
             for (int z = 0; z < maxZ; z++)
             {
+                if (!zSlabNonEmpty[z]) continue;
                 int curOff = z * xyWC;
                 int prevOff = (z - 1) * xyWC;
                 int nextOff = (z + 1) * xyWC;
+                bool skipBack = z > 0 && identicalPairZ[z - 1];
+                bool skipFront = z < maxZ - 1 && identicalPairZ[z];
                 for (int w = 0; w < xyWC; w++)
                 {
                     ulong cur = zSlabs[curOff + w];
                     if (cur == 0) continue;
-                    ulong backBits = (z == 0) ? (cur & ~neighborBack[w]) : (cur & ~zSlabs[prevOff + w]);
-                    ulong frontBits = (z == maxZ - 1) ? (cur & ~neighborFront[w]) : (cur & ~zSlabs[nextOff + w]);
-                    if (backBits != 0) totalFaces += BitOperations.PopCount(backBits);
-                    if (frontBits != 0) totalFaces += BitOperations.PopCount(frontBits);
+                    if (!skipBack)
+                    {
+                        ulong backBits = (z == 0) ? (cur & ~neighborBack[w]) : (cur & ~zSlabs[prevOff + w]);
+                        if (backBits != 0) totalFaces += BitOperations.PopCount(backBits);
+                    }
+                    if (!skipFront)
+                    {
+                        ulong frontBits = (z == maxZ - 1) ? (cur & ~neighborFront[w]) : (cur & ~zSlabs[nextOff + w]);
+                        if (frontBits != 0) totalFaces += BitOperations.PopCount(frontBits);
+                    }
                 }
             }
 
@@ -509,52 +570,48 @@ namespace MVGE_GFX.Terrain
             }
 
             int faceIndex = 0;
-
             void EmitFaces(ushort block, Faces face, byte x, byte y, byte z)
             {
                 if (hasSingleOpaque) block = singleSolidId;
                 WriteFace(block, face, x, y, z, ref faceIndex, null, singleSolidUVConcat);
             }
 
-            // Pass 2: emit faces by enumerating bits
+            // Pass 2: emit faces by enumerating bits with skips
             // X-axis
             for (int x = 0; x < maxX; x++)
             {
+                if (!xSlabNonEmpty[x]) continue;
                 int curOff = x * yzWC;
                 int prevOff = (x - 1) * yzWC;
                 int nextOff = (x + 1) * yzWC;
+                bool skipLeft = x > 0 && identicalPairX[x - 1];
+                bool skipRight = x < maxX - 1 && identicalPairX[x];
                 for (int w = 0; w < yzWC; w++)
                 {
                     ulong cur = xSlabs[curOff + w];
                     if (cur == 0) continue;
-                    ulong leftBits = (x == 0) ? (cur & ~neighborLeft[w]) : (cur & ~xSlabs[prevOff + w]);
-                    ulong rightBits = (x == maxX - 1) ? (cur & ~neighborRight[w]) : (cur & ~xSlabs[nextOff + w]);
-                    if (leftBits != 0)
+                    if (!skipLeft)
                     {
+                        ulong leftBits = (x == 0) ? (cur & ~neighborLeft[w]) : (cur & ~xSlabs[prevOff + w]);
                         ulong bits = leftBits;
                         while (bits != 0)
                         {
                             int t = BitOperations.TrailingZeroCount(bits);
-                            int yzIndex = (w << 6) + t;
-                            if (yzIndex >= yzPlaneBits) break;
-                            int z = yzIndex / maxY;
-                            int y = yzIndex % maxY;
-                            int li = LocalIndex(x, y, z, maxY, maxZ);
+                            int yzIndex = (w << 6) + t; if (yzIndex >= yzPlaneBits) break;
+                            int z = yzIndex / maxY; int y = yzIndex % maxY; int li = LocalIndex(x, y, z, maxY, maxZ);
                             EmitFaces(localBlocks[li], Faces.LEFT, (byte)x, (byte)y, (byte)z);
                             bits &= bits - 1;
                         }
                     }
-                    if (rightBits != 0)
+                    if (!skipRight)
                     {
+                        ulong rightBits = (x == maxX - 1) ? (cur & ~neighborRight[w]) : (cur & ~xSlabs[nextOff + w]);
                         ulong bits = rightBits;
                         while (bits != 0)
                         {
                             int t = BitOperations.TrailingZeroCount(bits);
-                            int yzIndex = (w << 6) + t;
-                            if (yzIndex >= yzPlaneBits) break;
-                            int z = yzIndex / maxY;
-                            int y = yzIndex % maxY;
-                            int li = LocalIndex(x, y, z, maxY, maxZ);
+                            int yzIndex = (w << 6) + t; if (yzIndex >= yzPlaneBits) break;
+                            int z = yzIndex / maxY; int y = yzIndex % maxY; int li = LocalIndex(x, y, z, maxY, maxZ);
                             EmitFaces(localBlocks[li], Faces.RIGHT, (byte)x, (byte)y, (byte)z);
                             bits &= bits - 1;
                         }
@@ -564,41 +621,38 @@ namespace MVGE_GFX.Terrain
             // Y-axis
             for (int y = 0; y < maxY; y++)
             {
+                if (!ySlabNonEmpty[y]) continue;
                 int curOff = y * xzWC;
                 int prevOff = (y - 1) * xzWC;
                 int nextOff = (y + 1) * xzWC;
+                bool skipBottom = y > 0 && identicalPairY[y - 1];
+                bool skipTop = y < maxY - 1 && identicalPairY[y];
                 for (int w = 0; w < xzWC; w++)
                 {
                     ulong cur = ySlabs[curOff + w];
                     if (cur == 0) continue;
-                    ulong bottomBits = (y == 0) ? (cur & ~neighborBottom[w]) : (cur & ~ySlabs[prevOff + w]);
-                    ulong topBits = (y == maxY - 1) ? (cur & ~neighborTop[w]) : (cur & ~ySlabs[nextOff + w]);
-                    if (bottomBits != 0)
+                    if (!skipBottom)
                     {
+                        ulong bottomBits = (y == 0) ? (cur & ~neighborBottom[w]) : (cur & ~ySlabs[prevOff + w]);
                         ulong bits = bottomBits;
                         while (bits != 0)
                         {
                             int t = BitOperations.TrailingZeroCount(bits);
-                            int xzIndex = (w << 6) + t;
-                            if (xzIndex >= xzPlaneBits) break;
-                            int x = xzIndex / maxZ;
-                            int z = xzIndex % maxZ;
-                            int li = LocalIndex(x, y, z, maxY, maxZ);
+                            int xzIndex = (w << 6) + t; if (xzIndex >= xzPlaneBits) break;
+                            int x = xzIndex / maxZ; int z = xzIndex % maxZ; int li = LocalIndex(x, y, z, maxY, maxZ);
                             EmitFaces(localBlocks[li], Faces.BOTTOM, (byte)x, (byte)y, (byte)z);
                             bits &= bits - 1;
                         }
                     }
-                    if (topBits != 0)
+                    if (!skipTop)
                     {
+                        ulong topBits = (y == maxY - 1) ? (cur & ~neighborTop[w]) : (cur & ~ySlabs[nextOff + w]);
                         ulong bits = topBits;
                         while (bits != 0)
                         {
                             int t = BitOperations.TrailingZeroCount(bits);
-                            int xzIndex = (w << 6) + t;
-                            if (xzIndex >= xzPlaneBits) break;
-                            int x = xzIndex / maxZ;
-                            int z = xzIndex % maxZ;
-                            int li = LocalIndex(x, y, z, maxY, maxZ);
+                            int xzIndex = (w << 6) + t; if (xzIndex >= xzPlaneBits) break;
+                            int x = xzIndex / maxZ; int z = xzIndex % maxZ; int li = LocalIndex(x, y, z, maxY, maxZ);
                             EmitFaces(localBlocks[li], Faces.TOP, (byte)x, (byte)y, (byte)z);
                             bits &= bits - 1;
                         }
@@ -608,41 +662,38 @@ namespace MVGE_GFX.Terrain
             // Z-axis
             for (int z = 0; z < maxZ; z++)
             {
+                if (!zSlabNonEmpty[z]) continue;
                 int curOff = z * xyWC;
                 int prevOff = (z - 1) * xyWC;
                 int nextOff = (z + 1) * xyWC;
+                bool skipBack = z > 0 && identicalPairZ[z - 1];
+                bool skipFront = z < maxZ - 1 && identicalPairZ[z];
                 for (int w = 0; w < xyWC; w++)
                 {
                     ulong cur = zSlabs[curOff + w];
                     if (cur == 0) continue;
-                    ulong backBits = (z == 0) ? (cur & ~neighborBack[w]) : (cur & ~zSlabs[prevOff + w]);
-                    ulong frontBits = (z == maxZ - 1) ? (cur & ~neighborFront[w]) : (cur & ~zSlabs[nextOff + w]);
-                    if (backBits != 0)
+                    if (!skipBack)
                     {
+                        ulong backBits = (z == 0) ? (cur & ~neighborBack[w]) : (cur & ~zSlabs[prevOff + w]);
                         ulong bits = backBits;
                         while (bits != 0)
                         {
                             int t = BitOperations.TrailingZeroCount(bits);
-                            int xyIndex = (w << 6) + t;
-                            if (xyIndex >= xyPlaneBits) break;
-                            int x = xyIndex / maxY;
-                            int y = xyIndex % maxY;
-                            int li = LocalIndex(x, y, z, maxY, maxZ);
+                            int xyIndex = (w << 6) + t; if (xyIndex >= xyPlaneBits) break;
+                            int x = xyIndex / maxY; int y = xyIndex % maxY; int li = LocalIndex(x, y, z, maxY, maxZ);
                             EmitFaces(localBlocks[li], Faces.BACK, (byte)x, (byte)y, (byte)z);
                             bits &= bits - 1;
                         }
                     }
-                    if (frontBits != 0)
+                    if (!skipFront)
                     {
+                        ulong frontBits = (z == maxZ - 1) ? (cur & ~neighborFront[w]) : (cur & ~zSlabs[nextOff + w]);
                         ulong bits = frontBits;
                         while (bits != 0)
                         {
                             int t = BitOperations.TrailingZeroCount(bits);
-                            int xyIndex = (w << 6) + t;
-                            if (xyIndex >= xyPlaneBits) break;
-                            int x = xyIndex / maxY;
-                            int y = xyIndex % maxY;
-                            int li = LocalIndex(x, y, z, maxY, maxZ);
+                            int xyIndex = (w << 6) + t; if (xyIndex >= xyPlaneBits) break;
+                            int x = xyIndex / maxY; int y = xyIndex % maxY; int li = LocalIndex(x, y, z, maxY, maxZ);
                             EmitFaces(localBlocks[li], Faces.FRONT, (byte)x, (byte)y, (byte)z);
                             bits &= bits - 1;
                         }
