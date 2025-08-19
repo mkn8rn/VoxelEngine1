@@ -542,45 +542,5 @@ namespace MVGE_GFX.Utils
                 ArrayPool<ulong>.Shared.Return(neighborFront, false);
             }
         }
-
-        private static bool CheckFullyOccluded(
-            Vector3 chunkWorldPosition,
-            int maxX,
-            int maxY,
-            int maxZ,
-            ushort emptyBlock,
-            Func<int, int, int, ushort> getWorldBlock,
-            Func<int, int, int, ushort> getLocalBlock)
-        {
-            int baseWX = (int)chunkWorldPosition.X;
-            int baseWY = (int)chunkWorldPosition.Y;
-            int baseWZ = (int)chunkWorldPosition.Z;
-            for (int x = 0; x < maxX; x++)
-                for (int y = 0; y < maxY; y++)
-                    for (int z = 0; z < maxZ; z++)
-                    {
-                        if (x != 0 && x != maxX - 1 && y != 0 && y != maxY - 1 && z != 0 && z != maxZ - 1) continue;
-                        if (getLocalBlock(x, y, z) == emptyBlock) return false;
-                    }
-            for (int y = 0; y < maxY; y++)
-                for (int z = 0; z < maxZ; z++)
-                {
-                    if (getWorldBlock(baseWX - 1, baseWY + y, baseWZ + z) == emptyBlock) return false;
-                    if (getWorldBlock(baseWX + maxX, baseWY + y, baseWZ + z) == emptyBlock) return false;
-                }
-            for (int x = 0; x < maxX; x++)
-                for (int z = 0; z < maxZ; z++)
-                {
-                    if (getWorldBlock(baseWX + x, baseWY - 1, baseWZ + z) == emptyBlock) return false;
-                    if (getWorldBlock(baseWX + x, baseWY + maxY, baseWZ + z) == emptyBlock) return false;
-                }
-            for (int x = 0; x < maxX; x++)
-                for (int y = 0; y < maxY; y++)
-                {
-                    if (getWorldBlock(baseWX + x, baseWY + y, baseWZ - 1) == emptyBlock) return false;
-                    if (getWorldBlock(baseWX + x, baseWY + y, baseWZ + maxZ) == emptyBlock) return false;
-                }
-            return true;
-        }
     }
 }
