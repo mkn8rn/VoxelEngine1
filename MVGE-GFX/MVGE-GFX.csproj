@@ -5,6 +5,7 @@
     <RootNamespace>MVGE_GFX</RootNamespace>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
 	<ItemGroup>

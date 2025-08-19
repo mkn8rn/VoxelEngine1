@@ -60,10 +60,10 @@ namespace MVGE.World
             Console.WriteLine("World manager initializing.");
 
             int proc = Environment.ProcessorCount;
-            int desired = proc + proc / 2 + 2; // 1.5x cores + cushion
+            int desired = proc * 3;
             ThreadPool.SetMinThreads(desired, desired);
             generationWorkerCount = proc - 1;
-            meshWorkerCount = proc * 10;
+            meshWorkerCount = proc * 3;
 
             loader = new WorldLoader();
             loader.ChooseWorld();
