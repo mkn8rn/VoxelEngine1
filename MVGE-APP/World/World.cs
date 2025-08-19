@@ -290,10 +290,7 @@ namespace MVGE.World
 
                     try
                     {
-                        lock (ch)
-                        {
-                            ch.BuildRender(worldBlockAccessor);
-                        }
+                        ch.BuildRender(worldBlockAccessor);
 
                         // If this was first-time build (in unbuilt), move to built dictionary
                         if (unbuiltChunks.TryRemove(key, out var builtChunk))
