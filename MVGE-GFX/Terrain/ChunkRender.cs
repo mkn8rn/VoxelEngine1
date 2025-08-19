@@ -165,10 +165,10 @@ namespace MVGE_GFX.Terrain
             bool usePooling = false;
             if (FlagManager.flags.useFacePooling.GetValueOrDefault())
             {
-                var threshold = FlagManager.flags.faceAmountToPool.GetValueOrDefault(int.MaxValue);
-                if (threshold != null || threshold >= 0)
+                int threshold = FlagManager.flags.faceAmountToPool.GetValueOrDefault(int.MaxValue);
+                if (threshold >= 0 && volume >= threshold)
                 {
-                    usePooling = volume >= threshold;
+                    usePooling = true;
                 }
             }
 
@@ -260,7 +260,30 @@ namespace MVGE_GFX.Terrain
             int slices = Math.Min(proc, maxX);
             int sliceWidth = (int)Math.Ceiling(maxX / (double)slices);
 
-            // First pass: count faces per slice (parallel)
+            // Pre-cache all local blocks into a flat array to avoid repeated palette / delegate cost
+            int sliceSizeY = maxY; // y fastest for locality between vertical neighbors
+            int sliceSizeZ = maxZ;
+            int planeSize = sliceSizeY * sliceSizeZ; // number of voxels in one X column slab
+            int totalVoxels = maxX * planeSize;
+            ushort[] localBlocks = new ushort[totalVoxels];
+            int idx = 0;
+            for (int x = 0; x < maxX; x++)
+            {
+                int baseXOffset = x * planeSize;
+                for (int z = 0; z < maxZ; z++)
+                {
+                    int baseZXOffset = baseXOffset + z * sliceSizeY;
+                    for (int y = 0; y < maxY; y++)
+                    {
+                        localBlocks[baseZXOffset + y] = getLocalBlock(x, y, z);
+                    }
+                }
+            }
+
+            static int LocalIndex(int x, int y, int z, int maxY, int maxZ)
+                => (x * maxZ + z) * maxY + y; // matches population order
+
+            // First pass: count faces per slice (parallel) using cached blocks
             int[] faceCounts = new int[slices];
             Parallel.For(0, slices, s =>
             {
@@ -273,17 +296,47 @@ namespace MVGE_GFX.Terrain
                     {
                         for (int y = 0; y < maxY; y++)
                         {
-                            ushort block = getLocalBlock(x, y, z);
+                            ushort block = localBlocks[LocalIndex(x, y, z, maxY, maxZ)];
                             if (block == emptyBlock) continue;
                             int wx = (int)chunkWorldPosition.X + x;
                             int wy = (int)chunkWorldPosition.Y + y;
                             int wz = (int)chunkWorldPosition.Z + z;
-                            if ((x > 0 && getLocalBlock(x - 1, y, z) == emptyBlock) || (x == 0 && getWorldBlock(wx - 1, wy, wz) == emptyBlock)) count++;
-                            if ((x < maxX - 1 && getLocalBlock(x + 1, y, z) == emptyBlock) || (x == maxX - 1 && getWorldBlock(wx + 1, wy, wz) == emptyBlock)) count++;
-                            if ((y < maxY - 1 && getLocalBlock(x, y + 1, z) == emptyBlock) || (y == maxY - 1 && getWorldBlock(wx, wy + 1, wz) == emptyBlock)) count++;
-                            if ((y > 0 && getLocalBlock(x, y - 1, z) == emptyBlock) || (y == 0 && getWorldBlock(wx, wy - 1, wz) == emptyBlock)) count++;
-                            if ((z < maxZ - 1 && getLocalBlock(x, y, z + 1) == emptyBlock) || (z == maxZ - 1 && getWorldBlock(wx, wy, wz + 1) == emptyBlock)) count++;
-                            if ((z > 0 && getLocalBlock(x, y, z - 1) == emptyBlock) || (z == 0 && getWorldBlock(wx, wy, wz - 1) == emptyBlock)) count++;
+                            // Left
+                            if (x == 0)
+                            {
+                                if (getWorldBlock(wx - 1, wy, wz) == emptyBlock) count++;
+                            }
+                            else if (localBlocks[LocalIndex(x - 1, y, z, maxY, maxZ)] == emptyBlock) count++;
+                            // Right
+                            if (x == maxX - 1)
+                            {
+                                if (getWorldBlock(wx + 1, wy, wz) == emptyBlock) count++;
+                            }
+                            else if (localBlocks[LocalIndex(x + 1, y, z, maxY, maxZ)] == emptyBlock) count++;
+                            // Top
+                            if (y == maxY - 1)
+                            {
+                                if (getWorldBlock(wx, wy + 1, wz) == emptyBlock) count++;
+                            }
+                            else if (localBlocks[LocalIndex(x, y + 1, z, maxY, maxZ)] == emptyBlock) count++;
+                            // Bottom
+                            if (y == 0)
+                            {
+                                if (getWorldBlock(wx, wy - 1, wz) == emptyBlock) count++;
+                            }
+                            else if (localBlocks[LocalIndex(x, y - 1, z, maxY, maxZ)] == emptyBlock) count++;
+                            // Front
+                            if (z == maxZ - 1)
+                            {
+                                if (getWorldBlock(wx, wy, wz + 1) == emptyBlock) count++;
+                            }
+                            else if (localBlocks[LocalIndex(x, y, z + 1, maxY, maxZ)] == emptyBlock) count++;
+                            // Back
+                            if (z == 0)
+                            {
+                                if (getWorldBlock(wx, wy, wz - 1) == emptyBlock) count++;
+                            }
+                            else if (localBlocks[LocalIndex(x, y, z - 1, maxY, maxZ)] == emptyBlock) count++;
                         }
                     }
                 }
@@ -312,37 +365,59 @@ namespace MVGE_GFX.Terrain
             else
                 indicesUIntBuffer = ArrayPool<uint>.Shared.Rent(totalFaces * 6);
 
-            // Second pass: write faces directly in parallel using disjoint ranges
+            // Second pass: write faces directly in parallel using disjoint ranges and cached blocks
             Parallel.For(0, slices, s =>
             {
                 int startX = s * sliceWidth;
                 int endX = Math.Min(maxX, startX + sliceWidth);
-                int writeFaceIndex = faceOffsets[s]; // face slot we are writing next (global face index)
+                int writeFaceIndex = faceOffsets[s];
                 for (int x = startX; x < endX; x++)
                 {
                     for (int z = 0; z < maxZ; z++)
                     {
                         for (int y = 0; y < maxY; y++)
                         {
-                            ushort block = getLocalBlock(x, y, z);
+                            ushort block = localBlocks[LocalIndex(x, y, z, maxY, maxZ)];
                             if (block == emptyBlock) continue;
                             int wx = (int)chunkWorldPosition.X + x;
                             int wy = (int)chunkWorldPosition.Y + y;
                             int wz = (int)chunkWorldPosition.Z + z;
 
-                            // For each visible face, emit it
-                            if ((x > 0 && getLocalBlock(x - 1, y, z) == emptyBlock) || (x == 0 && getWorldBlock(wx - 1, wy, wz) == emptyBlock))
-                                WriteFace(block, Faces.LEFT, (byte)x, (byte)y, (byte)z, ref writeFaceIndex);
-                            if ((x < maxX - 1 && getLocalBlock(x + 1, y, z) == emptyBlock) || (x == maxX - 1 && getWorldBlock(wx + 1, wy, wz) == emptyBlock))
-                                WriteFace(block, Faces.RIGHT, (byte)x, (byte)y, (byte)z, ref writeFaceIndex);
-                            if ((y < maxY - 1 && getLocalBlock(x, y + 1, z) == emptyBlock) || (y == maxY - 1 && getWorldBlock(wx, wy + 1, wz) == emptyBlock))
-                                WriteFace(block, Faces.TOP, (byte)x, (byte)y, (byte)z, ref writeFaceIndex);
-                            if ((y > 0 && getLocalBlock(x, y - 1, z) == emptyBlock) || (y == 0 && getWorldBlock(wx, wy - 1, wz) == emptyBlock))
-                                WriteFace(block, Faces.BOTTOM, (byte)x, (byte)y, (byte)z, ref writeFaceIndex);
-                            if ((z < maxZ - 1 && getLocalBlock(x, y, z + 1) == emptyBlock) || (z == maxZ - 1 && getWorldBlock(wx, wy, wz + 1) == emptyBlock))
-                                WriteFace(block, Faces.FRONT, (byte)x, (byte)y, (byte)z, ref writeFaceIndex);
-                            if ((z > 0 && getLocalBlock(x, y, z - 1) == emptyBlock) || (z == 0 && getWorldBlock(wx, wy, wz - 1) == emptyBlock))
-                                WriteFace(block, Faces.BACK, (byte)x, (byte)y, (byte)z, ref writeFaceIndex);
+                            if (x == 0)
+                            {
+                                if (getWorldBlock(wx - 1, wy, wz) == emptyBlock) WriteFace(block, Faces.LEFT, (byte)x, (byte)y, (byte)z, ref writeFaceIndex);
+                            }
+                            else if (localBlocks[LocalIndex(x - 1, y, z, maxY, maxZ)] == emptyBlock) WriteFace(block, Faces.LEFT, (byte)x, (byte)y, (byte)z, ref writeFaceIndex);
+
+                            if (x == maxX - 1)
+                            {
+                                if (getWorldBlock(wx + 1, wy, wz) == emptyBlock) WriteFace(block, Faces.RIGHT, (byte)x, (byte)y, (byte)z, ref writeFaceIndex);
+                            }
+                            else if (localBlocks[LocalIndex(x + 1, y, z, maxY, maxZ)] == emptyBlock) WriteFace(block, Faces.RIGHT, (byte)x, (byte)y, (byte)z, ref writeFaceIndex);
+
+                            if (y == maxY - 1)
+                            {
+                                if (getWorldBlock(wx, wy + 1, wz) == emptyBlock) WriteFace(block, Faces.TOP, (byte)x, (byte)y, (byte)z, ref writeFaceIndex);
+                            }
+                            else if (localBlocks[LocalIndex(x, y + 1, z, maxY, maxZ)] == emptyBlock) WriteFace(block, Faces.TOP, (byte)x, (byte)y, (byte)z, ref writeFaceIndex);
+
+                            if (y == 0)
+                            {
+                                if (getWorldBlock(wx, wy - 1, wz) == emptyBlock) WriteFace(block, Faces.BOTTOM, (byte)x, (byte)y, (byte)z, ref writeFaceIndex);
+                            }
+                            else if (localBlocks[LocalIndex(x, y - 1, z, maxY, maxZ)] == emptyBlock) WriteFace(block, Faces.BOTTOM, (byte)x, (byte)y, (byte)z, ref writeFaceIndex);
+
+                            if (z == maxZ - 1)
+                            {
+                                if (getWorldBlock(wx, wy, wz + 1) == emptyBlock) WriteFace(block, Faces.FRONT, (byte)x, (byte)y, (byte)z, ref writeFaceIndex);
+                            }
+                            else if (localBlocks[LocalIndex(x, y, z + 1, maxY, maxZ)] == emptyBlock) WriteFace(block, Faces.FRONT, (byte)x, (byte)y, (byte)z, ref writeFaceIndex);
+
+                            if (z == 0)
+                            {
+                                if (getWorldBlock(wx, wy, wz - 1) == emptyBlock) WriteFace(block, Faces.BACK, (byte)x, (byte)y, (byte)z, ref writeFaceIndex);
+                            }
+                            else if (localBlocks[LocalIndex(x, y, z - 1, maxY, maxZ)] == emptyBlock) WriteFace(block, Faces.BACK, (byte)x, (byte)y, (byte)z, ref writeFaceIndex);
                         }
                     }
                 }
