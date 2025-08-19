@@ -63,7 +63,7 @@ namespace MVGE.World
             int desired = proc + proc / 2 + 2; // 1.5x cores + cushion
             ThreadPool.SetMinThreads(desired, desired);
             generationWorkerCount = proc - 1;
-            meshWorkerCount = proc * 2;
+            meshWorkerCount = proc * 10;
 
             loader = new WorldLoader();
             loader.ChooseWorld();
