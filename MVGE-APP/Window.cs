@@ -14,6 +14,7 @@ using MVGE_INF.Models;
 using MVGE_INF.Managers;
 using MVGE_GFX;
 using MVGE_GFX.Terrain;
+using MVGE_INF.Loaders;
 
 namespace MVGE
 {
@@ -32,7 +33,7 @@ namespace MVGE
         ShaderProgram shaderProgram = null!;
 
         // data loaders
-        TerrainDataManager blockDataLoader = null!;
+        TerrainLoader blockDataLoader = null!;
 
         // player
         Player player = null!;
@@ -77,7 +78,7 @@ namespace MVGE
 
             // Initialize the Data Loaders
             Console.WriteLine("Data loaders initializing.");
-            blockDataLoader = new TerrainDataManager() ?? throw new Exception("blockDataLoader is null");
+            blockDataLoader = new TerrainLoader() ?? throw new Exception("blockDataLoader is null");
 
             // Initialize the Texture Atlases
             Console.WriteLine("Texture atlases initializing.");

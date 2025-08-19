@@ -1,18 +1,19 @@
-﻿using MVGE_INF.Models.Terrain;
+﻿using MVGE_INF.Managers;
+using MVGE_INF.Models.Terrain;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace MVGE_INF.Managers
+namespace MVGE_INF.Loaders
 {
-    public class TerrainDataManager
+    public class TerrainLoader
     {
         // Loading
         private ushort blockTypeCounter = 0;
 
-        public TerrainDataManager()
+        public TerrainLoader()
         {
             Console.WriteLine("Terrain data loading.");
 
@@ -29,7 +30,7 @@ namespace MVGE_INF.Managers
                 allBlockTypes.Add(blockType.ToString());
                 allBlockTypesByBaseType[blockType.ToString()] = blockType;
                 allBlockTypesByIds[blockTypeCounter] = blockType.ToString();
-                Console.WriteLine("Base type defined: " + blockType.ToString() + ", id: " + this.blockTypeCounter + "/65535");
+                Console.WriteLine("Base type defined: " + blockType.ToString() + ", id: " + blockTypeCounter + "/65535");
 
                 blockTypeCounter++;
             }
@@ -51,7 +52,7 @@ namespace MVGE_INF.Managers
                     allBlockTypes.Add(str);
                     allBlockTypesByBaseType[str] = blockType;
                     allBlockTypesByIds[blockTypeCounter] = str;
-                    Console.WriteLine("Block type defined: " + str + ", base type: " + blockType.ToString() + ", id: " + this.blockTypeCounter + "/65535");
+                    Console.WriteLine("Block type defined: " + str + ", base type: " + blockType.ToString() + ", id: " + blockTypeCounter + "/65535");
 
                     blockTypeCounter++;
                 }

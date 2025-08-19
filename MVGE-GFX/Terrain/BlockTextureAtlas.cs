@@ -1,4 +1,5 @@
 ﻿using MVGE_GFX.Models;
+using MVGE_INF.Loaders;
 using MVGE_INF.Managers;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
@@ -151,7 +152,7 @@ namespace MVGE_GFX.Terrain
         private void InitializeBlockTypeUVCoordinates()
         {
             ushort count = 0;
-            foreach (string blockType in TerrainDataManager.allBlockTypes)
+            foreach (string blockType in TerrainLoader.allBlockTypes)
             {
                 blockTypeUVCoordinates[count] = new Dictionary<Faces, ByteVector2>();
 
@@ -169,7 +170,7 @@ namespace MVGE_GFX.Terrain
             Console.WriteLine($"Mapping texture coordinates.");
 
             ushort count = 0;
-            foreach (string blockType in TerrainDataManager.allBlockTypesByBaseType.Keys)
+            foreach (string blockType in TerrainLoader.allBlockTypesByBaseType.Keys)
             {
                 string textureName = blockType.ToString();
 

@@ -11,6 +11,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using World;
 using System.Diagnostics;
+using MVGE_INF.Loaders;
 
 namespace MVGE.World
 {
@@ -25,16 +26,10 @@ namespace MVGE.World
 
     internal class World : IDisposable
     {
-        public Guid ID;
-        public string worldName;
+        public WorldLoader loader { get; private set; }
 
         private readonly ConcurrentDictionary<(int cx, int cy, int cz), Chunk> chunks = new(); // track generated chunks
         private readonly ConcurrentDictionary<(int cx, int cy, int cz), byte> pendingChunks = new(); // track enqueued but not yet generated
-        private int seed;
-        private string currentWorldSaveDirectory;
-        private string currentWorldDataFile = "world.txt";
-        private string currentWorldSavedChunksSubDirectory = "chunks";
-        private static Dictionary<Guid, string> worldSaves = new Dictionary<Guid, string>();
 
         // Streaming pipeline structures
         private BlockingCollection<Vector3> chunkPositionQueue;
@@ -51,15 +46,15 @@ namespace MVGE.World
         private readonly ConcurrentDictionary<(int cx, int cy, int cz), byte> dirtyMeshSet = new();
 
         // Initial generation tracking
-        private volatile bool initialPhaseComplete;       // flag once initial chunk generation done
         private volatile bool initialDirtyPhaseComplete;  // flag once initial dirty mesh rebuild done
 
         public World()
         {
             Console.WriteLine("World manager initializing.");
 
-            ChooseWorld();
-            Console.WriteLine("World manager loaded.");
+            loader = new WorldLoader();
+            loader.ChooseWorld();
+            Console.WriteLine("World data loaded.");
 
             InitializeStreaming();
             Console.WriteLine("Streaming chunk generation...");
@@ -197,7 +192,7 @@ namespace MVGE.World
 
         private void ChunkGenerationWorker(CancellationToken token)
         {
-            string chunkSaveDirectory = Path.Combine(currentWorldSaveDirectory, currentWorldSavedChunksSubDirectory);
+            string chunkSaveDirectory = Path.Combine(loader.currentWorldSaveDirectory, loader.currentWorldSavedChunksSubDirectory);
             try
             {
                 foreach (var pos in chunkPositionQueue.GetConsumingEnumerable(token))
@@ -208,9 +203,9 @@ namespace MVGE.World
                     int baseX = (int)pos.X;
                     int baseZ = (int)pos.Z;
                     var hmKey = (baseX, baseZ);
-                    float[,] heightmap = heightmapCache.GetOrAdd(hmKey, _ => Chunk.GenerateHeightMap(seed, baseX, baseZ));
+                    float[,] heightmap = heightmapCache.GetOrAdd(hmKey, _ => Chunk.GenerateHeightMap(loader.seed, baseX, baseZ));
 
-                    var chunk = new Chunk(pos, seed, Path.Combine(currentWorldSaveDirectory, currentWorldSavedChunksSubDirectory), heightmap);
+                    var chunk = new Chunk(pos, loader.seed, Path.Combine(loader.currentWorldSaveDirectory, loader.currentWorldSavedChunksSubDirectory), heightmap);
                     var key = ChunkIndexKey((int)pos.X, (int)pos.Y, (int)pos.Z);
                     chunks[key] = chunk;
 
@@ -291,13 +286,11 @@ namespace MVGE.World
                 Thread.Sleep(200);
             }
             sw.Stop();
-            initialPhaseComplete = true;
             Console.WriteLine($"[World] Initial chunk generation complete: {total} chunks in {sw.ElapsedMilliseconds} ms.");
         }
 
         private void WaitForInitialDirtyMeshRebuild()
         {
-            if (initialDirtyPhaseComplete) return;
             Console.WriteLine("[World] Rebuilding dirty neighbor meshes...");
             var sw = Stopwatch.StartNew();
             int initialTotal = dirtyMeshSet.Count;
@@ -345,127 +338,6 @@ namespace MVGE.World
             }
         }
 
-        private void ChooseWorld()
-        {
-            DetectWorldSaves();
-
-            if (worldSaves.Count == 0)
-            {
-                GenerateWorldSave();
-                return;
-            }
-
-            Console.WriteLine("Please select world: ");
-            Console.WriteLine("0. Generate brand new world");
-
-            List<string> worldSaveNames = worldSaves.Values.ToList();
-
-            for (int i = 0; i < worldSaveNames.Count; i++)
-            {
-                Console.WriteLine(i + 1 + ". " + worldSaveNames[i]);
-            }
-
-            string input = Console.ReadLine();
-
-            if (int.TryParse(input, out int selectedWorldIndex))
-            {
-                if (selectedWorldIndex == 0)
-                {
-                    GenerateWorldSave();
-                }
-                else if (selectedWorldIndex >= 1 && selectedWorldIndex <= worldSaves.Count)
-                {
-                    string selectedWorld = worldSaveNames[selectedWorldIndex - 1];
-                    Guid selectedWorldId = worldSaves.FirstOrDefault(x => x.Value == selectedWorld).Key;
-                    LoadWorldSave(selectedWorldId);
-                }
-                else
-                {
-                    Console.WriteLine("Invalid input. Please select a valid world.");
-                }
-            }
-            else
-            {
-                Console.WriteLine("Invalid input. Please enter a valid number.");
-            }
-        }
-
-        public void GenerateWorldSave()
-        {
-            if (string.IsNullOrWhiteSpace(worldName))
-            {
-                GetWorldName();
-            }
-
-            if (seed == 0)
-            {
-                GetWorldSeed();
-            }
-
-            if (ID == Guid.Empty)
-            {
-                ID = Guid.NewGuid();
-            }
-
-            Console.WriteLine($"Generating world {worldName} with seed: {seed}, id: {ID}");
-
-            currentWorldSaveDirectory = Path.Combine(GameManager.settings.savesWorldDirectory, ID.ToString());
-            Directory.CreateDirectory(currentWorldSaveDirectory);
-
-            string worldDataPath = Path.Combine(currentWorldSaveDirectory, currentWorldDataFile);
-            using (StreamWriter writer = new StreamWriter(worldDataPath))
-            {
-                writer.WriteLine(ID.ToString());
-                writer.WriteLine(worldName);
-                writer.WriteLine(seed);
-            }
-
-            string chunkSaveFolderPath = Path.Combine(currentWorldSaveDirectory, currentWorldSavedChunksSubDirectory);
-            Directory.CreateDirectory(chunkSaveFolderPath);
-        }
-
-        public void DetectWorldSaves()
-        {
-            string[] directories = Directory.GetDirectories(GameManager.settings.savesWorldDirectory);
-            foreach (string directory in directories)
-            {
-                string[] files = Directory.GetFiles(directory);
-                foreach (string file in files)
-                {
-                    if (file.Contains(currentWorldDataFile))
-                    {
-                        string[] lines = File.ReadAllLines(file);
-                        if (lines.Length >= 2)
-                        {
-                            var id = Guid.Parse(lines[0]);
-                            var wn = lines[1];
-                            if (!worldSaves.ContainsKey(id))
-                            {
-                                worldSaves.Add(id, wn);
-                                Console.WriteLine("Detected world save: " + wn + ", id: " + id);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        public void LoadWorldSave(Guid id)
-        {
-            ID = id;
-            currentWorldSaveDirectory = Path.Combine(GameManager.settings.savesWorldDirectory, id.ToString());
-            string worldDataPath = Path.Combine(currentWorldSaveDirectory, currentWorldDataFile);
-            string[] lines = File.ReadAllLines(worldDataPath);
-
-            if (lines.Length >= 3)
-            {
-                worldName = lines[1];
-                seed = int.Parse(lines[2]);
-            }
-
-            Console.WriteLine($"Loaded world save: {worldName}, id: {id}, seed: {seed}");
-        }
-
         public ushort GetBlock(int wx, int wy, int wz)
         {
             int sizeX = GameManager.settings.chunkMaxX;
@@ -504,55 +376,6 @@ namespace MVGE.World
             int cy = FloorDiv(baseY, sizeY);
             int cz = FloorDiv(baseZ, sizeZ);
             return (cx, cy, cz);
-        }
-
-        private bool IsLatinAlphabet(string input)
-        {
-            foreach (char c in input)
-            {
-                if (!char.IsLetter(c))
-                {
-                    return false;
-                }
-            }
-            return true;
-        }
-
-        public void GetWorldName()
-        {
-            while (true)
-            {
-                Console.WriteLine("Please enter a name for the world: ");
-                string input = Console.ReadLine();
-                if (IsLatinAlphabet(input))
-                {
-                    if (worldSaves.Values.Contains(input))
-                    {
-                        Console.WriteLine("Invalid input. The world name is already taken. Please enter a different name.");
-                    }
-                    else
-                    {
-                        worldName = input;
-                        break;
-                    }
-                }
-                else
-                {
-                    Console.WriteLine("Invalid input. Please enter a name with only Latin alphabet characters.");
-                }
-            }
-        }
-
-        private void GetWorldSeed()
-        {
-            Console.WriteLine("Please enter a seed for the world: ");
-            string input = Console.ReadLine();
-
-            while (!int.TryParse(input, out seed))
-            {
-                Console.WriteLine("Invalid input. Please enter a valid seed: ");
-                input = Console.ReadLine();
-            }
         }
     }
 }
