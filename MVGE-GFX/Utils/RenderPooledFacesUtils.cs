@@ -16,7 +16,7 @@ namespace MVGE_GFX.Utils
     {
         internal struct PooledFaceBuildResult
         {
-            public bool FullyOccluded; // preserved for compatibility (always false here because caller pre-checks)
+            public bool FullyOccluded;
             public bool UseUShort;
             public bool HasSingleOpaque;
             public byte[] VertBuffer;
