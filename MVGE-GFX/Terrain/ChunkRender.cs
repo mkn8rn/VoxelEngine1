@@ -181,12 +181,28 @@ namespace MVGE_GFX.Terrain
 
         private void GenerateFaces()
         {
-            long volume = (long)maxX * maxY * maxZ;
+            // Decide if pooling should be used based on non-empty voxel count instead of raw volume
             bool usePooling = false;
             if (FlagManager.flags.useFacePooling.GetValueOrDefault())
             {
                 int threshold = FlagManager.flags.faceAmountToPool.GetValueOrDefault(int.MaxValue);
-                if (threshold >= 0 && volume >= threshold) usePooling = true;
+                if (threshold >= 0)
+                {
+                    int nonEmpty = 0;
+                    int total = flatBlocks.Length;
+                    for (int i = 0; i < total; i++)
+                    {
+                        if (flatBlocks[i] != emptyBlock)
+                        {
+                            nonEmpty++;
+                            if (nonEmpty >= threshold)
+                            {
+                                usePooling = true;
+                                break;
+                            }
+                        }
+                    }
+                }
             }
 
             if (CheckFullyOccluded(maxX, maxY, maxZ)) { fullyOccluded = true; ReturnFlat(); return; }
