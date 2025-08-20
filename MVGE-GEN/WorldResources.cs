@@ -50,22 +50,22 @@ namespace MVGE_GEN
         {
             Console.WriteLine("World manager initializing.");
 
-            int proc = Environment.ProcessorCount;
-            if (FlagManager.flags.worldGenWorkersPerCore.HasValue)
+            float proc = Environment.ProcessorCount;
+            if (FlagManager.flags.worldGenWorkersPerCore is not null)
             {
                 generationWorkerCount = (int)(FlagManager.flags.worldGenWorkersPerCore.Value * proc);
             }
             else
             {
-                generationWorkerCount = proc;
+                generationWorkerCount = (int)proc;
             }
-            if (FlagManager.flags.meshRenderWorkersPerCore.HasValue)
+            if (FlagManager.flags.meshRenderWorkersPerCore is not null)
             {
                 meshBuildWorkerCount = (int)(FlagManager.flags.meshRenderWorkersPerCore.Value * proc);
             }
             else
             {
-                meshBuildWorkerCount = proc * 2;
+                meshBuildWorkerCount = (int)proc * 2;
             }
 
             loader = new WorldLoader();
@@ -130,7 +130,7 @@ namespace MVGE_GEN
             foreach (var chunk in activeChunks.Values) chunk.Render(program);
         }
 
-        private void InitializeGeneration(bool streamGeneration = false)
+        private void InitializeGeneration(bool streamGeneration)
         {
             worldBlockAccessor = GetBlock;
             chunkPositionQueue = new BlockingCollection<Vector3>(new ConcurrentQueue<Vector3>());
@@ -147,7 +147,7 @@ namespace MVGE_GEN
             Console.WriteLine($"[World] Initialized {generationWorkers.Count()} world generation workers.");
         }
 
-        private void InitializeBuilding(bool streamGeneration = false)
+        private void InitializeBuilding(bool streamGeneration)
         {
             meshBuildQueue = new BlockingCollection<(int cx,int cy,int cz)>(new ConcurrentQueue<(int,int,int)>());
 
