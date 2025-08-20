@@ -16,5 +16,9 @@ namespace MVGE_INF.Models.Terrain
         public int BitsPerIndex;
         public int VoxelCount;
         public int NonAirCount;
+
+        // Lazy decoded full block array (4096 entries). Null until first needed.
+        public ushort[] Decoded;
+        public bool DecodedDirty = true; // when true, needs rebuild before use
     }
 }

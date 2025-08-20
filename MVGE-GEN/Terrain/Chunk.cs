@@ -240,26 +240,54 @@ namespace MVGE_GEN.Terrain
             SectionUtils.SetBlock(sec, ox, oy, oz, blockId);
         }
 
+        private void FlattenSectionsInto(ushort[] dest)
+        {
+            int strideX = dimZ * dimY; // (x * dimZ + z) * dimY + y
+            int strideZ = dimY;
+            int sectionSize = ChunkSection.SECTION_SIZE;
+            int sectionPlane = sectionSize * sectionSize; // 256
+
+            for (int sx = 0; sx < sectionsX; sx++)
+            {
+                int baseX = sx * sectionSize; if (baseX >= dimX) break;
+                for (int sz = 0; sz < sectionsZ; sz++)
+                {
+                    int baseZ = sz * sectionSize; if (baseZ >= dimZ) break;
+                    for (int sy = 0; sy < sectionsY; sy++)
+                    {
+                        int baseY = sy * sectionSize; if (baseY >= dimY) break;
+                        var sec = sections[sx, sy, sz]; if (sec == null) continue;
+                        SectionUtils.EnsureDecoded(sec); var decoded = sec.Decoded; if (decoded == null) continue;
+                        int maxLocalX = Math.Min(sectionSize, dimX - baseX);
+                        int maxLocalZ = Math.Min(sectionSize, dimZ - baseZ);
+                        int maxLocalY = Math.Min(sectionSize, dimY - baseY);
+                        for (int lx = 0; lx < maxLocalX; lx++)
+                        {
+                            int gx = baseX + lx; int destXBase = gx * strideX;
+                            for (int lz = 0; lz < maxLocalZ; lz++)
+                            {
+                                int gz = baseZ + lz; int destZBase = destXBase + gz * strideZ;
+                                for (int ly = 0; ly < maxLocalY; ly++)
+                                {
+                                    int gy = baseY + ly;
+                                    int srcIndex = (ly * sectionPlane) + (lz * sectionSize) + lx; // (y*256)+(z*16)+x
+                                    dest[destZBase + gy] = decoded[srcIndex];
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         public void BuildRender(Func<int, int, int, ushort> worldBlockGetter)
         {
             chunkRender?.ScheduleDelete();
 
             int voxelCount = dimX * dimY * dimZ;
             ushort[] flat = ArrayPool<ushort>.Shared.Rent(voxelCount);
-
-            // Flatten blocks (x-major, then z, then y)
-            for (int x = 0; x < dimX; x++)
-            {
-                int xBase = x * dimZ * dimY;
-                for (int z = 0; z < dimZ; z++)
-                {
-                    int zBase = xBase + z * dimY;
-                    for (int y = 0; y < dimY; y++)
-                    {
-                        flat[zBase + y] = GetBlockLocal(x, y, z);
-                    }
-                }
-            }
+            for (int i = 0; i < flat.Length; i++) flat[i] = EMPTY; // initialize (air)
+            FlattenSectionsInto(flat);
 
             chunkRender = new ChunkRender(
                 chunkData,
