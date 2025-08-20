@@ -26,6 +26,9 @@ namespace MVGE_INF.Managers
                 windowHeight = PreferValue(consoleFlags.windowHeight, envFlags.windowHeight),
                 useFacePooling = PreferValue(consoleFlags.useFacePooling, envFlags.useFacePooling),
                 faceAmountToPool = PreferValue(consoleFlags.faceAmountToPool, envFlags.faceAmountToPool),
+                worldGenWorkersPerCore = PreferValue(consoleFlags.worldGenWorkersPerCore, envFlags.worldGenWorkersPerCore),
+                meshRenderWorkersPerCore = PreferValue(consoleFlags.meshRenderWorkersPerCore, envFlags.meshRenderWorkersPerCore),
+                renderStreamingIfAllowed = PreferValue(consoleFlags.renderStreamingIfAllowed, envFlags.renderStreamingIfAllowed),
                 GCConcurrent = PreferValue(consoleFlags.GCConcurrent, envFlags.GCConcurrent),
                 GCLatencyMode = PreferValue(consoleFlags.GCLatencyMode, envFlags.GCLatencyMode),
                 GCHeapHardLimit = PreferString(consoleFlags.GCHeapHardLimit, envFlags.GCHeapHardLimit),
@@ -47,6 +50,16 @@ namespace MVGE_INF.Managers
                 Console.WriteLine($"Set windowWidth: {flags.windowWidth.Value}");
             if (flags.windowHeight.HasValue)
                 Console.WriteLine($"Set windowHeight: {flags.windowHeight.Value}");
+            if (flags.useFacePooling.HasValue)
+                Console.WriteLine($"Set useFacePooling: {flags.useFacePooling.Value}");
+            if (flags.faceAmountToPool.HasValue)
+                Console.WriteLine($"Set faceAmountToPool: {flags.faceAmountToPool.Value}");
+            if (flags.worldGenWorkersPerCore.HasValue)
+                Console.WriteLine($"Set worldGenWorkersPerCore: {flags.worldGenWorkersPerCore.Value}");
+            if (flags.meshRenderWorkersPerCore.HasValue)
+                Console.WriteLine($"Set meshRenderWorkersPerCore: {flags.meshRenderWorkersPerCore.Value}");
+            if (flags.renderStreamingIfAllowed.HasValue)
+                Console.WriteLine($"Set renderStreamingIfAllowed: {flags.renderStreamingIfAllowed.Value}");
             if (flags.GCConcurrent.HasValue)
                 Console.WriteLine($"Set GCConcurrent: {flags.GCConcurrent.Value}");
             if (flags.GCLatencyMode.HasValue)

@@ -48,9 +48,12 @@ namespace MVGE_INF.Models
         public int? windowWidth;
         public int? windowHeight;
 
-        // Face pooling
+        // Render settings
         public bool? useFacePooling;
         public int? faceAmountToPool;
+        public float? worldGenWorkersPerCore;
+        public float? meshRenderWorkersPerCore;
+        public bool? renderStreamingIfAllowed;
 
         // GC settings
         public GCConcurrent? GCConcurrent;

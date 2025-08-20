@@ -122,9 +122,17 @@ namespace MVGE_GFX.Terrain
                     ? new IBO(indicesUShortBuffer, indicesUsed)
                     : new IBO(indicesUIntBuffer, indicesUsed);
 
-                ArrayPool<byte>.Shared.Return(vertBuffer, false);
-                ArrayPool<byte>.Shared.Return(uvBuffer, false);
-                if (useUShort) ArrayPool<ushort>.Shared.Return(indicesUShortBuffer, false); else ArrayPool<uint>.Shared.Return(indicesUIntBuffer, false);
+                // Null checks before returning to pool to avoid ArgumentNullException if state inconsistent
+                if (vertBuffer != null) ArrayPool<byte>.Shared.Return(vertBuffer, false);
+                if (uvBuffer != null) ArrayPool<byte>.Shared.Return(uvBuffer, false);
+                if (useUShort)
+                {
+                    if (indicesUShortBuffer != null) ArrayPool<ushort>.Shared.Return(indicesUShortBuffer, false);
+                }
+                else
+                {
+                    if (indicesUIntBuffer != null) ArrayPool<uint>.Shared.Return(indicesUIntBuffer, false);
+                }
                 vertBuffer = uvBuffer = null; indicesUIntBuffer = null; indicesUShortBuffer = null;
             }
             else

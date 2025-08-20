@@ -51,8 +51,22 @@ namespace MVGE_GEN
             Console.WriteLine("World manager initializing.");
 
             int proc = Environment.ProcessorCount;
-            generationWorkerCount = proc / 2;
-            meshWorkerCount = proc + (proc / 2);
+            if (FlagManager.flags.worldGenWorkersPerCore.HasValue)
+            {
+                generationWorkerCount = (int)(FlagManager.flags.worldGenWorkersPerCore.Value * proc);
+            }
+            else
+            {
+                generationWorkerCount = proc;
+            }
+            if (FlagManager.flags.meshRenderWorkersPerCore.HasValue)
+            {
+                meshWorkerCount = (int)(FlagManager.flags.meshRenderWorkersPerCore.Value * proc);
+            }
+            else
+            {
+                meshWorkerCount = proc * 2;
+            }
 
             loader = new WorldLoader();
             loader.ChooseWorld();
@@ -60,7 +74,11 @@ namespace MVGE_GEN
 
             streamingCts = new CancellationTokenSource();
 
-            bool streamGeneration = false; // not implemented yet, always false for now
+            bool streamGeneration = false;
+            if (FlagManager.flags.renderStreamingIfAllowed is not null)
+            {
+                streamGeneration = FlagManager.flags.renderStreamingIfAllowed.Value;
+            }
 
             InitializeGeneration(streamGeneration);
             if(streamGeneration == false) WaitForInitialChunkGeneration();

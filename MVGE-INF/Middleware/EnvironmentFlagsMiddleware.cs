@@ -59,6 +59,12 @@ namespace MVGE_INF.Middleware
                 flags.useFacePooling = useFacePoolingVal;
             if (GetEnv("faceAmountToPool") is string faceAmountToPool && int.TryParse(faceAmountToPool, out var faceAmountToPoolVal))
                 flags.faceAmountToPool = faceAmountToPoolVal;
+            if (GetEnv("worldGenWorkersPerCore") is string wg && float.TryParse(wg, out var wgVal))
+                flags.worldGenWorkersPerCore = wgVal;
+            if (GetEnv("meshRenderWorkersPerCore") is string mr && float.TryParse(mr, out var mrVal))
+                flags.meshRenderWorkersPerCore = mrVal;
+            if (GetEnv("renderStreamingIfAllowed") is string rs && bool.TryParse(rs, out var rsVal))
+                flags.renderStreamingIfAllowed = rsVal;
             if (GetEnv("GCConcurrent") is string gcConcurrent && Enum.TryParse<GCConcurrent>(gcConcurrent, true, out var gcConcurrentVal))
                 flags.GCConcurrent = gcConcurrentVal;
             if (GetEnv("GCLatencyMode") is string gcLatencyMode && Enum.TryParse<GCLatencyMode>(gcLatencyMode, true, out var gcLatencyModeVal))

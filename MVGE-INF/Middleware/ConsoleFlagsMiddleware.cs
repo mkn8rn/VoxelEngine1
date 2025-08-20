@@ -77,6 +77,21 @@ namespace MVGE_INF.Middleware
                     if (int.TryParse(args[i + 1], out var val))
                         flags.faceAmountToPool = val;
                 }
+                else if (args[i] == "--worldGenWorkersPerCore")
+                {
+                    if (float.TryParse(args[i + 1], out var val))
+                        flags.worldGenWorkersPerCore = val;
+                }
+                else if (args[i] == "--meshRenderWorkersPerCore")
+                {
+                    if (float.TryParse(args[i + 1], out var val))
+                        flags.meshRenderWorkersPerCore = val;
+                }
+                else if (args[i] == "--renderStreamingIfAllowed")
+                {
+                    if (bool.TryParse(args[i + 1], out var val))
+                        flags.renderStreamingIfAllowed = val;
+                }
             }
             consoleFlags = flags;
         }

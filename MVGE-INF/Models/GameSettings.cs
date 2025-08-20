@@ -12,6 +12,9 @@ namespace MVGE_INF.Models
         public int blockTileHeight;
         public string textureFileExtension;
 
+        // Render settings
+        public bool renderStreamingAllowed;
+
         // Render distances
         public int lod1RenderDistance;
         public int lod2RenderDistance;
