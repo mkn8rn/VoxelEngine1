@@ -83,7 +83,7 @@ namespace MVGE_GEN
             InitializeGeneration(streamGeneration);
             if(streamGeneration == false) WaitForInitialChunkGeneration();
 
-            InitializeBuilding();
+            InitializeBuilding(streamGeneration);
             if (streamGeneration == false) WaitForInitialChunkRenderBuild();
         }
 
@@ -143,11 +143,17 @@ namespace MVGE_GEN
             {
                 generationWorkers[i] = Task.Run(() => ChunkGenerationWorker(streamingCts.Token, streamGeneration));
             }
+            Console.WriteLine($"[World] Initialized {meshWorkerCount} mesh build workers.");
         }
 
-        private void InitializeBuilding()
+        private void InitializeBuilding(bool streamGeneration = false)
         {
             meshBuildQueue = new BlockingCollection<(int cx,int cy,int cz)>(new ConcurrentQueue<(int,int,int)>());
+
+            if(streamGeneration == false)
+            {
+                EnqueueUnbuiltChunksForBuild();
+            }
 
             Console.WriteLine("[World] Initializing mesh build workers...");
             meshBuildWorkers = new Task[meshWorkerCount];
@@ -156,8 +162,6 @@ namespace MVGE_GEN
                 meshBuildWorkers[i] = Task.Run(() => MeshBuildWorker(streamingCts.Token));
             }
             Console.WriteLine($"[World] Initialized {meshWorkerCount} mesh build workers.");
-
-            EnqueueUnbuiltChunksForBuild();
         }
 
         private void EnqueueInitialChunkPositions()
