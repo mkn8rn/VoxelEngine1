@@ -129,8 +129,7 @@ namespace MVGE_GFX.Terrain
             }
             else
             {
-                TryFinalizeIndexFormatList();
-
+                // indexFormat already decided during generation (two-pass)
                 chunkVertexVBO = new VBO(chunkVertsList);
                 chunkVertexVBO.Bind();
                 chunkVAO.LinkToVAO(0, 3, VertexAttribPointerType.UnsignedByte, false, chunkVertexVBO);
@@ -206,7 +205,7 @@ namespace MVGE_GFX.Terrain
             }
             else
             {
-                GenerateFacesListFlat();
+                GenerateFacesListFlatTwoPass();
                 ReturnFlat();
             }
         }
@@ -265,20 +264,97 @@ namespace MVGE_GFX.Terrain
             return true;
         }
 
-        private void GenerateFacesListFlat()
+        // Two-pass face generation to avoid worst-case over-allocation
+        private void GenerateFacesListFlatTwoPass()
         {
-            int blockCount = maxX * maxY * maxZ;
-            int worstFaces = blockCount * 6;
-            int vertsCapacity = Math.Min(worstFaces * 12, 8 * 1024 * 1024);
-            int uvsCapacity = Math.Min(worstFaces * 8, 8 * 1024 * 1024);
-            int indicesCapacity = Math.Min(worstFaces * 6, (8 * 1024 * 1024) / 4);
-
-            chunkVertsList = new List<byte>(vertsCapacity);
-            chunkUVsList = new List<byte>(uvsCapacity);
-            chunkIndicesList = new List<uint>(indicesCapacity);
-
             int strideX = maxZ * maxY; // delta for +/- X neighbor
             int strideZ = maxY;       // delta for +/- Z neighbor
+
+            // PASS 1: Count faces only
+            int totalFaces = 0;
+            for (int x = 0; x < maxX; x++)
+            {
+                int xBase = x * strideX;
+                for (int z = 0; z < maxZ; z++)
+                {
+                    int zBase = xBase + z * maxY;
+                    for (int y = 0; y < maxY; y++)
+                    {
+                        int li = zBase + y;
+                        ushort block = flatBlocks[li];
+                        if (block == emptyBlock) continue;
+                        int wx = (int)chunkWorldPosition.X + x;
+                        int wy = (int)chunkWorldPosition.Y + y;
+                        int wz = (int)chunkWorldPosition.Z + z;
+                        // -X
+                        if (x == 0)
+                        {
+                            if (getWorldBlock(wx - 1, wy, wz) == emptyBlock) totalFaces++;
+                        }
+                        else if (flatBlocks[li - strideX] == emptyBlock) totalFaces++;
+                        // +X
+                        if (x == maxX - 1)
+                        {
+                            if (getWorldBlock(wx + 1, wy, wz) == emptyBlock) totalFaces++;
+                        }
+                        else if (flatBlocks[li + strideX] == emptyBlock) totalFaces++;
+                        // +Y
+                        if (y == maxY - 1)
+                        {
+                            if (getWorldBlock(wx, wy + 1, wz) == emptyBlock) totalFaces++;
+                        }
+                        else if (flatBlocks[li + 1] == emptyBlock) totalFaces++;
+                        // -Y
+                        if (y == 0)
+                        {
+                            if (getWorldBlock(wx, wy - 1, wz) == emptyBlock) totalFaces++;
+                        }
+                        else if (flatBlocks[li - 1] == emptyBlock) totalFaces++;
+                        // +Z
+                        if (z == maxZ - 1)
+                        {
+                            if (getWorldBlock(wx, wy, wz + 1) == emptyBlock) totalFaces++;
+                        }
+                        else if (flatBlocks[li + strideZ] == emptyBlock) totalFaces++;
+                        // -Z
+                        if (z == 0)
+                        {
+                            if (getWorldBlock(wx, wy, wz - 1) == emptyBlock) totalFaces++;
+                        }
+                        else if (flatBlocks[li - strideZ] == emptyBlock) totalFaces++;
+                    }
+                }
+            }
+
+            if (totalFaces == 0)
+            {
+                // Allocate minimal structures
+                chunkVertsList = new List<byte>(0);
+                chunkUVsList = new List<byte>(0);
+                chunkIndicesList = new List<uint>(0);
+                indexFormat = IndexFormat.UInt; // arbitrary
+                return;
+            }
+
+            int totalVerts = totalFaces * 4;
+            bool useUShortIndices = totalVerts <= 65535;
+            indexFormat = useUShortIndices ? IndexFormat.UShort : IndexFormat.UInt;
+
+            // Allocate exact capacity
+            chunkVertsList = new List<byte>(totalVerts * 3);
+            chunkUVsList = new List<byte>(totalVerts * 2);
+            if (useUShortIndices)
+            {
+                chunkIndicesUShortList = new List<ushort>(totalFaces * 6);
+            }
+            else
+            {
+                chunkIndicesList = new List<uint>(totalFaces * 6);
+            }
+
+            // PASS 2: Emit geometry
+            int currentVertexBase = 0; // in vertices (not bytes)
+
             for (int x = 0; x < maxX; x++)
             {
                 int xBase = x * strideX;
@@ -294,93 +370,84 @@ namespace MVGE_GFX.Terrain
                         int wy = (int)chunkWorldPosition.Y + y;
                         int wz = (int)chunkWorldPosition.Z + z;
                         var bp = new ByteVector3 { x = (byte)x, y = (byte)y, z = (byte)z };
-                        int localFaces = 0;
                         // -X
                         if (x == 0)
                         {
-                            if (getWorldBlock(wx - 1, wy, wz) == emptyBlock) { IntegrateFaceList(block, Faces.LEFT, bp); localFaces++; }
+                            if (getWorldBlock(wx - 1, wy, wz) == emptyBlock) { IntegrateFaceListEmit(block, Faces.LEFT, bp, ref currentVertexBase, useUShortIndices); }
                         }
-                        else if (flatBlocks[li - strideX] == emptyBlock) { IntegrateFaceList(block, Faces.LEFT, bp); localFaces++; }
+                        else if (flatBlocks[li - strideX] == emptyBlock) { IntegrateFaceListEmit(block, Faces.LEFT, bp, ref currentVertexBase, useUShortIndices); }
                         // +X
                         if (x == maxX - 1)
                         {
-                            if (getWorldBlock(wx + 1, wy, wz) == emptyBlock) { IntegrateFaceList(block, Faces.RIGHT, bp); localFaces++; }
+                            if (getWorldBlock(wx + 1, wy, wz) == emptyBlock) { IntegrateFaceListEmit(block, Faces.RIGHT, bp, ref currentVertexBase, useUShortIndices); }
                         }
-                        else if (flatBlocks[li + strideX] == emptyBlock) { IntegrateFaceList(block, Faces.RIGHT, bp); localFaces++; }
+                        else if (flatBlocks[li + strideX] == emptyBlock) { IntegrateFaceListEmit(block, Faces.RIGHT, bp, ref currentVertexBase, useUShortIndices); }
                         // +Y
                         if (y == maxY - 1)
                         {
-                            if (getWorldBlock(wx, wy + 1, wz) == emptyBlock) { IntegrateFaceList(block, Faces.TOP, bp); localFaces++; }
+                            if (getWorldBlock(wx, wy + 1, wz) == emptyBlock) { IntegrateFaceListEmit(block, Faces.TOP, bp, ref currentVertexBase, useUShortIndices); }
                         }
-                        else if (flatBlocks[li + 1] == emptyBlock) { IntegrateFaceList(block, Faces.TOP, bp); localFaces++; }
+                        else if (flatBlocks[li + 1] == emptyBlock) { IntegrateFaceListEmit(block, Faces.TOP, bp, ref currentVertexBase, useUShortIndices); }
                         // -Y
                         if (y == 0)
                         {
-                            if (getWorldBlock(wx, wy - 1, wz) == emptyBlock) { IntegrateFaceList(block, Faces.BOTTOM, bp); localFaces++; }
+                            if (getWorldBlock(wx, wy - 1, wz) == emptyBlock) { IntegrateFaceListEmit(block, Faces.BOTTOM, bp, ref currentVertexBase, useUShortIndices); }
                         }
-                        else if (flatBlocks[li - 1] == emptyBlock) { IntegrateFaceList(block, Faces.BOTTOM, bp); localFaces++; }
+                        else if (flatBlocks[li - 1] == emptyBlock) { IntegrateFaceListEmit(block, Faces.BOTTOM, bp, ref currentVertexBase, useUShortIndices); }
                         // +Z
                         if (z == maxZ - 1)
                         {
-                            if (getWorldBlock(wx, wy, wz + 1) == emptyBlock) { IntegrateFaceList(block, Faces.FRONT, bp); localFaces++; }
+                            if (getWorldBlock(wx, wy, wz + 1) == emptyBlock) { IntegrateFaceListEmit(block, Faces.FRONT, bp, ref currentVertexBase, useUShortIndices); }
                         }
-                        else if (flatBlocks[li + strideZ] == emptyBlock) { IntegrateFaceList(block, Faces.FRONT, bp); localFaces++; }
+                        else if (flatBlocks[li + strideZ] == emptyBlock) { IntegrateFaceListEmit(block, Faces.FRONT, bp, ref currentVertexBase, useUShortIndices); }
                         // -Z
                         if (z == 0)
                         {
-                            if (getWorldBlock(wx, wy, wz - 1) == emptyBlock) { IntegrateFaceList(block, Faces.BACK, bp); localFaces++; }
+                            if (getWorldBlock(wx, wy, wz - 1) == emptyBlock) { IntegrateFaceListEmit(block, Faces.BACK, bp, ref currentVertexBase, useUShortIndices); }
                         }
-                        else if (flatBlocks[li - strideZ] == emptyBlock) { IntegrateFaceList(block, Faces.BACK, bp); localFaces++; }
-
-                        if (localFaces > 0) AddIndicesList(localFaces);
+                        else if (flatBlocks[li - strideZ] == emptyBlock) { IntegrateFaceListEmit(block, Faces.BACK, bp, ref currentVertexBase, useUShortIndices); }
                     }
                 }
             }
         }
 
-        private void IntegrateFaceList(ushort block, Faces face, ByteVector3 bp)
+        private void IntegrateFaceListEmit(ushort block, Faces face, ByteVector3 bp, ref int currentVertexBase, bool useUShortIndices)
         {
             var verts = RawFaceData.rawVertexData[face];
+            // Append vertex positions
             foreach (var v in verts)
             {
                 chunkVertsList.Add((byte)(v.x + bp.x));
                 chunkVertsList.Add((byte)(v.y + bp.y));
                 chunkVertsList.Add((byte)(v.z + bp.z));
             }
+            // UVs
             var blockUVs = block != emptyBlock ? terrainTextureAtlas.GetBlockUVs(block, face) : EmptyUVList;
             foreach (var uv in blockUVs)
             {
                 chunkUVsList.Add(uv.x);
                 chunkUVsList.Add(uv.y);
             }
-        }
-
-        private void AddIndicesList(int faces)
-        {
-            int currentVertIndex = (chunkVertsList.Count / 3) - faces * 4;
-            for (int i = 0; i < faces; i++)
+            // Indices (two triangles)
+            if (useUShortIndices)
             {
-                int baseIndex = currentVertIndex + i * 4;
-                chunkIndicesList.Add((uint)(baseIndex + 0));
-                chunkIndicesList.Add((uint)(baseIndex + 1));
-                chunkIndicesList.Add((uint)(baseIndex + 2));
-                chunkIndicesList.Add((uint)(baseIndex + 2));
-                chunkIndicesList.Add((uint)(baseIndex + 3));
-                chunkIndicesList.Add((uint)(baseIndex + 0));
+                chunkIndicesUShortList.Add((ushort)(currentVertexBase + 0));
+                chunkIndicesUShortList.Add((ushort)(currentVertexBase + 1));
+                chunkIndicesUShortList.Add((ushort)(currentVertexBase + 2));
+                chunkIndicesUShortList.Add((ushort)(currentVertexBase + 2));
+                chunkIndicesUShortList.Add((ushort)(currentVertexBase + 3));
+                chunkIndicesUShortList.Add((ushort)(currentVertexBase + 0));
             }
-        }
-
-        private void TryFinalizeIndexFormatList()
-        {
-            int vertCount = chunkVertsList.Count / 3;
-            if (vertCount <= 65535)
+            else
             {
-                indexFormat = IndexFormat.UShort;
-                chunkIndicesUShortList = new List<ushort>(chunkIndicesList.Count);
-                foreach (var i in chunkIndicesList) chunkIndicesUShortList.Add((ushort)i);
-                chunkIndicesList.Clear();
+                chunkIndicesList.Add((uint)(currentVertexBase + 0));
+                chunkIndicesList.Add((uint)(currentVertexBase + 1));
+                chunkIndicesList.Add((uint)(currentVertexBase + 2));
+                chunkIndicesList.Add((uint)(currentVertexBase + 2));
+                chunkIndicesList.Add((uint)(currentVertexBase + 3));
+                chunkIndicesList.Add((uint)(currentVertexBase + 0));
             }
-            else indexFormat = IndexFormat.UInt;
+            currentVertexBase += 4;
         }
 
         private void DeleteGL()
