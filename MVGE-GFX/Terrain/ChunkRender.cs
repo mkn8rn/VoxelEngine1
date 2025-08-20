@@ -44,7 +44,6 @@ namespace MVGE_GFX.Terrain
 
         private readonly ChunkData chunkMeta;
         private readonly Func<int, int, int, ushort> getWorldBlock;
-        private readonly GetBlockFastDelegate tryGetWorldBlockFast; // new fast delegate
         private readonly ushort emptyBlock = (ushort)BaseBlockType.Empty;
 
         // Flattened ephemeral blocks (x-major, then z, then y). Returned to pool after GenerateFaces
@@ -64,7 +63,6 @@ namespace MVGE_GFX.Terrain
         public ChunkRender(
             ChunkData chunkData,
             Func<int, int, int, ushort> worldBlockGetter,
-            GetBlockFastDelegate worldBlockFastGetter,
             ushort[] flatBlocks,
             int maxX,
             int maxY,
@@ -72,7 +70,6 @@ namespace MVGE_GFX.Terrain
         {
             chunkMeta = chunkData;
             getWorldBlock = worldBlockGetter;
-            tryGetWorldBlockFast = worldBlockFastGetter;
             this.flatBlocks = flatBlocks;
             this.maxX = maxX; this.maxY = maxY; this.maxZ = maxZ;
             chunkWorldPosition = new OpenTK.Mathematics.Vector3(chunkData.x, chunkData.y, chunkData.z);
@@ -197,7 +194,7 @@ namespace MVGE_GFX.Terrain
 
             if (usePooling)
             {
-                var builder = new PooledFacesRender(chunkWorldPosition, maxX, maxY, maxZ, emptyBlock, getWorldBlock, tryGetWorldBlockFast, null, terrainTextureAtlas, flatBlocks);
+                var builder = new PooledFacesRender(chunkWorldPosition, maxX, maxY, maxZ, emptyBlock, getWorldBlock, null, null, terrainTextureAtlas, flatBlocks);
                 var res = builder.Build();
                 usedPooling = true;
                 useUShort = res.UseUShort;
