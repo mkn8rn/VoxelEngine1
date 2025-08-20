@@ -39,6 +39,9 @@ namespace MVGE_GFX.Terrain
         private static int uvLutBlockCount;
         private static readonly object uvInitLock = new();
 
+        // Cache for single solid UV concat (48 bytes per blockId)
+        private static byte[][] singleSolidUvCache; // lazily sized to uvLutBlockCount
+
         // Heuristic threshold
         private const float IDENTICAL_SLAB_FILL_THRESHOLD = 0.70f; // 70%
 
@@ -70,13 +73,10 @@ namespace MVGE_GFX.Terrain
             lock (uvInitLock)
             {
                 if (uvLut != null) return;
-                // Determine block count from atlas static dictionary
                 uvLutBlockCount = BlockTextureAtlas.blockTypeUVCoordinates.Count;
-                if (uvLutBlockCount == 0)
-                {
-                    uvLutBlockCount = 1; // safeguard
-                }
+                if (uvLutBlockCount == 0) uvLutBlockCount = 1; // safeguard
                 uvLut = new byte[uvLutBlockCount * 6 * 8];
+                singleSolidUvCache = new byte[uvLutBlockCount][]; // allocate cache slots (null until filled)
                 for (ushort b = 0; b < uvLutBlockCount; b++)
                 {
                     for (int f = 0; f < 6; f++)
@@ -91,6 +91,23 @@ namespace MVGE_GFX.Terrain
                     }
                 }
             }
+        }
+
+        private static byte[] GetSingleSolidUVConcat(ushort blockId)
+        {
+            if (blockId >= uvLutBlockCount) return null; // safety
+            var cache = singleSolidUvCache[blockId];
+            if (cache != null) return cache;
+            // Build and store (no locking; benign race if double-built)
+            var arr = new byte[48];
+            int baseBlock = blockId * 6;
+            for (int f = 0; f < 6; f++)
+            {
+                int lutOffset = (baseBlock + f) * 8;
+                Buffer.BlockCopy(uvLut, lutOffset, arr, f * 8, 8);
+            }
+            singleSolidUvCache[blockId] = arr;
+            return arr;
         }
 
         // Specialized face writers
@@ -125,7 +142,6 @@ namespace MVGE_GFX.Terrain
 
             if (block != emptyBlock)
             {
-                // Direct span copy from LUT
                 int lutOffset = ((block * 6) + (int)face) * 8;
                 for (int i = 0; i < 8; i++) uvBuffer[uvByteOffset + i] = uvLut[lutOffset + i];
             }
@@ -341,6 +357,14 @@ namespace MVGE_GFX.Terrain
                     };
                 }
 
+                // Invert neighbor planes in-place (masking invalid tail bits) so we can replace cur & ~neighbor with cur & neighborInv
+                InvertNeighborBits(neighborLeft, yzPlaneBits);
+                InvertNeighborBits(neighborRight, yzPlaneBits);
+                InvertNeighborBits(neighborBottom, xzPlaneBits);
+                InvertNeighborBits(neighborTop, xzPlaneBits);
+                InvertNeighborBits(neighborBack, xyPlaneBits);
+                InvertNeighborBits(neighborFront, xyPlaneBits);
+
                 float fillRatio = solidCount == 0 ? 0f : (float)solidCount / voxelCount;
                 bool enableIdenticalDetection = fillRatio >= IDENTICAL_SLAB_FILL_THRESHOLD;
                 float xAxisFillRatio = (float)xNonEmptyCount / Math.Max(1, maxX);
@@ -356,50 +380,29 @@ namespace MVGE_GFX.Terrain
 
                 if (identicalPairX != null)
                 {
-                    Array.Clear(identicalPairX);
+                    var arr = identicalPairX; Array.Clear(arr);
                     for (int x = 0; x < maxX - 1; x++)
                     {
                         if (!xSlabNonEmpty[x] || !xSlabNonEmpty[x + 1]) continue;
-                        int aOff = x * yzWC; int bOff = (x + 1) * yzWC; bool eq = true;
-                        if (yzWC >= 1 && xSlabs[aOff] != xSlabs[bOff]) eq = false;
-                        else if (yzWC >= 2 && xSlabs[aOff + 1] != xSlabs[bOff + 1]) eq = false;
-                        if (eq)
-                        {
-                            for (int w = 2; w < yzWC; w++) { if (xSlabs[aOff + w] != xSlabs[bOff + w]) { eq = false; break; } }
-                        }
-                        identicalPairX[x] = eq;
+                        arr[x] = SlabsEqual(xSlabs, x * yzWC, (x + 1) * yzWC, yzWC);
                     }
                 }
                 if (identicalPairY != null)
                 {
-                    Array.Clear(identicalPairY);
+                    var arr = identicalPairY; Array.Clear(arr);
                     for (int y = 0; y < maxY - 1; y++)
                     {
                         if (!ySlabNonEmpty[y] || !ySlabNonEmpty[y + 1]) continue;
-                        int aOff = y * xzWC; int bOff = (y + 1) * xzWC; bool eq = true;
-                        if (xzWC >= 1 && ySlabs[aOff] != ySlabs[bOff]) eq = false;
-                        else if (xzWC >= 2 && ySlabs[aOff + 1] != ySlabs[bOff + 1]) eq = false;
-                        if (eq)
-                        {
-                            for (int w = 2; w < xzWC; w++) { if (ySlabs[aOff + w] != ySlabs[bOff + w]) { eq = false; break; } }
-                        }
-                        identicalPairY[y] = eq;
+                        arr[y] = SlabsEqual(ySlabs, y * xzWC, (y + 1) * xzWC, xzWC);
                     }
                 }
                 if (identicalPairZ != null)
                 {
-                    Array.Clear(identicalPairZ);
+                    var arr = identicalPairZ; Array.Clear(arr);
                     for (int z = 0; z < maxZ - 1; z++)
                     {
                         if (!zSlabNonEmpty[z] || !zSlabNonEmpty[z + 1]) continue;
-                        int aOff = z * xyWC; int bOff = (z + 1) * xyWC; bool eq = true;
-                        if (xyWC >= 1 && zSlabs[aOff] != zSlabs[bOff]) eq = false;
-                        else if (xyWC >= 2 && zSlabs[aOff + 1] != zSlabs[bOff + 1]) eq = false;
-                        if (eq)
-                        {
-                            for (int w = 2; w < xyWC; w++) { if (zSlabs[aOff + w] != zSlabs[bOff + w]) { eq = false; break; } }
-                        }
-                        identicalPairZ[z] = eq;
+                        arr[z] = SlabsEqual(zSlabs, z * xyWC, (z + 1) * xyWC, xyWC);
                     }
                 }
 
@@ -416,12 +419,12 @@ namespace MVGE_GFX.Terrain
                         ulong cur = xSlabs[curOff + w]; if (cur == 0) continue;
                         if (!skipLeft)
                         {
-                            ulong leftBits = (x == 0) ? (cur & ~neighborLeft[w]) : (cur & ~xSlabs[prevOff + w]);
+                            ulong leftBits = (x == 0) ? (cur & neighborLeft[w]) : (cur & ~xSlabs[prevOff + w]);
                             if (leftBits != 0) totalFaces += BitOperations.PopCount(leftBits);
                         }
                         if (!skipRight)
                         {
-                            ulong rightBits = (x == maxX - 1) ? (cur & ~neighborRight[w]) : (cur & ~xSlabs[nextOff + w]);
+                            ulong rightBits = (x == maxX - 1) ? (cur & neighborRight[w]) : (cur & ~xSlabs[nextOff + w]);
                             if (rightBits != 0) totalFaces += BitOperations.PopCount(rightBits);
                         }
                     }
@@ -438,12 +441,12 @@ namespace MVGE_GFX.Terrain
                         ulong cur = ySlabs[curOff + w]; if (cur == 0) continue;
                         if (!skipBottom)
                         {
-                            ulong bottomBits = (y == 0) ? (cur & ~neighborBottom[w]) : (cur & ~ySlabs[prevOff + w]);
+                            ulong bottomBits = (y == 0) ? (cur & neighborBottom[w]) : (cur & ~ySlabs[prevOff + w]);
                             if (bottomBits != 0) totalFaces += BitOperations.PopCount(bottomBits);
                         }
                         if (!skipTop)
                         {
-                            ulong topBits = (y == maxY - 1) ? (cur & ~neighborTop[w]) : (cur & ~ySlabs[nextOff + w]);
+                            ulong topBits = (y == maxY - 1) ? (cur & neighborTop[w]) : (cur & ~ySlabs[nextOff + w]);
                             if (topBits != 0) totalFaces += BitOperations.PopCount(topBits);
                         }
                     }
@@ -460,12 +463,12 @@ namespace MVGE_GFX.Terrain
                         ulong cur = zSlabs[curOff + w]; if (cur == 0) continue;
                         if (!skipBack)
                         {
-                            ulong backBits = (z == 0) ? (cur & ~neighborBack[w]) : (cur & ~zSlabs[prevOff + w]);
+                            ulong backBits = (z == 0) ? (cur & neighborBack[w]) : (cur & ~zSlabs[prevOff + w]);
                             if (backBits != 0) totalFaces += BitOperations.PopCount(backBits);
                         }
                         if (!skipFront)
                         {
-                            ulong frontBits = (z == maxZ - 1) ? (cur & ~neighborFront[w]) : (cur & ~zSlabs[nextOff + w]);
+                            ulong frontBits = (z == maxZ - 1) ? (cur & neighborFront[w]) : (cur & ~zSlabs[nextOff + w]);
                             if (frontBits != 0) totalFaces += BitOperations.PopCount(frontBits);
                         }
                     }
@@ -478,16 +481,7 @@ namespace MVGE_GFX.Terrain
                 uint[] indicesUIntBuffer = null; ushort[] indicesUShortBuffer = null;
                 if (useUShort) indicesUShortBuffer = ArrayPool<ushort>.Shared.Rent(Math.Max(1, totalFaces * 6)); else indicesUIntBuffer = ArrayPool<uint>.Shared.Rent(Math.Max(1, totalFaces * 6));
 
-                byte[] singleSolidUVConcat = null;
-                if (hasSingleOpaque)
-                {
-                    singleSolidUVConcat = new byte[48];
-                    for (int f = 0; f < 6; f++)
-                    {
-                        int lutOffset = ((singleSolidId * 6) + f) * 8;
-                        for (int i = 0; i < 8; i++) singleSolidUVConcat[f * 8 + i] = uvLut[lutOffset + i];
-                    }
-                }
+                byte[] singleSolidUVConcat = hasSingleOpaque ? GetSingleSolidUVConcat(singleSolidId) : null;
 
                 int faceIndex = 0;
                 if (hasSingleOpaque)
@@ -504,7 +498,7 @@ namespace MVGE_GFX.Terrain
                             ulong cur = xSlabs[curOff + w]; if (cur == 0) continue;
                             if (!skipLeft)
                             {
-                                ulong leftBits = (x == 0) ? (cur & ~neighborLeft[w]) : (cur & ~xSlabs[prevOff + w]);
+                                ulong leftBits = (x == 0) ? (cur & neighborLeft[w]) : (cur & ~xSlabs[prevOff + w]);
                                 ulong bits = leftBits;
                                 while (bits != 0)
                                 {
@@ -517,7 +511,7 @@ namespace MVGE_GFX.Terrain
                             }
                             if (!skipRight)
                             {
-                                ulong rightBits = (x == maxX - 1) ? (cur & ~neighborRight[w]) : (cur & ~xSlabs[nextOff + w]);
+                                ulong rightBits = (x == maxX - 1) ? (cur & neighborRight[w]) : (cur & ~xSlabs[nextOff + w]);
                                 ulong bits = rightBits;
                                 while (bits != 0)
                                 {
@@ -542,7 +536,7 @@ namespace MVGE_GFX.Terrain
                             ulong cur = ySlabs[curOff + w]; if (cur == 0) continue;
                             if (!skipBottom)
                             {
-                                ulong bottomBits = (y == 0) ? (cur & ~neighborBottom[w]) : (cur & ~ySlabs[prevOff + w]);
+                                ulong bottomBits = (y == 0) ? (cur & neighborBottom[w]) : (cur & ~ySlabs[prevOff + w]);
                                 ulong bits = bottomBits; while (bits != 0)
                                 {
                                     int t = BitOperations.TrailingZeroCount(bits);
@@ -554,7 +548,7 @@ namespace MVGE_GFX.Terrain
                             }
                             if (!skipTop)
                             {
-                                ulong topBits = (y == maxY - 1) ? (cur & ~neighborTop[w]) : (cur & ~ySlabs[nextOff + w]);
+                                ulong topBits = (y == maxY - 1) ? (cur & neighborTop[w]) : (cur & ~ySlabs[nextOff + w]);
                                 ulong bits = topBits; while (bits != 0)
                                 {
                                     int t = BitOperations.TrailingZeroCount(bits);
@@ -578,7 +572,7 @@ namespace MVGE_GFX.Terrain
                             ulong cur = zSlabs[curOff + w]; if (cur == 0) continue;
                             if (!skipBack)
                             {
-                                ulong backBits = (z == 0) ? (cur & ~neighborBack[w]) : (cur & ~zSlabs[prevOff + w]);
+                                ulong backBits = (z == 0) ? (cur & neighborBack[w]) : (cur & ~zSlabs[prevOff + w]);
                                 ulong bits = backBits; while (bits != 0)
                                 {
                                     int t = BitOperations.TrailingZeroCount(bits);
@@ -590,7 +584,7 @@ namespace MVGE_GFX.Terrain
                             }
                             if (!skipFront)
                             {
-                                ulong frontBits = (z == maxZ - 1) ? (cur & ~neighborFront[w]) : (cur & ~zSlabs[nextOff + w]);
+                                ulong frontBits = (z == maxZ - 1) ? (cur & neighborFront[w]) : (cur & ~zSlabs[nextOff + w]);
                                 ulong bits = frontBits; while (bits != 0)
                                 {
                                     int t = BitOperations.TrailingZeroCount(bits);
@@ -617,7 +611,7 @@ namespace MVGE_GFX.Terrain
                             ulong cur = xSlabs[curOff + w]; if (cur == 0) continue;
                             if (!skipLeft)
                             {
-                                ulong leftBits = (x == 0) ? (cur & ~neighborLeft[w]) : (cur & ~xSlabs[prevOff + w]);
+                                ulong leftBits = (x == 0) ? (cur & neighborLeft[w]) : (cur & ~xSlabs[prevOff + w]);
                                 ulong bits = leftBits;
                                 while (bits != 0)
                                 {
@@ -630,7 +624,7 @@ namespace MVGE_GFX.Terrain
                             }
                             if (!skipRight)
                             {
-                                ulong rightBits = (x == maxX - 1) ? (cur & ~neighborRight[w]) : (cur & ~xSlabs[nextOff + w]);
+                                ulong rightBits = (x == maxX - 1) ? (cur & neighborRight[w]) : (cur & ~xSlabs[nextOff + w]);
                                 ulong bits = rightBits;
                                 while (bits != 0)
                                 {
@@ -655,7 +649,7 @@ namespace MVGE_GFX.Terrain
                             ulong cur = ySlabs[curOff + w]; if (cur == 0) continue;
                             if (!skipBottom)
                             {
-                                ulong bottomBits = (y == 0) ? (cur & ~neighborBottom[w]) : (cur & ~ySlabs[prevOff + w]);
+                                ulong bottomBits = (y == 0) ? (cur & neighborBottom[w]) : (cur & ~ySlabs[prevOff + w]);
                                 ulong bits = bottomBits; while (bits != 0)
                                 {
                                     int t = BitOperations.TrailingZeroCount(bits);
@@ -667,7 +661,7 @@ namespace MVGE_GFX.Terrain
                             }
                             if (!skipTop)
                             {
-                                ulong topBits = (y == maxY - 1) ? (cur & ~neighborTop[w]) : (cur & ~ySlabs[nextOff + w]);
+                                ulong topBits = (y == maxY - 1) ? (cur & neighborTop[w]) : (cur & ~ySlabs[nextOff + w]);
                                 ulong bits = topBits; while (bits != 0)
                                 {
                                     int t = BitOperations.TrailingZeroCount(bits);
@@ -691,7 +685,7 @@ namespace MVGE_GFX.Terrain
                             ulong cur = zSlabs[curOff + w]; if (cur == 0) continue;
                             if (!skipBack)
                             {
-                                ulong backBits = (z == 0) ? (cur & ~neighborBack[w]) : (cur & ~zSlabs[prevOff + w]);
+                                ulong backBits = (z == 0) ? (cur & neighborBack[w]) : (cur & ~zSlabs[prevOff + w]);
                                 ulong bits = backBits; while (bits != 0)
                                 {
                                     int t = BitOperations.TrailingZeroCount(bits);
@@ -703,7 +697,7 @@ namespace MVGE_GFX.Terrain
                             }
                             if (!skipFront)
                             {
-                                ulong frontBits = (z == maxZ - 1) ? (cur & ~neighborFront[w]) : (cur & ~zSlabs[nextOff + w]);
+                                ulong frontBits = (z == maxZ - 1) ? (cur & neighborFront[w]) : (cur & ~zSlabs[nextOff + w]);
                                 ulong bits = frontBits; while (bits != 0)
                                 {
                                     int t = BitOperations.TrailingZeroCount(bits);
@@ -753,13 +747,42 @@ namespace MVGE_GFX.Terrain
 
         private static bool AllBitsSet(ulong[] arr, int bitCount)
         {
-            int wc = (bitCount + 63) >> 6;
-            int rem = bitCount & 63;
-            ulong lastMask = rem == 0 ? ulong.MaxValue : (1UL << rem) - 1UL;
+            int wc = (bitCount + 63) >> 6; int rem = bitCount & 63; ulong lastMask = rem == 0 ? ulong.MaxValue : (1UL << rem) - 1UL;
             for (int i = 0; i < wc; i++)
             {
                 ulong expected = (i == wc - 1) ? lastMask : ulong.MaxValue;
                 if ((arr[i] & expected) != expected) return false;
+            }
+            return true;
+        }
+
+        private static void InvertNeighborBits(ulong[] arr, int planeBits)
+        {
+            int wc = (planeBits + 63) >> 6; int rem = planeBits & 63; ulong lastMask = rem == 0 ? ulong.MaxValue : (1UL << rem) - 1UL;
+            for (int i = 0; i < wc; i++)
+            {
+                ulong inv = ~arr[i];
+                if (i == wc - 1) inv &= lastMask; // mask off invalid bits
+                arr[i] = inv;
+            }
+        }
+
+        private static bool SlabsEqual(ulong[] slabs, int offA, int offB, int wordCount)
+        {
+            int i = 0;
+            int vecCount = Vector<ulong>.Count;
+            // Vector loop
+            for (; i <= wordCount - vecCount; i += vecCount)
+            {
+                var va = new Vector<ulong>(slabs, offA + i);
+                var vb = new Vector<ulong>(slabs, offB + i);
+                var diff = va ^ vb;
+                if (!Vector<ulong>.Zero.Equals(diff)) return false;
+            }
+            // Remainder
+            for (; i < wordCount; i++)
+            {
+                if (slabs[offA + i] != slabs[offB + i]) return false;
             }
             return true;
         }
