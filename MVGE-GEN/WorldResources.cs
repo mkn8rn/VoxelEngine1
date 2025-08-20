@@ -55,18 +55,12 @@ namespace MVGE_GEN
             {
                 generationWorkerCount = (int)(FlagManager.flags.worldGenWorkersPerCore.Value * proc);
             }
-            else
-            {
-                generationWorkerCount = (int)proc;
-            }
+            else throw new InvalidOperationException("World generation workers per core flag is not set.");
             if (FlagManager.flags.meshRenderWorkersPerCore is not null)
             {
                 meshBuildWorkerCount = (int)(FlagManager.flags.meshRenderWorkersPerCore.Value * proc);
             }
-            else
-            {
-                meshBuildWorkerCount = (int)proc * 2;
-            }
+            else throw new InvalidOperationException("Mesh render workers per core flag is not set.");
 
             loader = new WorldLoader();
             loader.ChooseWorld();
@@ -75,10 +69,10 @@ namespace MVGE_GEN
             streamingCts = new CancellationTokenSource();
 
             bool streamGeneration = false;
-            if (FlagManager.flags.renderStreamingIfAllowed is not null)
+            if (FlagManager.flags.renderStreamingIfAllowed is null)
             {
-                streamGeneration = FlagManager.flags.renderStreamingIfAllowed.Value;
-            }
+               throw new InvalidOperationException("Render streaming flag is not set.");
+            } else streamGeneration = FlagManager.flags.renderStreamingIfAllowed.Value;
 
             InitializeGeneration(streamGeneration);
             if(streamGeneration == false) WaitForInitialChunkGeneration();
