@@ -89,13 +89,6 @@ namespace MVGE_GFX.Terrain
             }
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static byte[] GetUvBytesFast(ushort block, Faces face)
-        {
-            int idx = ((block * 6) + (int)face) * 8;
-            return new Span<byte>(uvLut, idx, 8).ToArray(); // small copy, retains original API where caller expects array
-        }
-
         // Specialized face writers
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void WriteFaceMulti(
