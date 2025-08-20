@@ -245,7 +245,6 @@ namespace MVGE_GEN.Terrain
             int strideX = dimZ * dimY; // (x * dimZ + z) * dimY + y
             int strideZ = dimY;
             int sectionSize = ChunkSection.SECTION_SIZE;
-            int sectionPlane = sectionSize * sectionSize; // 256
 
             for (int sx = 0; sx < sectionsX; sx++)
             {
@@ -256,22 +255,66 @@ namespace MVGE_GEN.Terrain
                     for (int sy = 0; sy < sectionsY; sy++)
                     {
                         int baseY = sy * sectionSize; if (baseY >= dimY) break;
-                        var sec = sections[sx, sy, sz]; if (sec == null) continue;
-                        SectionUtils.EnsureDecoded(sec); var decoded = sec.Decoded; if (decoded == null) continue;
+                        var sec = sections[sx, sy, sz];
+                        if (sec == null || sec.IsAllAir) continue;
+
                         int maxLocalX = Math.Min(sectionSize, dimX - baseX);
                         int maxLocalZ = Math.Min(sectionSize, dimZ - baseZ);
                         int maxLocalY = Math.Min(sectionSize, dimY - baseY);
+
+                        // Uniform non-air fast path: palette [AIR, singleSolid] and fully filled.
+                        if (sec.Palette != null &&
+                            sec.Palette.Count == 2 &&
+                            sec.Palette[0] == ChunkSection.AIR &&
+                            sec.NonAirCount == sec.VoxelCount &&
+                            sec.VoxelCount != 0)
+                        {
+                            ushort solid = sec.Palette[1];
+                            for (int lx = 0; lx < maxLocalX; lx++)
+                            {
+                                int gx = baseX + lx; int destXBase = gx * strideX;
+                                for (int lz = 0; lz < maxLocalZ; lz++)
+                                {
+                                    int gz = baseZ + lz; int destZBase = destXBase + gz * strideZ + baseY;
+                                    dest.AsSpan(destZBase, maxLocalY).Fill(solid);
+                                }
+                            }
+                            continue;
+                        }
+
+                        // General path: decode on the fly from BitData.
+                        // We iterate in y-major inside, but we reconstruct palette index per voxel.
+                        int sectionPlane = sectionSize * sectionSize; // 256
+                        int bitsPer = sec.BitsPerIndex;
+                        uint[] bitData = sec.BitData;
+                        var palette = sec.Palette;
+                        if (bitsPer == 0 || bitData == null || palette == null) continue;
+
+                        // For performance, precompute masks.
+                        int mask = (1 << bitsPer) - 1;
+
                         for (int lx = 0; lx < maxLocalX; lx++)
                         {
                             int gx = baseX + lx; int destXBase = gx * strideX;
                             for (int lz = 0; lz < maxLocalZ; lz++)
                             {
                                 int gz = baseZ + lz; int destZBase = destXBase + gz * strideZ;
+                                int baseXZ = lz * sectionSize + lx; // add ly*256 inside y loop
                                 for (int ly = 0; ly < maxLocalY; ly++)
                                 {
                                     int gy = baseY + ly;
-                                    int srcIndex = (ly * sectionPlane) + (lz * sectionSize) + lx; // (y*256)+(z*16)+x
-                                    dest[destZBase + gy] = decoded[srcIndex];
+                                    int linear = (ly * sectionPlane) + baseXZ; // (y*256)+(z*16)+x
+                                    long bitPos = (long)linear * bitsPer;
+                                    int dataIndex = (int)(bitPos >> 5);
+                                    int bitOffset = (int)(bitPos & 31);
+                                    uint value = bitData[dataIndex] >> bitOffset;
+                                    int remaining = 32 - bitOffset;
+                                    if (remaining < bitsPer)
+                                    {
+                                        value |= bitData[dataIndex + 1] << remaining;
+                                    }
+                                    int paletteIndex = (int)(value & (uint)mask);
+                                    dest[destZBase + gy] = palette[paletteIndex];
                                 }
                             }
                         }

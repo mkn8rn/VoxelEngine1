@@ -1,4 +1,5 @@
-﻿using MVGE_INF.Models.Terrain;
+﻿using MVGE_GEN.Terrain;
+using MVGE_INF.Models.Terrain;
 using System;
 using System.Collections.Generic;
 using System.Numerics;
@@ -13,10 +14,6 @@ namespace MVGE_GEN.Utils
         {
             if (sec == null || sec.IsAllAir) return ChunkSection.AIR;
             int linear = LinearIndex(x, y, z);
-            if (sec.Decoded != null && !sec.DecodedDirty)
-            {
-                return sec.Decoded[linear];
-            }
             int paletteIndex = ReadBits(sec, linear);
             return sec.Palette[paletteIndex];
         }
@@ -33,7 +30,6 @@ namespace MVGE_GEN.Utils
                 int oldIdx = ReadBits(sec, linear);
                 if (oldIdx == 0) return; // already air
                 WriteBits(sec, linear, 0);
-                if (sec.Decoded != null && !sec.DecodedDirty) sec.Decoded[linear] = ChunkSection.AIR; // patch decoded
                 sec.NonAirCount--;
                 if (sec.NonAirCount == 0)
                 {
@@ -60,7 +56,6 @@ namespace MVGE_GEN.Utils
 
             if (existingBlock == ChunkSection.AIR) sec.NonAirCount++;
             WriteBits(sec, linear, newPaletteIndex);
-            if (sec.Decoded != null && !sec.DecodedDirty) sec.Decoded[linear] = blockId; // patch decoded
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -86,7 +81,6 @@ namespace MVGE_GEN.Utils
                 int pi = ReadBits(oldData, oldBits, i);
                 WriteBits(sec, i, pi);
             }
-            // Existing decoded remains valid; no dirty flag needed since palette indices remapped identically.
         }
 
         private static void AllocateBitData(ChunkSection sec)
@@ -145,8 +139,6 @@ namespace MVGE_GEN.Utils
             sec.BitData = null;
             sec.BitsPerIndex = 0;
             sec.NonAirCount = 0;
-            sec.Decoded = null; // drop decoded cache
-            sec.DecodedDirty = true;
         }
 
         private static int GetOrAddPaletteIndex(ChunkSection sec, ushort blockId)
@@ -168,49 +160,6 @@ namespace MVGE_GEN.Utils
             sec.BitsPerIndex = 1;
             AllocateBitData(sec);
             sec.NonAirCount = 0;
-            sec.DecodedDirty = true; // cache invalid
-        }
-
-        // Decode entire section into Decoded[] if needed.
-        public static void EnsureDecoded(ChunkSection sec)
-        {
-            if (sec == null || sec.IsAllAir)
-            {
-                if (sec != null)
-                {
-                    sec.Decoded ??= new ushort[ChunkSection.SECTION_SIZE * ChunkSection.SECTION_SIZE * ChunkSection.SECTION_SIZE];
-                    if (sec.DecodedDirty)
-                    {
-                        Array.Fill(sec.Decoded, ChunkSection.AIR);
-                        sec.DecodedDirty = false;
-                    }
-                }
-                return;
-            }
-            if (sec.Decoded != null && !sec.DecodedDirty) return;
-            sec.Decoded ??= new ushort[ChunkSection.SECTION_SIZE * ChunkSection.SECTION_SIZE * ChunkSection.SECTION_SIZE];
-            if (sec.Palette == null || sec.BitsPerIndex == 0)
-            {
-                Array.Fill(sec.Decoded, ChunkSection.AIR);
-                sec.DecodedDirty = false;
-                return;
-            }
-            // Fast path: only air + one solid (palette count 2 but NonAirCount may vary)
-            if (sec.Palette.Count == 2 && sec.NonAirCount == sec.VoxelCount)
-            {
-                ushort solid = sec.Palette[1];
-                Array.Fill(sec.Decoded, solid);
-                sec.DecodedDirty = false;
-                return;
-            }
-            // General decode
-            int total = sec.VoxelCount;
-            for (int i = 0; i < total; i++)
-            {
-                int pi = ReadBits(sec, i);
-                sec.Decoded[i] = sec.Palette[pi];
-            }
-            sec.DecodedDirty = false;
         }
     }
 }

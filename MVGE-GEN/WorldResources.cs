@@ -51,8 +51,6 @@ namespace MVGE_GEN
             Console.WriteLine("World manager initializing.");
 
             int proc = Environment.ProcessorCount;
-            int desired = proc + (proc / 2);
-            ThreadPool.SetMinThreads(desired, desired);
             generationWorkerCount = proc / 2;
             meshWorkerCount = proc + (proc / 2);
 
