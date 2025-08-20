@@ -299,6 +299,8 @@ namespace MVGE_GFX.Terrain
                                 xSlabs[xSlabOffset + wyz] |= bit; slabAccumX |= bit;
                                 int xzIndex2 = x * maxZ + z; int wxz2 = xzIndex2 >> 6; int bxz2 = xzIndex2 & 63; ySlabs[y * xzWC + wxz2] |= 1UL << bxz2;
                                 int xyIndex2 = x * maxY + y; int wxy2 = xyIndex2 >> 6; int bxy2 = xyIndex2 & 63; zSlabs[z * xyWC + wxy2] |= 1UL << bxy2;
+                                if (!ySlabNonEmpty[y]) { ySlabNonEmpty[y] = true; yNonEmptyCount++; }
+                                if (!zSlabNonEmpty[z]) { zSlabNonEmpty[z] = true; zNonEmptyCount++; }
                                 if (detectSingleSolid)
                                 {
                                     if (!haveSolid) { haveSolid = true; singleSolidId = bId; }
@@ -310,8 +312,6 @@ namespace MVGE_GFX.Terrain
                     if (slabAccumX != 0) { xSlabNonEmpty[x] = true; xNonEmptyCount++; }
                 }
                 bool singleSolidType = detectSingleSolid;
-                for (int y = 0; y < maxY; y++) { int off = y * xzWC; ulong acc = 0UL; for (int w = 0; w < xzWC; w++) acc |= ySlabs[off + w]; if (acc != 0) { ySlabNonEmpty[y] = true; yNonEmptyCount++; } }
-                for (int z = 0; z < maxZ; z++) { int off = z * xyWC; ulong acc = 0UL; for (int w = 0; w < xyWC; w++) acc |= zSlabs[off + w]; if (acc != 0) { zSlabNonEmpty[z] = true; zNonEmptyCount++; } }
                 bool hasSingleOpaque = haveSolid && singleSolidType;
 
                 // Early full-occlusion cull inside pooled builder: chunk full AND all six neighbor planes full
