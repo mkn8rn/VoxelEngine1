@@ -28,7 +28,8 @@ namespace MVGE_GFX.Terrain
         private readonly Vector3 chunkWorldPosition;
         private readonly int maxX, maxY, maxZ;
         private readonly ushort emptyBlock;
-        private readonly Func<int, int, int, ushort> getWorldBlock;
+        private readonly Func<int, int, int, ushort> getWorldBlock; // legacy path
+        private readonly GetBlockFastDelegate tryGetWorldBlockFast;
         private readonly Func<int, int, int, ushort> getLocalBlock;
         private readonly BlockTextureAtlas atlas;
 
@@ -36,13 +37,13 @@ namespace MVGE_GFX.Terrain
         private static readonly ConcurrentDictionary<int, byte[]> uvByteCache = new();
 
         // Heuristic: only run identical slab detection when overall fill ratio >= threshold
-        // (tunable; 0.70f default based on expectation that large homogeneous regions benefit most)
         private const float IDENTICAL_SLAB_FILL_THRESHOLD = 0.70f; // 70%
 
         public PooledFacesRender(Vector3 chunkWorldPosition,
                                  int maxX, int maxY, int maxZ,
                                  ushort emptyBlock,
                                  Func<int, int, int, ushort> worldGetter,
+                                 GetBlockFastDelegate fastGetter,
                                  Func<int, int, int, ushort> localGetter,
                                  BlockTextureAtlas atlas)
         {
@@ -50,6 +51,7 @@ namespace MVGE_GFX.Terrain
             this.maxX = maxX; this.maxY = maxY; this.maxZ = maxZ;
             this.emptyBlock = emptyBlock;
             getWorldBlock = worldGetter;
+            tryGetWorldBlockFast = fastGetter;
             getLocalBlock = localGetter;
             this.atlas = atlas;
         }
@@ -192,17 +194,24 @@ namespace MVGE_GFX.Terrain
 
             long solidCount = 0; // track total solid voxels for density heuristic
 
-            // Cache delegates locally (minor overhead reduction)
             var localGetter = getLocalBlock;
             var worldGetter = getWorldBlock;
+            var fastGetter = tryGetWorldBlockFast;
 
             try
             {
+                // Prefetch neighbor boundary occupancy planes (border caching) using fast getter when possible
+                PrefetchNeighborPlane(fastGetter, worldGetter, neighborLeft,  baseWX - 1, baseWY, baseWZ, maxY, maxZ, yzWC, plane:'X');
+                PrefetchNeighborPlane(fastGetter, worldGetter, neighborRight, baseWX + maxX, baseWY, baseWZ, maxY, maxZ, yzWC, plane:'X');
+                PrefetchNeighborPlane(fastGetter, worldGetter, neighborBack,  baseWX, baseWY, baseWZ - 1, maxX, maxY, xyWC, plane:'Z');
+                PrefetchNeighborPlane(fastGetter, worldGetter, neighborFront, baseWX, baseWY, baseWZ + maxZ, maxX, maxY, xyWC, plane:'Z');
+                PrefetchNeighborPlane(fastGetter, worldGetter, neighborBottom, baseWX, baseWY - 1, baseWZ, maxX, maxZ, xzWC, plane:'Y');
+                PrefetchNeighborPlane(fastGetter, worldGetter, neighborTop,    baseWX, baseWY + maxY, baseWZ, maxX, maxZ, xzWC, plane:'Y');
+
                 for (int x = 0; x < maxX; x++)
                 {
                     int xSlabOffset = x * yzWC;
                     ulong slabAccumX = 0UL;
-                    bool isLeftBoundary = x == 0; bool isRightBoundary = x == maxX - 1;
                     for (int z = 0; z < maxZ; z++)
                     {
                         int baseYZIndexZ = z * maxY;
@@ -211,20 +220,6 @@ namespace MVGE_GFX.Terrain
                             int yzIndex = baseYZIndexZ + y; int wyz = yzIndex >> 6; int byz = yzIndex & 63;
                             int li = LocalIndex(x, y, z, maxY, maxZ);
                             ushort bId = localGetter(x, y, z); localBlocks[li] = bId;
-                            if (isLeftBoundary && worldGetter(baseWX - 1, baseWY + y, baseWZ + z) != emptyBlock) neighborLeft[wyz] |= 1UL << byz;
-                            if (isRightBoundary && worldGetter(baseWX + maxX, baseWY + y, baseWZ + z) != emptyBlock) neighborRight[wyz] |= 1UL << byz;
-                            if (z == 0)
-                            {
-                                int xyIndex = x * maxY + y; int wxy = xyIndex >> 6; int bxy = xyIndex & 63;
-                                if (worldGetter(baseWX + x, baseWY + y, baseWZ - 1) != emptyBlock) neighborBack[wxy] |= 1UL << bxy;
-                                if (worldGetter(baseWX + x, baseWY + y, baseWZ + maxZ) != emptyBlock) neighborFront[wxy] |= 1UL << bxy;
-                            }
-                            if (y == 0)
-                            {
-                                int xzIndex = x * maxZ + z; int wxz = xzIndex >> 6; int bxz = xzIndex & 63;
-                                if (worldGetter(baseWX + x, baseWY - 1, baseWZ + z) != emptyBlock) neighborBottom[wxz] |= 1UL << bxz;
-                                if (worldGetter(baseWX + x, baseWY + maxY, baseWZ + z) != emptyBlock) neighborTop[wxz] |= 1UL << bxz;
-                            }
                             if (bId != emptyBlock)
                             {
                                 solidCount++;
@@ -521,6 +516,51 @@ namespace MVGE_GFX.Terrain
                 ArrayPool<ulong>.Shared.Return(neighborTop, false);
                 ArrayPool<ulong>.Shared.Return(neighborBack, false);
                 ArrayPool<ulong>.Shared.Return(neighborFront, false);
+            }
+        }
+
+        private void PrefetchNeighborPlane(GetBlockFastDelegate fastGetter, Func<int,int,int,ushort> slowGetter, ulong[] target, int baseWX, int baseWY, int baseWZ, int dimA, int dimB, int wordCount, char plane)
+        {
+            // plane indicates which axis is normal: 'X' => iterate y,z; 'Y' => iterate x,z; 'Z' => iterate x,y
+            // baseW? passed so that (for X) baseWX is constant and we vary baseWY+y, baseWZ+z etc.
+            if (plane == 'X')
+            {
+                for (int z = 0; z < dimB; z++)
+                {
+                    for (int y = 0; y < dimA; y++)
+                    {
+                        int yzIndex = z * dimA + y; int w = yzIndex >> 6; int b = yzIndex & 63;
+                        ushort val = 0; bool ok = fastGetter != null && fastGetter(baseWX, baseWY + y, baseWZ + z, out val);
+                        if (!ok) val = slowGetter(baseWX, baseWY + y, baseWZ + z);
+                        if (val != emptyBlock) target[w] |= 1UL << b;
+                    }
+                }
+            }
+            else if (plane == 'Y')
+            {
+                for (int z = 0; z < dimB; z++)
+                {
+                    for (int x = 0; x < dimA; x++)
+                    {
+                        int xzIndex = x * dimB + z; int w = xzIndex >> 6; int b = xzIndex & 63;
+                        ushort val = 0; bool ok = fastGetter != null && fastGetter(baseWX + x, baseWY, baseWZ + z, out val);
+                        if (!ok) val = slowGetter(baseWX + x, baseWY, baseWZ + z);
+                        if (val != emptyBlock) target[w] |= 1UL << b;
+                    }
+                }
+            }
+            else // 'Z'
+            {
+                for (int x = 0; x < dimA; x++)
+                {
+                    for (int y = 0; y < dimB; y++)
+                    {
+                        int xyIndex = x * dimB + y; int w = xyIndex >> 6; int b = xyIndex & 63;
+                        ushort val = 0; bool ok = fastGetter != null && fastGetter(baseWX + x, baseWY + y, baseWZ, out val);
+                        if (!ok) val = slowGetter(baseWX + x, baseWY + y, baseWZ);
+                        if (val != emptyBlock) target[w] |= 1UL << b;
+                    }
+                }
             }
         }
     }

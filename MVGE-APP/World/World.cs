@@ -46,8 +46,9 @@ namespace MVGE.World
         // Cache heightmaps for (baseX, baseZ) columns across vertical stacks
         private readonly ConcurrentDictionary<(int baseX,int baseZ), float[,]> heightmapCache = new();
 
-        // World block accessor delegate
+        // World block accessor delegates
         private Func<int, int, int, ushort> worldBlockAccessor;
+        private GetBlockFastDelegate worldBlockFastAccessor;
 
         // Asynchronous mesh build pipeline
         private int meshWorkerCount;
@@ -124,6 +125,7 @@ namespace MVGE.World
         private void InitializeGeneration()
         {
             worldBlockAccessor = GetBlock;
+            worldBlockFastAccessor = TryGetBlockFast; // new fast delegate
             chunkPositionQueue = new BlockingCollection<Vector3>(new ConcurrentQueue<Vector3>());
 
             EnqueueInitialChunkPositions();
@@ -344,7 +346,7 @@ namespace MVGE.World
 
                     try
                     {
-                        ch.BuildRender(worldBlockAccessor);
+                        ch.BuildRender(worldBlockAccessor, worldBlockFastAccessor);
 
                         // If this was first-time build (in unbuilt), move to built dictionary
                         if (unbuiltChunks.TryRemove(key, out var builtChunk))
@@ -417,6 +419,34 @@ namespace MVGE.World
             int localZ = wz - cz * sizeZ;
 
             return chunk.GetBlockLocal(localX, localY, localZ);
+        }
+
+        public bool TryGetBlockFast(int wx, int wy, int wz, out ushort block)
+        {
+            int sizeX = GameManager.settings.chunkMaxX;
+            int sizeY = GameManager.settings.chunkMaxY;
+            int sizeZ = GameManager.settings.chunkMaxZ;
+
+            int cx = FloorDiv(wx, sizeX);
+            int cy = FloorDiv(wy, sizeY);
+            int cz = FloorDiv(wz, sizeZ);
+            var key = (cx, cy, cz);
+
+            Chunk chunk;
+            if (!unbuiltChunks.TryGetValue(key, out chunk))
+            {
+                if (!chunks.TryGetValue(key, out chunk))
+                {
+                    block = (ushort)BaseBlockType.Empty;
+                    return false;
+                }
+            }
+
+            int localX = wx - cx * sizeX;
+            int localY = wy - cy * sizeY;
+            int localZ = wz - cz * sizeZ;
+            block = chunk.GetBlockLocal(localX, localY, localZ);
+            return true;
         }
 
         private static int FloorDiv(int a, int b)

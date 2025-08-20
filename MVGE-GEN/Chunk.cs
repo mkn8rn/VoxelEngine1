@@ -11,6 +11,7 @@ using System.Runtime.CompilerServices;
 
 namespace MVGE_GEN
 {
+    // moved TryGetBlockFastDelegate to MVGE_INF.Models.Terrain for shared use
     public class Chunk
     {
         public Vector3 position { get; set; }
@@ -217,12 +218,13 @@ namespace MVGE_GEN
             SectionUtils.SetBlock(sec, ox, oy, oz, blockId);
         }
 
-        public void BuildRender(Func<int, int, int, ushort> worldBlockGetter)
+        public void BuildRender(Func<int, int, int, ushort> worldBlockGetter, GetBlockFastDelegate fastGetter)
         {
             chunkRender?.ScheduleDelete();
             chunkRender = new ChunkRender(
                 chunkData,
                 worldBlockGetter,
+                fastGetter,
                 (lx, ly, lz) => GetBlockLocal(lx, ly, lz));
         }
     }
