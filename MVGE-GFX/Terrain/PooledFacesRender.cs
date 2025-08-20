@@ -3,7 +3,6 @@ using MVGE_INF.Models.Terrain;
 using OpenTK.Mathematics;
 using System;
 using System.Buffers;
-using System.Collections.Concurrent;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using Vector3 = OpenTK.Mathematics.Vector3;
@@ -29,14 +28,16 @@ namespace MVGE_GFX.Terrain
         private readonly int maxX, maxY, maxZ;
         private readonly ushort emptyBlock;
         private readonly Func<int, int, int, ushort> getWorldBlock; // legacy path
-        private readonly GetBlockFastDelegate getWorldBlockFast;
+        private readonly GetBlockFastDelegate getWorldBlockFast; // renamed for consistency
         private readonly Func<int, int, int, ushort> getLocalBlock;
         private readonly BlockTextureAtlas atlas;
 
-        // UV cache shared across instances
-        private static readonly ConcurrentDictionary<int, byte[]> uvByteCache = new();
+        // Flat UV lookup: [blockId * 6 + face] * 8 bytes (4 verts * 2 bytes each)
+        private static byte[] uvLut; // null until initialized
+        private static int uvLutBlockCount;
+        private static readonly object uvInitLock = new();
 
-        // Heuristic: only run identical slab detection when overall fill ratio >= threshold
+        // Heuristic threshold
         private const float IDENTICAL_SLAB_FILL_THRESHOLD = 0.70f; // 70%
 
         public PooledFacesRender(Vector3 chunkWorldPosition,
@@ -59,23 +60,43 @@ namespace MVGE_GFX.Terrain
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static int LocalIndex(int x, int y, int z, int maxY, int maxZ) => (x * maxZ + z) * maxY + y;
 
-        private static byte[] GetOrCreateUv(BlockTextureAtlas atlas, ushort block, Faces face)
+        private static void EnsureUvLut(BlockTextureAtlas atlas)
         {
-            int key = (block << 3) | (int)face;
-            return uvByteCache.GetOrAdd(key, _ =>
+            if (uvLut != null) return;
+            lock (uvInitLock)
             {
-                var list = atlas.GetBlockUVs(block, face);
-                var arr = new byte[8];
-                for (int j = 0; j < list.Count && j < 4; j++)
+                if (uvLut != null) return;
+                // Determine block count from atlas static dictionary
+                uvLutBlockCount = BlockTextureAtlas.blockTypeUVCoordinates.Count;
+                if (uvLutBlockCount == 0)
                 {
-                    arr[j * 2] = list[j].x;
-                    arr[j * 2 + 1] = list[j].y;
+                    uvLutBlockCount = 1; // safeguard
                 }
-                return arr;
-            });
+                uvLut = new byte[uvLutBlockCount * 6 * 8];
+                for (ushort b = 0; b < uvLutBlockCount; b++)
+                {
+                    for (int f = 0; f < 6; f++)
+                    {
+                        var list = atlas.GetBlockUVs(b, (Faces)f); // returns 4 entries
+                        int baseOffset = ((b * 6) + f) * 8;
+                        for (int i = 0; i < 4; i++)
+                        {
+                            uvLut[baseOffset + i * 2] = list[i].x;
+                            uvLut[baseOffset + i * 2 + 1] = list[i].y;
+                        }
+                    }
+                }
+            }
         }
 
-        // Specialized face writers to eliminate per-face branching for single-solid optimization
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static byte[] GetUvBytesFast(ushort block, Faces face)
+        {
+            int idx = ((block * 6) + (int)face) * 8;
+            return new Span<byte>(uvLut, idx, 8).ToArray(); // small copy, retains original API where caller expects array
+        }
+
+        // Specialized face writers
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void WriteFaceMulti(
             ushort block,
@@ -107,16 +128,9 @@ namespace MVGE_GFX.Terrain
 
             if (block != emptyBlock)
             {
-                byte[] uvBytes = GetOrCreateUv(atlas, block, face);
-                // Unrolled copy (8 bytes)
-                uvBuffer[uvByteOffset + 0] = uvBytes[0];
-                uvBuffer[uvByteOffset + 1] = uvBytes[1];
-                uvBuffer[uvByteOffset + 2] = uvBytes[2];
-                uvBuffer[uvByteOffset + 3] = uvBytes[3];
-                uvBuffer[uvByteOffset + 4] = uvBytes[4];
-                uvBuffer[uvByteOffset + 5] = uvBytes[5];
-                uvBuffer[uvByteOffset + 6] = uvBytes[6];
-                uvBuffer[uvByteOffset + 7] = uvBytes[7];
+                // Direct span copy from LUT
+                int lutOffset = ((block * 6) + (int)face) * 8;
+                for (int i = 0; i < 8; i++) uvBuffer[uvByteOffset + i] = uvLut[lutOffset + i];
             }
             else
             {
@@ -171,15 +185,7 @@ namespace MVGE_GFX.Terrain
                 vertBuffer[vertexByteOffset + i * 3 + 2] = (byte)(verts[i].z + bz);
             }
             int off = ((int)face) * 8;
-            // Unrolled copy
-            uvBuffer[uvByteOffset + 0] = singleSolidUVConcat[off + 0];
-            uvBuffer[uvByteOffset + 1] = singleSolidUVConcat[off + 1];
-            uvBuffer[uvByteOffset + 2] = singleSolidUVConcat[off + 2];
-            uvBuffer[uvByteOffset + 3] = singleSolidUVConcat[off + 3];
-            uvBuffer[uvByteOffset + 4] = singleSolidUVConcat[off + 4];
-            uvBuffer[uvByteOffset + 5] = singleSolidUVConcat[off + 5];
-            uvBuffer[uvByteOffset + 6] = singleSolidUVConcat[off + 6];
-            uvBuffer[uvByteOffset + 7] = singleSolidUVConcat[off + 7];
+            for (int i = 0; i < 8; i++) uvBuffer[uvByteOffset + i] = singleSolidUVConcat[off + i];
 
             if (useUShort)
             {
@@ -204,6 +210,9 @@ namespace MVGE_GFX.Terrain
 
         public BuildResult Build()
         {
+            // Ensure UV LUT ready
+            EnsureUvLut(atlas);
+
             int yzPlaneBits = maxY * maxZ;
             int yzWC = (yzPlaneBits + 63) >> 6;
             int xzPlaneBits = maxX * maxZ; int xzWC = (xzPlaneBits + 63) >> 6;
@@ -224,7 +233,6 @@ namespace MVGE_GFX.Terrain
             ulong[] neighborBack = ArrayPool<ulong>.Shared.Rent(xyWC);
             ulong[] neighborFront = ArrayPool<ulong>.Shared.Rent(xyWC);
 
-            // Minor zeroing reduction: clear only used spans via simple loops (avoids reflection path in Array.Clear)
             static void ClearUlongs(ulong[] arr, int len) { for (int i = 0; i < len; i++) arr[i] = 0UL; }
             static void ClearBools(bool[] arr, int len) { for (int i = 0; i < len; i++) arr[i] = false; }
             ClearUlongs(xSlabs, maxX * yzWC);
@@ -262,6 +270,7 @@ namespace MVGE_GFX.Terrain
                 PrefetchNeighborPlane(fastGetter, worldGetter, neighborBottom, baseWX, baseWY - 1, baseWZ, maxX, maxZ, xzWC, plane: 'Y');
                 PrefetchNeighborPlane(fastGetter, worldGetter, neighborTop, baseWX, baseWY + maxY, baseWZ, maxX, maxZ, xzWC, plane: 'Y');
 
+                // Optimized voxel scan with incremental linear index
                 for (int x = 0; x < maxX; x++)
                 {
                     int xSlabOffset = x * yzWC;
@@ -269,10 +278,11 @@ namespace MVGE_GFX.Terrain
                     for (int z = 0; z < maxZ; z++)
                     {
                         int baseYZIndexZ = z * maxY;
-                        for (int y = 0; y < maxY; y++)
+                        int liBase = (x * maxZ + z) * maxY; // start index for (x,z,0)
+                        int li = liBase;
+                        for (int y = 0; y < maxY; y++, li++)
                         {
                             int yzIndex = baseYZIndexZ + y; int wyz = yzIndex >> 6; int byz = yzIndex & 63;
-                            int li = LocalIndex(x, y, z, maxY, maxZ);
                             ushort bId = localGetter(x, y, z); localBlocks[li] = bId;
                             if (bId != emptyBlock)
                             {
@@ -296,15 +306,11 @@ namespace MVGE_GFX.Terrain
                 for (int z = 0; z < maxZ; z++) { int off = z * xyWC; ulong acc = 0UL; for (int w = 0; w < xyWC; w++) acc |= zSlabs[off + w]; if (acc != 0) { zSlabNonEmpty[z] = true; zNonEmptyCount++; } }
                 bool hasSingleOpaque = haveSolid && singleSolidType;
 
-                // Overall fill ratio
                 float fillRatio = solidCount == 0 ? 0f : (float)solidCount / voxelCount;
                 bool enableIdenticalDetection = fillRatio >= IDENTICAL_SLAB_FILL_THRESHOLD;
-
-                // Per-axis non-empty slab ratio heuristic
                 float xAxisFillRatio = (float)xNonEmptyCount / Math.Max(1, maxX);
                 float yAxisFillRatio = (float)yNonEmptyCount / Math.Max(1, maxY);
                 float zAxisFillRatio = (float)zNonEmptyCount / Math.Max(1, maxZ);
-
                 bool enableX = enableIdenticalDetection && xAxisFillRatio >= IDENTICAL_SLAB_FILL_THRESHOLD && maxX > 1;
                 bool enableY = enableIdenticalDetection && yAxisFillRatio >= IDENTICAL_SLAB_FILL_THRESHOLD && maxY > 1;
                 bool enableZ = enableIdenticalDetection && zAxisFillRatio >= IDENTICAL_SLAB_FILL_THRESHOLD && maxZ > 1;
@@ -313,7 +319,6 @@ namespace MVGE_GFX.Terrain
                 if (enableY) identicalPairY = ArrayPool<bool>.Shared.Rent(maxY - 1);
                 if (enableZ) identicalPairZ = ArrayPool<bool>.Shared.Rent(maxZ - 1);
 
-                // Smarter identical slab detection with early sampling of first 1-2 words before full compare
                 if (identicalPairX != null)
                 {
                     Array.Clear(identicalPairX);
@@ -444,15 +449,14 @@ namespace MVGE_GFX.Terrain
                     singleSolidUVConcat = new byte[48];
                     for (int f = 0; f < 6; f++)
                     {
-                        var uvBytes = GetOrCreateUv(atlas, singleSolidId, (Faces)f);
-                        System.Buffer.BlockCopy(uvBytes, 0, singleSolidUVConcat, f * 8, 8);
+                        int lutOffset = ((singleSolidId * 6) + f) * 8;
+                        for (int i = 0; i < 8; i++) singleSolidUVConcat[f * 8 + i] = uvLut[lutOffset + i];
                     }
                 }
 
                 int faceIndex = 0;
                 if (hasSingleOpaque)
                 {
-                    // Single-solid specialized emission
                     for (int x = 0; x < maxX; x++)
                     {
                         if (!xSlabNonEmpty[x]) continue;
@@ -471,7 +475,7 @@ namespace MVGE_GFX.Terrain
                                 {
                                     int t = BitOperations.TrailingZeroCount(bits);
                                     int yzIndex = (w << 6) + t; if (yzIndex >= yzPlaneBits) break;
-                                    int z = yzIndex / maxY; int y = yzIndex % maxY; // block id redundant for single solid
+                                    int z = yzIndex / maxY; int y = yzIndex % maxY;
                                     WriteFaceSingle(Faces.LEFT, (byte)x, (byte)y, (byte)z, ref faceIndex, singleSolidUVConcat, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
                                     bits &= bits - 1;
                                 }
@@ -566,7 +570,6 @@ namespace MVGE_GFX.Terrain
                 }
                 else
                 {
-                    // Multi-block path
                     for (int x = 0; x < maxX; x++)
                     {
                         if (!xSlabNonEmpty[x]) continue;
