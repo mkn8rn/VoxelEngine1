@@ -29,8 +29,10 @@ namespace MVGE_GFX.Terrain
         private readonly ushort emptyBlock;
         private readonly Func<int, int, int, ushort> getWorldBlock; // legacy path
         private readonly GetBlockFastDelegate getWorldBlockFast; // renamed for consistency
-        private readonly Func<int, int, int, ushort> getLocalBlock;
+        private readonly Func<int, int, int, ushort> getLocalBlock; // fallback delegate path
         private readonly BlockTextureAtlas atlas;
+        // Optional pre-flattened local blocks (contiguous, x-major, then z, then y)
+        private readonly ushort[] preFlattenedLocalBlocks; // null if not supplied
 
         // Flat UV lookup: [blockId * 6 + face] * 8 bytes (4 verts * 2 bytes each)
         private static byte[] uvLut; // null until initialized
@@ -46,7 +48,8 @@ namespace MVGE_GFX.Terrain
                                  Func<int, int, int, ushort> worldGetter,
                                  GetBlockFastDelegate fastGetter,
                                  Func<int, int, int, ushort> localGetter,
-                                 BlockTextureAtlas atlas)
+                                 BlockTextureAtlas atlas,
+                                 ushort[] preFlattenedLocalBlocks = null)
         {
             this.chunkWorldPosition = chunkWorldPosition;
             this.maxX = maxX; this.maxY = maxY; this.maxZ = maxZ;
@@ -55,6 +58,7 @@ namespace MVGE_GFX.Terrain
             getWorldBlockFast = fastGetter;
             getLocalBlock = localGetter;
             this.atlas = atlas;
+            this.preFlattenedLocalBlocks = preFlattenedLocalBlocks; // may be null
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -212,7 +216,10 @@ namespace MVGE_GFX.Terrain
             int xyPlaneBits = maxX * maxY; int xyWC = (xyPlaneBits + 63) >> 6;
             int voxelCount = maxX * maxY * maxZ;
 
-            ushort[] localBlocks = ArrayPool<ushort>.Shared.Rent(voxelCount);
+            // If we already have a flattened array supplied, use it directly (no per-voxel delegate calls)
+            bool suppliedLocalBlocks = preFlattenedLocalBlocks != null;
+            ushort[] localBlocks = suppliedLocalBlocks ? preFlattenedLocalBlocks : ArrayPool<ushort>.Shared.Rent(voxelCount);
+
             ulong[] xSlabs = ArrayPool<ulong>.Shared.Rent(maxX * yzWC);
             ulong[] ySlabs = ArrayPool<ulong>.Shared.Rent(maxY * xzWC);
             ulong[] zSlabs = ArrayPool<ulong>.Shared.Rent(maxZ * xyWC);
@@ -247,7 +254,6 @@ namespace MVGE_GFX.Terrain
 
             long solidCount = 0; // track total solid voxels for density heuristic
 
-            var localGetter = getLocalBlock;
             var worldGetter = getWorldBlock;
             var fastGetter = getWorldBlockFast;
 
@@ -276,7 +282,16 @@ namespace MVGE_GFX.Terrain
                         for (int y = 0; y < maxY; y++, li++)
                         {
                             int yzIndex = baseYZIndexZ + y; int wyz = yzIndex >> 6; int byz = yzIndex & 63;
-                            ushort bId = localGetter(x, y, z); localBlocks[li] = bId;
+                            ushort bId;
+                            if (suppliedLocalBlocks)
+                            {
+                                bId = localBlocks[li];
+                            }
+                            else
+                            {
+                                bId = getLocalBlock(x, y, z); // fallback delegate only when no pre-flattened array
+                                localBlocks[li] = bId; // store for later multi-face pass
+                            }
                             if (bId != emptyBlock)
                             {
                                 solidCount++;
@@ -298,6 +313,33 @@ namespace MVGE_GFX.Terrain
                 for (int y = 0; y < maxY; y++) { int off = y * xzWC; ulong acc = 0UL; for (int w = 0; w < xzWC; w++) acc |= ySlabs[off + w]; if (acc != 0) { ySlabNonEmpty[y] = true; yNonEmptyCount++; } }
                 for (int z = 0; z < maxZ; z++) { int off = z * xyWC; ulong acc = 0UL; for (int w = 0; w < xyWC; w++) acc |= zSlabs[off + w]; if (acc != 0) { zSlabNonEmpty[z] = true; zNonEmptyCount++; } }
                 bool hasSingleOpaque = haveSolid && singleSolidType;
+
+                // Early full-occlusion cull inside pooled builder: chunk full AND all six neighbor planes full
+                if (solidCount == voxelCount &&
+                    AllBitsSet(neighborLeft, yzPlaneBits) &&
+                    AllBitsSet(neighborRight, yzPlaneBits) &&
+                    AllBitsSet(neighborBottom, xzPlaneBits) &&
+                    AllBitsSet(neighborTop, xzPlaneBits) &&
+                    AllBitsSet(neighborBack, xyPlaneBits) &&
+                    AllBitsSet(neighborFront, xyPlaneBits))
+                {
+                    // Rent minimal 1-byte buffers so caller's pooling return logic still works uniformly.
+                    byte[] vb = ArrayPool<byte>.Shared.Rent(1);
+                    byte[] ub = ArrayPool<byte>.Shared.Rent(1);
+                    ushort[] ib = ArrayPool<ushort>.Shared.Rent(1);
+                    return new BuildResult
+                    {
+                        UseUShort = true,
+                        HasSingleOpaque = hasSingleOpaque,
+                        VertBuffer = vb,
+                        UVBuffer = ub,
+                        IndicesUShortBuffer = ib,
+                        IndicesUIntBuffer = null,
+                        VertBytesUsed = 0,
+                        UVBytesUsed = 0,
+                        IndicesUsed = 0
+                    };
+                }
 
                 float fillRatio = solidCount == 0 ? 0f : (float)solidCount / voxelCount;
                 bool enableIdenticalDetection = fillRatio >= IDENTICAL_SLAB_FILL_THRESHOLD;
@@ -431,10 +473,10 @@ namespace MVGE_GFX.Terrain
 
                 int totalVerts = totalFaces * 4;
                 bool useUShort = totalVerts <= 65535;
-                byte[] vertBuffer = ArrayPool<byte>.Shared.Rent(totalVerts * 3);
-                byte[] uvBuffer = ArrayPool<byte>.Shared.Rent(totalVerts * 2);
+                byte[] vertBuffer = ArrayPool<byte>.Shared.Rent(Math.Max(1, totalVerts * 3)); // rent at least 1 so we can always return
+                byte[] uvBuffer = ArrayPool<byte>.Shared.Rent(Math.Max(1, totalVerts * 2));
                 uint[] indicesUIntBuffer = null; ushort[] indicesUShortBuffer = null;
-                if (useUShort) indicesUShortBuffer = ArrayPool<ushort>.Shared.Rent(totalFaces * 6); else indicesUIntBuffer = ArrayPool<uint>.Shared.Rent(totalFaces * 6);
+                if (useUShort) indicesUShortBuffer = ArrayPool<ushort>.Shared.Rent(Math.Max(1, totalFaces * 6)); else indicesUIntBuffer = ArrayPool<uint>.Shared.Rent(Math.Max(1, totalFaces * 6));
 
                 byte[] singleSolidUVConcat = null;
                 if (hasSingleOpaque)
@@ -693,7 +735,7 @@ namespace MVGE_GFX.Terrain
                 if (identicalPairX != null) ArrayPool<bool>.Shared.Return(identicalPairX, false);
                 if (identicalPairY != null) ArrayPool<bool>.Shared.Return(identicalPairY, false);
                 if (identicalPairZ != null) ArrayPool<bool>.Shared.Return(identicalPairZ, false);
-                ArrayPool<ushort>.Shared.Return(localBlocks, false);
+                if (!suppliedLocalBlocks) ArrayPool<ushort>.Shared.Return(localBlocks, false);
                 ArrayPool<ulong>.Shared.Return(xSlabs, false);
                 ArrayPool<ulong>.Shared.Return(ySlabs, false);
                 ArrayPool<ulong>.Shared.Return(zSlabs, false);
@@ -707,6 +749,19 @@ namespace MVGE_GFX.Terrain
                 ArrayPool<ulong>.Shared.Return(neighborBack, false);
                 ArrayPool<ulong>.Shared.Return(neighborFront, false);
             }
+        }
+
+        private static bool AllBitsSet(ulong[] arr, int bitCount)
+        {
+            int wc = (bitCount + 63) >> 6;
+            int rem = bitCount & 63;
+            ulong lastMask = rem == 0 ? ulong.MaxValue : (1UL << rem) - 1UL;
+            for (int i = 0; i < wc; i++)
+            {
+                ulong expected = (i == wc - 1) ? lastMask : ulong.MaxValue;
+                if ((arr[i] & expected) != expected) return false;
+            }
+            return true;
         }
 
         private void PrefetchNeighborPlane(GetBlockFastDelegate fastGetter, Func<int, int, int, ushort> slowGetter, ulong[] target, int baseWX, int baseWY, int baseWZ, int dimA, int dimB, int wordCount, char plane)

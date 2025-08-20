@@ -28,7 +28,7 @@ namespace MVGE_GEN
     {
         public WorldLoader loader { get; private set; }
 
-        private readonly ConcurrentDictionary<(int cx, int cy, int cz), Chunk> chunks = new(); // track generated and built chunks
+        private readonly ConcurrentDictionary<(int cx, int cy, int cz), Chunk> activeChunks = new(); // track ready to render chunks
         private readonly ConcurrentDictionary<(int cx, int cy, int cz), Chunk> unbuiltChunks = new(); // track generated but not yet built chunks
         private readonly ConcurrentDictionary<(int cx, int cy, int cz), byte> pendingChunks = new(); // track enqueued but not yet generated
 
@@ -63,8 +63,8 @@ namespace MVGE_GEN
             int proc = Environment.ProcessorCount;
             int desired = proc + (proc / 2);
             ThreadPool.SetMinThreads(desired, desired);
-            generationWorkerCount = proc - 1;
-            meshWorkerCount = proc * 2;
+            generationWorkerCount = proc / 2;
+            meshWorkerCount = proc + (proc / 2);
 
             loader = new WorldLoader();
             loader.ChooseWorld();
@@ -72,11 +72,13 @@ namespace MVGE_GEN
 
             streamingCts = new CancellationTokenSource();
 
-            InitializeGeneration();
-            WaitForInitialChunkGeneration();
+            bool streamGeneration = false; // not implemented yet, always false for now
+
+            InitializeGeneration(streamGeneration);
+            if(streamGeneration == false) WaitForInitialChunkGeneration();
 
             InitializeBuilding();
-            WaitForInitialChunkRenderBuild();
+            if (streamGeneration == false) WaitForInitialChunkRenderBuild();
         }
 
         private void WaitForInitialChunkGeneration()
@@ -119,10 +121,10 @@ namespace MVGE_GEN
 
         public void Render(ShaderProgram program)
         {
-            foreach (var chunk in chunks.Values) chunk.Render(program);
+            foreach (var chunk in activeChunks.Values) chunk.Render(program);
         }
 
-        private void InitializeGeneration()
+        private void InitializeGeneration(bool streamGeneration = false)
         {
             worldBlockAccessor = GetBlock;
             worldBlockFastAccessor = TryGetBlockFast; // new fast delegate
@@ -134,7 +136,7 @@ namespace MVGE_GEN
             generationWorkers = new Task[generationWorkerCount];
             for (int i = 0; i < generationWorkerCount; i++)
             {
-                generationWorkers[i] = Task.Run(() => ChunkGenerationWorker(streamingCts.Token, true));
+                generationWorkers[i] = Task.Run(() => ChunkGenerationWorker(streamingCts.Token, streamGeneration));
             }
         }
 
@@ -209,7 +211,7 @@ namespace MVGE_GEN
             var key = ChunkIndexKey(worldX, worldY, worldZ);
             if (!force)
             {
-                if (unbuiltChunks.ContainsKey(key) || chunks.ContainsKey(key)) return; // already generated or built
+                if (unbuiltChunks.ContainsKey(key) || activeChunks.ContainsKey(key)) return; // already generated or built
                 if (!pendingChunks.TryAdd(key, 0)) return; // already queued
             }
             else
@@ -219,7 +221,7 @@ namespace MVGE_GEN
             chunkPositionQueue.Add(new Vector3(worldX, worldY, worldZ));
         }
 
-        private void ChunkGenerationWorker(CancellationToken token, bool initialBuild = false)
+        private void ChunkGenerationWorker(CancellationToken token, bool streamGeneration = false)
         {
             string chunkSaveDirectory = Path.Combine(loader.currentWorldSaveDirectory, loader.currentWorldSavedChunksSubDirectory);
             try
@@ -240,7 +242,7 @@ namespace MVGE_GEN
 
                     pendingChunks.TryRemove(key, out _);
 
-                    if(initialBuild == false) // We don't need to rebuild meshes during initial generation
+                    if(streamGeneration == true) // We don't need to rebuild meshes during initial generation
                     {
                         // Enqueue self for initial mesh build
                         EnqueueMeshBuild(key, markDirty:false);
@@ -301,7 +303,7 @@ namespace MVGE_GEN
             {
                 var nk = (key.cx + dir.dx, key.cy + dir.dy, key.cz + dir.dz);
                 // Only consider already present neighbor chunks
-                bool neighborExists = unbuiltChunks.ContainsKey(nk) || chunks.ContainsKey(nk);
+                bool neighborExists = unbuiltChunks.ContainsKey(nk) || activeChunks.ContainsKey(nk);
                 if (!neighborExists) continue;
 
                 if (!HasAnySolidOnBoundary(newChunk, dir)) continue;
@@ -316,7 +318,7 @@ namespace MVGE_GEN
 
         private void EnqueueMeshBuild((int cx,int cy,int cz) key, bool markDirty = true)
         {
-            if (!unbuiltChunks.ContainsKey(key) && !chunks.ContainsKey(key)) return;
+            if (!unbuiltChunks.ContainsKey(key) && !activeChunks.ContainsKey(key)) return;
             if (markDirty)
             {
                 // Ensure dirty flag exists (idempotent)
@@ -341,7 +343,7 @@ namespace MVGE_GEN
                     // Acquire chunk from either dictionary
                     if (!unbuiltChunks.TryGetValue(key, out var ch))
                     {
-                        if (!chunks.TryGetValue(key, out ch)) continue; // disappeared
+                        if (!activeChunks.TryGetValue(key, out ch)) continue; // disappeared
                     }
 
                     try
@@ -351,7 +353,7 @@ namespace MVGE_GEN
                         // If this was first-time build (in unbuilt), move to built dictionary
                         if (unbuiltChunks.TryRemove(key, out var builtChunk))
                         {
-                            chunks[key] = builtChunk;
+                            activeChunks[key] = builtChunk;
                         }
 
                         // Clear dirty flag after successful build
@@ -408,7 +410,7 @@ namespace MVGE_GEN
             var key = (cx, cy, cz);
             if (!unbuiltChunks.TryGetValue(key, out var chunk))
             {
-                if (!chunks.TryGetValue(key, out chunk))
+                if (!activeChunks.TryGetValue(key, out chunk))
                 {
                     return (ushort)BaseBlockType.Empty;
                 }
@@ -435,7 +437,7 @@ namespace MVGE_GEN
             Chunk chunk;
             if (!unbuiltChunks.TryGetValue(key, out chunk))
             {
-                if (!chunks.TryGetValue(key, out chunk))
+                if (!activeChunks.TryGetValue(key, out chunk))
                 {
                     block = (ushort)BaseBlockType.Empty;
                     return false;
