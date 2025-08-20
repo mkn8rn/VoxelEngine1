@@ -45,8 +45,13 @@ namespace MVGE_GFX.Terrain
         private readonly ChunkData chunkMeta;
         private readonly Func<int, int, int, ushort> getWorldBlock;
         private readonly GetBlockFastDelegate tryGetWorldBlockFast; // new fast delegate
-        private readonly Func<int, int, int, ushort> getLocalBlock;
         private readonly ushort emptyBlock = (ushort)BaseBlockType.Empty;
+
+        // Flattened ephemeral blocks (x-major, then z, then y). Returned to pool after GenerateFaces
+        private readonly ushort[] flatBlocks;
+        private readonly int maxX;
+        private readonly int maxY;
+        private readonly int maxZ;
 
         private enum IndexFormat : byte { UShort, UInt }
         private IndexFormat indexFormat;
@@ -60,12 +65,16 @@ namespace MVGE_GFX.Terrain
             ChunkData chunkData,
             Func<int, int, int, ushort> worldBlockGetter,
             GetBlockFastDelegate worldBlockFastGetter,
-            Func<int, int, int, ushort> localBlockGetter)
+            ushort[] flatBlocks,
+            int maxX,
+            int maxY,
+            int maxZ)
         {
             chunkMeta = chunkData;
             getWorldBlock = worldBlockGetter;
             tryGetWorldBlockFast = worldBlockFastGetter;
-            getLocalBlock = localBlockGetter;
+            this.flatBlocks = flatBlocks;
+            this.maxX = maxX; this.maxY = maxY; this.maxZ = maxZ;
             chunkWorldPosition = new OpenTK.Mathematics.Vector3(chunkData.x, chunkData.y, chunkData.z);
             GenerateFaces();
         }
@@ -171,80 +180,43 @@ namespace MVGE_GFX.Terrain
                 0);
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private int FlatIndex(int x, int y, int z) => (x * maxZ + z) * maxY + y;
+
         private void GenerateFaces()
         {
-            int maxX = GameManager.settings.chunkMaxX;
-            int maxY = GameManager.settings.chunkMaxY;
-            int maxZ = GameManager.settings.chunkMaxZ;
-
             long volume = (long)maxX * maxY * maxZ;
             bool usePooling = false;
             if (FlagManager.flags.useFacePooling.GetValueOrDefault())
             {
                 int threshold = FlagManager.flags.faceAmountToPool.GetValueOrDefault(int.MaxValue);
-                if (threshold >= 0 && volume >= threshold)
-                {
-                    usePooling = true;
-                }
+                if (threshold >= 0 && volume >= threshold) usePooling = true;
             }
 
-            if (CheckFullyOccluded(maxX, maxY, maxZ)) { fullyOccluded = true; return; }
+            if (CheckFullyOccluded(maxX, maxY, maxZ)) { fullyOccluded = true; ReturnFlat(); return; }
 
             if (usePooling)
             {
-                // Ephemeral flatten: rent, fill, pass to pooled builder, then return immediately.
-                int voxelCount = maxX * maxY * maxZ;
-                ushort[] flat = ArrayPool<ushort>.Shared.Rent(voxelCount);
-                try
-                {
-                    // Flatten order matches PooledFacesRender.LocalIndex: x-major, then z, then y
-                    for (int x = 0; x < maxX; x++)
-                    {
-                        int xBase = x * maxZ * maxY;
-                        for (int z = 0; z < maxZ; z++)
-                        {
-                            int zBase = xBase + z * maxY;
-                            for (int y = 0; y < maxY; y++)
-                            {
-                                flat[zBase + y] = getLocalBlock(x, y, z);
-                            }
-                        }
-                    }
-
-                    var builder = new PooledFacesRender(
-                        chunkWorldPosition,
-                        maxX, maxY, maxZ,
-                        emptyBlock,
-                        getWorldBlock,
-                        tryGetWorldBlockFast,
-                        getLocalBlock,
-                        terrainTextureAtlas,
-                        flat);
-
-                    var res = builder.Build();
-                    usedPooling = true;
-                    useUShort = res.UseUShort;
-
-                    vertBuffer = res.VertBuffer;
-                    uvBuffer = res.UVBuffer;
-                    indicesUIntBuffer = res.IndicesUIntBuffer;
-                    indicesUShortBuffer = res.IndicesUShortBuffer;
-
-                    vertBytesUsed = res.VertBytesUsed;
-                    uvBytesUsed = res.UVBytesUsed;
-                    indicesUsed = res.IndicesUsed;
-                    indexFormat = useUShort ? IndexFormat.UShort : IndexFormat.UInt;
-                }
-                finally
-                {
-                    // Return flattened array (PooledFacesRender will not return it since it treats it as suppliedLocalBlocks)
-                    ArrayPool<ushort>.Shared.Return(flat, false);
-                }
+                var builder = new PooledFacesRender(chunkWorldPosition, maxX, maxY, maxZ, emptyBlock, getWorldBlock, tryGetWorldBlockFast, null, terrainTextureAtlas, flatBlocks);
+                var res = builder.Build();
+                usedPooling = true;
+                useUShort = res.UseUShort;
+                vertBuffer = res.VertBuffer; uvBuffer = res.UVBuffer;
+                indicesUIntBuffer = res.IndicesUIntBuffer; indicesUShortBuffer = res.IndicesUShortBuffer;
+                vertBytesUsed = res.VertBytesUsed; uvBytesUsed = res.UVBytesUsed; indicesUsed = res.IndicesUsed;
+                indexFormat = useUShort ? IndexFormat.UShort : IndexFormat.UInt;
+                ReturnFlat();
             }
             else
             {
-                GenerateFacesList(maxX, maxY, maxZ);
+                GenerateFacesListFlat();
+                ReturnFlat();
             }
+        }
+
+        private void ReturnFlat()
+        {
+            if (flatBlocks != null) ArrayPool<ushort>.Shared.Return(flatBlocks, false);
         }
 
         private bool CheckFullyOccluded(int maxX, int maxY, int maxZ)
@@ -252,13 +224,29 @@ namespace MVGE_GFX.Terrain
             int baseWX = (int)chunkWorldPosition.X;
             int baseWY = (int)chunkWorldPosition.Y;
             int baseWZ = (int)chunkWorldPosition.Z;
+            // Check chunk boundary only using flat blocks
             for (int x = 0; x < maxX; x++)
                 for (int y = 0; y < maxY; y++)
-                    for (int z = 0; z < maxZ; z++)
-                    {
-                        if (x != 0 && x != maxX - 1 && y != 0 && y != maxY - 1 && z != 0 && z != maxZ - 1) continue;
-                        if (getLocalBlock(x, y, z) == emptyBlock) return false;
-                    }
+                {
+                    int z0 = 0; int z1 = maxZ - 1;
+                    if (flatBlocks[FlatIndex(x, y, z0)] == emptyBlock) return false;
+                    if (flatBlocks[FlatIndex(x, y, z1)] == emptyBlock) return false;
+                }
+            for (int z = 0; z < maxZ; z++)
+                for (int y = 0; y < maxY; y++)
+                {
+                    int x0 = 0; int x1 = maxX - 1;
+                    if (flatBlocks[FlatIndex(x0, y, z)] == emptyBlock) return false;
+                    if (flatBlocks[FlatIndex(x1, y, z)] == emptyBlock) return false;
+                }
+            for (int x = 0; x < maxX; x++)
+                for (int z = 0; z < maxZ; z++)
+                {
+                    int y0 = 0; int y1 = maxY - 1;
+                    if (flatBlocks[FlatIndex(x, y0, z)] == emptyBlock) return false;
+                    if (flatBlocks[FlatIndex(x, y1, z)] == emptyBlock) return false;
+                }
+            // Neighbor shell checks
             for (int y = 0; y < maxY; y++)
                 for (int z = 0; z < maxZ; z++)
                 {
@@ -280,41 +268,77 @@ namespace MVGE_GFX.Terrain
             return true;
         }
 
-        private void GenerateFacesList(int maxX, int maxY, int maxZ)
+        private void GenerateFacesListFlat()
         {
             int blockCount = maxX * maxY * maxZ;
             int worstFaces = blockCount * 6;
-            int vertsCapacity = worstFaces * 12;
-            int uvsCapacity = worstFaces * 8;
-            int indicesCapacity = worstFaces * 6;
-            const int MaxListBytes = 8 * 1024 * 1024;
-            if (vertsCapacity > MaxListBytes) vertsCapacity = MaxListBytes;
-            if (uvsCapacity > MaxListBytes) uvsCapacity = MaxListBytes;
-            if (indicesCapacity > (MaxListBytes / 4)) indicesCapacity = MaxListBytes / 4;
+            int vertsCapacity = Math.Min(worstFaces * 12, 8 * 1024 * 1024);
+            int uvsCapacity = Math.Min(worstFaces * 8, 8 * 1024 * 1024);
+            int indicesCapacity = Math.Min(worstFaces * 6, (8 * 1024 * 1024) / 4);
 
             chunkVertsList = new List<byte>(vertsCapacity);
             chunkUVsList = new List<byte>(uvsCapacity);
             chunkIndicesList = new List<uint>(indicesCapacity);
 
+            int strideX = maxZ * maxY; // delta for +/- X neighbor
+            int strideZ = maxY;       // delta for +/- Z neighbor
             for (int x = 0; x < maxX; x++)
+            {
+                int xBase = x * strideX;
                 for (int z = 0; z < maxZ; z++)
+                {
+                    int zBase = xBase + z * maxY;
                     for (int y = 0; y < maxY; y++)
                     {
-                        ushort block = getLocalBlock(x, y, z);
+                        int li = zBase + y;
+                        ushort block = flatBlocks[li];
                         if (block == emptyBlock) continue;
                         int wx = (int)chunkWorldPosition.X + x;
                         int wy = (int)chunkWorldPosition.Y + y;
                         int wz = (int)chunkWorldPosition.Z + z;
                         var bp = new ByteVector3 { x = (byte)x, y = (byte)y, z = (byte)z };
                         int localFaces = 0;
-                        if ((x > 0 && getLocalBlock(x - 1, y, z) == emptyBlock) || (x == 0 && getWorldBlock(wx - 1, wy, wz) == emptyBlock)) { IntegrateFaceList(block, Faces.LEFT, bp); localFaces++; }
-                        if ((x < maxX - 1 && getLocalBlock(x + 1, y, z) == emptyBlock) || (x == maxX - 1 && getWorldBlock(wx + 1, wy, wz) == emptyBlock)) { IntegrateFaceList(block, Faces.RIGHT, bp); localFaces++; }
-                        if ((y < maxY - 1 && getLocalBlock(x, y + 1, z) == emptyBlock) || (y == maxY - 1 && getWorldBlock(wx, wy + 1, wz) == emptyBlock)) { IntegrateFaceList(block, Faces.TOP, bp); localFaces++; }
-                        if ((y > 0 && getLocalBlock(x, y - 1, z) == emptyBlock) || (y == 0 && getWorldBlock(wx, wy - 1, wz) == emptyBlock)) { IntegrateFaceList(block, Faces.BOTTOM, bp); localFaces++; }
-                        if ((z < maxZ - 1 && getLocalBlock(x, y, z + 1) == emptyBlock) || (z == maxZ - 1 && getWorldBlock(wx, wy, wz + 1) == emptyBlock)) { IntegrateFaceList(block, Faces.FRONT, bp); localFaces++; }
-                        if ((z > 0 && getLocalBlock(x, y, z - 1) == emptyBlock) || (z == 0 && getWorldBlock(wx, wy, wz - 1) == emptyBlock)) { IntegrateFaceList(block, Faces.BACK, bp); localFaces++; }
+                        // -X
+                        if (x == 0)
+                        {
+                            if (getWorldBlock(wx - 1, wy, wz) == emptyBlock) { IntegrateFaceList(block, Faces.LEFT, bp); localFaces++; }
+                        }
+                        else if (flatBlocks[li - strideX] == emptyBlock) { IntegrateFaceList(block, Faces.LEFT, bp); localFaces++; }
+                        // +X
+                        if (x == maxX - 1)
+                        {
+                            if (getWorldBlock(wx + 1, wy, wz) == emptyBlock) { IntegrateFaceList(block, Faces.RIGHT, bp); localFaces++; }
+                        }
+                        else if (flatBlocks[li + strideX] == emptyBlock) { IntegrateFaceList(block, Faces.RIGHT, bp); localFaces++; }
+                        // +Y
+                        if (y == maxY - 1)
+                        {
+                            if (getWorldBlock(wx, wy + 1, wz) == emptyBlock) { IntegrateFaceList(block, Faces.TOP, bp); localFaces++; }
+                        }
+                        else if (flatBlocks[li + 1] == emptyBlock) { IntegrateFaceList(block, Faces.TOP, bp); localFaces++; }
+                        // -Y
+                        if (y == 0)
+                        {
+                            if (getWorldBlock(wx, wy - 1, wz) == emptyBlock) { IntegrateFaceList(block, Faces.BOTTOM, bp); localFaces++; }
+                        }
+                        else if (flatBlocks[li - 1] == emptyBlock) { IntegrateFaceList(block, Faces.BOTTOM, bp); localFaces++; }
+                        // +Z
+                        if (z == maxZ - 1)
+                        {
+                            if (getWorldBlock(wx, wy, wz + 1) == emptyBlock) { IntegrateFaceList(block, Faces.FRONT, bp); localFaces++; }
+                        }
+                        else if (flatBlocks[li + strideZ] == emptyBlock) { IntegrateFaceList(block, Faces.FRONT, bp); localFaces++; }
+                        // -Z
+                        if (z == 0)
+                        {
+                            if (getWorldBlock(wx, wy, wz - 1) == emptyBlock) { IntegrateFaceList(block, Faces.BACK, bp); localFaces++; }
+                        }
+                        else if (flatBlocks[li - strideZ] == emptyBlock) { IntegrateFaceList(block, Faces.BACK, bp); localFaces++; }
+
                         if (localFaces > 0) AddIndicesList(localFaces);
                     }
+                }
+            }
         }
 
         private void IntegrateFaceList(ushort block, Faces face, ByteVector3 bp)
