@@ -41,7 +41,7 @@ namespace MVGE_GEN
         private Func<int, int, int, ushort> worldBlockAccessor;
 
         // Asynchronous mesh build pipeline
-        private int meshWorkerCount;
+        private int meshBuildWorkerCount;
         private Task[] meshBuildWorkers;
         private BlockingCollection<(int cx,int cy,int cz)> meshBuildQueue; // build tasks
         private readonly ConcurrentDictionary<(int cx, int cy, int cz), byte> meshBuildSchedule = new(); // de-dupe keys in build queue
@@ -61,11 +61,11 @@ namespace MVGE_GEN
             }
             if (FlagManager.flags.meshRenderWorkersPerCore.HasValue)
             {
-                meshWorkerCount = (int)(FlagManager.flags.meshRenderWorkersPerCore.Value * proc);
+                meshBuildWorkerCount = (int)(FlagManager.flags.meshRenderWorkersPerCore.Value * proc);
             }
             else
             {
-                meshWorkerCount = proc * 2;
+                meshBuildWorkerCount = proc * 2;
             }
 
             loader = new WorldLoader();
@@ -137,13 +137,14 @@ namespace MVGE_GEN
 
             EnqueueInitialChunkPositions();
 
+            Console.WriteLine("[World] Initializing world generation workers...");
             int proc = Environment.ProcessorCount;
             generationWorkers = new Task[generationWorkerCount];
             for (int i = 0; i < generationWorkerCount; i++)
             {
                 generationWorkers[i] = Task.Run(() => ChunkGenerationWorker(streamingCts.Token, streamGeneration));
             }
-            Console.WriteLine($"[World] Initialized {meshWorkerCount} mesh build workers.");
+            Console.WriteLine($"[World] Initialized {generationWorkers.Count()} world generation workers.");
         }
 
         private void InitializeBuilding(bool streamGeneration = false)
@@ -156,12 +157,12 @@ namespace MVGE_GEN
             }
 
             Console.WriteLine("[World] Initializing mesh build workers...");
-            meshBuildWorkers = new Task[meshWorkerCount];
-            for (int i = 0; i < meshWorkerCount; i++)
+            meshBuildWorkers = new Task[meshBuildWorkerCount];
+            for (int i = 0; i < meshBuildWorkerCount; i++)
             {
                 meshBuildWorkers[i] = Task.Run(() => MeshBuildWorker(streamingCts.Token));
             }
-            Console.WriteLine($"[World] Initialized {meshWorkerCount} mesh build workers.");
+            Console.WriteLine($"[World] Initialized {meshBuildWorkers.Count()} mesh build workers.");
         }
 
         private void EnqueueInitialChunkPositions()
