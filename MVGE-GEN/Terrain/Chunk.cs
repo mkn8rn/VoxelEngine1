@@ -9,7 +9,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 
-namespace MVGE_GEN
+namespace MVGE_GEN.Terrain
 {
     // moved TryGetBlockFastDelegate to MVGE_INF.Models.Terrain for shared use
     public class Chunk
@@ -90,7 +90,7 @@ namespace MVGE_GEN
                     int columnHeight = (int)heightmap[x, z];
                     if (columnHeight < chunkBaseY)
                     {
-                        int soilCapExclusive = (int)Math.Floor((2.0 / 3.0) * (columnHeight + 100));
+                        int soilCapExclusive = (int)Math.Floor(2.0 / 3.0 * (columnHeight + 100));
                         if (soilCapExclusive <= chunkBaseY) continue;
                     }
 
@@ -98,8 +98,8 @@ namespace MVGE_GEN
                     int stoneLocalTop = stoneWorldTop - chunkBaseY;
                     bool hasStone = columnHeight >= chunkBaseY && chunkBaseY <= stoneWorldTop;
 
-                    int soilCapExclusiveWorldY = (int)Math.Floor((2.0 / 3.0) * (columnHeight + 100));
-                    int soilLocalStart = (columnHeight + 1) - chunkBaseY;
+                    int soilCapExclusiveWorldY = (int)Math.Floor(2.0 / 3.0 * (columnHeight + 100));
+                    int soilLocalStart = columnHeight + 1 - chunkBaseY;
                     int soilLocalEnd = soilCapExclusiveWorldY - 1 - chunkBaseY;
                     bool hasSoil = soilLocalStart <= soilLocalEnd && soilLocalStart < maxY && soilLocalEnd >= 0;
                     if (hasSoil)
@@ -115,7 +115,7 @@ namespace MVGE_GEN
 
                     int sx = x >> SECTION_SHIFT;
                     int sz = z >> SECTION_SHIFT;
-                    for (int sy = 0; sy <= (maxNonAirLocalY >> SECTION_SHIFT); sy++)
+                    for (int sy = 0; sy <= maxNonAirLocalY >> SECTION_SHIFT; sy++)
                     {
                         if (sections[sx, sy, sz] == null)
                         {
@@ -176,7 +176,7 @@ namespace MVGE_GEN
                 for (int z = 0; z < maxZ; z++)
                 {
                     float noiseValue = (float)noise.Evaluate((x + chunkBaseX) * scale, (z + chunkBaseZ) * scale);
-                    float normalizedValue = (noiseValue * 0.5f) + 0.5f;
+                    float normalizedValue = noiseValue * 0.5f + 0.5f;
                     heightmap[x, z] = normalizedValue * (maxHeight - minHeight) + minHeight;
                 }
             }

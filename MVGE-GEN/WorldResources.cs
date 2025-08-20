@@ -11,9 +11,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Diagnostics;
 using MVGE_INF.Loaders;
-using MVGE_GEN;
+using MVGE_GEN.Terrain;
 
-namespace MVGE.World
+namespace MVGE_GEN
 {
     public enum RenderDetail
     {
@@ -24,7 +24,7 @@ namespace MVGE.World
         LoD5
     }
 
-    internal class World : IDisposable
+    public class WorldResources : IDisposable
     {
         public WorldLoader loader { get; private set; }
 
@@ -56,7 +56,7 @@ namespace MVGE.World
         private BlockingCollection<(int cx,int cy,int cz)> meshBuildQueue; // build tasks
         private readonly ConcurrentDictionary<(int cx, int cy, int cz), byte> meshBuildSchedule = new(); // de-dupe keys in build queue
         
-        public World()
+        public WorldResources()
         {
             Console.WriteLine("World manager initializing.");
 

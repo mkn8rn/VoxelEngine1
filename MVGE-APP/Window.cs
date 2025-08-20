@@ -1,4 +1,4 @@
-﻿using MVGE.Gameplay;
+﻿using MVGE_GEN.Gameplay;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 using OpenTK.Windowing.Common;
@@ -15,8 +15,9 @@ using MVGE_INF.Managers;
 using MVGE_GFX;
 using MVGE_GFX.Terrain;
 using MVGE_INF.Loaders;
+using MVGE_GEN;
 
-namespace MVGE
+namespace MVGE_GEN
 {
     public enum GameMode
     {
@@ -28,7 +29,7 @@ namespace MVGE
     public class Window : GameWindow
     {
         // render pipeline
-        World.World world = null!;
+        WorldResources world = null!;
         BlockTextureAtlas blockTextureAtlas = null!;
         ShaderProgram shaderProgram = null!;
 
@@ -95,7 +96,7 @@ namespace MVGE
             blockTextureAtlas.Bind();
 
             // Initialize the World rendering
-            world = new World.World() ?? throw new Exception("world is null");
+            world = new WorldResources() ?? throw new Exception("world is null");
 
             // Enabling OpenGL options
             Console.WriteLine("Enabling OpenGL options.");

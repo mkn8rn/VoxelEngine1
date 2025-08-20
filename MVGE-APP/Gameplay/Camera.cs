@@ -5,7 +5,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace MVGE.Gameplay
+namespace MVGE_GEN.Gameplay
 {
     internal class Camera
     {
