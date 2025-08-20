@@ -192,20 +192,54 @@ namespace MVGE_GFX.Terrain
 
             if (usePooling)
             {
-                var builder = new PooledFacesRender(chunkWorldPosition, maxX, maxY, maxZ, emptyBlock, getWorldBlock, tryGetWorldBlockFast, getLocalBlock, terrainTextureAtlas);
-                var res = builder.Build();
-                usedPooling = true;
-                useUShort = res.UseUShort;
+                // Ephemeral flatten: rent, fill, pass to pooled builder, then return immediately.
+                int voxelCount = maxX * maxY * maxZ;
+                ushort[] flat = ArrayPool<ushort>.Shared.Rent(voxelCount);
+                try
+                {
+                    // Flatten order matches PooledFacesRender.LocalIndex: x-major, then z, then y
+                    for (int x = 0; x < maxX; x++)
+                    {
+                        int xBase = x * maxZ * maxY;
+                        for (int z = 0; z < maxZ; z++)
+                        {
+                            int zBase = xBase + z * maxY;
+                            for (int y = 0; y < maxY; y++)
+                            {
+                                flat[zBase + y] = getLocalBlock(x, y, z);
+                            }
+                        }
+                    }
 
-                vertBuffer = res.VertBuffer;
-                uvBuffer = res.UVBuffer;
-                indicesUIntBuffer = res.IndicesUIntBuffer;
-                indicesUShortBuffer = res.IndicesUShortBuffer;
+                    var builder = new PooledFacesRender(
+                        chunkWorldPosition,
+                        maxX, maxY, maxZ,
+                        emptyBlock,
+                        getWorldBlock,
+                        tryGetWorldBlockFast,
+                        getLocalBlock,
+                        terrainTextureAtlas,
+                        flat);
 
-                vertBytesUsed = res.VertBytesUsed;
-                uvBytesUsed = res.UVBytesUsed;
-                indicesUsed = res.IndicesUsed;
-                indexFormat = useUShort ? IndexFormat.UShort : IndexFormat.UInt;
+                    var res = builder.Build();
+                    usedPooling = true;
+                    useUShort = res.UseUShort;
+
+                    vertBuffer = res.VertBuffer;
+                    uvBuffer = res.UVBuffer;
+                    indicesUIntBuffer = res.IndicesUIntBuffer;
+                    indicesUShortBuffer = res.IndicesUShortBuffer;
+
+                    vertBytesUsed = res.VertBytesUsed;
+                    uvBytesUsed = res.UVBytesUsed;
+                    indicesUsed = res.IndicesUsed;
+                    indexFormat = useUShort ? IndexFormat.UShort : IndexFormat.UInt;
+                }
+                finally
+                {
+                    // Return flattened array (PooledFacesRender will not return it since it treats it as suppliedLocalBlocks)
+                    ArrayPool<ushort>.Shared.Return(flat, false);
+                }
             }
             else
             {
