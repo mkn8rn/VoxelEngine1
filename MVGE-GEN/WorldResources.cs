@@ -21,7 +21,6 @@ namespace MVGE_GEN
 
         private readonly ConcurrentDictionary<(int cx, int cy, int cz), Chunk> activeChunks = new(); // track ready to render chunks
         private readonly ConcurrentDictionary<(int cx, int cy, int cz), Chunk> unbuiltChunks = new(); // track generated but not yet built chunks
-        private readonly ConcurrentDictionary<(int cx, int cy, int cz), byte> pendingChunks = new(); // track enqueued but not yet generated
 
         // Track chunks marked dirty (needing rebuild) so we can coalesce multiple requests before building
         private readonly ConcurrentDictionary<(int cx, int cy, int cz), byte> dirtyChunks = new();
@@ -29,23 +28,24 @@ namespace MVGE_GEN
         // Cancellation token for streaming operations
         private CancellationTokenSource streamingCts;
 
+        // Cache heightmaps for (baseX, baseZ) columns across vertical stacks
+        private readonly ConcurrentDictionary<(int baseX, int baseZ), float[,]> heightmapCache = new();
+
+        // World block accessor delegates
+        private Func<int, int, int, ushort> worldBlockAccessor;
+
         // Asynchronous generation pipeline
         private int generationWorkerCount;
         private Task[] generationWorkers;
         private BlockingCollection<Vector3> chunkPositionQueue; // gen tasks
-
-        // Cache heightmaps for (baseX, baseZ) columns across vertical stacks
-        private readonly ConcurrentDictionary<(int baseX,int baseZ), float[,]> heightmapCache = new();
-
-        // World block accessor delegates
-        private Func<int, int, int, ushort> worldBlockAccessor;
+        private readonly ConcurrentDictionary<(int cx, int cy, int cz), byte> chunkGenSchedule = new(); // track enqueued but not yet generated
 
         // Asynchronous mesh build pipeline
         private int meshBuildWorkerCount;
         private Task[] meshBuildWorkers;
         private BlockingCollection<(int cx,int cy,int cz)> meshBuildQueue; // build tasks
-        private readonly ConcurrentDictionary<(int cx, int cy, int cz), byte> meshBuildSchedule = new(); // de-dupe keys in build queue
-        
+        private readonly ConcurrentDictionary<(int cx, int cy, int cz), byte> meshBuildSchedule = new(); // track chunks scheduled for build
+
         public WorldResources()
         {
             Console.WriteLine("World manager initializing.");
@@ -87,13 +87,13 @@ namespace MVGE_GEN
             var sw = Stopwatch.StartNew();
 
             int done = unbuiltChunks.Count;
-            int remaining = pendingChunks.Count;
-            int total = pendingChunks.Count + done;
+            int remaining = chunkGenSchedule.Count;
+            int total = chunkGenSchedule.Count + done;
 
-            while (pendingChunks.Count > 0)
+            while (chunkGenSchedule.Count > 0)
             {
                 done = unbuiltChunks.Count;
-                remaining = pendingChunks.Count;
+                remaining = chunkGenSchedule.Count;
 
                 Console.WriteLine($"[World] Initial chunk generation: {done}/{total}, remaining: {remaining}");
                 Thread.Sleep(500);
@@ -216,11 +216,11 @@ namespace MVGE_GEN
             if (!force)
             {
                 if (unbuiltChunks.ContainsKey(key) || activeChunks.ContainsKey(key)) return; // already generated or built
-                if (!pendingChunks.TryAdd(key, 0)) return; // already queued
+                if (!chunkGenSchedule.TryAdd(key, 0)) return; // already queued
             }
             else
             {
-                pendingChunks[key] = 0; // overwrite / ensure present
+                chunkGenSchedule[key] = 0; // overwrite / ensure present
             }
             chunkPositionQueue.Add(new Vector3(worldX, worldY, worldZ));
         }
@@ -244,7 +244,7 @@ namespace MVGE_GEN
                     var key = ChunkIndexKey((int)pos.X, (int)pos.Y, (int)pos.Z);
                     unbuiltChunks[key] = chunk;
 
-                    pendingChunks.TryRemove(key, out _);
+                    chunkGenSchedule.TryRemove(key, out _);
 
                     if(streamGeneration == true) // We don't need to rebuild meshes during initial generation
                     {
