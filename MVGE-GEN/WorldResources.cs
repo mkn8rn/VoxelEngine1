@@ -147,7 +147,9 @@ namespace MVGE_GEN
         private void InitializeScheduling()
         {
             Console.WriteLine($"[World] Initializing scheduling workers...");
-            
+
+            EnqueueInitialChunkPositions();
+
             schedulingWorkers = new Task[chunkScheduleWorkerCount];
             for (int i = 0; i < chunkScheduleWorkerCount; i++)
             {
@@ -158,8 +160,6 @@ namespace MVGE_GEN
 
         private void InitializeGeneration()
         {
-            EnqueueInitialChunkPositions();
-
             Console.WriteLine("[World] Initializing world generation workers...");
             int proc = Environment.ProcessorCount;
             generationWorkers = new Task[generationWorkerCount];
