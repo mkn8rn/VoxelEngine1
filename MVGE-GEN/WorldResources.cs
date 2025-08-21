@@ -34,6 +34,10 @@ namespace MVGE_GEN
         // World block accessor delegates
         private Func<int, int, int, ushort> worldBlockAccessor;
 
+        // Asynchronous scheduling pipeline
+        private int chunkScheduleWorkerCount = 1; 
+        private Task[] schedulingWorkers;
+
         // Asynchronous generation pipeline
         private int generationWorkerCount;
         private Task[] generationWorkers;
@@ -45,6 +49,16 @@ namespace MVGE_GEN
         private Task[] meshBuildWorkers;
         private BlockingCollection<(int cx,int cy,int cz)> meshBuildQueue; // build tasks
         private readonly ConcurrentDictionary<(int cx, int cy, int cz), byte> meshBuildSchedule = new(); // track chunks scheduled for build
+
+        // Player current chunk position (external systems can set this). For now not wired to real player.
+        private volatile int playerChunkX;
+        private volatile int playerChunkY;
+        private volatile int playerChunkZ;
+        public (int cx, int cy, int cz) PlayerChunkPosition
+        {
+            get => (playerChunkX, playerChunkY, playerChunkZ);
+            set { playerChunkX = value.cx; playerChunkY = value.cy; playerChunkZ = value.cz; }
+        }
 
         public WorldResources()
         {
@@ -66,7 +80,11 @@ namespace MVGE_GEN
             loader.ChooseWorld();
             Console.WriteLine("World data loaded.");
 
+            worldBlockAccessor = GetBlock;
+            chunkPositionQueue = new BlockingCollection<Vector3>(new ConcurrentQueue<Vector3>());
+            meshBuildQueue = new BlockingCollection<(int cx, int cy, int cz)>(new ConcurrentQueue<(int, int, int)>());
             streamingCts = new CancellationTokenSource();
+            Console.WriteLine("World resources initialized.");
 
             bool streamGeneration = false;
             if (FlagManager.flags.renderStreamingIfAllowed is null)
@@ -74,10 +92,12 @@ namespace MVGE_GEN
                throw new InvalidOperationException("Render streaming flag is not set.");
             } else streamGeneration = FlagManager.flags.renderStreamingIfAllowed.Value;
 
-            InitializeGeneration(streamGeneration);
+            InitializeScheduling();
+
+            InitializeGeneration();
             if(streamGeneration == false) WaitForInitialChunkGeneration();
 
-            InitializeBuilding(streamGeneration);
+            InitializeBuilding();
             if (streamGeneration == false) WaitForInitialChunkRenderBuild();
         }
 
@@ -124,11 +144,20 @@ namespace MVGE_GEN
             foreach (var chunk in activeChunks.Values) chunk.Render(program);
         }
 
-        private void InitializeGeneration(bool streamGeneration)
+        private void InitializeScheduling()
         {
-            worldBlockAccessor = GetBlock;
-            chunkPositionQueue = new BlockingCollection<Vector3>(new ConcurrentQueue<Vector3>());
+            Console.WriteLine($"[World] Initializing scheduling workers...");
+            
+            schedulingWorkers = new Task[chunkScheduleWorkerCount];
+            for (int i = 0; i < chunkScheduleWorkerCount; i++)
+            {
+                schedulingWorkers[i] = Task.Run(() => ChunkSchedulingWorker(streamingCts.Token));
+            }
+            Console.WriteLine($"[World] Initialized {schedulingWorkers.Count()} scheduling workers.");
+        }
 
+        private void InitializeGeneration()
+        {
             EnqueueInitialChunkPositions();
 
             Console.WriteLine("[World] Initializing world generation workers...");
@@ -136,20 +165,13 @@ namespace MVGE_GEN
             generationWorkers = new Task[generationWorkerCount];
             for (int i = 0; i < generationWorkerCount; i++)
             {
-                generationWorkers[i] = Task.Run(() => ChunkGenerationWorker(streamingCts.Token, streamGeneration));
+                generationWorkers[i] = Task.Run(() => ChunkGenerationWorker(streamingCts.Token));
             }
             Console.WriteLine($"[World] Initialized {generationWorkers.Count()} world generation workers.");
         }
 
-        private void InitializeBuilding(bool streamGeneration)
+        private void InitializeBuilding()
         {
-            meshBuildQueue = new BlockingCollection<(int cx,int cy,int cz)>(new ConcurrentQueue<(int,int,int)>());
-
-            if(streamGeneration == false)
-            {
-                EnqueueUnbuiltChunksForBuild();
-            }
-
             Console.WriteLine("[World] Initializing mesh build workers...");
             meshBuildWorkers = new Task[meshBuildWorkerCount];
             for (int i = 0; i < meshBuildWorkerCount; i++)
@@ -225,7 +247,7 @@ namespace MVGE_GEN
             chunkPositionQueue.Add(new Vector3(worldX, worldY, worldZ));
         }
 
-        private void ChunkGenerationWorker(CancellationToken token, bool streamGeneration = false)
+        private void ChunkGenerationWorker(CancellationToken token)
         {
             string chunkSaveDirectory = Path.Combine(loader.currentWorldSaveDirectory, loader.currentWorldSavedChunksSubDirectory);
             try
@@ -246,13 +268,10 @@ namespace MVGE_GEN
 
                     chunkGenSchedule.TryRemove(key, out _);
 
-                    if(streamGeneration == true) // We don't need to rebuild meshes during initial generation
-                    {
-                        // Enqueue self for initial mesh build
-                        EnqueueMeshBuild(key, markDirty:false);
-                        // Mark neighbors so they can rebuild to hide now occluded faces (only if boundary overlap has solids)
-                        MarkNeighborsDirty(key, chunk);
-                    }
+                    // Enqueue self for initial mesh build
+                    EnqueueMeshBuild(key, markDirty:false);
+                    // Mark neighbors so they can rebuild to hide now occluded faces (only if boundary overlap has solids)
+                    MarkNeighborsDirty(key, chunk);
                 }
             }
             catch (OperationCanceledException) { }
@@ -376,6 +395,73 @@ namespace MVGE_GEN
             }
         }
 
+        // Background worker that continually ensures required chunks around player are scheduled.
+        private void ChunkSchedulingWorker(CancellationToken token)
+        {
+            int lastCenterCx = int.MinValue;
+            int lastCenterCy = int.MinValue;
+            int lastCenterCz = int.MinValue;
+            int sleepMs = 50;
+            while (!token.IsCancellationRequested)
+            {
+                var (pcx, pcy, pcz) = PlayerChunkPosition;
+                bool moved = pcx != lastCenterCx || pcy != lastCenterCy || pcz != lastCenterCz;
+                if (moved)
+                {
+                    lastCenterCx = pcx; lastCenterCy = pcy; lastCenterCz = pcz;
+                    Console.WriteLine($"[World] Player moved to chunk ({pcx}, {pcy}, {pcz}), scheduling surrounding chunks.");
+                    try
+                    {
+                        ScheduleChunksAroundPlayer(pcx, pcy, pcz);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[World] Chunk scheduling error: {ex.Message}");
+                    }
+                }
+                Thread.Sleep(sleepMs);
+            }
+        }
+
+        private void ScheduleChunksAroundPlayer(int centerCx, int centerCy, int centerCz)
+        {
+            int lodDist = GameManager.settings.lod1RenderDistance;
+            int sizeX = GameManager.settings.chunkMaxX;
+            int sizeY = GameManager.settings.chunkMaxY;
+            int sizeZ = GameManager.settings.chunkMaxZ;
+            int verticalRows = lodDist; // mirrors initial behavior
+
+            for (int radius = 0; radius < lodDist; radius++)
+            {
+                if (radius == 0)
+                {
+                    for (int vy = 0; vy < verticalRows; vy++)
+                    {
+                        int cy = centerCy + vy; // stack upward (same pattern as initial)
+                        EnqueueChunkPosition(centerCx * sizeX, (cy) * sizeY, centerCz * sizeZ);
+                    }
+                    continue;
+                }
+                int min = -radius;
+                int max = radius;
+                for (int dx = min; dx <= max; dx++)
+                {
+                    for (int dz = min; dz <= max; dz++)
+                    {
+                        if (Math.Abs(dx) != radius && Math.Abs(dz) != radius) continue; // ring perimeter
+                        for (int vy = 0; vy < verticalRows; vy++)
+                        {
+                            int cy = centerCy + vy; // stacking upward only (consistent with existing logic)
+                            int wx = (centerCx + dx) * sizeX;
+                            int wy = (cy) * sizeY;
+                            int wz = (centerCz + dz) * sizeZ;
+                            EnqueueChunkPosition(wx, wy, wz);
+                        }
+                    }
+                }
+            }
+        }
+
         public void Dispose()
         {
             try
@@ -390,6 +476,10 @@ namespace MVGE_GEN
                 if (meshBuildWorkers != null)
                 {
                     Task.WaitAll(meshBuildWorkers, TimeSpan.FromSeconds(2));
+                }
+                if (schedulingWorkers != null)
+                {
+                    Task.WaitAll(schedulingWorkers, TimeSpan.FromSeconds(2));
                 }
             }
             catch { }

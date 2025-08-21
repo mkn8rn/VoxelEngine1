@@ -98,6 +98,12 @@ namespace MVGE_GEN
             // Initialize the World rendering
             world = new WorldResources() ?? throw new Exception("world is null");
 
+            // Initialize the Player (and its Camera)
+            Console.WriteLine("Initializing player.");
+            player = new Player(world) ?? throw new Exception("player is null");
+            // Initialize player chunk position explicitly (already done in Player ctor but keep explicit for clarity)
+            world.PlayerChunkPosition = (0,0,0);
+
             // Enabling OpenGL options
             Console.WriteLine("Enabling OpenGL options.");
             GL.Enable(EnableCap.DepthTest);
@@ -111,9 +117,6 @@ namespace MVGE_GEN
             GC.WaitForPendingFinalizers();
             GC.Collect();
 
-            // Initialize the Player (and its Camera)
-            Console.WriteLine("Initializing player.");
-            player = new Player() ?? throw new Exception("player is null");
             CursorState = CursorState.Grabbed;
         }
 

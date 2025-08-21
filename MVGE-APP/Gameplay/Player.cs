@@ -6,6 +6,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using MVGE_GEN; // access WorldResources
+using MVGE_INF.Managers; // for GameManager settings
 
 namespace MVGE_GEN.Gameplay
 {
@@ -22,15 +24,24 @@ namespace MVGE_GEN.Gameplay
         public Vector3 velocity = Vector3.Zero;
         public Vector3 direction = -Vector3.UnitZ; // Facing forward
 
-        private float SPEED = 12f;
+        private float SPEED = 60f;
         private float jumpStrength = 5f;
 
         public Camera camera;
 
-        public Player()
+        private readonly WorldResources world; // reference to world for chunk scheduling
+
+        // Cache last reported chunk to avoid redundant property sets
+        private int lastChunkX = int.MinValue;
+        private int lastChunkY = int.MinValue;
+        private int lastChunkZ = int.MinValue;
+
+        public Player(WorldResources world)
         {
+            this.world = world;
             playerMode = PlayerState.Alive;
             camera = new Camera(position);
+            UpdateWorldChunkPosition(); // initialize
         }
 
         public void Update(KeyboardState input, MouseState mouse, FrameEventArgs args)
@@ -39,7 +50,31 @@ namespace MVGE_GEN.Gameplay
 
             // Only update direction, not position
             camera.UpdateDirection(direction);
+
+            UpdateWorldChunkPosition();
         }
+
+        private void UpdateWorldChunkPosition()
+        {
+            int sizeX = GameManager.settings.chunkMaxX;
+            int sizeY = GameManager.settings.chunkMaxY;
+            int sizeZ = GameManager.settings.chunkMaxZ;
+            int wx = (int)MathF.Floor(camera.position.X);
+            int wy = (int)MathF.Floor(camera.position.Y);
+            int wz = (int)MathF.Floor(camera.position.Z);
+            int cx = FloorDiv(wx, sizeX);
+            int cy = FloorDiv(wy, sizeY);
+            int cz = FloorDiv(wz, sizeZ);
+            if (cx != lastChunkX || cy != lastChunkY || cz != lastChunkZ)
+            {
+                world.PlayerChunkPosition = (cx, cy, cz);
+                lastChunkX = cx; lastChunkY = cy; lastChunkZ = cz;
+
+                Console.WriteLine($"Player chunk position updated to: ({cx}, {cy}, {cz})");
+            }
+        }
+
+        private static int FloorDiv(int a, int b) => (int)Math.Floor((double)a / b);
 
         private void HandleInput(KeyboardState input, MouseState mouse, FrameEventArgs args)
         {
