@@ -429,16 +429,20 @@ namespace MVGE_GEN
             int sizeX = GameManager.settings.chunkMaxX;
             int sizeY = GameManager.settings.chunkMaxY;
             int sizeZ = GameManager.settings.chunkMaxZ;
-            int verticalRows = lodDist; // mirrors initial behavior
+            int verticalRows = lodDist; // use same distance vertically for symmetry
+
+            // Define symmetric vertical range around player (includes center layer once)
+            int vMin = -verticalRows; // below
+            int vMax = verticalRows;  // above
 
             for (int radius = 0; radius < lodDist; radius++)
             {
                 if (radius == 0)
                 {
-                    for (int vy = 0; vy < verticalRows; vy++)
+                    for (int vy = vMin; vy <= vMax; vy++)
                     {
-                        int cy = centerCy + vy; // stack upward (same pattern as initial)
-                        EnqueueChunkPosition(centerCx * sizeX, (cy) * sizeY, centerCz * sizeZ);
+                        int cy = centerCy + vy;
+                        EnqueueChunkPosition(centerCx * sizeX, cy * sizeY, centerCz * sizeZ);
                     }
                     continue;
                 }
@@ -449,11 +453,11 @@ namespace MVGE_GEN
                     for (int dz = min; dz <= max; dz++)
                     {
                         if (Math.Abs(dx) != radius && Math.Abs(dz) != radius) continue; // ring perimeter
-                        for (int vy = 0; vy < verticalRows; vy++)
+                        for (int vy = vMin; vy <= vMax; vy++)
                         {
-                            int cy = centerCy + vy; // stacking upward only (consistent with existing logic)
+                            int cy = centerCy + vy;
                             int wx = (centerCx + dx) * sizeX;
-                            int wy = (cy) * sizeY;
+                            int wy = cy * sizeY;
                             int wz = (centerCz + dz) * sizeZ;
                             EnqueueChunkPosition(wx, wy, wz);
                         }
