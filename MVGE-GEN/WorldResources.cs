@@ -25,6 +25,9 @@ namespace MVGE_GEN
         // Track chunks marked dirty (needing rebuild) so we can coalesce multiple requests before building
         private readonly ConcurrentDictionary<(int cx, int cy, int cz), byte> dirtyChunks = new();
 
+        // Track chunks that have been cancelled (scheduled then later deemed too far before gen/build)
+        private readonly ConcurrentDictionary<(int cx, int cy, int cz), byte> cancelledChunks = new();
+
         // Cancellation token for streaming operations
         private CancellationTokenSource streamingCts;
 
@@ -256,6 +259,23 @@ namespace MVGE_GEN
                 {
                     if (token.IsCancellationRequested) break;
 
+                    // quick discard if far / cancelled before doing any work
+                    int sizeX = GameManager.settings.chunkMaxX;
+                    int sizeY = GameManager.settings.chunkMaxY;
+                    int sizeZ = GameManager.settings.chunkMaxZ;
+                    int cx = (int)Math.Floor(pos.X / sizeX);
+                    int cy = (int)Math.Floor(pos.Y / sizeY);
+                    int cz = (int)Math.Floor(pos.Z / sizeZ);
+                    var key = (cx, cy, cz);
+                    int lodDist = GameManager.settings.lod1RenderDistance;
+                    int verticalRange = lodDist; // symmetric
+                    if (cancelledChunks.ContainsKey(key) || Math.Abs(cx - playerChunkX) >= lodDist || Math.Abs(cz - playerChunkZ) >= lodDist || Math.Abs(cy - playerChunkY) > verticalRange)
+                    {
+                        chunkGenSchedule.TryRemove(key, out _);
+                        cancelledChunks.TryRemove(key, out _);
+                        continue; // skip generation
+                    }
+
                     // Heightmap reuse per (x,z) across vertical stack
                     int baseX = (int)pos.X;
                     int baseZ = (int)pos.Z;
@@ -263,7 +283,6 @@ namespace MVGE_GEN
                     float[,] heightmap = heightmapCache.GetOrAdd(hmKey, _ => Chunk.GenerateHeightMap(loader.seed, baseX, baseZ));
 
                     var chunk = new Chunk(pos, loader.seed, Path.Combine(loader.currentWorldSaveDirectory, loader.currentWorldSavedChunksSubDirectory), heightmap);
-                    var key = ChunkIndexKey((int)pos.X, (int)pos.Y, (int)pos.Z);
                     unbuiltChunks[key] = chunk;
 
                     chunkGenSchedule.TryRemove(key, out _);
@@ -361,6 +380,18 @@ namespace MVGE_GEN
                 {
                     if (token.IsCancellationRequested) break;
 
+                    // distance cull before building
+                    int lodDist = GameManager.settings.lod1RenderDistance;
+                    int verticalRange = lodDist;
+                    if (Math.Abs(key.cx - playerChunkX) >= lodDist || Math.Abs(key.cz - playerChunkZ) >= lodDist || Math.Abs(key.cy - playerChunkY) > verticalRange)
+                    {
+                        // remove any stale data
+                        unbuiltChunks.TryRemove(key, out _);
+                        meshBuildSchedule.TryRemove(key, out _);
+                        dirtyChunks.TryRemove(key, out _);
+                        continue;
+                    }
+
                     meshBuildSchedule.TryRemove(key, out _);
 
                     // Acquire chunk from either dictionary
@@ -413,6 +444,7 @@ namespace MVGE_GEN
                     try
                     {
                         ScheduleChunksAroundPlayer(pcx, pcy, pcz);
+                        UnloadFarChunks(pcx, pcy, pcz);
                     }
                     catch (Exception ex)
                     {
@@ -461,6 +493,41 @@ namespace MVGE_GEN
                             int wz = (centerCz + dz) * sizeZ;
                             EnqueueChunkPosition(wx, wy, wz);
                         }
+                    }
+                }
+            }
+        }
+
+        // Unload chunks (active or unbuilt) outside of current interest radius.
+        private void UnloadFarChunks(int centerCx, int centerCy, int centerCz)
+        {
+            int lodDist = GameManager.settings.lod1RenderDistance;
+            int verticalRange = lodDist;
+
+            // Active chunks
+            foreach (var key in activeChunks.Keys.ToArray())
+            {
+                if (Math.Abs(key.cx - centerCx) >= lodDist || Math.Abs(key.cz - centerCz) >= lodDist || Math.Abs(key.cy - centerCy) > verticalRange)
+                {
+                    if (activeChunks.TryRemove(key, out var chunk))
+                    {
+                        chunk.chunkRender?.ScheduleDelete();
+                        dirtyChunks.TryRemove(key, out _);
+                        meshBuildSchedule.TryRemove(key, out _);
+                    }
+                }
+            }
+            // Unbuilt chunks (cancel generation / building if far)
+            foreach (var key in unbuiltChunks.Keys.ToArray())
+            {
+                if (Math.Abs(key.cx - centerCx) >= lodDist || Math.Abs(key.cz - centerCz) >= lodDist || Math.Abs(key.cy - centerCy) > verticalRange)
+                {
+                    if (unbuiltChunks.TryRemove(key, out _))
+                    {
+                        cancelledChunks[key] = 0; // mark so generation worker discards if not yet processed
+                        chunkGenSchedule.TryRemove(key, out _);
+                        meshBuildSchedule.TryRemove(key, out _);
+                        dirtyChunks.TryRemove(key, out _);
                     }
                 }
             }
