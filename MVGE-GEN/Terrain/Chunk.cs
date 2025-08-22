@@ -91,9 +91,8 @@ namespace MVGE_GEN.Terrain
             float[,] heightmap = precomputedHeightmap ?? GenerateHeightMap(generationSeed);
 
             int chunkBaseY = (int)position.Y;
-            int chunkTopY = chunkBaseY + maxY - 1;
 
-            // Clamp biome Y levels into this chunk's vertical span for calculation convenience
+            // Biome absolute bounds
             int stoneMinY = biome.stone_min_ylevel;
             int stoneMaxY = biome.stone_max_ylevel;
             int soilMinY = biome.soil_min_ylevel;
@@ -103,87 +102,97 @@ namespace MVGE_GEN.Terrain
             {
                 for (int z = 0; z < maxZ; z++)
                 {
-                    int columnHeight = (int)heightmap[x, z];
+                    int columnHeight = (int)heightmap[x, z]; // inclusive highest world Y occupied by terrain
 
-                    // Determine stone band actual world y range for this column
+                    // STONE CALCULATION
                     int stoneBandStartWorld = Math.Max(stoneMinY, 0);
-                    int stoneBandEndWorld = stoneMaxY; // inclusive upper cap from biome definition
-                    if (stoneBandEndWorld < stoneBandStartWorld) continue; // invalid config
+                    int stoneBandEndWorld = Math.Min(stoneMaxY, columnHeight); // cannot exceed actual terrain top
+                    if (stoneBandEndWorld < stoneBandStartWorld)
+                        continue; // nothing to place at all (also implies no soil since terrain lower than bands)
 
-                    int finalStoneTopWorld = stoneBandStartWorld - 1; // initialize below start so we know if set
-                    int finalStoneBottomWorld = stoneBandStartWorld; // default
+                    int available = stoneBandEndWorld - stoneBandStartWorld + 1; // total vertical cells available for stone+reserved soil
+                    if (available <= 0)
+                        continue;
 
-                    // The top of natural terrain is columnHeight; stone cannot exceed that.
-                    int stoneTopWorld = Math.Min(columnHeight, stoneBandEndWorld);
-                    int stoneBottomWorld = stoneBandStartWorld;
+                    // Reserve minimum soil depth (clamped to available)
+                    int soilMinReserve = Math.Clamp(biome.soil_min_depth, 0, available);
 
-                    // Apply depth constraints (min/max depth counts thickness of stone layer)
-                    int stoneDesiredMinDepth = biome.stone_min_depth;
-                    int stoneDesiredMaxDepth = biome.stone_max_depth;
+                    // Desired stone depths
+                    int stoneMinDepth = biome.stone_min_depth;
+                    int stoneMaxDepth = biome.stone_max_depth;
 
-                    int availableStoneDepth = stoneTopWorld - stoneBottomWorld + 1;
-                    if (availableStoneDepth > 0)
+                    // Raw candidate per spec: stoneDepth = min(stoneMaxDepth, max(stoneMinDepth, available - soilMinReserve))
+                    int rawStoneDepth = available - soilMinReserve;
+                    int stoneDepth = Math.Min(stoneMaxDepth, Math.Max(stoneMinDepth, rawStoneDepth));
+                    if (stoneDepth > available) stoneDepth = available; // safety clamp if spec overflows
+
+                    // Recompute actual reserved soil left after assigning stone
+                    int remainingForSoil = available - stoneDepth; // may be < soilMinReserve if clamped
+
+                    int finalStoneBottomWorld = stoneBandStartWorld;
+                    int finalStoneTopWorld = finalStoneBottomWorld + stoneDepth - 1; // inclusive
+
+                    // Place stone (clamp to chunk vertical span)
+                    int localStoneStart = finalStoneBottomWorld - chunkBaseY;
+                    int localStoneEnd = finalStoneTopWorld - chunkBaseY;
+                    if (localStoneEnd >= 0 && localStoneStart < maxY)
                     {
-                        int stoneDepth = Math.Max(stoneDesiredMinDepth, Math.Min(stoneDesiredMaxDepth, availableStoneDepth));
-                        finalStoneTopWorld = stoneTopWorld;
-                        finalStoneBottomWorld = finalStoneTopWorld - stoneDepth + 1;
-                        if (finalStoneBottomWorld < stoneBottomWorld)
-                            finalStoneBottomWorld = stoneBottomWorld;
-                        stoneDepth = finalStoneTopWorld - finalStoneBottomWorld + 1;
-
-                    // Convert to local chunk Y and write stone blocks
-                        int localStoneStart = finalStoneBottomWorld - chunkBaseY;
-                        int localStoneEnd = finalStoneTopWorld - chunkBaseY;
-
-                        if (localStoneEnd >= 0 && localStoneStart < maxY)
+                        if (localStoneStart < 0) localStoneStart = 0;
+                        if (localStoneEnd >= maxY) localStoneEnd = maxY - 1;
+                        if (localStoneStart <= localStoneEnd)
                         {
-                            if (localStoneStart < 0) localStoneStart = 0;
-                            if (localStoneEnd >= maxY) localStoneEnd = maxY - 1;
-                            if (localStoneStart <= localStoneEnd)
+                            int sxBase = x >> SECTION_SHIFT;
+                            int szBase = z >> SECTION_SHIFT;
+                            for (int ly = localStoneStart; ly <= localStoneEnd; ly++)
                             {
-                            // Ensure sections exist
-                                int sx = x >> SECTION_SHIFT;
-                                int sz = z >> SECTION_SHIFT;
-                                for (int ly = localStoneStart; ly <= localStoneEnd; ly++)
-                                {
-                                    int sy = ly >> SECTION_SHIFT;
-                                    if (sections[sx, sy, sz] == null)
-                                        sections[sx, sy, sz] = new ChunkSection();
-                                    SetBlockLocal(x, ly, z, (ushort)BaseBlockType.Stone);
-                                }
+                                int sy = ly >> SECTION_SHIFT;
+                                if (sections[sxBase, sy, szBase] == null)
+                                    sections[sxBase, sy, szBase] = new ChunkSection();
+                                SetBlockLocal(x, ly, z, (ushort)BaseBlockType.Stone);
                             }
                         }
                     }
 
-                    // Soil layer: absolute y limits but depth counts only soil placed
-                    int soilBandStartWorld = Math.Max(soilMinY, 0);
-                    int soilBandEndWorld = soilMaxY;
-                    if (soilBandEndWorld < soilBandStartWorld) continue;
+                    // SOIL CALCULATION
+                    // Soil starts directly above stone; if no stone depth (stoneDepth==0) it starts at stoneBandStartWorld.
+                    int soilStartWorld = finalStoneTopWorld + 1;
+                    if (stoneDepth == 0) soilStartWorld = stoneBandStartWorld; // no stone placed, soil may start at band start
 
-                    int soilDesiredMinDepth = biome.soil_min_depth;
-                    int soilDesiredMaxDepth = biome.soil_max_depth;
+                    // Enforce absolute biome soil band bounds
+                    if (soilStartWorld < soilMinY) soilStartWorld = soilMinY;
+                    if (soilStartWorld > soilMaxY) continue; // out of soil band already
 
-                    int soilPlacementTopWorld = Math.Min(columnHeight, soilBandEndWorld);
-                    if (soilPlacementTopWorld < soilBandStartWorld) continue; // no soil possible
+                    int soilBandCapWorld = Math.Min(soilMaxY, columnHeight);
+                    if (soilBandCapWorld < soilStartWorld) continue; // no vertical space for soil
 
-                    int soilCursorWorld = finalStoneTopWorld + 1; // first potential soil block right above stone (or just above startWorld-1 if no stone)
-                    if (soilCursorWorld < soilBandStartWorld) soilCursorWorld = soilBandStartWorld;
+                    // Remaining vertical space up to cap
+                    int soilAvailable = soilBandCapWorld - soilStartWorld + 1;
+                    if (soilAvailable <= 0) continue;
 
-                    int soilPlaced = 0;
-                    while (soilCursorWorld <= soilPlacementTopWorld && soilPlaced < soilDesiredMaxDepth)
+                    int soilMaxDepth = biome.soil_max_depth;
+                    int soilDepth = Math.Min(soilMaxDepth, soilAvailable);
+
+                    int soilEndWorld = soilStartWorld + soilDepth - 1;
+
+                    // Place soil
+                    int localSoilStart = soilStartWorld - chunkBaseY;
+                    int localSoilEnd = soilEndWorld - chunkBaseY;
+                    if (localSoilEnd >= 0 && localSoilStart < maxY)
                     {
-                        int localY = soilCursorWorld - chunkBaseY;
-                        if (localY >= 0 && localY < maxY)
+                        if (localSoilStart < 0) localSoilStart = 0;
+                        if (localSoilEnd >= maxY) localSoilEnd = maxY - 1;
+                        if (localSoilStart <= localSoilEnd)
                         {
-                            int sx = x >> SECTION_SHIFT;
-                            int sz = z >> SECTION_SHIFT;
-                            int sy = localY >> SECTION_SHIFT;
-                            if (sections[sx, sy, sz] == null)
-                                sections[sx, sy, sz] = new ChunkSection();
-                            SetBlockLocal(x, localY, z, (ushort)BaseBlockType.Soil);
+                            int sxBase = x >> SECTION_SHIFT;
+                            int szBase = z >> SECTION_SHIFT;
+                            for (int ly = localSoilStart; ly <= localSoilEnd; ly++)
+                            {
+                                int sy = ly >> SECTION_SHIFT;
+                                if (sections[sxBase, sy, szBase] == null)
+                                    sections[sxBase, sy, szBase] = new ChunkSection();
+                                SetBlockLocal(x, ly, z, (ushort)BaseBlockType.Soil);
+                            }
                         }
-                        soilPlaced++;
-                        soilCursorWorld++;
                     }
                 }
             }
