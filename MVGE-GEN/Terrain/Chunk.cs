@@ -39,6 +39,10 @@ namespace MVGE_GEN.Terrain
 
         private Biome biome; // biome used for this chunk
 
+        // Occupancy flags
+        public bool IsEmpty { get; private set; }
+        public bool HasAnyBoundarySolid { get; private set; }
+
         public Chunk(Vector3 chunkPosition, long seed, string chunkDataDirectory, float[,] precomputedHeightmap = null)
         {
             position = chunkPosition;
@@ -301,11 +305,14 @@ namespace MVGE_GEN.Terrain
             SectionUtils.SetBlock(sec, ox, oy, oz, blockId);
         }
 
-        private void FlattenSectionsInto(ushort[] dest)
+        private int FlattenSectionsInto(ushort[] dest)
         {
             int strideX = dimZ * dimY; // (x * dimZ + z) * dimY + y
             int strideZ = dimY;
             int sectionSize = ChunkSection.SECTION_SIZE;
+
+            int nonAirTotal = 0;
+            HasAnyBoundarySolid = false;
 
             for (int sx = 0; sx < sectionsX; sx++)
             {
@@ -323,7 +330,7 @@ namespace MVGE_GEN.Terrain
                         int maxLocalZ = Math.Min(sectionSize, dimZ - baseZ);
                         int maxLocalY = Math.Min(sectionSize, dimY - baseY);
 
-                        // Uniform non-air fast path: palette [AIR, singleSolid] and fully filled.
+                        // Uniform non-air fast path
                         if (sec.Palette != null &&
                             sec.Palette.Count == 2 &&
                             sec.Palette[0] == ChunkSection.AIR &&
@@ -331,6 +338,11 @@ namespace MVGE_GEN.Terrain
                             sec.VoxelCount != 0)
                         {
                             ushort solid = sec.Palette[1];
+                            int voxels = maxLocalX * maxLocalZ * maxLocalY;
+                            nonAirTotal += voxels;
+                            // Boundary contact check
+                            if (!HasAnyBoundarySolid && (baseX == 0 || baseY == 0 || baseZ == 0 || baseX + maxLocalX == dimX || baseY + maxLocalY == dimY || baseZ + maxLocalZ == dimZ))
+                                HasAnyBoundarySolid = true;
                             for (int lx = 0; lx < maxLocalX; lx++)
                             {
                                 int gx = baseX + lx; int destXBase = gx * strideX;
@@ -343,7 +355,7 @@ namespace MVGE_GEN.Terrain
                             continue;
                         }
 
-                        // General path: decode on the fly from BitData.
+                        // General path
                         int sectionPlane = sectionSize * sectionSize; // 256
                         int bitsPer = sec.BitsPerIndex;
                         uint[] bitData = sec.BitData;
@@ -355,9 +367,11 @@ namespace MVGE_GEN.Terrain
                         for (int lx = 0; lx < maxLocalX; lx++)
                         {
                             int gx = baseX + lx; int destXBase = gx * strideX;
+                            bool boundaryX = gx == 0 || gx == dimX - 1;
                             for (int lz = 0; lz < maxLocalZ; lz++)
                             {
                                 int gz = baseZ + lz; int destZBase = destXBase + gz * strideZ;
+                                bool boundaryXZ = boundaryX || gz == 0 || gz == dimZ - 1;
                                 int baseXZ = lz * sectionSize + lx; // add ly*256 inside y loop
                                 for (int ly = 0; ly < maxLocalY; ly++)
                                 {
@@ -373,13 +387,22 @@ namespace MVGE_GEN.Terrain
                                         value |= bitData[dataIndex + 1] << remaining;
                                     }
                                     int paletteIndex = (int)(value & (uint)mask);
-                                    dest[destZBase + gy] = palette[paletteIndex];
+                                    ushort id = palette[paletteIndex];
+                                    dest[destZBase + gy] = id;
+                                    if (id != ChunkSection.AIR)
+                                    {
+                                        nonAirTotal++;
+                                        if (!HasAnyBoundarySolid && (boundaryXZ || gy == 0 || gy == dimY - 1))
+                                            HasAnyBoundarySolid = true;
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
+            IsEmpty = nonAirTotal == 0;
+            return nonAirTotal;
         }
 
         public void BuildRender(Func<int, int, int, ushort> worldBlockGetter)
@@ -389,7 +412,14 @@ namespace MVGE_GEN.Terrain
             int voxelCount = dimX * dimY * dimZ;
             ushort[] flat = ArrayPool<ushort>.Shared.Rent(voxelCount);
             for (int i = 0; i < flat.Length; i++) flat[i] = EMPTY; // initialize (air)
-            FlattenSectionsInto(flat);
+            int nonAir = FlattenSectionsInto(flat);
+
+            if (nonAir == 0)
+            {
+                // Return buffer immediately; skip creating a render instance for empty chunks
+                ArrayPool<ushort>.Shared.Return(flat, false);
+                return; // chunkRender stays null; Render() will no-op
+            }
 
             chunkRender = new ChunkRender(
                 chunkData,
