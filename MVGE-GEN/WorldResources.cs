@@ -1,6 +1,5 @@
 ﻿using MVGE_GFX;
 using MVGE_INF.Managers;
-using MVGE_INF.Models.Terrain;
 using OpenTK.Mathematics;
 using System;
 using System.Collections.Concurrent;
@@ -12,6 +11,7 @@ using System.Threading.Tasks;
 using System.Diagnostics;
 using MVGE_INF.Loaders;
 using MVGE_GEN.Terrain;
+using MVGE_INF.Models.Terrain;
 
 namespace MVGE_GEN
 {

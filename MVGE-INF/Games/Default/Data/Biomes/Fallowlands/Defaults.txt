@@ -1,0 +1,8 @@
+﻿stone_min_ylevel=0
+stone_max_ylevel=8000
+stone_min_depth=320
+stone_max_depth=8000
+soil_min_ylevel=0
+soil_max_ylevel=5600
+soil_min_depth=320
+soil_max_depth=3200

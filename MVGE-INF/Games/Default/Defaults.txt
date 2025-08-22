@@ -1,6 +1,8 @@
 ﻿chunkMaxX=160
 chunkMaxZ=160
 chunkMaxY=160
+maxWorldHeight=160000
+minWorldHeight=0
 blockTileWidth=32
 blockTileHeight=32
 textureFileExtension=.png

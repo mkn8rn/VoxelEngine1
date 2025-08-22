@@ -77,6 +77,11 @@ namespace MVGE_GEN
             string game = GameManager.SelectGameFolder();
             GameManager.LoadGameDefaultSettings(game);
 
+            // Load biomes after game settings
+            Console.WriteLine("Biomes loading.");
+            BiomeManager.LoadAllBiomes();
+            Console.WriteLine($"Loaded {BiomeManager.Biomes.Count} biome(s).");
+
             // Initialize the Data Loaders
             Console.WriteLine("Data loaders initializing.");
             blockDataLoader = new TerrainLoader() ?? throw new Exception("blockDataLoader is null");

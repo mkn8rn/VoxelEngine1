@@ -1,7 +1,6 @@
 ﻿using MVGE_GFX.BufferObjects;
 using MVGE_GFX.Models;
 using MVGE_INF.Managers;
-using MVGE_INF.Models.Terrain;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 using System;
@@ -9,6 +8,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Buffers;
 using System.Runtime.CompilerServices;
+using MVGE_INF.Models.Terrain;
 
 namespace MVGE_GFX.Terrain
 {
