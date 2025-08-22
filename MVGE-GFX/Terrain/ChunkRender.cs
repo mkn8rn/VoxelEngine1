@@ -72,7 +72,7 @@ namespace MVGE_GFX.Terrain
             return arr;
         }
 
-        // Bit flags for mask (order chosen to match emission mapping below)
+        // Bit flags for mask
         private const byte FACE_LEFT = 1 << 0;
         private const byte FACE_RIGHT = 1 << 1;
         private const byte FACE_TOP = 1 << 2;
@@ -249,7 +249,7 @@ namespace MVGE_GFX.Terrain
             }
             else
             {
-                GenerateFacesListFlatMaskedTwoPass();
+                GenerateFacesListFlatMaskedTwoPass_BB();
                 ReturnFlat();
             }
         }
@@ -308,57 +308,95 @@ namespace MVGE_GFX.Terrain
             return true;
         }
 
-        // Optimized two-pass: Pass 1 builds face visibility mask & counts faces; Pass 2 emits.
-        private void GenerateFacesListFlatMaskedTwoPass()
+        // Bounding-box aware masked two-pass generation.
+        private void GenerateFacesListFlatMaskedTwoPass_BB()
         {
-            int strideX = maxZ * maxY; // delta for +/- X neighbor
-            int strideZ = maxY;       // delta for +/- Z neighbor
+            int strideX = maxZ * maxY;
+            int strideZ = maxY;
 
-            // Allocate mask array (byte per voxel). Will be large but transient; pool for reuse.
-            byte[] masks = ArrayPool<byte>.Shared.Rent(flatBlocks.Length);
-            Array.Clear(masks, 0, flatBlocks.Length);
+            // First pass: determine bounding box of non-empty voxels (no allocations yet)
+            int minX = maxX, minY = maxY, minZ = maxZ;
+            int maxXb = -1, maxYb = -1, maxZb = -1;
+            bool any = false;
+            for (int x = 0; x < maxX; x++)
+            {
+                int xBase = x * strideX;
+                for (int z = 0; z < maxZ; z++)
+                {
+                    int zBase = xBase + z * maxY;
+                    for (int y = 0; y < maxY; y++)
+                    {
+                        int li = zBase + y;
+                        if (flatBlocks[li] == emptyBlock) continue;
+                        any = true;
+                        if (x < minX) minX = x; if (x > maxXb) maxXb = x;
+                        if (y < minY) minY = y; if (y > maxYb) maxYb = y;
+                        if (z < minZ) minZ = z; if (z > maxZb) maxZb = z;
+                    }
+                }
+            }
+            if (!any)
+            {
+                chunkVertsList = new List<byte>(0);
+                chunkUVsList = new List<byte>(0);
+                chunkIndicesList = new List<uint>(0);
+                indexFormat = IndexFormat.UInt;
+                return;
+            }
+
+            // If bounding box covers entire chunk, fall back to existing method (no extra indirection)
+            if (minX == 0 && minY == 0 && minZ == 0 && maxXb == maxX - 1 && maxYb == maxY - 1 && maxZb == maxZ - 1)
+            {
+                GenerateFacesListFlatMaskedTwoPass_Full();
+                return;
+            }
+
+            int spanX = maxXb - minX + 1;
+            int spanY = maxYb - minY + 1;
+            int spanZ = maxZb - minZ + 1;
+            int regionVolume = spanX * spanY * spanZ;
+
+            byte[] masks = ArrayPool<byte>.Shared.Rent(regionVolume);
+            Array.Clear(masks, 0, regionVolume);
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            int MaskIndex(int x, int y, int z) => ((x - minX) * spanZ + (z - minZ)) * spanY + (y - minY);
 
             int totalFaces = 0;
             int baseWX = (int)chunkWorldPosition.X;
             int baseWY = (int)chunkWorldPosition.Y;
             int baseWZ = (int)chunkWorldPosition.Z;
 
-            // PASS 1: compute masks & count faces
-            for (int x = 0; x < maxX; x++)
+            // PASS 1 restricted to bounding box
+            for (int x = minX; x <= maxXb; x++)
             {
                 int xBase = x * strideX;
                 int wx = baseWX + x;
-                bool atMinX = x == 0;
-                bool atMaxX = x == maxX - 1;
-                for (int z = 0; z < maxZ; z++)
+                bool chunkMinX = x == 0;
+                bool chunkMaxX = x == maxX - 1;
+                for (int z = minZ; z <= maxZb; z++)
                 {
                     int zBase = xBase + z * maxY;
                     int wz = baseWZ + z;
-                    bool atMinZ = z == 0;
-                    bool atMaxZ = z == maxZ - 1;
-                    for (int y = 0; y < maxY; y++)
+                    bool chunkMinZ = z == 0;
+                    bool chunkMaxZ = z == maxZ - 1;
+                    for (int y = minY; y <= maxYb; y++)
                     {
                         int li = zBase + y;
                         ushort block = flatBlocks[li];
                         if (block == emptyBlock) continue;
                         int wy = baseWY + y;
-                        bool atMinY = y == 0;
-                        bool atMaxY = y == maxY - 1;
+                        bool chunkMinY = y == 0;
+                        bool chunkMaxY = y == maxY - 1;
                         byte mask = 0;
-                        // LEFT (-X)
-                        if (atMinX ? getWorldBlock(wx - 1, wy, wz) == emptyBlock : flatBlocks[li - strideX] == emptyBlock) mask |= FACE_LEFT;
-                        // RIGHT (+X)
-                        if (atMaxX ? getWorldBlock(wx + 1, wy, wz) == emptyBlock : flatBlocks[li + strideX] == emptyBlock) mask |= FACE_RIGHT;
-                        // TOP (+Y)
-                        if (atMaxY ? getWorldBlock(wx, wy + 1, wz) == emptyBlock : flatBlocks[li + 1] == emptyBlock) mask |= FACE_TOP;
-                        // BOTTOM (-Y)
-                        if (atMinY ? getWorldBlock(wx, wy - 1, wz) == emptyBlock : flatBlocks[li - 1] == emptyBlock) mask |= FACE_BOTTOM;
-                        // FRONT (+Z)
-                        if (atMaxZ ? getWorldBlock(wx, wy, wz + 1) == emptyBlock : flatBlocks[li + strideZ] == emptyBlock) mask |= FACE_FRONT;
-                        // BACK (-Z)
-                        if (atMinZ ? getWorldBlock(wx, wy, wz - 1) == emptyBlock : flatBlocks[li - strideZ] == emptyBlock) mask |= FACE_BACK;
+                        if (chunkMinX ? getWorldBlock(wx - 1, wy, wz) == emptyBlock : flatBlocks[li - strideX] == emptyBlock) mask |= FACE_LEFT;
+                        if (chunkMaxX ? getWorldBlock(wx + 1, wy, wz) == emptyBlock : flatBlocks[li + strideX] == emptyBlock) mask |= FACE_RIGHT;
+                        if (chunkMaxY ? getWorldBlock(wx, wy + 1, wz) == emptyBlock : flatBlocks[li + 1] == emptyBlock) mask |= FACE_TOP;
+                        if (chunkMinY ? getWorldBlock(wx, wy - 1, wz) == emptyBlock : flatBlocks[li - 1] == emptyBlock) mask |= FACE_BOTTOM;
+                        if (chunkMaxZ ? getWorldBlock(wx, wy, wz + 1) == emptyBlock : flatBlocks[li + strideZ] == emptyBlock) mask |= FACE_FRONT;
+                        if (chunkMinZ ? getWorldBlock(wx, wy, wz - 1) == emptyBlock : flatBlocks[li - strideZ] == emptyBlock) mask |= FACE_BACK;
                         if (mask == 0) continue;
-                        masks[li] = mask;
+                        masks[MaskIndex(x, y, z)] = mask;
                         totalFaces += FacePopCount[mask];
                     }
                 }
@@ -380,26 +418,18 @@ namespace MVGE_GFX.Terrain
 
             chunkVertsList = new List<byte>(totalVerts * 3);
             chunkUVsList = new List<byte>(totalVerts * 2);
-            if (useUShortIndices)
-                chunkIndicesUShortList = new List<ushort>(totalFaces * 6);
-            else
-                chunkIndicesList = new List<uint>(totalFaces * 6);
+            if (useUShortIndices) chunkIndicesUShortList = new List<ushort>(totalFaces * 6); else chunkIndicesList = new List<uint>(totalFaces * 6);
 
             int currentVertexBase = 0;
-
-            // PASS 2: emit using masks
-            for (int x = 0; x < maxX; x++)
+            for (int x = minX; x <= maxXb; x++)
             {
-                int xBase = x * strideX;
-                for (int z = 0; z < maxZ; z++)
+                for (int z = minZ; z <= maxZb; z++)
                 {
-                    int zBase = xBase + z * maxY;
-                    for (int y = 0; y < maxY; y++)
+                    for (int y = minY; y <= maxYb; y++)
                     {
-                        int li = zBase + y;
-                        byte mask = masks[li];
+                        byte mask = masks[MaskIndex(x, y, z)];
                         if (mask == 0) continue;
-                        ushort block = flatBlocks[li];
+                        ushort block = flatBlocks[(x * maxZ + z) * maxY + y];
                         var bp = new ByteVector3 { x = (byte)x, y = (byte)y, z = (byte)z };
                         if ((mask & FACE_LEFT) != 0) IntegrateFaceListEmit(block, Faces.LEFT, bp, ref currentVertexBase, useUShortIndices);
                         if ((mask & FACE_RIGHT) != 0) IntegrateFaceListEmit(block, Faces.RIGHT, bp, ref currentVertexBase, useUShortIndices);
@@ -411,6 +441,60 @@ namespace MVGE_GFX.Terrain
                 }
             }
 
+            ArrayPool<byte>.Shared.Return(masks, false);
+        }
+
+        // Fallback full-volume masked two-pass (previous implementation) when bounding box covers whole chunk
+        private void GenerateFacesListFlatMaskedTwoPass_Full()
+        {
+            int strideX = maxZ * maxY; int strideZ = maxY;
+            byte[] masks = ArrayPool<byte>.Shared.Rent(flatBlocks.Length);
+            Array.Clear(masks, 0, flatBlocks.Length);
+            int totalFaces = 0; int baseWX = (int)chunkWorldPosition.X; int baseWY = (int)chunkWorldPosition.Y; int baseWZ = (int)chunkWorldPosition.Z;
+            for (int x = 0; x < maxX; x++)
+            {
+                int xBase = x * strideX; int wx = baseWX + x; bool atMinX = x == 0; bool atMaxX = x == maxX - 1;
+                for (int z = 0; z < maxZ; z++)
+                {
+                    int zBase = xBase + z * maxY; int wz = baseWZ + z; bool atMinZ = z == 0; bool atMaxZ = z == maxZ - 1;
+                    for (int y = 0; y < maxY; y++)
+                    {
+                        int li = zBase + y; ushort block = flatBlocks[li]; if (block == emptyBlock) continue; int wy = baseWY + y; bool atMinY = y == 0; bool atMaxY = y == maxY - 1; byte mask = 0;
+                        if (atMinX ? getWorldBlock(wx - 1, wy, wz) == emptyBlock : flatBlocks[li - strideX] == emptyBlock) mask |= FACE_LEFT;
+                        if (atMaxX ? getWorldBlock(wx + 1, wy, wz) == emptyBlock : flatBlocks[li + strideX] == emptyBlock) mask |= FACE_RIGHT;
+                        if (atMaxY ? getWorldBlock(wx, wy + 1, wz) == emptyBlock : flatBlocks[li + 1] == emptyBlock) mask |= FACE_TOP;
+                        if (atMinY ? getWorldBlock(wx, wy - 1, wz) == emptyBlock : flatBlocks[li - 1] == emptyBlock) mask |= FACE_BOTTOM;
+                        if (atMaxZ ? getWorldBlock(wx, wy, wz + 1) == emptyBlock : flatBlocks[li + strideZ] == emptyBlock) mask |= FACE_FRONT;
+                        if (atMinZ ? getWorldBlock(wx, wy, wz - 1) == emptyBlock : flatBlocks[li - strideZ] == emptyBlock) mask |= FACE_BACK;
+                        if (mask == 0) continue; masks[li] = mask; totalFaces += FacePopCount[mask];
+                    }
+                }
+            }
+            if (totalFaces == 0)
+            {
+                chunkVertsList = new List<byte>(0); chunkUVsList = new List<byte>(0); chunkIndicesList = new List<uint>(0); indexFormat = IndexFormat.UInt; ArrayPool<byte>.Shared.Return(masks, false); return;
+            }
+            int totalVerts = totalFaces * 4; bool useUShortIndices = totalVerts <= 65535; indexFormat = useUShortIndices ? IndexFormat.UShort : IndexFormat.UInt;
+            chunkVertsList = new List<byte>(totalVerts * 3); chunkUVsList = new List<byte>(totalVerts * 2); if (useUShortIndices) chunkIndicesUShortList = new List<ushort>(totalFaces * 6); else chunkIndicesList = new List<uint>(totalFaces * 6);
+            int currentVertexBase = 0;
+            for (int x = 0; x < maxX; x++)
+            {
+                int xBase = x * strideX;
+                for (int z = 0; z < maxZ; z++)
+                {
+                    int zBase = xBase + z * maxY;
+                    for (int y = 0; y < maxY; y++)
+                    {
+                        int li = zBase + y; byte mask = masks[li]; if (mask == 0) continue; ushort block = flatBlocks[li]; var bp = new ByteVector3 { x = (byte)x, y = (byte)y, z = (byte)z };
+                        if ((mask & FACE_LEFT) != 0) IntegrateFaceListEmit(block, Faces.LEFT, bp, ref currentVertexBase, useUShortIndices);
+                        if ((mask & FACE_RIGHT) != 0) IntegrateFaceListEmit(block, Faces.RIGHT, bp, ref currentVertexBase, useUShortIndices);
+                        if ((mask & FACE_TOP) != 0) IntegrateFaceListEmit(block, Faces.TOP, bp, ref currentVertexBase, useUShortIndices);
+                        if ((mask & FACE_BOTTOM) != 0) IntegrateFaceListEmit(block, Faces.BOTTOM, bp, ref currentVertexBase, useUShortIndices);
+                        if ((mask & FACE_FRONT) != 0) IntegrateFaceListEmit(block, Faces.FRONT, bp, ref currentVertexBase, useUShortIndices);
+                        if ((mask & FACE_BACK) != 0) IntegrateFaceListEmit(block, Faces.BACK, bp, ref currentVertexBase, useUShortIndices);
+                    }
+                }
+            }
             ArrayPool<byte>.Shared.Return(masks, false);
         }
 

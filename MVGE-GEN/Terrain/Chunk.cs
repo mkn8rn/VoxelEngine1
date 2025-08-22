@@ -235,9 +235,9 @@ namespace MVGE_GEN.Terrain
             int maxX = GameManager.settings.chunkMaxX;
             int maxZ = GameManager.settings.chunkMaxZ;
             float[,] heightmap = new float[maxX, maxZ];
-            float scale = 0.0005f;
+            float scale = 0.005f;
             float minHeight = 1f;
-            float maxHeight = 4000f;
+            float maxHeight = 1000f;
 
             for (int x = 0; x < maxX; x++)
             {
