@@ -132,7 +132,7 @@ namespace MVGE_GEN.Terrain
                     int finalStoneBottomWorld = stoneBandStartWorld;
                     int finalStoneTopWorld = finalStoneBottomWorld + stoneDepth - 1; // inclusive
 
-                    // Place stone (clamp to chunk vertical span)
+                    // Place stone (clamp to chunk vertical span) using bulk column fill
                     int localStoneStart = finalStoneBottomWorld - chunkBaseY;
                     int localStoneEnd = finalStoneTopWorld - chunkBaseY;
                     if (localStoneEnd >= 0 && localStoneStart < maxY)
@@ -141,14 +141,19 @@ namespace MVGE_GEN.Terrain
                         if (localStoneEnd >= maxY) localStoneEnd = maxY - 1;
                         if (localStoneStart <= localStoneEnd)
                         {
-                            int sxBase = x >> SECTION_SHIFT;
-                            int szBase = z >> SECTION_SHIFT;
-                            for (int ly = localStoneStart; ly <= localStoneEnd; ly++)
+                            int syStart = localStoneStart >> SECTION_SHIFT;
+                            int syEnd = localStoneEnd >> SECTION_SHIFT;
+                            int ox = x & SECTION_MASK;
+                            int oz = z & SECTION_MASK;
+                            int sx = x >> SECTION_SHIFT;
+                            int sz = z >> SECTION_SHIFT;
+                            for (int sy = syStart; sy <= syEnd; sy++)
                             {
-                                int sy = ly >> SECTION_SHIFT;
-                                if (sections[sxBase, sy, szBase] == null)
-                                    sections[sxBase, sy, szBase] = new ChunkSection();
-                                SetBlockLocal(x, ly, z, (ushort)BaseBlockType.Stone);
+                                var sec = sections[sx, sy, sz];
+                                if (sec == null) { sec = new ChunkSection(); sections[sx, sy, sz] = sec; }
+                                int yStartInSection = (sy == syStart) ? (localStoneStart & SECTION_MASK) : 0;
+                                int yEndInSection = (sy == syEnd) ? (localStoneEnd & SECTION_MASK) : (ChunkSection.SECTION_SIZE - 1);
+                                SectionUtils.FillColumnRangeInitial(sec, ox, oz, yStartInSection, yEndInSection, (ushort)BaseBlockType.Stone);
                             }
                         }
                     }
@@ -174,7 +179,7 @@ namespace MVGE_GEN.Terrain
 
                     int soilEndWorld = soilStartWorld + soilDepth - 1;
 
-                    // Place soil
+                    // Place soil using bulk column fill
                     int localSoilStart = soilStartWorld - chunkBaseY;
                     int localSoilEnd = soilEndWorld - chunkBaseY;
                     if (localSoilEnd >= 0 && localSoilStart < maxY)
@@ -183,14 +188,19 @@ namespace MVGE_GEN.Terrain
                         if (localSoilEnd >= maxY) localSoilEnd = maxY - 1;
                         if (localSoilStart <= localSoilEnd)
                         {
-                            int sxBase = x >> SECTION_SHIFT;
-                            int szBase = z >> SECTION_SHIFT;
-                            for (int ly = localSoilStart; ly <= localSoilEnd; ly++)
+                            int syStart = localSoilStart >> SECTION_SHIFT;
+                            int syEnd = localSoilEnd >> SECTION_SHIFT;
+                            int ox = x & SECTION_MASK;
+                            int oz = z & SECTION_MASK;
+                            int sx = x >> SECTION_SHIFT;
+                            int sz = z >> SECTION_SHIFT;
+                            for (int sy = syStart; sy <= syEnd; sy++)
                             {
-                                int sy = ly >> SECTION_SHIFT;
-                                if (sections[sxBase, sy, szBase] == null)
-                                    sections[sxBase, sy, szBase] = new ChunkSection();
-                                SetBlockLocal(x, ly, z, (ushort)BaseBlockType.Soil);
+                                var sec = sections[sx, sy, sz];
+                                if (sec == null) { sec = new ChunkSection(); sections[sx, sy, sz] = sec; }
+                                int yStartInSection = (sy == syStart) ? (localSoilStart & SECTION_MASK) : 0;
+                                int yEndInSection = (sy == syEnd) ? (localSoilEnd & SECTION_MASK) : (ChunkSection.SECTION_SIZE - 1);
+                                SectionUtils.FillColumnRangeInitial(sec, ox, oz, yStartInSection, yEndInSection, (ushort)BaseBlockType.Soil);
                             }
                         }
                     }
