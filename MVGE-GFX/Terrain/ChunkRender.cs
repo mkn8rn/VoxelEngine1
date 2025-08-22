@@ -60,6 +60,26 @@ namespace MVGE_GFX.Terrain
         // Fast-path flag when chunk fully enclosed (no visible faces)
         private bool fullyOccluded;
 
+        // Popcount LUT for 6-bit mask (bits: L,R,T,B,F,Bk)
+        private static readonly byte[] FacePopCount = InitPopCount();
+        private static byte[] InitPopCount()
+        {
+            var arr = new byte[64];
+            for (int i = 0; i < 64; i++)
+            {
+                int v = i; int c = 0; while (v != 0) { v &= v - 1; c++; } arr[i] = (byte)c;
+            }
+            return arr;
+        }
+
+        // Bit flags for mask (order chosen to match emission mapping below)
+        private const byte FACE_LEFT = 1 << 0;
+        private const byte FACE_RIGHT = 1 << 1;
+        private const byte FACE_TOP = 1 << 2;
+        private const byte FACE_BOTTOM = 1 << 3;
+        private const byte FACE_FRONT = 1 << 4;
+        private const byte FACE_BACK = 1 << 5;
+
         public ChunkRender(
             ChunkData chunkData,
             Func<int, int, int, ushort> worldBlockGetter,
@@ -229,7 +249,7 @@ namespace MVGE_GFX.Terrain
             }
             else
             {
-                GenerateFacesListFlatTwoPass();
+                GenerateFacesListFlatMaskedTwoPass();
                 ReturnFlat();
             }
         }
@@ -288,75 +308,69 @@ namespace MVGE_GFX.Terrain
             return true;
         }
 
-        // Two-pass face generation to avoid worst-case over-allocation
-        private void GenerateFacesListFlatTwoPass()
+        // Optimized two-pass: Pass 1 builds face visibility mask & counts faces; Pass 2 emits.
+        private void GenerateFacesListFlatMaskedTwoPass()
         {
             int strideX = maxZ * maxY; // delta for +/- X neighbor
             int strideZ = maxY;       // delta for +/- Z neighbor
 
-            // PASS 1: Count faces only
+            // Allocate mask array (byte per voxel). Will be large but transient; pool for reuse.
+            byte[] masks = ArrayPool<byte>.Shared.Rent(flatBlocks.Length);
+            Array.Clear(masks, 0, flatBlocks.Length);
+
             int totalFaces = 0;
+            int baseWX = (int)chunkWorldPosition.X;
+            int baseWY = (int)chunkWorldPosition.Y;
+            int baseWZ = (int)chunkWorldPosition.Z;
+
+            // PASS 1: compute masks & count faces
             for (int x = 0; x < maxX; x++)
             {
                 int xBase = x * strideX;
+                int wx = baseWX + x;
+                bool atMinX = x == 0;
+                bool atMaxX = x == maxX - 1;
                 for (int z = 0; z < maxZ; z++)
                 {
                     int zBase = xBase + z * maxY;
+                    int wz = baseWZ + z;
+                    bool atMinZ = z == 0;
+                    bool atMaxZ = z == maxZ - 1;
                     for (int y = 0; y < maxY; y++)
                     {
                         int li = zBase + y;
                         ushort block = flatBlocks[li];
                         if (block == emptyBlock) continue;
-                        int wx = (int)chunkWorldPosition.X + x;
-                        int wy = (int)chunkWorldPosition.Y + y;
-                        int wz = (int)chunkWorldPosition.Z + z;
-                        // -X
-                        if (x == 0)
-                        {
-                            if (getWorldBlock(wx - 1, wy, wz) == emptyBlock) totalFaces++;
-                        }
-                        else if (flatBlocks[li - strideX] == emptyBlock) totalFaces++;
-                        // +X
-                        if (x == maxX - 1)
-                        {
-                            if (getWorldBlock(wx + 1, wy, wz) == emptyBlock) totalFaces++;
-                        }
-                        else if (flatBlocks[li + strideX] == emptyBlock) totalFaces++;
-                        // +Y
-                        if (y == maxY - 1)
-                        {
-                            if (getWorldBlock(wx, wy + 1, wz) == emptyBlock) totalFaces++;
-                        }
-                        else if (flatBlocks[li + 1] == emptyBlock) totalFaces++;
-                        // -Y
-                        if (y == 0)
-                        {
-                            if (getWorldBlock(wx, wy - 1, wz) == emptyBlock) totalFaces++;
-                        }
-                        else if (flatBlocks[li - 1] == emptyBlock) totalFaces++;
-                        // +Z
-                        if (z == maxZ - 1)
-                        {
-                            if (getWorldBlock(wx, wy, wz + 1) == emptyBlock) totalFaces++;
-                        }
-                        else if (flatBlocks[li + strideZ] == emptyBlock) totalFaces++;
-                        // -Z
-                        if (z == 0)
-                        {
-                            if (getWorldBlock(wx, wy, wz - 1) == emptyBlock) totalFaces++;
-                        }
-                        else if (flatBlocks[li - strideZ] == emptyBlock) totalFaces++;
+                        int wy = baseWY + y;
+                        bool atMinY = y == 0;
+                        bool atMaxY = y == maxY - 1;
+                        byte mask = 0;
+                        // LEFT (-X)
+                        if (atMinX ? getWorldBlock(wx - 1, wy, wz) == emptyBlock : flatBlocks[li - strideX] == emptyBlock) mask |= FACE_LEFT;
+                        // RIGHT (+X)
+                        if (atMaxX ? getWorldBlock(wx + 1, wy, wz) == emptyBlock : flatBlocks[li + strideX] == emptyBlock) mask |= FACE_RIGHT;
+                        // TOP (+Y)
+                        if (atMaxY ? getWorldBlock(wx, wy + 1, wz) == emptyBlock : flatBlocks[li + 1] == emptyBlock) mask |= FACE_TOP;
+                        // BOTTOM (-Y)
+                        if (atMinY ? getWorldBlock(wx, wy - 1, wz) == emptyBlock : flatBlocks[li - 1] == emptyBlock) mask |= FACE_BOTTOM;
+                        // FRONT (+Z)
+                        if (atMaxZ ? getWorldBlock(wx, wy, wz + 1) == emptyBlock : flatBlocks[li + strideZ] == emptyBlock) mask |= FACE_FRONT;
+                        // BACK (-Z)
+                        if (atMinZ ? getWorldBlock(wx, wy, wz - 1) == emptyBlock : flatBlocks[li - strideZ] == emptyBlock) mask |= FACE_BACK;
+                        if (mask == 0) continue;
+                        masks[li] = mask;
+                        totalFaces += FacePopCount[mask];
                     }
                 }
             }
 
             if (totalFaces == 0)
             {
-                // Allocate minimal structures
                 chunkVertsList = new List<byte>(0);
                 chunkUVsList = new List<byte>(0);
                 chunkIndicesList = new List<uint>(0);
-                indexFormat = IndexFormat.UInt; // arbitrary
+                indexFormat = IndexFormat.UInt;
+                ArrayPool<byte>.Shared.Return(masks, false);
                 return;
             }
 
@@ -364,21 +378,16 @@ namespace MVGE_GFX.Terrain
             bool useUShortIndices = totalVerts <= 65535;
             indexFormat = useUShortIndices ? IndexFormat.UShort : IndexFormat.UInt;
 
-            // Allocate exact capacity
             chunkVertsList = new List<byte>(totalVerts * 3);
             chunkUVsList = new List<byte>(totalVerts * 2);
             if (useUShortIndices)
-            {
                 chunkIndicesUShortList = new List<ushort>(totalFaces * 6);
-            }
             else
-            {
                 chunkIndicesList = new List<uint>(totalFaces * 6);
-            }
 
-            // PASS 2: Emit geometry
-            int currentVertexBase = 0; // in vertices (not bytes)
+            int currentVertexBase = 0;
 
+            // PASS 2: emit using masks
             for (int x = 0; x < maxX; x++)
             {
                 int xBase = x * strideX;
@@ -388,51 +397,21 @@ namespace MVGE_GFX.Terrain
                     for (int y = 0; y < maxY; y++)
                     {
                         int li = zBase + y;
+                        byte mask = masks[li];
+                        if (mask == 0) continue;
                         ushort block = flatBlocks[li];
-                        if (block == emptyBlock) continue;
-                        int wx = (int)chunkWorldPosition.X + x;
-                        int wy = (int)chunkWorldPosition.Y + y;
-                        int wz = (int)chunkWorldPosition.Z + z;
                         var bp = new ByteVector3 { x = (byte)x, y = (byte)y, z = (byte)z };
-                        // -X
-                        if (x == 0)
-                        {
-                            if (getWorldBlock(wx - 1, wy, wz) == emptyBlock) { IntegrateFaceListEmit(block, Faces.LEFT, bp, ref currentVertexBase, useUShortIndices); }
-                        }
-                        else if (flatBlocks[li - strideX] == emptyBlock) { IntegrateFaceListEmit(block, Faces.LEFT, bp, ref currentVertexBase, useUShortIndices); }
-                        // +X
-                        if (x == maxX - 1)
-                        {
-                            if (getWorldBlock(wx + 1, wy, wz) == emptyBlock) { IntegrateFaceListEmit(block, Faces.RIGHT, bp, ref currentVertexBase, useUShortIndices); }
-                        }
-                        else if (flatBlocks[li + strideX] == emptyBlock) { IntegrateFaceListEmit(block, Faces.RIGHT, bp, ref currentVertexBase, useUShortIndices); }
-                        // +Y
-                        if (y == maxY - 1)
-                        {
-                            if (getWorldBlock(wx, wy + 1, wz) == emptyBlock) { IntegrateFaceListEmit(block, Faces.TOP, bp, ref currentVertexBase, useUShortIndices); }
-                        }
-                        else if (flatBlocks[li + 1] == emptyBlock) { IntegrateFaceListEmit(block, Faces.TOP, bp, ref currentVertexBase, useUShortIndices); }
-                        // -Y
-                        if (y == 0)
-                        {
-                            if (getWorldBlock(wx, wy - 1, wz) == emptyBlock) { IntegrateFaceListEmit(block, Faces.BOTTOM, bp, ref currentVertexBase, useUShortIndices); }
-                        }
-                        else if (flatBlocks[li - 1] == emptyBlock) { IntegrateFaceListEmit(block, Faces.BOTTOM, bp, ref currentVertexBase, useUShortIndices); }
-                        // +Z
-                        if (z == maxZ - 1)
-                        {
-                            if (getWorldBlock(wx, wy, wz + 1) == emptyBlock) { IntegrateFaceListEmit(block, Faces.FRONT, bp, ref currentVertexBase, useUShortIndices); }
-                        }
-                        else if (flatBlocks[li + strideZ] == emptyBlock) { IntegrateFaceListEmit(block, Faces.FRONT, bp, ref currentVertexBase, useUShortIndices); }
-                        // -Z
-                        if (z == 0)
-                        {
-                            if (getWorldBlock(wx, wy, wz - 1) == emptyBlock) { IntegrateFaceListEmit(block, Faces.BACK, bp, ref currentVertexBase, useUShortIndices); }
-                        }
-                        else if (flatBlocks[li - strideZ] == emptyBlock) { IntegrateFaceListEmit(block, Faces.BACK, bp, ref currentVertexBase, useUShortIndices); }
+                        if ((mask & FACE_LEFT) != 0) IntegrateFaceListEmit(block, Faces.LEFT, bp, ref currentVertexBase, useUShortIndices);
+                        if ((mask & FACE_RIGHT) != 0) IntegrateFaceListEmit(block, Faces.RIGHT, bp, ref currentVertexBase, useUShortIndices);
+                        if ((mask & FACE_TOP) != 0) IntegrateFaceListEmit(block, Faces.TOP, bp, ref currentVertexBase, useUShortIndices);
+                        if ((mask & FACE_BOTTOM) != 0) IntegrateFaceListEmit(block, Faces.BOTTOM, bp, ref currentVertexBase, useUShortIndices);
+                        if ((mask & FACE_FRONT) != 0) IntegrateFaceListEmit(block, Faces.FRONT, bp, ref currentVertexBase, useUShortIndices);
+                        if ((mask & FACE_BACK) != 0) IntegrateFaceListEmit(block, Faces.BACK, bp, ref currentVertexBase, useUShortIndices);
                     }
                 }
             }
+
+            ArrayPool<byte>.Shared.Return(masks, false);
         }
 
         private void IntegrateFaceListEmit(ushort block, Faces face, ByteVector3 bp, ref int currentVertexBase, bool useUShortIndices)
