@@ -46,6 +46,15 @@ namespace MVGE_GEN.Terrain
         public bool FullyBuried { get; private set; }
         private const int BURIAL_MARGIN = 2; // configurable later via settings/flags
 
+        // per-face full solidity flags (all boundary voxels on that face are non-empty)
+        // Naming: NegX = x==0 face ("left"), PosX = x==dimX-1 ("right"), etc.
+        public bool FaceSolidNegX { get; private set; }
+        public bool FaceSolidPosX { get; private set; }
+        public bool FaceSolidNegY { get; private set; }
+        public bool FaceSolidPosY { get; private set; }
+        public bool FaceSolidNegZ { get; private set; }
+        public bool FaceSolidPosZ { get; private set; }
+
         public Chunk(Vector3 chunkPosition, long seed, string chunkDataDirectory, float[,] precomputedHeightmap = null)
         {
             position = chunkPosition;
@@ -71,6 +80,9 @@ namespace MVGE_GEN.Terrain
 
             InitializeSectionGrid();
             InitializeChunkData();
+
+            // After generation compute per-face solidity once (all writes were generation-only bulk writes)
+            ComputeAllFaceSolidity();
         }
 
         public void InitializeSectionGrid()
@@ -325,6 +337,14 @@ namespace MVGE_GEN.Terrain
             LocalToSection(lx, ly, lz, out int sx, out int sy, out int sz, out int ox, out int oy, out int oz);
             var sec = GetOrCreateSection(sx, sy, sz);
             SectionUtils.SetBlock(sec, ox, oy, oz, blockId);
+
+            // Update face solidity if we touched a boundary cell (cheap plane scan only for affected faces)
+            if (lx == 0) FaceSolidNegX = ScanFaceSolidNegX();
+            if (lx == dimX - 1) FaceSolidPosX = ScanFaceSolidPosX();
+            if (lz == 0) FaceSolidNegZ = ScanFaceSolidNegZ();
+            if (lz == dimZ - 1) FaceSolidPosZ = ScanFaceSolidPosZ();
+            if (ly == 0) FaceSolidNegY = ScanFaceSolidNegY();
+            if (ly == dimY - 1) FaceSolidPosY = ScanFaceSolidPosY();
         }
 
         private int FlattenSectionsInto(ushort[] dest)
@@ -431,8 +451,7 @@ namespace MVGE_GEN.Terrain
         {
             chunkRender?.ScheduleDelete();
 
-            // Early skip: if chunk is entirely buried beneath terrain surface we do not generate a mesh.
-            // The voxel data still exists for neighbor queries / physics.
+            // Early skip retained (heightmap burial) – kept separate from new neighbor-face occlusion system.
             if (FullyBuried)
             {
                 return; // leave chunkRender null
@@ -445,7 +464,6 @@ namespace MVGE_GEN.Terrain
 
             if (nonAir == 0)
             {
-                // Return buffer immediately; skip creating a render instance for empty chunks
                 ArrayPool<ushort>.Shared.Return(flat, false);
                 return; // chunkRender stays null; Render() will no-op
             }
@@ -457,6 +475,63 @@ namespace MVGE_GEN.Terrain
                 dimX,
                 dimY,
                 dimZ);
+        }
+
+        // Per-face solidity helpers
+        private void ComputeAllFaceSolidity()
+        {
+            FaceSolidNegX = ScanFaceSolidNegX();
+            FaceSolidPosX = ScanFaceSolidPosX();
+            FaceSolidNegY = ScanFaceSolidNegY();
+            FaceSolidPosY = ScanFaceSolidPosY();
+            FaceSolidNegZ = ScanFaceSolidNegZ();
+            FaceSolidPosZ = ScanFaceSolidPosZ();
+        }
+
+        private bool ScanFaceSolidNegX()
+        {
+            for (int y = 0; y < dimY; y++)
+                for (int z = 0; z < dimZ; z++)
+                    if (GetBlockLocal(0, y, z) == EMPTY) return false;
+            return true;
+        }
+        private bool ScanFaceSolidPosX()
+        {
+            int x = dimX - 1;
+            for (int y = 0; y < dimY; y++)
+                for (int z = 0; z < dimZ; z++)
+                    if (GetBlockLocal(x, y, z) == EMPTY) return false;
+            return true;
+        }
+        private bool ScanFaceSolidNegY()
+        {
+            for (int x = 0; x < dimX; x++)
+                for (int z = 0; z < dimZ; z++)
+                    if (GetBlockLocal(x, 0, z) == EMPTY) return false;
+            return true;
+        }
+        private bool ScanFaceSolidPosY()
+        {
+            int y = dimY - 1;
+            for (int x = 0; x < dimX; x++)
+                for (int z = 0; z < dimZ; z++)
+                    if (GetBlockLocal(x, y, z) == EMPTY) return false;
+            return true;
+        }
+        private bool ScanFaceSolidNegZ()
+        {
+            for (int x = 0; x < dimX; x++)
+                for (int y = 0; y < dimY; y++)
+                    if (GetBlockLocal(x, y, 0) == EMPTY) return false;
+            return true;
+        }
+        private bool ScanFaceSolidPosZ()
+        {
+            int z = dimZ - 1;
+            for (int x = 0; x < dimX; x++)
+                for (int y = 0; y < dimY; y++)
+                    if (GetBlockLocal(x, y, z) == EMPTY) return false;
+            return true;
         }
     }
 }
