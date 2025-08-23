@@ -210,7 +210,6 @@ namespace MVGE_GEN.Terrain
             int maxX = dimX;
             int maxZ = dimZ;
             bool possibleStone = true;
-            bool possibleSoil = !FullyBuried; // mirror earlier logic: soil uniform not attempted if fully buried
 
             int stoneMinY = biome.stone_min_ylevel;
             int stoneMaxY = biome.stone_max_ylevel;
@@ -220,6 +219,9 @@ namespace MVGE_GEN.Terrain
             int soilMaxDepthSpec = biome.soil_max_depth;
             int stoneMinDepthSpec = biome.stone_min_depth;
             int stoneMaxDepthSpec = biome.stone_max_depth;
+
+            // Soil uniform detection is attempted whenever the chunk vertical span intersects the biome soil band
+            bool possibleSoil = (topOfChunk >= soilMinY) && (chunkBaseY <= soilMaxY);
 
             for (int x = 0; x < maxX && (possibleStone || possibleSoil); x++)
             {
