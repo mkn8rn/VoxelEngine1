@@ -65,24 +65,12 @@ namespace MVGE_GEN.Terrain
                 return; // skip any section allocation / fills
             }
 
-            // Attempt uniform-stone detection before doing per-column writes.
-            TryDetectAllStone(heightmap, chunkBaseY, topOfChunk);
-            if (AllStoneChunk)
+            // Combined uniform detection for stone / soil
+            DetectAllStoneOrSoil(heightmap, chunkBaseY, topOfChunk);
+            if (AllStoneChunk || AllSoilChunk)
             {
-                // We generated uniform stone sections inside detection. Clean up and exit.
                 precomputedHeightmap = null;
-                return;
-            }
-            // Attempt uniform-soil detection (if not fully buried)
-            if (!FullyBuried)
-            {
-                TryDetectAllSoil(heightmap, chunkBaseY, topOfChunk);
-                if (AllSoilChunk)
-                {
-                    // We generated uniform soil sections inside detection. Clean up and exit.
-                    precomputedHeightmap = null;
-                    return;
-                }
+                return; // uniform fast path handled
             }
 
             // Biome absolute bounds
@@ -204,52 +192,126 @@ namespace MVGE_GEN.Terrain
             precomputedHeightmap = null; // release reference
         }
 
+        private void DetectAllStoneOrSoil(float[,] heightmap, int chunkBaseY, int topOfChunk)
+        {
+            // Combined detection pass for uniform stone and uniform soil.
+            // This merges logic from TryDetectAllStone and TryDetectAllSoil to avoid two full column scans.
+            // Stone conditions per column (x,z):
+            // 1. columnHeight >= topOfChunk (terrain covers chunk vertically)
+            // 2. Stone band + computed stone depth covers [chunkBaseY, topOfChunk]
+            //    => chunkBaseY >= stoneBandStartWorld AND topOfChunk <= finalStoneTopWorld.
+            // Soil conditions per column (x,z):
+            // 1. columnHeight >= topOfChunk
+            // 2. Compute stone layer (as normal) to obtain finalStoneTopWorld
+            // 3. Determine soilStartWorld (just above stone top or biome band start if no stone), clamp to biome soil bounds; compute soilEndWorld with biome depth
+            // 4. Entire chunk vertical span [chunkBaseY, topOfChunk] lies fully within [soilStartWorld, soilEndWorld]
+            // 5. Chunk sits strictly above any stone (chunkBaseY > finalStoneTopWorld)
+            // If EVERY column satisfies either set, we flag the corresponding uniform chunk type.
+            int maxX = dimX;
+            int maxZ = dimZ;
+            bool possibleStone = true;
+            bool possibleSoil = !FullyBuried; // mirror earlier logic: soil uniform not attempted if fully buried
+
+            int stoneMinY = biome.stone_min_ylevel;
+            int stoneMaxY = biome.stone_max_ylevel;
+            int soilMinY = biome.soil_min_ylevel;
+            int soilMaxY = biome.soil_max_ylevel;
+            int soilMinDepthSpec = biome.soil_min_depth;
+            int soilMaxDepthSpec = biome.soil_max_depth;
+            int stoneMinDepthSpec = biome.stone_min_depth;
+            int stoneMaxDepthSpec = biome.stone_max_depth;
+
+            for (int x = 0; x < maxX && (possibleStone || possibleSoil); x++)
+            {
+                for (int z = 0; z < maxZ && (possibleStone || possibleSoil); z++)
+                {
+                    int columnHeight = (int)heightmap[x, z];
+                    if (columnHeight < topOfChunk)
+                    {
+                        possibleStone = false;
+                        possibleSoil = false;
+                        break;
+                    }
+
+                    // Stone band & depth calc (shared)
+                    int stoneBandStartWorld = Math.Max(stoneMinY, 0);
+                    int stoneBandEndWorld = Math.Min(stoneMaxY, columnHeight);
+                    int available = stoneBandEndWorld - stoneBandStartWorld + 1;
+                    int finalStoneTopWorld = stoneBandStartWorld - 1; // default (no stone)
+                    if (stoneBandEndWorld >= stoneBandStartWorld && available > 0)
+                    {
+                        int soilMinReserve = Math.Clamp(soilMinDepthSpec, 0, available);
+                        int rawStoneDepth = available - soilMinReserve;
+                        int stoneDepth = Math.Min(stoneMaxDepthSpec, Math.Max(stoneMinDepthSpec, rawStoneDepth));
+                        if (stoneDepth > available) stoneDepth = available;
+                        if (stoneDepth > 0)
+                            finalStoneTopWorld = stoneBandStartWorld + stoneDepth - 1;
+                        else
+                            finalStoneTopWorld = stoneBandStartWorld - 1; // treat as no stone placed
+                    }
+                    else
+                    {
+                        available = 0;
+                    }
+
+                    // Evaluate stone uniform condition for this column
+                    if (possibleStone)
+                    {
+                        if (available <= 0) { possibleStone = false; }
+                        else
+                        {
+                            // Need entire chunk span covered by stone depth
+                            if (chunkBaseY < stoneBandStartWorld || topOfChunk > finalStoneTopWorld)
+                                possibleStone = false;
+                        }
+                    }
+
+                    // Evaluate soil uniform condition for this column
+                    if (possibleSoil)
+                    {
+                        int soilStartWorld = finalStoneTopWorld + 1;
+                        if (finalStoneTopWorld < stoneBandStartWorld) // means no stone placed (stoneDepth 0)
+                            soilStartWorld = stoneBandStartWorld;
+                        if (soilStartWorld < soilMinY) soilStartWorld = soilMinY;
+                        if (soilStartWorld > soilMaxY) { possibleSoil = false; continue; }
+                        int soilBandCapWorld = Math.Min(soilMaxY, columnHeight);
+                        if (soilBandCapWorld < soilStartWorld) { possibleSoil = false; continue; }
+                        int soilAvailable = soilBandCapWorld - soilStartWorld + 1;
+                        if (soilAvailable <= 0) { possibleSoil = false; continue; }
+                        int soilDepth = Math.Min(soilMaxDepthSpec, soilAvailable);
+                        int soilEndWorld = soilStartWorld + soilDepth - 1;
+                        if (chunkBaseY < soilStartWorld || topOfChunk > soilEndWorld || chunkBaseY <= finalStoneTopWorld)
+                            possibleSoil = false;
+                    }
+                }
+            }
+
+            if (possibleStone)
+            {
+                AllStoneChunk = true;
+                IsEmpty = false;
+                CreateUniformSections((ushort)BaseBlockType.Stone);
+                FaceSolidNegX = FaceSolidPosX = FaceSolidNegY = FaceSolidPosY = FaceSolidNegZ = FaceSolidPosZ = true;
+                return;
+            }
+            if (possibleSoil)
+            {
+                AllSoilChunk = true;
+                IsEmpty = false;
+                CreateUniformSections((ushort)BaseBlockType.Soil);
+                FaceSolidNegX = FaceSolidPosX = FaceSolidNegY = FaceSolidPosY = FaceSolidNegZ = FaceSolidPosZ = true;
+            }
+        }
+
         private void TryDetectAllStone(float[,] heightmap, int chunkBaseY, int topOfChunk)
         {
             // Conditions per column (x,z):
             // 1. columnHeight >= topOfChunk (terrain covers chunk vertically)
             // 2. Stone band + computed stone depth covers [chunkBaseY, topOfChunk]
             // That requires chunkBaseY >= stoneBandStartWorld AND topOfChunk <= finalStoneTopWorld.
-            int maxX = dimX;
-            int maxZ = dimZ;
-            int stoneMinY = biome.stone_min_ylevel;
-            int stoneMaxY = biome.stone_max_ylevel;
-            int soilMinDepthSpec = biome.soil_min_depth; // for depth reservation
-            int stoneMinDepthSpec = biome.stone_min_depth;
-            int stoneMaxDepthSpec = biome.stone_max_depth;
-
-            for (int x = 0; x < maxX; x++)
-            {
-                for (int z = 0; z < maxZ; z++)
-                {
-                    int columnHeight = (int)heightmap[x, z];
-                    if (columnHeight < topOfChunk)
-                    {
-                        AllStoneChunk = false; return; // exposed somewhere
-                    }
-                    int stoneBandStartWorld = Math.Max(stoneMinY, 0);
-                    int stoneBandEndWorld = Math.Min(stoneMaxY, columnHeight);
-                    if (stoneBandEndWorld < stoneBandStartWorld)
-                    { AllStoneChunk = false; return; }
-                    int available = stoneBandEndWorld - stoneBandStartWorld + 1;
-                    if (available <= 0) { AllStoneChunk = false; return; }
-                    int soilMinReserve = Math.Clamp(soilMinDepthSpec, 0, available);
-                    int rawStoneDepth = available - soilMinReserve;
-                    int stoneDepth = Math.Min(stoneMaxDepthSpec, Math.Max(stoneMinDepthSpec, rawStoneDepth));
-                    if (stoneDepth > available) stoneDepth = available;
-                    int finalStoneBottomWorld = stoneBandStartWorld;
-                    int finalStoneTopWorld = finalStoneBottomWorld + stoneDepth - 1;
-                    if (chunkBaseY < finalStoneBottomWorld || topOfChunk > finalStoneTopWorld)
-                    { AllStoneChunk = false; return; }
-                }
-            }
-            // If we reached here every column satisfies conditions.
-            AllStoneChunk = true;
-            IsEmpty = false;
-            // Pre-create uniform stone sections.
-            CreateUniformSections((ushort)BaseBlockType.Stone);
-            // Every face solid.
-            FaceSolidNegX = FaceSolidPosX = FaceSolidNegY = FaceSolidPosY = FaceSolidNegZ = FaceSolidPosZ = true;
+            // (Wrapper kept for compatibility; now calls unified detector.)
+            if (AllStoneChunk || AllSoilChunk) return;
+            DetectAllStoneOrSoil(heightmap, chunkBaseY, topOfChunk);
         }
 
         private void TryDetectAllSoil(float[,] heightmap, int chunkBaseY, int topOfChunk)
@@ -261,66 +323,9 @@ namespace MVGE_GEN.Terrain
             // 4. Chunk qualifies as uniform all-soil iff its entire vertical span [chunkBaseY, topOfChunk] lies fully within the computed soil interval [soilStartWorld, soilEndWorld]
             // 5. Additionally the chunk must sit strictly above any stone (chunkBaseY > finalStoneTopWorld) to avoid containing stone voxels
             // If EVERY column satisfies these conditions the chunk can be flagged AllSoilChunk and filled uniformly.
-            int maxX = dimX;
-            int maxZ = dimZ;
-            int stoneMinY = biome.stone_min_ylevel;
-            int stoneMaxY = biome.stone_max_ylevel;
-            int soilMinY = biome.soil_min_ylevel;
-            int soilMaxY = biome.soil_max_ylevel;
-            int soilMinDepthSpec = biome.soil_min_depth;
-            int soilMaxDepthSpec = biome.soil_max_depth;
-            int stoneMinDepthSpec = biome.stone_min_depth;
-            int stoneMaxDepthSpec = biome.stone_max_depth;
-
-            for (int x = 0; x < maxX; x++)
-            {
-                for (int z = 0; z < maxZ; z++)
-                {
-                    int columnHeight = (int)heightmap[x, z];
-                    if (columnHeight < topOfChunk) { AllSoilChunk = false; return; }
-
-                    // Stone layer computation (same as generation) to find top of stone in this column
-                    int stoneBandStartWorld = Math.Max(stoneMinY, 0);
-                    int stoneBandEndWorld = Math.Min(stoneMaxY, columnHeight);
-                    int finalStoneTopWorld = int.MinValue;
-                    if (stoneBandEndWorld >= stoneBandStartWorld)
-                    {
-                        int available = stoneBandEndWorld - stoneBandStartWorld + 1;
-                        if (available > 0)
-                        {
-                            int soilMinReserve = Math.Clamp(soilMinDepthSpec, 0, available);
-                            int rawStoneDepth = available - soilMinReserve;
-                            int stoneDepth = Math.Min(stoneMaxDepthSpec, Math.Max(stoneMinDepthSpec, rawStoneDepth));
-                            if (stoneDepth > available) stoneDepth = available;
-                            finalStoneTopWorld = stoneBandStartWorld + stoneDepth - 1;
-                        }
-                    }
-                    else
-                    {
-                        finalStoneTopWorld = stoneBandStartWorld - 1; // no stone present
-                    }
-
-                    int soilStartWorld = finalStoneTopWorld + 1;
-                    if (finalStoneTopWorld < stoneBandStartWorld) // means no stone placed (stoneDepth 0)
-                        soilStartWorld = stoneBandStartWorld;
-                    if (soilStartWorld < soilMinY) soilStartWorld = soilMinY;
-                    if (soilStartWorld > soilMaxY) { AllSoilChunk = false; return; }
-                    int soilBandCapWorld = Math.Min(soilMaxY, columnHeight);
-                    if (soilBandCapWorld < soilStartWorld) { AllSoilChunk = false; return; }
-                    int soilAvailable = soilBandCapWorld - soilStartWorld + 1;
-                    if (soilAvailable <= 0) { AllSoilChunk = false; return; }
-                    int soilDepth = Math.Min(soilMaxDepthSpec, soilAvailable);
-                    int soilEndWorld = soilStartWorld + soilDepth - 1;
-
-                    // Uniform soil condition: chunk inside [soilStartWorld, soilEndWorld] and entirely above stone top
-                    if (chunkBaseY < soilStartWorld || topOfChunk > soilEndWorld || chunkBaseY <= finalStoneTopWorld)
-                    { AllSoilChunk = false; return; }
-                }
-            }
-            AllSoilChunk = true;
-            IsEmpty = false;
-            CreateUniformSections((ushort)BaseBlockType.Soil);
-            FaceSolidNegX = FaceSolidPosX = FaceSolidNegY = FaceSolidPosY = FaceSolidNegZ = FaceSolidPosZ = true;
+            // (Wrapper kept for compatibility; now calls unified detector.)
+            if (AllStoneChunk || AllSoilChunk) return;
+            DetectAllStoneOrSoil(heightmap, chunkBaseY, topOfChunk);
         }
 
         private void CreateUniformSections(ushort blockId)
