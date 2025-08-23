@@ -254,6 +254,13 @@ namespace MVGE_GEN.Terrain
 
         private void TryDetectAllSoil(float[,] heightmap, int chunkBaseY, int topOfChunk)
         {
+            // Conditions per column (x,z):
+            // 1. columnHeight >= topOfChunk (terrain covers chunk vertically)
+            // 2. Compute the stone layer exactly as normal generation would (respecting depth reservations & biome bands) and obtain finalStoneTopWorld
+            // 3. Determine soilStartWorld (just above stone top or biome start if no stone) clamped to biome soil min & max, then soilEndWorld using biome soil depth rules
+            // 4. Chunk qualifies as uniform all-soil iff its entire vertical span [chunkBaseY, topOfChunk] lies fully within the computed soil interval [soilStartWorld, soilEndWorld]
+            // 5. Additionally the chunk must sit strictly above any stone (chunkBaseY > finalStoneTopWorld) to avoid containing stone voxels
+            // If EVERY column satisfies these conditions the chunk can be flagged AllSoilChunk and filled uniformly.
             int maxX = dimX;
             int maxZ = dimZ;
             int stoneMinY = biome.stone_min_ylevel;
