@@ -42,6 +42,9 @@ namespace MVGE_GEN.Terrain
         // Occupancy flags
         public bool IsEmpty { get; private set; }
         public bool HasAnyBoundarySolid { get; private set; }
+        // New: heightmap burial classification (chunk wholly below terrain surface minus margin)
+        public bool FullyBuried { get; private set; }
+        private const int BURIAL_MARGIN = 2; // configurable later via settings/flags
 
         public Chunk(Vector3 chunkPosition, long seed, string chunkDataDirectory, float[,] precomputedHeightmap = null)
         {
@@ -95,6 +98,25 @@ namespace MVGE_GEN.Terrain
             float[,] heightmap = precomputedHeightmap ?? GenerateHeightMap(generationSeed);
 
             int chunkBaseY = (int)position.Y;
+            int topOfChunk = chunkBaseY + maxY - 1;
+
+            // Precompute burial classification BEFORE we null out the heightmap reference.
+            // A chunk is FullyBuried if for every (x,z) column the top of the chunk is strictly below
+            // (surfaceHeight - BURIAL_MARGIN).
+            bool allBuried = true;
+            for (int x = 0; x < maxX && allBuried; x++)
+            {
+                for (int z = 0; z < maxZ; z++)
+                {
+                    int surface = (int)heightmap[x, z];
+                    if (topOfChunk >= surface - BURIAL_MARGIN)
+                    {
+                        allBuried = false;
+                        break;
+                    }
+                }
+            }
+            FullyBuried = allBuried;
 
             // Biome absolute bounds
             int stoneMinY = biome.stone_min_ylevel;
@@ -408,6 +430,13 @@ namespace MVGE_GEN.Terrain
         public void BuildRender(Func<int, int, int, ushort> worldBlockGetter)
         {
             chunkRender?.ScheduleDelete();
+
+            // Early skip: if chunk is entirely buried beneath terrain surface we do not generate a mesh.
+            // The voxel data still exists for neighbor queries / physics.
+            if (FullyBuried)
+            {
+                return; // leave chunkRender null
+            }
 
             int voxelCount = dimX * dimY * dimZ;
             ushort[] flat = ArrayPool<ushort>.Shared.Rent(voxelCount);
