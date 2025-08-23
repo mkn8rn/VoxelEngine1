@@ -16,6 +16,7 @@ namespace MVGE_INF.Models.Terrain
         Soil,
         Stone,
         Water,
-        Wood
+        Wood,
+        Glass
     }
 }
