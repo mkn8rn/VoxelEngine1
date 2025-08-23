@@ -55,6 +55,9 @@ namespace MVGE_GEN.Terrain
         public bool FaceSolidNegZ { get; private set; }
         public bool FaceSolidPosZ { get; private set; }
 
+        // neighbor-based burial (all six neighboring opposing faces are solid AND our faces solid)
+        public bool BuriedByNeighbors { get; internal set; }
+
         public Chunk(Vector3 chunkPosition, long seed, string chunkDataDirectory, float[,] precomputedHeightmap = null)
         {
             position = chunkPosition;
@@ -452,7 +455,7 @@ namespace MVGE_GEN.Terrain
             chunkRender?.ScheduleDelete();
 
             // Early skip retained (heightmap burial) – kept separate from new neighbor-face occlusion system.
-            if (FullyBuried)
+            if (FullyBuried || BuriedByNeighbors)
             {
                 return; // leave chunkRender null
             }

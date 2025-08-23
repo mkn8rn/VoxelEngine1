@@ -402,6 +402,9 @@ namespace MVGE_GEN
 
                     try
                     {
+                        // attempt neighbor-based burial classification
+                        TryMarkBuriedByNeighbors(key, ch);
+
                         ch.BuildRender(worldBlockAccessor);
 
                         // If this was first-time build (in unbuilt), move to built dictionary
@@ -603,6 +606,48 @@ namespace MVGE_GEN
             int cy = FloorDiv(baseY, sizeY);
             int cz = FloorDiv(baseZ, sizeZ);
             return (cx, cy, cz);
+        }
+
+        // helper for neighbor-based chunk burial detection
+        private void TryMarkBuriedByNeighbors((int cx,int cy,int cz) key, Chunk ch)
+        {
+            // Only perform on initial build attempt; if chunk already active we skip.
+            if (!unbuiltChunks.ContainsKey(key)) return;
+
+            // We require all six neighbors to be present (either generated but unbuilt, or already active).
+            static bool GetChunk((int cx,int cy,int cz) k,
+                                 ConcurrentDictionary<(int,int,int), Chunk> active,
+                                 ConcurrentDictionary<(int,int,int), Chunk> pending,
+                                 out Chunk result)
+            {
+                if (active.TryGetValue(k, out result)) return true;
+                if (pending.TryGetValue(k, out result)) return true;
+                result = null; return false;
+            }
+
+            var leftKey  = (key.cx - 1, key.cy, key.cz);
+            var rightKey = (key.cx + 1, key.cy, key.cz);
+            var downKey  = (key.cx, key.cy - 1, key.cz);
+            var upKey    = (key.cx, key.cy + 1, key.cz);
+            var backKey  = (key.cx, key.cy, key.cz - 1); // negative Z
+            var frontKey = (key.cx, key.cy, key.cz + 1); // positive Z
+
+            if (!GetChunk(leftKey,  activeChunks, unbuiltChunks, out var left )) return;
+            if (!GetChunk(rightKey, activeChunks, unbuiltChunks, out var right)) return;
+            if (!GetChunk(downKey,  activeChunks, unbuiltChunks, out var down )) return;
+            if (!GetChunk(upKey,    activeChunks, unbuiltChunks, out var up   )) return;
+            if (!GetChunk(backKey,  activeChunks, unbuiltChunks, out var back )) return;
+            if (!GetChunk(frontKey, activeChunks, unbuiltChunks, out var front)) return;
+
+            // Opposing faces: our -X must be solid and neighbor's +X solid, etc.
+            // Also ensure all our faces solid (prevents skipping if we have any exposed face ourselves).
+            if (ch.FaceSolidNegX && ch.FaceSolidPosX && ch.FaceSolidNegY && ch.FaceSolidPosY && ch.FaceSolidNegZ && ch.FaceSolidPosZ &&
+                left.FaceSolidPosX && right.FaceSolidNegX &&
+                down.FaceSolidPosY && up.FaceSolidNegY &&
+                back.FaceSolidPosZ && front.FaceSolidNegZ)
+            {
+                ch.BuriedByNeighbors = true;
+            }
         }
     }
 }
