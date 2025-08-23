@@ -285,6 +285,13 @@ namespace MVGE_GFX.Terrain
 
         private bool CheckFullyOccluded(int maxX, int maxY, int maxZ)
         {
+            // Fast constant-time short-circuit using face + neighbor opposing face solidity flags.
+            if (faceNegX && facePosX && faceNegY && facePosY && faceNegZ && facePosZ &&
+                nNegXPosX && nPosXNegX && nNegYPosY && nPosYNegY && nNegZPosZ && nPosZNegZ)
+            {
+                return true;
+            }
+
             int baseWX = (int)chunkWorldPosition.X;
             int baseWY = (int)chunkWorldPosition.Y;
             int baseWZ = (int)chunkWorldPosition.Z;
@@ -392,6 +399,13 @@ namespace MVGE_GFX.Terrain
             int baseWZ = (int)chunkWorldPosition.Z;
 
             // PASS 1 restricted to bounding box
+            bool leftVisible = !(faceNegX && nNegXPosX);
+            bool rightVisible = !(facePosX && nPosXNegX);
+            bool bottomVisible = !(faceNegY && nNegYPosY);
+            bool topVisible = !(facePosY && nPosYNegY);
+            bool backVisible = !(faceNegZ && nNegZPosZ);
+            bool frontVisible = !(facePosZ && nPosZNegZ);
+
             for (int x = minX; x <= maxXb; x++)
             {
                 int xBase = x * strideX;
@@ -413,12 +427,12 @@ namespace MVGE_GFX.Terrain
                         bool chunkMinY = y == 0;
                         bool chunkMaxY = y == maxY - 1;
                         byte mask = 0;
-                        if (chunkMinX ? getWorldBlock(wx - 1, wy, wz) == emptyBlock : flatBlocks[li - strideX] == emptyBlock) mask |= FACE_LEFT;
-                        if (chunkMaxX ? getWorldBlock(wx + 1, wy, wz) == emptyBlock : flatBlocks[li + strideX] == emptyBlock) mask |= FACE_RIGHT;
-                        if (chunkMaxY ? getWorldBlock(wx, wy + 1, wz) == emptyBlock : flatBlocks[li + 1] == emptyBlock) mask |= FACE_TOP;
-                        if (chunkMinY ? getWorldBlock(wx, wy - 1, wz) == emptyBlock : flatBlocks[li - 1] == emptyBlock) mask |= FACE_BOTTOM;
-                        if (chunkMaxZ ? getWorldBlock(wx, wy, wz + 1) == emptyBlock : flatBlocks[li + strideZ] == emptyBlock) mask |= FACE_FRONT;
-                        if (chunkMinZ ? getWorldBlock(wx, wy, wz - 1) == emptyBlock : flatBlocks[li - strideZ] == emptyBlock) mask |= FACE_BACK;
+                        if (leftVisible && (chunkMinX ? getWorldBlock(wx - 1, wy, wz) == emptyBlock : flatBlocks[li - strideX] == emptyBlock)) mask |= FACE_LEFT;
+                        if (rightVisible && (chunkMaxX ? getWorldBlock(wx + 1, wy, wz) == emptyBlock : flatBlocks[li + strideX] == emptyBlock)) mask |= FACE_RIGHT;
+                        if (topVisible && (chunkMaxY ? getWorldBlock(wx, wy + 1, wz) == emptyBlock : flatBlocks[li + 1] == emptyBlock)) mask |= FACE_TOP;
+                        if (bottomVisible && (chunkMinY ? getWorldBlock(wx, wy - 1, wz) == emptyBlock : flatBlocks[li - 1] == emptyBlock)) mask |= FACE_BOTTOM;
+                        if (frontVisible && (chunkMaxZ ? getWorldBlock(wx, wy, wz + 1) == emptyBlock : flatBlocks[li + strideZ] == emptyBlock)) mask |= FACE_FRONT;
+                        if (backVisible && (chunkMinZ ? getWorldBlock(wx, wy, wz - 1) == emptyBlock : flatBlocks[li - strideZ] == emptyBlock)) mask |= FACE_BACK;
                         if (mask == 0) continue;
                         masks[MaskIndex(x, y, z)] = mask;
                         totalFaces += FacePopCount[mask];
@@ -475,6 +489,14 @@ namespace MVGE_GFX.Terrain
             byte[] masks = ArrayPool<byte>.Shared.Rent(flatBlocks.Length);
             Array.Clear(masks, 0, flatBlocks.Length);
             int totalFaces = 0; int baseWX = (int)chunkWorldPosition.X; int baseWY = (int)chunkWorldPosition.Y; int baseWZ = (int)chunkWorldPosition.Z;
+
+            bool leftVisible = !(faceNegX && nNegXPosX);
+            bool rightVisible = !(facePosX && nPosXNegX);
+            bool bottomVisible = !(faceNegY && nNegYPosY);
+            bool topVisible = !(facePosY && nPosYNegY);
+            bool backVisible = !(faceNegZ && nNegZPosZ);
+            bool frontVisible = !(facePosZ && nPosZNegZ);
+
             for (int x = 0; x < maxX; x++)
             {
                 int xBase = x * strideX; int wx = baseWX + x; bool atMinX = x == 0; bool atMaxX = x == maxX - 1;
@@ -484,12 +506,12 @@ namespace MVGE_GFX.Terrain
                     for (int y = 0; y < maxY; y++)
                     {
                         int li = zBase + y; ushort block = flatBlocks[li]; if (block == emptyBlock) continue; int wy = baseWY + y; bool atMinY = y == 0; bool atMaxY = y == maxY - 1; byte mask = 0;
-                        if (atMinX ? getWorldBlock(wx - 1, wy, wz) == emptyBlock : flatBlocks[li - strideX] == emptyBlock) mask |= FACE_LEFT;
-                        if (atMaxX ? getWorldBlock(wx + 1, wy, wz) == emptyBlock : flatBlocks[li + strideX] == emptyBlock) mask |= FACE_RIGHT;
-                        if (atMaxY ? getWorldBlock(wx, wy + 1, wz) == emptyBlock : flatBlocks[li + 1] == emptyBlock) mask |= FACE_TOP;
-                        if (atMinY ? getWorldBlock(wx, wy - 1, wz) == emptyBlock : flatBlocks[li - 1] == emptyBlock) mask |= FACE_BOTTOM;
-                        if (atMaxZ ? getWorldBlock(wx, wy, wz + 1) == emptyBlock : flatBlocks[li + strideZ] == emptyBlock) mask |= FACE_FRONT;
-                        if (atMinZ ? getWorldBlock(wx, wy, wz - 1) == emptyBlock : flatBlocks[li - strideZ] == emptyBlock) mask |= FACE_BACK;
+                        if (leftVisible && (atMinX ? getWorldBlock(wx - 1, wy, wz) == emptyBlock : flatBlocks[li - strideX] == emptyBlock)) mask |= FACE_LEFT;
+                        if (rightVisible && (atMaxX ? getWorldBlock(wx + 1, wy, wz) == emptyBlock : flatBlocks[li + strideX] == emptyBlock)) mask |= FACE_RIGHT;
+                        if (topVisible && (atMaxY ? getWorldBlock(wx, wy + 1, wz) == emptyBlock : flatBlocks[li + 1] == emptyBlock)) mask |= FACE_TOP;
+                        if (bottomVisible && (atMinY ? getWorldBlock(wx, wy - 1, wz) == emptyBlock : flatBlocks[li - 1] == emptyBlock)) mask |= FACE_BOTTOM;
+                        if (frontVisible && (atMaxZ ? getWorldBlock(wx, wy, wz + 1) == emptyBlock : flatBlocks[li + strideZ] == emptyBlock)) mask |= FACE_FRONT;
+                        if (backVisible && (atMinZ ? getWorldBlock(wx, wy, wz - 1) == emptyBlock : flatBlocks[li - strideZ] == emptyBlock)) mask |= FACE_BACK;
                         if (mask == 0) continue; masks[li] = mask; totalFaces += FacePopCount[mask];
                     }
                 }
