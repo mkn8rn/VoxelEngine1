@@ -45,6 +45,8 @@ namespace MVGE_GEN.Terrain
         // New: heightmap burial classification (chunk wholly below terrain surface minus margin)
         public bool FullyBuried { get; private set; }
         private const int BURIAL_MARGIN = 2; // configurable later via settings/flags
+        // Fast path: entire chunk volume is guaranteed all air (lies completely above max surface height for every column)
+        public bool AllAirChunk { get; private set; }
 
         // per-face full solidity flags (all boundary voxels on that face are non-empty)
         // Naming: NegX = x==0 face ("left"), PosX = x==dimX-1 ("right"), etc.
@@ -94,7 +96,8 @@ namespace MVGE_GEN.Terrain
             InitializeChunkData();
 
             // After generation compute per-face solidity once (all writes were generation-only bulk writes)
-            ComputeAllFaceSolidity();
+            if (!AllAirChunk) // nothing to scan for pure air fast-path
+                ComputeAllFaceSolidity();
         }
 
         public void InitializeSectionGrid()
@@ -128,19 +131,45 @@ namespace MVGE_GEN.Terrain
             // A chunk is FullyBuried if for every (x,z) column the top of the chunk is strictly below
             // (surfaceHeight - BURIAL_MARGIN).
             bool allBuried = true;
+            int maxSurface = int.MinValue; // also track highest surface for all-air fast-path
             for (int x = 0; x < maxX && allBuried; x++)
             {
                 for (int z = 0; z < maxZ; z++)
                 {
                     int surface = (int)heightmap[x, z];
+                    if (surface > maxSurface) maxSurface = surface;
                     if (topOfChunk >= surface - BURIAL_MARGIN)
                     {
                         allBuried = false;
+                        // we still continue updating maxSurface in rest of columns (need highest surface)
+                        // but break inner loop for burial condition
                         break;
                     }
                 }
             }
+            // If we broke early due to allBuried becoming false, we still need remaining columns' maxSurface
+            if (!allBuried)
+            {
+                for (int x = 0; x < maxX; x++)
+                {
+                    for (int z = 0; z < maxZ; z++)
+                    {
+                        int surface = (int)heightmap[x, z];
+                        if (surface > maxSurface) maxSurface = surface;
+                    }
+                }
+            }
             FullyBuried = allBuried;
+
+            // All-air fast path: entire chunk vertical span is above every surface sample.
+            // Condition: chunk bottom (chunkBaseY) is strictly greater than maximum surface height.
+            if (chunkBaseY > maxSurface)
+            {
+                AllAirChunk = true;
+                IsEmpty = true;
+                precomputedHeightmap = null;
+                return; // skip any section allocation / fills
+            }
 
             // Biome absolute bounds
             int stoneMinY = biome.stone_min_ylevel;
@@ -153,6 +182,10 @@ namespace MVGE_GEN.Terrain
                 for (int z = 0; z < maxZ; z++)
                 {
                     int columnHeight = (int)heightmap[x, z]; // inclusive highest world Y occupied by terrain
+
+                    // If terrain surface below this chunk's base for this column, column is all air – skip.
+                    if (columnHeight < chunkBaseY)
+                        continue;
 
                     // STONE CALCULATION
                     int stoneBandStartWorld = Math.Max(stoneMinY, 0);
@@ -285,9 +318,9 @@ namespace MVGE_GEN.Terrain
             int maxX = GameManager.settings.chunkMaxX;
             int maxZ = GameManager.settings.chunkMaxZ;
             float[,] heightmap = new float[maxX, maxZ];
-            float scale = 0.005f;
+            float scale = 0.0005f;
             float minHeight = 1f;
-            float maxHeight = 1000f;
+            float maxHeight = 4000f;
 
             for (int x = 0; x < maxX; x++)
             {
@@ -464,7 +497,7 @@ namespace MVGE_GEN.Terrain
             chunkRender?.ScheduleDelete();
 
             // Early skip retained (heightmap burial) – kept separate from new neighbor-face occlusion system.
-            if (FullyBuried || BuriedByNeighbors)
+            if (AllAirChunk || FullyBuried || BuriedByNeighbors)
             {
                 return; // leave chunkRender null
             }
