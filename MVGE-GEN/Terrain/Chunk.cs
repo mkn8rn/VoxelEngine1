@@ -58,6 +58,15 @@ namespace MVGE_GEN.Terrain
         // neighbor-based burial (all six neighboring opposing faces are solid AND our faces solid)
         public bool BuriedByNeighbors { get; internal set; }
 
+        // Neighbor opposing face solidity flags (populated by WorldResources before BuildRender)
+        // These reflect the solidity of the neighbor face that touches this chunk.
+        public bool NeighborNegXFaceSolidPosX { get; internal set; } // neighbor at -X, its +X face solid
+        public bool NeighborPosXFaceSolidNegX { get; internal set; }
+        public bool NeighborNegYFaceSolidPosY { get; internal set; }
+        public bool NeighborPosYFaceSolidNegY { get; internal set; }
+        public bool NeighborNegZFaceSolidPosZ { get; internal set; }
+        public bool NeighborPosZFaceSolidNegZ { get; internal set; }
+
         public Chunk(Vector3 chunkPosition, long seed, string chunkDataDirectory, float[,] precomputedHeightmap = null)
         {
             position = chunkPosition;
@@ -477,7 +486,11 @@ namespace MVGE_GEN.Terrain
                 flat,
                 dimX,
                 dimY,
-                dimZ);
+                dimZ,
+                // our own 6 face flags
+                FaceSolidNegX, FaceSolidPosX, FaceSolidNegY, FaceSolidPosY, FaceSolidNegZ, FaceSolidPosZ,
+                // neighbor opposing faces (any missing neighbor left as false)
+                NeighborNegXFaceSolidPosX, NeighborPosXFaceSolidNegX, NeighborNegYFaceSolidPosY, NeighborPosYFaceSolidNegY, NeighborNegZFaceSolidPosZ, NeighborPosZFaceSolidNegZ);
         }
 
         // Per-face solidity helpers

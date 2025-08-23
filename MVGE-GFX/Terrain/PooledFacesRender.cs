@@ -34,6 +34,11 @@ namespace MVGE_GFX.Terrain
         // Optional pre-flattened local blocks (contiguous, x-major, then z, then y)
         private readonly ushort[] preFlattenedLocalBlocks; // null if not supplied
 
+        // Incoming face solidity flags (current chunk faces)
+        private readonly bool faceNegX, facePosX, faceNegY, facePosY, faceNegZ, facePosZ;
+        // Neighbor opposing face solidity flags
+        private readonly bool nNegXPosX, nPosXNegX, nNegYPosY, nPosYNegY, nNegZPosZ, nPosZNegZ;
+
         // Flat UV lookup: [blockId * 6 + face] * 8 bytes (4 verts * 2 bytes each)
         private static byte[] uvLut; // null until initialized
         private static int uvLutBlockCount;
@@ -52,7 +57,19 @@ namespace MVGE_GFX.Terrain
                                  GetBlockFastDelegate fastGetter,
                                  Func<int, int, int, ushort> localGetter,
                                  BlockTextureAtlas atlas,
-                                 ushort[] preFlattenedLocalBlocks = null)
+                                 ushort[] preFlattenedLocalBlocks = null,
+                                 bool faceNegX = false,
+                                 bool facePosX = false,
+                                 bool faceNegY = false,
+                                 bool facePosY = false,
+                                 bool faceNegZ = false,
+                                 bool facePosZ = false,
+                                 bool nNegXPosX = false,
+                                 bool nPosXNegX = false,
+                                 bool nNegYPosY = false,
+                                 bool nPosYNegY = false,
+                                 bool nNegZPosZ = false,
+                                 bool nPosZNegZ = false)
         {
             this.chunkWorldPosition = chunkWorldPosition;
             this.maxX = maxX; this.maxY = maxY; this.maxZ = maxZ;
@@ -62,6 +79,8 @@ namespace MVGE_GFX.Terrain
             getLocalBlock = localGetter;
             this.atlas = atlas;
             this.preFlattenedLocalBlocks = preFlattenedLocalBlocks; // may be null
+            this.faceNegX = faceNegX; this.facePosX = facePosX; this.faceNegY = faceNegY; this.facePosY = facePosY; this.faceNegZ = faceNegZ; this.facePosZ = facePosZ;
+            this.nNegXPosX = nNegXPosX; this.nPosXNegX = nPosXNegX; this.nNegYPosY = nNegYPosY; this.nPosYNegY = nPosYNegY; this.nNegZPosZ = nNegZPosZ; this.nPosZNegZ = nPosZNegZ;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

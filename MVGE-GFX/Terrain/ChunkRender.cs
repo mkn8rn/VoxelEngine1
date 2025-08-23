@@ -9,6 +9,7 @@ using System.Collections.Generic;
 using System.Buffers;
 using System.Runtime.CompilerServices;
 using MVGE_INF.Models.Terrain;
+using Vector3 = OpenTK.Mathematics.Vector3;
 
 namespace MVGE_GFX.Terrain
 {
@@ -52,6 +53,11 @@ namespace MVGE_GFX.Terrain
         private readonly int maxY;
         private readonly int maxZ;
 
+        // Incoming solidity flags (current chunk faces)
+        private readonly bool faceNegX, facePosX, faceNegY, facePosY, faceNegZ, facePosZ;
+        // Neighbor opposing face solidity flags
+        private readonly bool nNegXPosX, nPosXNegX, nNegYPosY, nPosYNegY, nNegZPosZ, nPosZNegZ;
+
         private enum IndexFormat : byte { UShort, UInt }
         private IndexFormat indexFormat;
 
@@ -86,13 +92,27 @@ namespace MVGE_GFX.Terrain
             ushort[] flatBlocks,
             int maxX,
             int maxY,
-            int maxZ)
+            int maxZ,
+            bool faceNegX,
+            bool facePosX,
+            bool faceNegY,
+            bool facePosY,
+            bool faceNegZ,
+            bool facePosZ,
+            bool nNegXPosX,
+            bool nPosXNegX,
+            bool nNegYPosY,
+            bool nPosYNegY,
+            bool nNegZPosZ,
+            bool nPosZNegZ)
         {
             chunkMeta = chunkData;
             getWorldBlock = worldBlockGetter;
             this.flatBlocks = flatBlocks;
             this.maxX = maxX; this.maxY = maxY; this.maxZ = maxZ;
-            chunkWorldPosition = new OpenTK.Mathematics.Vector3(chunkData.x, chunkData.y, chunkData.z);
+            chunkWorldPosition = new Vector3(chunkData.x, chunkData.y, chunkData.z);
+            this.faceNegX = faceNegX; this.facePosX = facePosX; this.faceNegY = faceNegY; this.facePosY = facePosY; this.faceNegZ = faceNegZ; this.facePosZ = facePosZ;
+            this.nNegXPosX = nNegXPosX; this.nPosXNegX = nPosXNegX; this.nNegYPosY = nNegYPosY; this.nPosYNegY = nPosYNegY; this.nNegZPosZ = nNegZPosZ; this.nPosZNegZ = nPosZNegZ;
             GenerateFaces();
         }
 
@@ -237,7 +257,11 @@ namespace MVGE_GFX.Terrain
 
             if (usePooling)
             {
-                var builder = new PooledFacesRender(chunkWorldPosition, maxX, maxY, maxZ, emptyBlock, getWorldBlock, null, null, terrainTextureAtlas, flatBlocks);
+                var builder = new PooledFacesRender(
+                    chunkWorldPosition, maxX, maxY, maxZ, emptyBlock,
+                    getWorldBlock, null, null, terrainTextureAtlas, flatBlocks,
+                    faceNegX, facePosX, faceNegY, facePosY, faceNegZ, facePosZ,
+                    nNegXPosX, nPosXNegX, nNegYPosY, nPosYNegY, nNegZPosZ, nPosZNegZ);
                 var res = builder.Build();
                 usedPooling = true;
                 useUShort = res.UseUShort;
