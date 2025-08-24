@@ -8,7 +8,7 @@ namespace MVGE_INF.Models.Terrain
 {
     public struct BlockTypeJSON
     {
-        public required ushort ID { get; set; }
+        public ushort? ID { get; set; }
         public required string Name { get; set; }
         public required BaseBlockType BaseType { get; set; }
         public required string TextureFaceBase { get; set; }

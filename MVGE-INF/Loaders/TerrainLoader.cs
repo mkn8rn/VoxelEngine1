@@ -14,7 +14,8 @@ namespace MVGE_INF.Loaders
     public class TerrainLoader
     {
         // Loading
-        private ushort blockTypeCounter = 0;
+        private ushort blockTypeCounter = 0; // used only for base types
+        private const ushort FIRST_CUSTOM_BLOCK_ID = 101; // IDs <=100 reserved for base / special
 
         public TerrainLoader()
         {
@@ -29,7 +30,7 @@ namespace MVGE_INF.Loaders
 
         internal void LoadBaseBlockType()
         {
-            // Base enum block types do not come from JSON; we synthesize them.
+            // Base enum block types occupy the reserved ID range starting at 0.
             foreach (BaseBlockType baseType in Enum.GetValues(typeof(BaseBlockType)))
             {
                 string name = baseType.ToString();
@@ -68,6 +69,12 @@ namespace MVGE_INF.Loaders
             }
 
             string[] txtFiles = Directory.GetFiles(dir, "*.txt", SearchOption.TopDirectoryOnly);
+            if (txtFiles.Length == 0)
+            {
+                Console.WriteLine("No custom block type files found.");
+                return;
+            }
+
             var jsonOptions = new JsonSerializerOptions
             {
                 PropertyNameCaseInsensitive = true,
@@ -76,61 +83,145 @@ namespace MVGE_INF.Loaders
             };
             jsonOptions.Converters.Add(new JsonStringEnumConverter());
 
+            // Tracking collections for reporting
+            var explicitIdList = new List<(BlockTypeJSON json, string file)>();
+            var autoIdList = new List<(BlockTypeJSON json, string file)>();
+            var skippedFiles = new List<(string file, string reason)>();
+            var explicitAssigned = new List<(string name, ushort id)>();
+            var autoAssigned = new List<(string name, ushort id)>();
+
+            // First pass: deserialize and classify
             foreach (string txtFile in txtFiles)
             {
                 try
                 {
-                    string json = File.ReadAllText(txtFile);
-                    if (string.IsNullOrWhiteSpace(json))
+                    string jsonText = File.ReadAllText(txtFile);
+                    if (string.IsNullOrWhiteSpace(jsonText))
                     {
-                        Console.WriteLine($"[TerrainLoader] Skipping empty file: {Path.GetFileName(txtFile)}");
+                        skippedFiles.Add((Path.GetFileName(txtFile), "Empty file"));
                         continue;
                     }
-
-                    // Deserialize into the lightweight JSON struct first
-                    BlockTypeJSON? parsedJson = JsonSerializer.Deserialize<BlockTypeJSON>(json, jsonOptions);
-                    if (parsedJson == null)
+                    BlockTypeJSON? parsed = JsonSerializer.Deserialize<BlockTypeJSON>(jsonText, jsonOptions);
+                    if (parsed == null)
                     {
-                        Console.WriteLine($"[TerrainLoader] Failed to deserialize file: {Path.GetFileName(txtFile)}");
+                        skippedFiles.Add((Path.GetFileName(txtFile), "Deserialize returned null"));
                         continue;
                     }
-
-                    // Build the runtime BlockType object (filling defaults)
-                    string fileBaseName = Path.GetFileNameWithoutExtension(txtFile);
-                    var rt = new BlockType
+                    if (string.IsNullOrWhiteSpace(parsed.Value.Name))
                     {
-                        ID = blockTypeCounter,
-                        UniqueName = fileBaseName,
-                        Name = parsedJson.Value.Name,
-                        BaseType = parsedJson.Value.BaseType,
-                        TextureFaceBase = parsedJson.Value.TextureFaceBase,
-                        TextureFaceTop = parsedJson.Value.TextureFaceTop ?? parsedJson.Value.TextureFaceBase,
-                        TextureFaceFront = parsedJson.Value.TextureFaceFront ?? parsedJson.Value.TextureFaceBase,
-                        TextureFaceBack = parsedJson.Value.TextureFaceBack ?? parsedJson.Value.TextureFaceBase,
-                        TextureFaceLeft = parsedJson.Value.TextureFaceLeft ?? parsedJson.Value.TextureFaceBase,
-                        TextureFaceRight = parsedJson.Value.TextureFaceRight ?? parsedJson.Value.TextureFaceBase,
-                        TextureFaceBottom = parsedJson.Value.TextureFaceBottom ?? parsedJson.Value.TextureFaceBase
-                    };
-
-                    if (string.IsNullOrWhiteSpace(rt.Name))
-                    {
-                        Console.WriteLine($"[TerrainLoader] Missing Name in file: {Path.GetFileName(txtFile)}");
+                        skippedFiles.Add((Path.GetFileName(txtFile), "Missing Name"));
                         continue;
                     }
-
-                    allBlockTypes.Add(rt.Name);
-                    allBlockTypesByBaseType[rt.Name] = rt.BaseType;
-                    allBlockTypesByIds[blockTypeCounter] = rt.Name;
-                    allBlockTypeObjects.Add(rt);
-
-                    Console.WriteLine($"Block type JSON loaded: {rt.Name} (unique '{rt.UniqueName}'), base type: {rt.BaseType}, id: {blockTypeCounter}/65535 (file: {Path.GetFileName(txtFile)})");
-                    blockTypeCounter++;
+                    if (parsed.Value.ID.HasValue)
+                        explicitIdList.Add((parsed.Value, txtFile));
+                    else
+                        autoIdList.Add((parsed.Value, txtFile));
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[TerrainLoader] Error reading '{Path.GetFileName(txtFile)}': {ex.Message}");
+                    skippedFiles.Add((Path.GetFileName(txtFile), "Exception: " + ex.Message));
                 }
             }
+
+            // Track taken IDs (include base + reserved)
+            var takenIds = new HashSet<ushort>(allBlockTypeObjects.Select(b => b.ID));
+            for (ushort r = 0; r < FIRST_CUSTOM_BLOCK_ID; r++) takenIds.Add(r);
+
+            void RegisterRuntimeBlock(BlockType rt, string filePath)
+            {
+                allBlockTypes.Add(rt.Name);
+                allBlockTypesByBaseType[rt.Name] = rt.BaseType;
+                allBlockTypesByIds[rt.ID] = rt.Name;
+                allBlockTypeObjects.Add(rt);
+                Console.WriteLine($"Block type JSON loaded: {rt.Name} (unique '{rt.UniqueName}'), base type: {rt.BaseType}, id: {rt.ID}/65535 (file: {Path.GetFileName(filePath)})");
+            }
+
+            // Explicit IDs first
+            foreach (var (json, file) in explicitIdList)
+            {
+                try
+                {
+                    ushort requestedId = json.ID!.Value;
+                    if (requestedId < FIRST_CUSTOM_BLOCK_ID)
+                        throw new InvalidOperationException($"Requested reserved ID {requestedId}");
+                    if (takenIds.Contains(requestedId))
+                        throw new InvalidOperationException($"Requested ID {requestedId} already taken");
+
+                    takenIds.Add(requestedId);
+                    string fileBaseName = Path.GetFileNameWithoutExtension(file);
+                    var rt = new BlockType
+                    {
+                        ID = requestedId,
+                        UniqueName = fileBaseName,
+                        Name = json.Name,
+                        BaseType = json.BaseType,
+                        TextureFaceBase = json.TextureFaceBase,
+                        TextureFaceTop = json.TextureFaceTop ?? json.TextureFaceBase,
+                        TextureFaceFront = json.TextureFaceFront ?? json.TextureFaceBase,
+                        TextureFaceBack = json.TextureFaceBack ?? json.TextureFaceBase,
+                        TextureFaceLeft = json.TextureFaceLeft ?? json.TextureFaceBase,
+                        TextureFaceRight = json.TextureFaceRight ?? json.TextureFaceBase,
+                        TextureFaceBottom = json.TextureFaceBottom ?? json.TextureFaceBase
+                    };
+                    RegisterRuntimeBlock(rt, file);
+                    explicitAssigned.Add((rt.Name, rt.ID));
+                }
+                catch (Exception ex)
+                {
+                    skippedFiles.Add((Path.GetFileName(file), "Explicit ID failed: " + ex.Message));
+                }
+            }
+
+            // Auto IDs
+            ushort nextId = FIRST_CUSTOM_BLOCK_ID;
+            foreach (var (json, file) in autoIdList)
+            {
+                try
+                {
+                    while (takenIds.Contains(nextId))
+                    {
+                        if (nextId == ushort.MaxValue)
+                            throw new InvalidOperationException("Ran out of block IDs");
+                        nextId++;
+                    }
+                    ushort assignedId = nextId;
+                    takenIds.Add(assignedId);
+                    nextId++;
+
+                    string fileBaseName = Path.GetFileNameWithoutExtension(file);
+                    var rt = new BlockType
+                    {
+                        ID = assignedId,
+                        UniqueName = fileBaseName,
+                        Name = json.Name,
+                        BaseType = json.BaseType,
+                        TextureFaceBase = json.TextureFaceBase,
+                        TextureFaceTop = json.TextureFaceTop ?? json.TextureFaceBase,
+                        TextureFaceFront = json.TextureFaceFront ?? json.TextureFaceBase,
+                        TextureFaceBack = json.TextureFaceBack ?? json.TextureFaceBase,
+                        TextureFaceLeft = json.TextureFaceLeft ?? json.TextureFaceBase,
+                        TextureFaceRight = json.TextureFaceRight ?? json.TextureFaceBase,
+                        TextureFaceBottom = json.TextureFaceBottom ?? json.TextureFaceBase
+                    };
+                    RegisterRuntimeBlock(rt, file);
+                    autoAssigned.Add((rt.Name, rt.ID));
+                }
+                catch (Exception ex)
+                {
+                    skippedFiles.Add((Path.GetFileName(file), "Auto ID failed: " + ex.Message));
+                }
+            }
+
+            // Summary report
+            Console.WriteLine($"Explicit ID requests processed: {explicitIdList.Count}, successful: {explicitAssigned.Count}, failed: {explicitIdList.Count - explicitAssigned.Count}");
+            if (explicitAssigned.Count > 0)
+                Console.WriteLine("Explicit assignments: " + string.Join(", ", explicitAssigned.Select(e => e.name + "->" + e.id)));
+            Console.WriteLine($"Auto-ID blocks processed: {autoIdList.Count}, assigned: {autoAssigned.Count}, failed: {autoIdList.Count - autoAssigned.Count}");
+            if (autoAssigned.Count > 0)
+                Console.WriteLine("Auto assignments: " + string.Join(", ", autoAssigned.Select(a => a.name + "->" + a.id)));
+            Console.WriteLine($"Skipped files: {skippedFiles.Count}");
+            foreach (var (f, r) in skippedFiles)
+                Console.WriteLine("  Skipped " + f + ": " + r);
         }
 
         public static List<string> allBlockTypes { get; set; } = new List<string>();

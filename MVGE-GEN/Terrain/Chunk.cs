@@ -117,11 +117,10 @@ namespace MVGE_GEN.Terrain
             sections = new ChunkSection[sectionsX, sectionsY, sectionsZ];
         }
 
-        public void InitializeChunkData() => GenerateInitialChunkData(); // wrapper preserved
-
-        public void Render(ShaderProgram shader) => chunkRender?.Render(shader);
+        public void InitializeChunkData() => GenerateInitialChunkData();
 
         // NOTE: InitializeChunkData & all generation helpers are in ChunkGenerator partial file.
+        public void Render(ShaderProgram shader) => chunkRender?.Render(shader);
 
         public ushort GenerateInitialBlockData(int lx, int ly, int lz, int columnHeight)
         {
