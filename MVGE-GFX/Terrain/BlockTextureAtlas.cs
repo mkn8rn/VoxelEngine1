@@ -313,33 +313,40 @@ namespace MVGE_GFX.Terrain
         {
             Console.WriteLine($"Mapping texture coordinates.");
 
-            ushort count = 0;
-            foreach (string blockType in TerrainLoader.allBlockTypesByBaseType.Keys)
+            foreach (var bt in TerrainLoader.allBlockTypeObjects)
             {
-                string textureName = blockType.ToString();
-
-                if (textureCoordinates.ContainsKey(textureName))
+                if (!blockTypeUVCoordinates.TryGetValue(bt.ID, out var faceDict))
                 {
-                    Vector2 textureCoordinates = BlockTextureAtlas.textureCoordinates[textureName];
-                    ByteVector2 textureByteCoordinates = new ByteVector2 { x = (byte)textureCoordinates.X, y = (byte)textureCoordinates.Y };
-                    foreach (Faces face in Enum.GetValues(typeof(Faces)).Cast<Faces>())
-                    {
-                        blockTypeUVCoordinates[count][face] = textureByteCoordinates;
-                        Console.WriteLine($"[UV] Block '{blockType}' Face {face} assigned UV tile ({textureByteCoordinates.x},{textureByteCoordinates.y})");
-                    }
-                }
-                else
-                {
-                    Vector2 textureCoordinates = BlockTextureAtlas.textureCoordinates[missingTextureName];
-                    ByteVector2 textureByteCoordinates = new ByteVector2 { x = (byte)textureCoordinates.X, y = (byte)textureCoordinates.Y };
-                    foreach (Faces face in Enum.GetValues(typeof(Faces)).Cast<Faces>())
-                    {
-                        blockTypeUVCoordinates[count][face] = textureByteCoordinates;
-                        Console.WriteLine($"[UV] Block '{blockType}' Face {face} assigned MISSING UV tile ({textureByteCoordinates.x},{textureByteCoordinates.y})");
-                    }
+                    // Safety: initialize if missing
+                    faceDict = new Dictionary<Faces, ByteVector2>();
+                    foreach (var face in Enum.GetValues(typeof(Faces)).Cast<Faces>()) faceDict[face] = new ByteVector2();
+                    blockTypeUVCoordinates[bt.ID] = faceDict;
                 }
 
-                count++;
+                // Helper local function to resolve a texture name to ByteVector2
+                ByteVector2 Resolve(string texName)
+                {
+                    if (string.IsNullOrWhiteSpace(texName) || !textureCoordinates.TryGetValue(texName, out var vec))
+                    {
+                        var missVec = textureCoordinates[missingTextureName];
+                        return new ByteVector2 { x = (byte)missVec.X, y = (byte)missVec.Y };
+                    }
+                    return new ByteVector2 { x = (byte)vec.X, y = (byte)vec.Y };
+                }
+
+                var top    = Resolve(bt.TextureFaceTop);
+                var bottom = Resolve(bt.TextureFaceBottom);
+                var front  = Resolve(bt.TextureFaceFront);
+                var back   = Resolve(bt.TextureFaceBack);
+                var left   = Resolve(bt.TextureFaceLeft);
+                var right  = Resolve(bt.TextureFaceRight);
+
+                faceDict[Faces.TOP] = top;      Console.WriteLine($"[UV] Block '{bt.Name}' Face TOP    -> ({top.x},{top.y}) tex='{bt.TextureFaceTop}'");
+                faceDict[Faces.BOTTOM] = bottom;Console.WriteLine($"[UV] Block '{bt.Name}' Face BOTTOM -> ({bottom.x},{bottom.y}) tex='{bt.TextureFaceBottom}'");
+                faceDict[Faces.FRONT] = front;  Console.WriteLine($"[UV] Block '{bt.Name}' Face FRONT  -> ({front.x},{front.y}) tex='{bt.TextureFaceFront}'");
+                faceDict[Faces.BACK] = back;    Console.WriteLine($"[UV] Block '{bt.Name}' Face BACK   -> ({back.x},{back.y}) tex='{bt.TextureFaceBack}'");
+                faceDict[Faces.LEFT] = left;    Console.WriteLine($"[UV] Block '{bt.Name}' Face LEFT   -> ({left.x},{left.y}) tex='{bt.TextureFaceLeft}'");
+                faceDict[Faces.RIGHT] = right;  Console.WriteLine($"[UV] Block '{bt.Name}' Face RIGHT  -> ({right.x},{right.y}) tex='{bt.TextureFaceRight}'");
             }
         }
 

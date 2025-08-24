@@ -23,4 +23,8 @@
     <None Include="Loaders\TerrainLoader.cs" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Folder Include="Games\Default\Data\Blocks\Types\" />
+  </ItemGroup>
+
 </Project>

@@ -1,0 +1,6 @@
+{
+  "ID": 102,
+  "Name": "Limestone",
+  "BaseType": "Stone",
+  "TextureFaceBase": "LimeWhole"
+}

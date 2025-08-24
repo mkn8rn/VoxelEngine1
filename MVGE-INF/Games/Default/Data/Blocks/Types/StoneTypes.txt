@@ -1,6 +1,0 @@
-RockWhole
-RockCrushed
-LimeWhole
-LimeCrushed
-ObsidianWhole
-ObsidianCrushed

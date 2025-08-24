@@ -1,0 +1,6 @@
+{
+  "ID": 101,
+  "Name": "Dolomite",
+  "BaseType": "Stone",
+  "TextureFaceBase": "RockWhole"
+}
