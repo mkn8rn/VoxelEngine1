@@ -184,11 +184,14 @@ namespace MVGE_GFX.Terrain
                     currentX = 0; currentY += GameManager.settings.blockTileHeight;
                 }
                 if (currentY + ri.Height > atlasHeight) break; // overflow safety
+                int tileX = currentX / GameManager.settings.blockTileWidth;
+                int tileY = currentY / GameManager.settings.blockTileHeight;
                 GL.TexSubImage2D(TextureTarget.Texture2D, 0, currentX, currentY,
                     ri.Width, ri.Height, PixelFormat.Rgba, PixelType.UnsignedByte, ri.Data);
                 float floatCoordsX = (float)currentX / (float)GameManager.settings.blockTileWidth;
                 float floatCoordsY = (float)currentY / (float)GameManager.settings.blockTileHeight;
                 textureCoordinates[name] = new Vector2(floatCoordsX, floatCoordsY);
+                Console.WriteLine($"[Atlas] Loaded texture '{name}' at tile ({tileX},{tileY}) pixels ({currentX},{currentY}) UV base ({floatCoordsX},{floatCoordsY})");
                 currentX += ri.Width;
             }
 
@@ -277,12 +280,15 @@ namespace MVGE_GFX.Terrain
                 {
                     throw new Exception("Texture atlas is too small to fit all textures.");
                 }
+                int tileX = currentX / GameManager.settings.blockTileWidth;
+                int tileY = currentY / GameManager.settings.blockTileHeight;
                 GL.TexSubImage2D(TextureTarget.Texture2D, 0, currentX, currentY,
                     GameManager.settings.blockTileWidth, GameManager.settings.blockTileHeight,
                     PixelFormat.Rgba, PixelType.UnsignedByte, loadedTexture.Data);
                 var floatCoordsX = (float)currentX / (float)GameManager.settings.blockTileWidth;
                 var floatCoordsY = (float)currentY / (float)GameManager.settings.blockTileHeight;
                 textureCoordinates[textureName] = new Vector2(floatCoordsX, floatCoordsY);
+                Console.WriteLine($"[Atlas] Loaded texture '{textureName}' at tile ({tileX},{tileY}) pixels ({currentX},{currentY}) UV base ({floatCoordsX},{floatCoordsY})");
                 currentX += GameManager.settings.blockTileWidth;
             }
         }
@@ -319,6 +325,7 @@ namespace MVGE_GFX.Terrain
                     foreach (Faces face in Enum.GetValues(typeof(Faces)).Cast<Faces>())
                     {
                         blockTypeUVCoordinates[count][face] = textureByteCoordinates;
+                        Console.WriteLine($"[UV] Block '{blockType}' Face {face} assigned UV tile ({textureByteCoordinates.x},{textureByteCoordinates.y})");
                     }
                 }
                 else
@@ -328,6 +335,7 @@ namespace MVGE_GFX.Terrain
                     foreach (Faces face in Enum.GetValues(typeof(Faces)).Cast<Faces>())
                     {
                         blockTypeUVCoordinates[count][face] = textureByteCoordinates;
+                        Console.WriteLine($"[UV] Block '{blockType}' Face {face} assigned MISSING UV tile ({textureByteCoordinates.x},{textureByteCoordinates.y})");
                     }
                 }
 
