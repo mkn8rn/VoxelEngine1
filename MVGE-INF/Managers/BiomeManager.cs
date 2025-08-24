@@ -5,6 +5,8 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using MVGE_INF.Generation.Models;
 using MVGE_INF.Models.Generation;
+using MVGE_INF.Models.Terrain;
+using MVGE_INF.Loaders;
 
 namespace MVGE_INF.Managers
 {
@@ -26,6 +28,11 @@ namespace MVGE_INF.Managers
             ReadCommentHandling = JsonCommentHandling.Skip,
             WriteIndented = false
         };
+
+        static BiomeManager()
+        {
+            jsonOptions.Converters.Add(new JsonStringEnumConverter());
+        }
 
         public static void LoadAllBiomes()
         {
@@ -62,10 +69,75 @@ namespace MVGE_INF.Managers
                 _microbiomes[biomeFolderName] = microbiomesMap; // store map
                 var microbiomesList = new List<MicrobiomeJSON>(microbiomesMap.Values);
 
-                // TODO: Hook in generation rule loading (e.g., GenerationRules.txt) to populate simpleReplacements
+                // Load generation rules (required to parse if file exists; throw on failure if present)
                 var simpleReplacementRules = new List<SimpleReplacementRule>();
+                string generationRulesPath = Path.Combine(biomeDir, "GenerationRules.txt");
+                if (File.Exists(generationRulesPath))
+                {
+                    try
+                    {
+                        string rulesJsonText = File.ReadAllText(generationRulesPath);
+                        if (string.IsNullOrWhiteSpace(rulesJsonText))
+                            throw new Exception("GenerationRules.txt is empty");
+                        var rules = JsonSerializer.Deserialize<List<GenerationRuleJSON>>(rulesJsonText, jsonOptions);
+                        if (rules == null)
+                            throw new Exception("Deserialized rules list is null");
 
-                // Map to runtime Biome class (camel-case to authored property names)
+                        foreach (var rule in rules)
+                        {
+                            if (rule.generation_type != GenerationType.SimpleReplacement)
+                                continue; // only map SimpleReplacement for now
+
+                            // Resolve target block type by ID
+                            var targetBlock = TerrainLoader.allBlockTypeObjects.Find(b => b.ID == rule.block_type_id);
+                            if (targetBlock == null)
+                                throw new Exception($"Rule references unknown block_type_id {rule.block_type_id}");
+
+                            // Build list of base block types to replace
+                            var baseList = new List<BaseBlockType>();
+                            if (rule.base_blocks_to_replace != null && rule.base_blocks_to_replace.Count > 0)
+                            {
+                                foreach (var bb in rule.base_blocks_to_replace)
+                                {
+                                    if (Enum.IsDefined(typeof(BaseBlockType), (byte)bb))
+                                        baseList.Add((BaseBlockType)bb);
+                                }
+                            }
+                            else if (rule.blocks_to_replace != null && rule.blocks_to_replace.Count > 0)
+                            {
+                                // Derive base types from specific block IDs
+                                foreach (var btId in rule.blocks_to_replace)
+                                {
+                                    var bt = TerrainLoader.allBlockTypeObjects.Find(b => b.ID == btId);
+                                    if (bt != null && !baseList.Contains(bt.BaseType))
+                                        baseList.Add(bt.BaseType);
+                                }
+                            }
+
+                            var simpleRule = new SimpleReplacementRule
+                            {
+                                blocks_to_replace = baseList,
+                                block_type = targetBlock,
+                                priority = rule.priority,
+                                microbiomeId = rule.microbiome_id,
+                                absoluteMinYlevel = rule.absolute_min_ylevel,
+                                absoluteMaxYlevel = rule.absolute_max_ylevel,
+                                relativeMinDepth = rule.relative_min_depth,
+                                relativeMaxDepth = rule.relative_max_depth
+                            };
+                            simpleReplacementRules.Add(simpleRule);
+                        }
+
+                        // Order by priority (ascending: lower number first)
+                        simpleReplacementRules.Sort((a,b)=> a.priority.CompareTo(b.priority));
+                    }
+                    catch (Exception ex)
+                    {
+                        throw new InvalidOperationException($"Failed to parse generation rules for biome '{biomeFolderName}': {ex.Message}");
+                    }
+                }
+
+                // Map to runtime Biome class
                 var runtimeBiome = new Biome
                 {
                     id = biomeJson.id,
@@ -84,7 +156,7 @@ namespace MVGE_INF.Managers
 
                 _biomes[biomeFolderName] = runtimeBiome;
 
-                Console.WriteLine($"[Biome] Loaded biome id={runtimeBiome.id} folder='{biomeFolderName}' name='{runtimeBiome.name}' (microbiomes: {microbiomesMap.Count})");
+                Console.WriteLine($"[Biome] Loaded biome id={runtimeBiome.id} folder='{biomeFolderName}' name='{runtimeBiome.name}' (microbiomes: {microbiomesMap.Count}, simpleRules: {simpleReplacementRules.Count})");
             }
 
             _biomeOrder = new string[_biomes.Count];
