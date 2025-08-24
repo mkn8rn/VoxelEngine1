@@ -74,10 +74,10 @@ namespace MVGE_GEN.Terrain
             }
 
             // Biome absolute bounds
-            int stoneMinY = biome.stone_min_ylevel;
-            int stoneMaxY = biome.stone_max_ylevel;
-            int soilMinY = biome.soil_min_ylevel;
-            int soilMaxY = biome.soil_max_ylevel;
+            int stoneMinY = biome.stoneMinYLevel;
+            int stoneMaxY = biome.stoneMaxYLevel;
+            int soilMinY = biome.soilMinYLevel;
+            int soilMaxY = biome.soilMaxYLevel;
 
             for (int x = 0; x < maxX; x++)
             {
@@ -100,11 +100,11 @@ namespace MVGE_GEN.Terrain
                         continue;
 
                     // Reserve minimum soil depth (clamped to available)
-                    int soilMinReserve = Math.Clamp(biome.soil_min_depth, 0, available);
+                    int soilMinReserve = Math.Clamp(biome.soilMinDepth, 0, available);
 
                     // Desired stone depths
-                    int stoneMinDepth = biome.stone_min_depth;
-                    int stoneMaxDepth = biome.stone_max_depth;
+                    int stoneMinDepth = biome.stoneMinDepth;
+                    int stoneMaxDepth = biome.stoneMaxDepth;
 
                     // Raw candidate per spec: stoneDepth = min(stoneMaxDepth, max(stoneMinDepth, available - soilMinReserve))
                     int rawStoneDepth = available - soilMinReserve;
@@ -156,7 +156,7 @@ namespace MVGE_GEN.Terrain
                     int soilAvailable = soilBandCapWorld - soilStartWorld + 1;
                     if (soilAvailable <= 0) continue;
 
-                    int soilMaxDepth = biome.soil_max_depth;
+                    int soilMaxDepth = biome.soilMaxDepth;
                     int soilDepth = Math.Min(soilMaxDepth, soilAvailable);
 
                     int soilEndWorld = soilStartWorld + soilDepth - 1;
@@ -211,14 +211,14 @@ namespace MVGE_GEN.Terrain
             int maxZ = dimZ;
             bool possibleStone = true;
 
-            int stoneMinY = biome.stone_min_ylevel;
-            int stoneMaxY = biome.stone_max_ylevel;
-            int soilMinY = biome.soil_min_ylevel;
-            int soilMaxY = biome.soil_max_ylevel;
-            int soilMinDepthSpec = biome.soil_min_depth;
-            int soilMaxDepthSpec = biome.soil_max_depth;
-            int stoneMinDepthSpec = biome.stone_min_depth;
-            int stoneMaxDepthSpec = biome.stone_max_depth;
+            int stoneMinY = biome.stoneMinYLevel;
+            int stoneMaxY = biome.stoneMaxYLevel;
+            int soilMinY = biome.soilMinYLevel;
+            int soilMaxY = biome.soilMaxYLevel;
+            int soilMinDepthSpec = biome.soilMinDepth;
+            int soilMaxDepthSpec = biome.soilMaxDepth;
+            int stoneMinDepthSpec = biome.stoneMinDepth;
+            int stoneMaxDepthSpec = biome.stoneMaxDepth;
 
             // Soil uniform detection is attempted whenever the chunk vertical span intersects the biome soil band
             bool possibleSoil = (topOfChunk >= soilMinY) && (chunkBaseY <= soilMaxY);

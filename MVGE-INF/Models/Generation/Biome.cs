@@ -1,23 +1,20 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Diagnostics.Contracts;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+﻿using MVGE_INF.Generation.Models;
 
-namespace MVGE_INF.Generation.Models
+namespace MVGE_INF.Models.Generation
 {
-    public struct Biome
+    public class Biome
     {
-        public int id { get; set; }
-        public string name { get; set; }
-        public int stone_min_ylevel { get; set; }
-        public int stone_max_ylevel { get; set; }
-        public int stone_min_depth { get; set; }
-        public int stone_max_depth { get; set; }
-        public int soil_min_ylevel { get; set; }
-        public int soil_max_ylevel { get; set; }
-        public int soil_min_depth { get; set; }
-        public int soil_max_depth { get; set; }
+        public required int id { get; set; }
+        public required string name { get; set; }
+        public required int stoneMinYLevel { get; set; }
+        public required int stoneMaxYLevel { get; set; }
+        public required int stoneMinDepth { get; set; }
+        public required int stoneMaxDepth { get; set; }
+        public required int soilMinYLevel { get; set; }
+        public required int soilMaxYLevel { get; set; }
+        public required int soilMinDepth { get; set; }
+        public required int soilMaxDepth { get; set; }
+        public required List<MicrobiomeJSON> microbiomes { get; set; }
+        public required List<SimpleReplacementRule> simpleReplacements { get; set; }
     }
 }

@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 
 namespace MVGE_INF.Generation.Models
 {
-    public struct Microbiome
+    public struct MicrobiomeJSON
     {
         // Placeholder for future microbiome-specific parameters.
         public int id { get; set; }

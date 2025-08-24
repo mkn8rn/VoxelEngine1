@@ -10,6 +10,7 @@ using System.Runtime.CompilerServices;
 using System.Buffers;
 using MVGE_INF.Models.Terrain;
 using MVGE_INF.Generation.Models;
+using MVGE_INF.Models.Generation;
 
 namespace MVGE_GEN.Terrain
 {
@@ -37,7 +38,7 @@ namespace MVGE_GEN.Terrain
         private readonly int dimZ;
         private const ushort EMPTY = (ushort)BaseBlockType.Empty;
 
-        private Biome biome; // biome used for this chunk
+        private Biome biome;
 
         // Occupancy flags
         public bool IsEmpty { get; private set; }
@@ -93,7 +94,7 @@ namespace MVGE_GEN.Terrain
                 humidity = 0
             };
 
-            // Select biome deterministically (fast path when only one loaded)
+            // Select biome deterministically
             biome = BiomeManager.SelectBiomeForChunk(seed, (int)position.X, (int)position.Z);
 
             InitializeSectionGrid();

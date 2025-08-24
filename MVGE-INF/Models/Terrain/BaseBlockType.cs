@@ -8,15 +8,15 @@ namespace MVGE_INF.Models.Terrain
 {
     public enum BaseBlockType : byte
     {
-        Empty,
-        Gas,
-        Living,
-        Mineral,
-        Liquid,
-        Soil,
-        Stone,
-        Water,
-        Wood,
-        Glass
+        Empty = 0,
+        Gas = 1,
+        Living = 2,
+        Mineral = 3,
+        Liquid = 4,
+        Soil = 5,
+        Stone = 6,
+        Water = 7,
+        Wood = 8,
+        Glass = 9
     }
 }

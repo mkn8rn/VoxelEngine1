@@ -1,0 +1,14 @@
+﻿[
+  {
+    "generation_type": "SimpleReplacement",
+    "blocks_to_replace": [],
+    "base_blocks_to_replace": [6],
+    "block_type_id": 101,
+    "priority": 1,
+    "microbiome_id": null,
+    "absolute_min_ylevel": null,
+    "absolute_max_ylevel": null,
+    "relative_min_depth": null,
+    "relative_max_depth": null
+  }
+]

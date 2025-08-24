@@ -4,17 +4,19 @@ using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using MVGE_INF.Generation.Models;
+using MVGE_INF.Models.Generation;
 
 namespace MVGE_INF.Managers
 {
     public static class BiomeManager
     {
+        // Public read-only accessors now expose runtime Biome objects
         public static IReadOnlyDictionary<string, Biome> Biomes => _biomes;        
-        public static IReadOnlyDictionary<string, IReadOnlyDictionary<string, Microbiome>> Microbiomes => _microbiomes;
+        public static IReadOnlyDictionary<string, IReadOnlyDictionary<string, MicrobiomeJSON>> Microbiomes => _microbiomes; // keep raw microbiome map for now
 
         private static readonly Dictionary<string, Biome> _biomes = new(StringComparer.OrdinalIgnoreCase);
-        private static readonly Dictionary<string, IReadOnlyDictionary<string, Microbiome>> _microbiomes = new(StringComparer.OrdinalIgnoreCase);
-        private static string[] _biomeOrder = Array.Empty<string>();
+        private static readonly Dictionary<string, IReadOnlyDictionary<string, MicrobiomeJSON>> _microbiomes = new(StringComparer.OrdinalIgnoreCase);
+        private static string[] _biomeOrder = Array.Empty<string>(); // ordered keys for deterministic selection
         private static readonly HashSet<int> _biomeIds = new();
 
         private static readonly JsonSerializerOptions jsonOptions = new()
@@ -45,20 +47,44 @@ namespace MVGE_INF.Managers
                 var biomeFolderName = Path.GetFileName(biomeDir);
                 if (string.IsNullOrWhiteSpace(biomeFolderName)) continue;
 
-                var biome = LoadBiomeJson(biomeDir, biomeFolderName);
-                if (string.IsNullOrWhiteSpace(biome.name))
+                // Load raw JSON model
+                var biomeJson = LoadBiomeJson(biomeDir, biomeFolderName);
+                if (string.IsNullOrWhiteSpace(biomeJson.name))
                 {
-                    biome.name = biomeFolderName; // fallback if name not provided in JSON
+                    biomeJson.name = biomeFolderName; // fallback if name not provided in JSON
                 }
 
-                if (!_biomeIds.Add(biome.id))
-                    throw new InvalidOperationException($"Duplicate biome id {biome.id} detected (folder '{biomeFolderName}'). IDs must be unique.");
+                if (!_biomeIds.Add(biomeJson.id))
+                    throw new InvalidOperationException($"Duplicate biome id {biomeJson.id} detected (folder '{biomeFolderName}'). IDs must be unique.");
 
-                _biomes[biomeFolderName] = biome;
-                var microbiomes = LoadMicrobiomes(Path.Combine(biomeDir, "Microbiomes"), biomeFolderName);
-                _microbiomes[biomeFolderName] = microbiomes;
+                // Load microbiomes (raw JSON) and convert to list for runtime biome
+                var microbiomesMap = LoadMicrobiomes(Path.Combine(biomeDir, "Microbiomes"), biomeFolderName);
+                _microbiomes[biomeFolderName] = microbiomesMap; // store map
+                var microbiomesList = new List<MicrobiomeJSON>(microbiomesMap.Values);
 
-                Console.WriteLine($"[Biome] Loaded biome id={biome.id} folder='{biomeFolderName}' name='{biome.name}' (microbiomes: {microbiomes.Count})");
+                // TODO: Hook in generation rule loading (e.g., GenerationRules.txt) to populate simpleReplacements
+                var simpleReplacementRules = new List<SimpleReplacementRule>();
+
+                // Map to runtime Biome class (camel-case to authored property names)
+                var runtimeBiome = new Biome
+                {
+                    id = biomeJson.id,
+                    name = biomeJson.name,
+                    stoneMinYLevel = biomeJson.stone_min_ylevel,
+                    stoneMaxYLevel = biomeJson.stone_max_ylevel,
+                    stoneMinDepth = biomeJson.stone_min_depth,
+                    stoneMaxDepth = biomeJson.stone_max_depth,
+                    soilMinYLevel = biomeJson.soil_min_ylevel,
+                    soilMaxYLevel = biomeJson.soil_max_ylevel,
+                    soilMinDepth = biomeJson.soil_min_depth,
+                    soilMaxDepth = biomeJson.soil_max_depth,
+                    microbiomes = microbiomesList,
+                    simpleReplacements = simpleReplacementRules
+                };
+
+                _biomes[biomeFolderName] = runtimeBiome;
+
+                Console.WriteLine($"[Biome] Loaded biome id={runtimeBiome.id} folder='{biomeFolderName}' name='{runtimeBiome.name}' (microbiomes: {microbiomesMap.Count})");
             }
 
             _biomeOrder = new string[_biomes.Count];
@@ -82,9 +108,10 @@ namespace MVGE_INF.Managers
             return _biomes[_biomeOrder[idx]];
         }
 
-        private static Biome LoadBiomeJson(string biomeDir, string biomeFolderName)
+        // Raw JSON loading helpers
+        private static BiomeJSON LoadBiomeJson(string biomeDir, string biomeFolderName)
         {
-            string jsonPath = Path.Combine(biomeDir, "Defaults.txt"); // still use .txt extension per existing layout
+            string jsonPath = Path.Combine(biomeDir, "Defaults.txt");
             if (!File.Exists(jsonPath))
                 throw new FileNotFoundException($"Biome JSON Defaults.txt not found for biome '{biomeFolderName}' at {jsonPath}");
 
@@ -92,10 +119,10 @@ namespace MVGE_INF.Managers
             if (string.IsNullOrWhiteSpace(json))
                 throw new InvalidOperationException($"Biome JSON empty for biome '{biomeFolderName}'.");
 
-            Biome biome;
+            BiomeJSON biome;
             try
             {
-                biome = JsonSerializer.Deserialize<Biome>(json, jsonOptions);
+                biome = JsonSerializer.Deserialize<BiomeJSON>(json, jsonOptions);
             }
             catch (Exception ex)
             {
@@ -108,9 +135,9 @@ namespace MVGE_INF.Managers
             return biome;
         }
 
-        private static IReadOnlyDictionary<string, Microbiome> LoadMicrobiomes(string microbiomesRoot, string biomeName)
+        private static IReadOnlyDictionary<string, MicrobiomeJSON> LoadMicrobiomes(string microbiomesRoot, string biomeName)
         {
-            var result = new Dictionary<string, Microbiome>(StringComparer.OrdinalIgnoreCase);
+            var result = new Dictionary<string, MicrobiomeJSON>(StringComparer.OrdinalIgnoreCase);
             if (!Directory.Exists(microbiomesRoot)) return result;
 
             foreach (var microDir in Directory.GetDirectories(microbiomesRoot))
@@ -122,13 +149,13 @@ namespace MVGE_INF.Managers
             return result;
         }
 
-        private static Microbiome LoadMicrobiome(string microDir, string biomeName, string microName)
+        private static MicrobiomeJSON LoadMicrobiome(string microDir, string biomeName, string microName)
         {
             string defaultsPath = Path.Combine(microDir, "Defaults.txt");
             if (!File.Exists(defaultsPath))
                 throw new FileNotFoundException($"Microbiome Defaults.txt not found for microbiome '{microName}' in biome '{biomeName}' at {defaultsPath}");
             // Placeholder for future JSON parse; currently only validates presence
-            return new Microbiome();
+            return new MicrobiomeJSON();
         }
     }
 }
