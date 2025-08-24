@@ -49,6 +49,7 @@ namespace MVGE_GEN.Terrain
         public bool AllAirChunk { get; private set; }
         // Fast path: entire chunk volume is uniform stone (no soil/air inside)
         public bool AllStoneChunk { get; private set; }
+        // Fast path: entire chunk volume is uniform soil (no stone/air inside)
         public bool AllSoilChunk { get; private set; }
 
         // per-face full solidity flags (all boundary voxels on that face are non-empty)

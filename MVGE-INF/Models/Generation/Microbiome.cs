@@ -9,5 +9,7 @@ namespace MVGE_INF.Generation.Models
     public struct Microbiome
     {
         // Placeholder for future microbiome-specific parameters.
+        public int id { get; set; }
+        public string name { get; set; }
     }
 }

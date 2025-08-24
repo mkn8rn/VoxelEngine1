@@ -1,39 +1,39 @@
 namespace MVGE_INF.Models
 {
-    public struct GameSettings
+    public class GameSettings
     {
-        // Chunk settings
-        public int chunkMaxX;
-        public int chunkMaxZ;
-        public int chunkMaxY;
+        // Chunk settings (required in JSON)
+        public required int chunkMaxX { get; set; }
+        public required int chunkMaxZ { get; set; }
+        public required int chunkMaxY { get; set; }
 
-        // Block texture atlas settings
-        public int blockTileWidth;
-        public int blockTileHeight;
-        public string textureFileExtension;
+        // Block texture atlas settings (required)
+        public required int blockTileWidth { get; set; }
+        public required int blockTileHeight { get; set; }
+        public required string textureFileExtension { get; set; }
 
         // Render settings
-        public bool renderStreamingAllowed;
+        public bool renderStreamingAllowed { get; set; }
 
-        // Render distances
-        public int lod1RenderDistance;
-        public int lod2RenderDistance;
-        public int lod3RenderDistance;
-        public int lod4RenderDistance;
-        public int lod5RenderDistance;
-        public int entityLoadRange;
-        public int entitySpawnMaxRange;
-        public int entityDespawnMaxRange;
+        // Render distances (required)
+        public required int lod1RenderDistance { get; set; }
+        public required int lod2RenderDistance { get; set; }
+        public required int lod3RenderDistance { get; set; }
+        public required int lod4RenderDistance { get; set; }
+        public required int lod5RenderDistance { get; set; }
+        public required int entityLoadRange { get; set; }
+        public required int entitySpawnMaxRange { get; set; }
+        public required int entityDespawnMaxRange { get; set; }
 
-        // Directories
-        public string gamesDirectory;
-        public string loadedGameDirectory;
-        public string loadedGameSettingsDirectory;
-        public string assetsBaseBlockTexturesDirectory;
-        public string assetsBlockTexturesDirectory;
-        public string dataBlockTypesDirectory;
-        public string dataBiomeTypesDirectory;
-        public string savesWorldDirectory;
-        public string savesCharactersDirectory;
+        // Directories (required in JSON except those computed at runtime)
+        public string gamesDirectory { get; set; } = string.Empty;          // set by GameManager (not required in JSON)
+        public string loadedGameDirectory { get; set; } = string.Empty;      // set by GameManager (not required in JSON)
+        public required string loadedGameSettingsDirectory { get; set; }
+        public required string assetsBaseBlockTexturesDirectory { get; set; }
+        public required string assetsBlockTexturesDirectory { get; set; }
+        public required string dataBlockTypesDirectory { get; set; }
+        public required string dataBiomeTypesDirectory { get; set; }
+        public required string savesWorldDirectory { get; set; }
+        public required string savesCharactersDirectory { get; set; }
     }
 }

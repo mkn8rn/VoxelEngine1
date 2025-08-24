@@ -1,23 +1,26 @@
-﻿chunkMaxX=160
-chunkMaxZ=160
-chunkMaxY=160
-maxWorldHeight=160000
-minWorldHeight=0
-blockTileWidth=32
-blockTileHeight=32
-textureFileExtension=.png
-lod1RenderDistance=6
-lod2RenderDistance=18
-lod3RenderDistance=36
-lod4RenderDistance=54
-lod5RenderDistance=486
-entityLoadRange=12
-entitySpawnMaxRange=12
-entityDespawnMaxRange=12
-loadedGameSettingsDirectory=Settings
-assetsBaseBlockTexturesDirectory=Assets/Textures/Blocks/Base/
-assetsBlockTexturesDirectory=Assets/Textures/Blocks/
-dataBlockTypesDirectory=Data/Blocks/Types/
-dataBiomeTypesDirectory=Data/Biomes/
-savesWorldDirectory=Saves/Worlds/
-savesCharactersDirectory=Saves/Characters/
+﻿{
+  "chunkMaxX": 160,
+  "chunkMaxZ": 160,
+  "chunkMaxY": 160,
+  "maxWorldHeight": 160000,
+  "minWorldHeight": 0,
+  "blockTileWidth": 32,
+  "blockTileHeight": 32,
+  "textureFileExtension": ".png",
+  "lod1RenderDistance": 6,
+  "lod2RenderDistance": 18,
+  "lod3RenderDistance": 36,
+  "lod4RenderDistance": 54,
+  "lod5RenderDistance": 486,
+  "entityLoadRange": 12,
+  "entitySpawnMaxRange": 12,
+  "entityDespawnMaxRange": 12,
+  "loadedGameSettingsDirectory": "Settings",
+  "assetsBaseBlockTexturesDirectory": "Assets/Textures/Blocks/Base/",
+  "assetsBlockTexturesDirectory": "Assets/Textures/Blocks/",
+  "dataBlockTypesDirectory": "Data/Blocks/Types/",
+  "dataBiomeTypesDirectory": "Data/Biomes/",
+  "savesWorldDirectory": "Saves/Worlds/",
+  "savesCharactersDirectory": "Saves/Characters/",
+  "renderStreamingAllowed": false
+}
