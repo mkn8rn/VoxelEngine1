@@ -295,17 +295,14 @@ namespace MVGE_GFX.Terrain
 
         private void InitializeBlockTypeUVCoordinates()
         {
-            ushort count = 0;
-            foreach (string blockType in TerrainLoader.allBlockTypes)
+            blockTypeUVCoordinates.Clear();
+            // Initialize only existing block IDs to avoid mismatches; MapTextureCoordinates fills values
+            foreach (var bt in TerrainLoader.allBlockTypeObjects)
             {
-                blockTypeUVCoordinates[count] = new Dictionary<Faces, ByteVector2>();
-
-                foreach (var face in Enum.GetValues(typeof(Faces)).Cast<Faces>())
-                {
-                    blockTypeUVCoordinates[count][face] = new ByteVector2();
-                }
-
-                count++;
+                var dict = new Dictionary<Faces, ByteVector2>();
+                foreach (Faces f in Enum.GetValues(typeof(Faces)))
+                    dict[f] = new ByteVector2();
+                blockTypeUVCoordinates[bt.ID] = dict;
             }
         }
 
@@ -319,63 +316,59 @@ namespace MVGE_GFX.Terrain
                 {
                     // Safety: initialize if missing
                     faceDict = new Dictionary<Faces, ByteVector2>();
-                    foreach (var face in Enum.GetValues(typeof(Faces)).Cast<Faces>()) faceDict[face] = new ByteVector2();
+                    foreach (var faceInit in Enum.GetValues(typeof(Faces)).Cast<Faces>()) faceDict[faceInit] = new ByteVector2();
                     blockTypeUVCoordinates[bt.ID] = faceDict;
                 }
 
-                // Helper local function to resolve a texture name to ByteVector2
-                ByteVector2 Resolve(string texName)
+                ByteVector2 Resolve(string texName, Faces face)
                 {
                     if (string.IsNullOrWhiteSpace(texName) || !textureCoordinates.TryGetValue(texName, out var vec))
                     {
                         var missVec = textureCoordinates[missingTextureName];
+                        Console.WriteLine($"[Atlas] Block '{bt.Name}' face {face} texture '{texName ?? "<null>"}' NOT FOUND -> using '{missingTextureName}' at tile ({missVec.X},{missVec.Y})");
                         return new ByteVector2 { x = (byte)missVec.X, y = (byte)missVec.Y };
                     }
-                    return new ByteVector2 { x = (byte)vec.X, y = (byte)vec.Y };
+                    else
+                    {
+                        Console.WriteLine($"[Atlas] Block '{bt.Name}' face {face} mapped texture '{texName}' at tile ({vec.X},{vec.Y})");
+                        return new ByteVector2 { x = (byte)vec.X, y = (byte)vec.Y };
+                    }
                 }
 
-                var top    = Resolve(bt.TextureFaceTop);
-                var bottom = Resolve(bt.TextureFaceBottom);
-                var front  = Resolve(bt.TextureFaceFront);
-                var back   = Resolve(bt.TextureFaceBack);
-                var left   = Resolve(bt.TextureFaceLeft);
-                var right  = Resolve(bt.TextureFaceRight);
-
-                faceDict[Faces.TOP] = top;      Console.WriteLine($"[UV] Block '{bt.Name}' Face TOP    -> ({top.x},{top.y}) tex='{bt.TextureFaceTop}'");
-                faceDict[Faces.BOTTOM] = bottom;Console.WriteLine($"[UV] Block '{bt.Name}' Face BOTTOM -> ({bottom.x},{bottom.y}) tex='{bt.TextureFaceBottom}'");
-                faceDict[Faces.FRONT] = front;  Console.WriteLine($"[UV] Block '{bt.Name}' Face FRONT  -> ({front.x},{front.y}) tex='{bt.TextureFaceFront}'");
-                faceDict[Faces.BACK] = back;    Console.WriteLine($"[UV] Block '{bt.Name}' Face BACK   -> ({back.x},{back.y}) tex='{bt.TextureFaceBack}'");
-                faceDict[Faces.LEFT] = left;    Console.WriteLine($"[UV] Block '{bt.Name}' Face LEFT   -> ({left.x},{left.y}) tex='{bt.TextureFaceLeft}'");
-                faceDict[Faces.RIGHT] = right;  Console.WriteLine($"[UV] Block '{bt.Name}' Face RIGHT  -> ({right.x},{right.y}) tex='{bt.TextureFaceRight}'");
+                faceDict[Faces.TOP] = Resolve(bt.TextureFaceTop, Faces.TOP);
+                faceDict[Faces.BOTTOM] = Resolve(bt.TextureFaceBottom, Faces.BOTTOM);
+                faceDict[Faces.FRONT] = Resolve(bt.TextureFaceFront, Faces.FRONT);
+                faceDict[Faces.BACK] = Resolve(bt.TextureFaceBack, Faces.BACK);
+                faceDict[Faces.LEFT] = Resolve(bt.TextureFaceLeft, Faces.LEFT);
+                faceDict[Faces.RIGHT] = Resolve(bt.TextureFaceRight, Faces.RIGHT);
             }
         }
 
         public List<ByteVector2> GetBlockUVs(ushort blockType, Faces face)
         {
-            List<ByteVector2> faceData = new List<ByteVector2>();
+            if (!blockTypeUVCoordinates.TryGetValue(blockType, out var blockCoords))
+            {
+                // Lazy-create an entry mapping all faces to missing texture to avoid KeyNotFound
+                Console.WriteLine($"[UV] Warning: Block ID {blockType} missing from atlas; using missing texture.");
+                if (!textureCoordinates.TryGetValue(missingTextureName, out var miss))
+                    miss = Vector2.Zero;
+                var missByte = new ByteVector2 { x = (byte)miss.X, y = (byte)miss.Y };
+                blockCoords = new Dictionary<Faces, ByteVector2>();
+                foreach (Faces f in Enum.GetValues(typeof(Faces))) blockCoords[f] = missByte;
+                blockTypeUVCoordinates[blockType] = blockCoords;
+            }
+            var faceCoords = blockCoords[face];
 
-            Dictionary<Faces, ByteVector2> blockCoords = blockTypeUVCoordinates[blockType];
-            ByteVector2 faceCoords = blockCoords[face];
-
-            faceData = new List<ByteVector2>()
+            return new List<ByteVector2>
             {
                 new ByteVector2{ x = (byte)(faceCoords.x + 1), y = (byte)(faceCoords.y + 1) },
                 new ByteVector2{ x = (byte)(faceCoords.x), y = (byte)(faceCoords.y + 1) },
                 new ByteVector2{ x = (byte)(faceCoords.x), y = (byte)(faceCoords.y) },
                 new ByteVector2{ x = (byte)(faceCoords.x + 1), y = (byte)(faceCoords.y) },
             };
-
-            return faceData;
         }
 
-        public void Bind()
-        {
-            GL.BindTexture(TextureTarget.Texture2D, ID);
-        }
-
-        public void Unbind()
-        {
-            GL.BindTexture(TextureTarget.Texture2D, 0);
-        }
+        public void Bind() => GL.BindTexture(TextureTarget.Texture2D, ID);
+        public void Unbind() => GL.BindTexture(TextureTarget.Texture2D, 0);
     }
 }

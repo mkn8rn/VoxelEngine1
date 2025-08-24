@@ -6,6 +6,7 @@ using System.Buffers;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using Vector3 = OpenTK.Mathematics.Vector3;
+using Vector2 = OpenTK.Mathematics.Vector2;
 
 namespace MVGE_GFX.Terrain
 {
@@ -39,13 +40,17 @@ namespace MVGE_GFX.Terrain
         // Neighbor opposing face solidity flags
         private readonly bool nNegXPosX, nPosXNegX, nNegYPosY, nPosYNegY, nNegZPosZ, nPosZNegZ;
 
-        // Flat UV lookup: [blockId * 6 + face] * 8 bytes (4 verts * 2 bytes each)
-        private static byte[] uvLut; // null until initialized
+        // Dense LUT fields (legacy). Left in place for fallback but not used in sparse mode.
+        private static byte[] uvLut; // null in sparse mode
         private static int uvLutBlockCount;
         private static readonly object uvInitLock = new();
 
-        // Cache for single solid UV concat (48 bytes per blockId)
-        private static byte[][] singleSolidUvCache; // lazily sized to uvLutBlockCount
+        // Sparse LUT (new): maps blockId -> 48-byte array (6 faces * 8 bytes)
+        private static Dictionary<ushort, byte[]> uvLutSparse; // null until built
+
+        // Cache for single solid UV concat (references same 48-byte arrays in sparse mode)
+        private static Dictionary<ushort, byte[]> singleSolidUvCacheSparse; // for sparse
+        private static byte[][] singleSolidUvCache; // legacy dense cache
 
         // Heuristic threshold
         private const float IDENTICAL_SLAB_FILL_THRESHOLD = 0.70f; // 70%
@@ -88,45 +93,72 @@ namespace MVGE_GFX.Terrain
 
         private static void EnsureUvLut(BlockTextureAtlas atlas)
         {
-            if (uvLut != null) return;
+            if (uvLutSparse != null || uvLut != null) return;
             lock (uvInitLock)
             {
-                if (uvLut != null) return;
-                uvLutBlockCount = BlockTextureAtlas.blockTypeUVCoordinates.Count;
-                if (uvLutBlockCount == 0) uvLutBlockCount = 1; // safeguard
-                uvLut = new byte[uvLutBlockCount * 6 * 8];
-                singleSolidUvCache = new byte[uvLutBlockCount][]; // allocate cache slots (null until filled)
-                for (ushort b = 0; b < uvLutBlockCount; b++)
+                if (uvLutSparse != null || uvLut != null) return;
+
+                // Build sparse dictionary directly from actual block IDs to avoid gaps/reserved ranges.
+                uvLutSparse = new Dictionary<ushort, byte[]>(BlockTextureAtlas.blockTypeUVCoordinates.Count);
+                singleSolidUvCacheSparse = new Dictionary<ushort, byte[]>(BlockTextureAtlas.blockTypeUVCoordinates.Count);
+
+                // Missing texture base (fallback for any future unknown lookups)
+                Vector2 missVec;
+                if (!BlockTextureAtlas.textureCoordinates.TryGetValue("404", out missVec))
+                    missVec = Vector2.Zero;
+                // Precompute the 8 bytes for each face of missing (4 verts * 2 bytes) pattern once
+                byte missX = (byte)missVec.X; byte missY = (byte)missVec.Y;
+                byte[] missingFace = new byte[8];
+                // Order: we mimic GetBlockUVs layout; fill rectangle from (x,y)
+                // We'll reuse for any absent textures (should be rare now).
+                missingFace[0] = (byte)(missX + 1); missingFace[1] = (byte)(missY + 1);
+                missingFace[2] = missX;           missingFace[3] = (byte)(missY + 1);
+                missingFace[4] = missX;           missingFace[5] = missY;
+                missingFace[6] = (byte)(missX + 1); missingFace[7] = missY;
+
+                foreach (var kvp in BlockTextureAtlas.blockTypeUVCoordinates)
                 {
+                    ushort blockId = kvp.Key;
+                    var concat = new byte[48]; // 6 faces * 8 bytes
                     for (int f = 0; f < 6; f++)
                     {
-                        var list = atlas.GetBlockUVs(b, (Faces)f); // returns 4 entries
-                        int baseOffset = ((b * 6) + f) * 8;
+                        var list = atlas.GetBlockUVs(blockId, (Faces)f); // 4 entries
+                        int baseOffset = f * 8;
                         for (int i = 0; i < 4; i++)
                         {
-                            uvLut[baseOffset + i * 2] = list[i].x;
-                            uvLut[baseOffset + i * 2 + 1] = list[i].y;
+                            concat[baseOffset + i * 2] = list[i].x;
+                            concat[baseOffset + i * 2 + 1] = list[i].y;
                         }
                     }
+                    uvLutSparse[blockId] = concat;
+                    singleSolidUvCacheSparse[blockId] = concat; // same reference; read-only usage
                 }
+
+                // Dense fields remain null; mark count for compatibility
+                uvLutBlockCount = uvLutSparse.Count;
             }
         }
 
         private static byte[] GetSingleSolidUVConcat(ushort blockId)
         {
-            if (blockId >= uvLutBlockCount) return null; // safety
+            // Sparse path
+            if (uvLutSparse != null)
+            {
+                return singleSolidUvCacheSparse.TryGetValue(blockId, out var arr) ? arr : null;
+            }
+            // Dense fallback (legacy)
+            if (blockId >= uvLutBlockCount) return null;
             var cache = singleSolidUvCache[blockId];
             if (cache != null) return cache;
-            // Build and store (no locking; benign race if double-built)
-            var arr = new byte[48];
+            var build = new byte[48];
             int baseBlock = blockId * 6;
             for (int f = 0; f < 6; f++)
             {
                 int lutOffset = (baseBlock + f) * 8;
-                Buffer.BlockCopy(uvLut, lutOffset, arr, f * 8, 8);
+                Buffer.BlockCopy(uvLut, lutOffset, build, f * 8, 8);
             }
-            singleSolidUvCache[blockId] = arr;
-            return arr;
+            singleSolidUvCache[blockId] = build;
+            return build;
         }
 
         // Specialized face writers
@@ -161,8 +193,24 @@ namespace MVGE_GFX.Terrain
 
             if (block != emptyBlock)
             {
-                int lutOffset = ((block * 6) + (int)face) * 8;
-                for (int i = 0; i < 8; i++) uvBuffer[uvByteOffset + i] = uvLut[lutOffset + i];
+                if (uvLutSparse != null)
+                {
+                    if (uvLutSparse.TryGetValue(block, out var concat))
+                    {
+                        int off = ((int)face) * 8;
+                        for (int i = 0; i < 8; i++) uvBuffer[uvByteOffset + i] = concat[off + i];
+                    }
+                    else
+                    {
+                        // Unknown block id; fill zeros
+                        for (int i = 0; i < 8; i++) uvBuffer[uvByteOffset + i] = 0;
+                    }
+                }
+                else
+                {
+                    int lutOffset = ((block * 6) + (int)face) * 8;
+                    for (int i = 0; i < 8; i++) uvBuffer[uvByteOffset + i] = uvLut[lutOffset + i];
+                }
             }
             else
             {

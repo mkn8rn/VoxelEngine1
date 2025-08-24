@@ -554,6 +554,7 @@ namespace MVGE_GFX.Terrain
                 chunkVertsList.Add((byte)(v.y + bp.y));
                 chunkVertsList.Add((byte)(v.z + bp.z));
             }
+
             // UVs
             var blockUVs = block != emptyBlock ? terrainTextureAtlas.GetBlockUVs(block, face) : EmptyUVList;
             foreach (var uv in blockUVs)
