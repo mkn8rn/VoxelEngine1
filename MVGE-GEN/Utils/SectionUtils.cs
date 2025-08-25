@@ -1,6 +1,7 @@
 ﻿using MVGE_GEN.Terrain;
 using MVGE_INF.Models.Terrain;
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.CompilerServices;
@@ -9,6 +10,9 @@ namespace MVGE_GEN.Utils
 {
     public static class SectionUtils
     {
+        private static uint[] RentBitData(int uintCount) => ArrayPool<uint>.Shared.Rent(uintCount);
+        private static void ReturnBitData(uint[] data) { if (data != null) ArrayPool<uint>.Shared.Return(data, clearArray: false); }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static ushort GetBlock(ChunkSection sec, int x, int y, int z)
         {
@@ -164,7 +168,9 @@ namespace MVGE_GEN.Utils
             }
             long totalBits = (long)sec.VoxelCount * sec.BitsPerIndex;
             int uintCount = (int)((totalBits + 31) / 32);
-            sec.BitData = new uint[uintCount];
+            sec.BitData = RentBitData(uintCount);
+            // Ensure clean state (fill with zeros) because pool may give dirty memory
+            Array.Clear(sec.BitData, 0, uintCount);
         }
 
         private static int ReadBits(uint[] data, int bpi, int voxelIndex)
@@ -208,6 +214,7 @@ namespace MVGE_GEN.Utils
             sec.IsAllAir = true;
             sec.Palette = null;
             sec.PaletteLookup = null;
+            ReturnBitData(sec.BitData);
             sec.BitData = null;
             sec.BitsPerIndex = 0;
             sec.NonAirCount = 0;

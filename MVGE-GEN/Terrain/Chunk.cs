@@ -43,9 +43,36 @@ namespace MVGE_GEN.Terrain
         // Occupancy flags
         public bool IsEmpty { get; private set; }
         public bool HasAnyBoundarySolid { get; private set; }
-        // heightmap burial classification (chunk wholly below terrain surface minus margin)
-        public bool FullyBuried { get; private set; }
-        private const int BURIAL_MARGIN = 2; // configurable later via settings/flags
+        [Flags]
+        public enum OcclusionClass : byte
+        {
+            None = 0,
+            FullyBuried = 1 << 0,
+            NeighborBuried = 1 << 1
+        }
+
+        public OcclusionClass OcclusionStatus { get; private set; } = OcclusionClass.None;
+
+        public bool FullyBuried { get; private set; } // heightmap burial classification
+        public bool BuriedByNeighbors { get; internal set; }
+
+        internal void SetFullyBuried()
+        {
+            if (!FullyBuried)
+            {
+                FullyBuried = true;
+                OcclusionStatus |= OcclusionClass.FullyBuried;
+            }
+        }
+        internal void SetNeighborBuried()
+        {
+            if (!BuriedByNeighbors)
+            {
+                BuriedByNeighbors = true;
+                OcclusionStatus |= OcclusionClass.NeighborBuried;
+            }
+        }
+
         // Fast path: entire chunk volume is guaranteed all air (lies completely above max surface height for every column)
         public bool AllAirChunk { get; private set; }
         // Fast path: entire chunk volume is uniform stone (no soil/air inside)
@@ -62,9 +89,6 @@ namespace MVGE_GEN.Terrain
         public bool FaceSolidNegZ { get; private set; }
         public bool FaceSolidPosZ { get; private set; }
 
-        // neighbor-based burial (all six neighboring opposing faces are solid AND our faces solid)
-        public bool BuriedByNeighbors { get; internal set; }
-
         // Neighbor opposing face solidity flags (populated by WorldResources before BuildRender)
         // These reflect the solidity of the neighbor face that touches this chunk.
         public bool NeighborNegXFaceSolidPosX { get; internal set; } // neighbor at -X, its +X face solid
@@ -73,6 +97,8 @@ namespace MVGE_GEN.Terrain
         public bool NeighborPosYFaceSolidNegY { get; internal set; }
         public bool NeighborNegZFaceSolidPosZ { get; internal set; }
         public bool NeighborPosZFaceSolidNegZ { get; internal set; }
+
+        private bool candidateFullyBuried; // heightmap suggested burial; confirmed after face solidity scan
 
         public Chunk(Vector3 chunkPosition, long seed, string chunkDataDirectory, float[,] precomputedHeightmap = null)
         {
@@ -103,6 +129,12 @@ namespace MVGE_GEN.Terrain
             // After generation compute per-face solidity once (all writes were generation-only bulk writes)
             if (!AllAirChunk && !AllStoneChunk && !AllSoilChunk) // nothing to scan for pure air or uniform stone/soil fast-path (stone/soil sets flags directly)
                 ComputeAllFaceSolidity();
+
+            // Confirm burial only if all six faces ended up solid
+            if (candidateFullyBuried && FaceSolidNegX && FaceSolidPosX && FaceSolidNegY && FaceSolidPosY && FaceSolidNegZ && FaceSolidPosZ)
+            {
+                SetFullyBuried();
+            }
         }
 
         public void InitializeSectionGrid()
@@ -327,8 +359,8 @@ namespace MVGE_GEN.Terrain
         {
             chunkRender?.ScheduleDelete();
 
-            // Early skip retained (heightmap burial) – kept separate from new neighbor-face occlusion system.
-            if (AllAirChunk || FullyBuried || BuriedByNeighbors)
+            // Unified occlusion early exit
+            if (AllAirChunk || OcclusionStatus != OcclusionClass.None)
             {
                 return; // leave chunkRender null
             }

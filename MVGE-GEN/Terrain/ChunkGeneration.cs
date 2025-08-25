@@ -5,12 +5,11 @@ using MVGE_INF.Generation.Models;
 using MVGE_INF.Managers;
 using MVGE_Tools.Noise;
 using MVGE_GEN.Utils;
-using MVGE_INF.Models.Generation; // added for SimpleReplacementRule
-using MVGE_INF.Loaders; // for TerrainLoader lookup
+using MVGE_INF.Models.Generation;
+using MVGE_INF.Loaders;
 
 namespace MVGE_GEN.Terrain
 {
-    // Split generation responsibilities out of Chunk (partial)
     public partial class Chunk
     {
         // Static cache: block id -> base block type (built on first use)
@@ -466,8 +465,9 @@ namespace MVGE_GEN.Terrain
                             BitsPerIndex = bitsPerIndex,
                             VoxelCount = voxelsPerSection,
                             NonAirCount = voxelsPerSection,
-                            BitData = new uint[uintCount]
+                            BitData = System.Buffers.ArrayPool<uint>.Shared.Rent(uintCount)
                         };
+                        // Fill all bits to 1 for palette index 1 (since BitsPerIndex==1). Need to set only required uintCount entries.
                         for (int i = 0; i < uintCount; i++) sec.BitData[i] = 0xFFFFFFFFu;
                         sections[sx, sy, sz] = sec;
                     }
@@ -478,19 +478,23 @@ namespace MVGE_GEN.Terrain
         public void GenerateInitialChunkData()
         {
             // ----- BASIC DIMENSIONS & HEIGHTMAP -----
+            // Establish local voxel dimensions for this chunk and obtain (or reuse) the heightmap.
+            // The heightmap supplies the surface (inclusive) world Y for every (x,z) column at chunk resolution.
             int maxX = dimX;              // chunk X dimension in voxels
             int maxY = dimY;              // chunk Y dimension in voxels
             int maxZ = dimZ;              // chunk Z dimension in voxels
             // Reuse precomputed heightmap (shared for vertical stack) or generate new
             float[,] heightmap = precomputedHeightmap ?? GenerateHeightMap(generationSeed);
-
-            int chunkBaseY = (int)position.Y;      // world Y at bottom of chunk
-            int topOfChunk = chunkBaseY + maxY - 1; // world Y at top of chunk
+            int chunkBaseY = (int)position.Y;              // world Y at bottom of chunk
+            int topOfChunk = chunkBaseY + maxY - 1;        // world Y at top of chunk
+            const int LocalBurialMargin = 2;               // small margin so a column counts as exposing chunk even if surface slightly above
 
             // ----- BURIAL / ALL-AIR CLASSIFICATION PASS -----
             // We compute two things:
-            //  1. FullyBuried: top of chunk lies strictly below (surfaceHeight - BURIAL_MARGIN) for every column
-            //  2. maxSurface: highest surface sample across (x,z) to enable an all-air fast path
+            //  1. allBuried (later stored into candidateFullyBuried): true if the top of this chunk lies strictly below
+            //     (surfaceHeight - LocalBurialMargin) for EVERY (x,z) column; meaning chunk volume is deeply underground.
+            //  2. maxSurface: highest sampled surface across all columns, used for a fast all-air early return when
+            //     the entire chunk sits above terrain.
             bool allBuried = true;
             int maxSurface = int.MinValue;
             for (int x = 0; x < maxX && allBuried; x++)
@@ -498,15 +502,16 @@ namespace MVGE_GEN.Terrain
                 for (int z = 0; z < maxZ; z++)
                 {
                     int surface = (int)heightmap[x, z];
-                    if (surface > maxSurface) maxSurface = surface;
-                    if (topOfChunk >= surface - BURIAL_MARGIN)
+                    if (surface > maxSurface) maxSurface = surface; // track highest surface so far
+                    if (topOfChunk >= surface - LocalBurialMargin)
                     {
-                        allBuried = false; // one column disproves burial; continue later for maxSurface
+                        // One column disproves burial; we break early but must still finish maxSurface collection below.
+                        allBuried = false;
                         break;
                     }
                 }
             }
-            // If burial disproved early we still need to finish computing maxSurface
+            // If burial was disproved by early exit we must finish scanning remaining columns for maxSurface.
             if (!allBuried)
             {
                 for (int x = 0; x < maxX; x++)
@@ -518,73 +523,73 @@ namespace MVGE_GEN.Terrain
                     }
                 }
             }
-            FullyBuried = allBuried;
+            if (allBuried) candidateFullyBuried = true; // mark potential fully-buried chunk (naming differs from older FullyBuried flag)
 
-            // All-air fast path: chunk volume sits entirely above highest terrain surface -> nothing to allocate
+            // ----- ALL-AIR FAST PATH -----
+            // If the chunk base Y is higher than every surface sample, the entire volume is air and we can exit early
+            // without allocating/initializing section data. This drastically reduces work for empty sky chunks.
             if (chunkBaseY > maxSurface)
             {
                 AllAirChunk = true;
                 IsEmpty = true;
-                precomputedHeightmap = null; // release reference for GC
+                precomputedHeightmap = null; // release shared reference for GC / reuse cycle
                 return;
             }
 
             // ----- UNIFORM CONTENT DETECTION (STONE / SOIL) -----
-            // Detects if ENTIRE chunk volume can be expressed as only stone or only soil.
-            // If true, creates compressed uniform sections & sets solidity flags; skips per-column writes.
+            // Detect if ENTIRE chunk volume can be represented as exclusively stone or exclusively soil.
+            // If successful, we allocate compact uniform sections and skip per-column population below.
             DetectAllStoneOrSoil(heightmap, chunkBaseY, topOfChunk);
 
             // ----- GENERAL COLUMN MATERIAL FILL (STONE + SOIL) -----
-            // If chunk not uniform stone/soil we perform a column wise fill using biome band & depth rules.
+            // If not a uniform stone or soil chunk we fall back to a per-column layered fill honoring biome bands
+            // and min/max depth constraints. Stone is written first (lower layer) followed by soil overlay.
             if (!AllStoneChunk && !AllSoilChunk)
             {
-                // Absolute biome Y bounds for stone & soil bands
+                // Absolute biome Y limits for stone & soil generation bands.
                 int stoneMinY = biome.stoneMinYLevel;
                 int stoneMaxY = biome.stoneMaxYLevel;
                 int soilMinY = biome.soilMinYLevel;
                 int soilMaxY = biome.soilMaxYLevel;
-
                 for (int x = 0; x < maxX; x++)
                 {
                     for (int z = 0; z < maxZ; z++)
                     {
-                        int columnHeight = (int)heightmap[x, z]; // surface height (inclusive)
-                        if (columnHeight < chunkBaseY) continue; // column entirely below chunk -> air only
+                        int columnHeight = (int)heightmap[x, z]; // inclusive surface height for this column
+                        if (columnHeight < chunkBaseY) continue; // Entire column lies below the chunk -> remains air
 
                         // --- Stone layer calculation ---
-                        int stoneBandStartWorld = Math.Max(stoneMinY, 0);                // lower bound (clamped >= 0)
-                        int stoneBandEndWorld = Math.Min(stoneMaxY, columnHeight);       // cannot exceed surface
-                        if (stoneBandEndWorld < stoneBandStartWorld) continue;            // no stone band intersects this column
-                        int available = stoneBandEndWorld - stoneBandStartWorld + 1;      // span inside stone band up to surface
+                        // Determine overlap of biome stone band with column; compute stone depth after reserving
+                        // minimal soil thickness near the surface (soilMinDepth). Apply biome min/max stone depths.
+                        int stoneBandStartWorld = Math.Max(stoneMinY, 0);          // lower clamp (never below 0)
+                        int stoneBandEndWorld = Math.Min(stoneMaxY, columnHeight); // stone cannot extend above surface
+                        if (stoneBandEndWorld < stoneBandStartWorld) continue;      // no stone band intersection
+                        int available = stoneBandEndWorld - stoneBandStartWorld + 1; // vertical span available for (stone+reserved soil)
                         if (available <= 0) continue;
-
-                        // Reserve minimum soil depth out of available span before computing stone depth
-                        int soilMinReserve = Math.Clamp(biome.soilMinDepth, 0, available);
+                        int soilMinReserve = Math.Clamp(biome.soilMinDepth, 0, available); // guaranteed soil reservation
                         int stoneMinDepth = biome.stoneMinDepth;
                         int stoneMaxDepth = biome.stoneMaxDepth;
-                        // Choose stone depth (respecting soil reserve, min/max)
-                        int rawStoneDepth = available - soilMinReserve;
+                        int rawStoneDepth = available - soilMinReserve;              // tentative stone depth before clamping
                         int stoneDepth = Math.Min(stoneMaxDepth, Math.Max(stoneMinDepth, rawStoneDepth));
-                        if (stoneDepth > available) stoneDepth = available; // safety clamp
-
+                        if (stoneDepth > available) stoneDepth = available;          // final safety clamp
                         int finalStoneBottomWorld = stoneBandStartWorld;
-                        int finalStoneTopWorld = finalStoneBottomWorld + stoneDepth - 1;  // inclusive top of stone
+                        int finalStoneTopWorld = finalStoneBottomWorld + stoneDepth - 1; // inclusive top of placed stone
 
-                        // Write stone into sections (bulk column write ranges per section for efficiency)
+                        // Write stone voxels within chunk-local coordinate space, splitting at section boundaries.
                         int localStoneStart = finalStoneBottomWorld - chunkBaseY;
                         int localStoneEnd = finalStoneTopWorld - chunkBaseY;
                         if (localStoneEnd >= 0 && localStoneStart < maxY)
                         {
-                            if (localStoneStart < 0) localStoneStart = 0;               // clip to chunk bottom
-                            if (localStoneEnd >= maxY) localStoneEnd = maxY - 1;        // clip to chunk top
+                            if (localStoneStart < 0) localStoneStart = 0;             // clip below chunk
+                            if (localStoneEnd >= maxY) localStoneEnd = maxY - 1;      // clip above chunk
                             if (localStoneStart <= localStoneEnd)
                             {
-                                int syStart = localStoneStart >> SECTION_SHIFT;          // first section Y index
-                                int syEnd = localStoneEnd >> SECTION_SHIFT;              // last section Y index
-                                int ox = x & SECTION_MASK;                               // intra-section X
-                                int oz = z & SECTION_MASK;                               // intra-section Z
-                                int sx = x >> SECTION_SHIFT;                             // section X index
-                                int sz = z >> SECTION_SHIFT;                             // section Z index
+                                int syStart = localStoneStart >> SECTION_SHIFT;       // first section index (Y)
+                                int syEnd = localStoneEnd >> SECTION_SHIFT;           // last section index (Y)
+                                int ox = x & SECTION_MASK;                            // intra-section X coordinate
+                                int oz = z & SECTION_MASK;                            // intra-section Z coordinate
+                                int sx = x >> SECTION_SHIFT;                          // section grid X index
+                                int sz = z >> SECTION_SHIFT;                          // section grid Z index
                                 for (int sy = syStart; sy <= syEnd; sy++)
                                 {
                                     var sec = sections[sx, sy, sz];
@@ -597,21 +602,21 @@ namespace MVGE_GEN.Terrain
                         }
 
                         // --- Soil layer calculation ---
-                        // Soil starts immediately above stone; if no stone placed (stoneDepth==0) soil may start at stone band start.
+                        // Soil begins immediately above the stone top (or at stone band start if no stone placed) and
+                        // is limited by the biome soil band and configured maximum depth.
                         int soilStartWorld = finalStoneTopWorld + 1;
-                        if (stoneDepth == 0) soilStartWorld = stoneBandStartWorld;
-                        // Clamp into biome soil band
-                        if (soilStartWorld < soilMinY) soilStartWorld = soilMinY;
-                        if (soilStartWorld > soilMaxY) continue; // outside soil band
-                        int soilBandCapWorld = Math.Min(soilMaxY, columnHeight);
-                        if (soilBandCapWorld < soilStartWorld) continue; // no vertical room for soil
+                        if (stoneDepth == 0) soilStartWorld = stoneBandStartWorld;  // no stone: soil may occupy lower band
+                        if (soilStartWorld < soilMinY) soilStartWorld = soilMinY;   // clamp into soil biome band
+                        if (soilStartWorld > soilMaxY) continue;                    // lies entirely above soil band
+                        int soilBandCapWorld = Math.Min(soilMaxY, columnHeight);    // cannot exceed surface or biome max
+                        if (soilBandCapWorld < soilStartWorld) continue;            // insufficient room
                         int soilAvailable = soilBandCapWorld - soilStartWorld + 1;
                         if (soilAvailable <= 0) continue;
                         int soilMaxDepth = biome.soilMaxDepth;
                         int soilDepth = Math.Min(soilMaxDepth, soilAvailable);
-                        int soilEndWorld = soilStartWorld + soilDepth - 1; // inclusive
+                        int soilEndWorld = soilStartWorld + soilDepth - 1;          // inclusive top of soil
 
-                        // Write soil column segments
+                        // Write soil voxels similar to stone pass.
                         int localSoilStart = soilStartWorld - chunkBaseY;
                         int localSoilEnd = soilEndWorld - chunkBaseY;
                         if (localSoilEnd >= 0 && localSoilStart < maxY)
@@ -639,12 +644,11 @@ namespace MVGE_GEN.Terrain
                     }
                 }
             }
-
             // ----- SECOND PASS: SIMPLE REPLACEMENT RULES -----
-            // Applies ordered biome replacement rules (priority ascending) using section-level & palette-level optimizations.
+            // Apply ordered biome replacement rules (e.g., convert some stone to ore) using palette/section optimizations.
             ApplySimpleReplacementRules(chunkBaseY, topOfChunk);
 
-            // Release heightmap reference (shared array reused for other vertical chunks outside this instance)
+            // Release heightmap reference now that generation for this chunk is complete.
             precomputedHeightmap = null;
         }
     }

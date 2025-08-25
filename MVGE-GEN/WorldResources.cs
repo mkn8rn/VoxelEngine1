@@ -405,6 +405,8 @@ namespace MVGE_GEN
                         // attempt neighbor-based burial classification
                         TryMarkBuriedByNeighbors(key, ch);
 
+                        PopulateNeighborFaceFlags(key, ch); // <-- New call to populate neighbor face flags
+
                         ch.BuildRender(worldBlockAccessor);
 
                         // If this was first-time build (in unbuilt), move to built dictionary
@@ -427,6 +429,31 @@ namespace MVGE_GEN
             {
                 Console.WriteLine("Mesh build worker error: " + ex.Message);
             }
+        }
+
+        private void PopulateNeighborFaceFlags((int cx,int cy,int cz) key, Chunk ch)
+        {
+            // Attempt to set neighbor face solidity flags. Missing neighbors -> leave false.
+            if (ch == null) return;
+            TryGetChunk((key.cx - 1, key.cy, key.cz), out var left);
+            TryGetChunk((key.cx + 1, key.cy, key.cz), out var right);
+            TryGetChunk((key.cx, key.cy - 1, key.cz), out var down);
+            TryGetChunk((key.cx, key.cy + 1, key.cz), out var up);
+            TryGetChunk((key.cx, key.cy, key.cz - 1), out var back);
+            TryGetChunk((key.cx, key.cy, key.cz + 1), out var front);
+            if (left != null) ch.NeighborNegXFaceSolidPosX = left.FaceSolidPosX;
+            if (right != null) ch.NeighborPosXFaceSolidNegX = right.FaceSolidNegX;
+            if (down != null) ch.NeighborNegYFaceSolidPosY = down.FaceSolidPosY;
+            if (up != null) ch.NeighborPosYFaceSolidNegY = up.FaceSolidNegY;
+            if (back != null) ch.NeighborNegZFaceSolidPosZ = back.FaceSolidPosZ;
+            if (front != null) ch.NeighborPosZFaceSolidNegZ = front.FaceSolidNegZ;
+        }
+
+        private bool TryGetChunk((int cx,int cy,int cz) key, out Chunk chunk)
+        {
+            if (activeChunks.TryGetValue(key, out chunk)) return true;
+            if (unbuiltChunks.TryGetValue(key, out chunk)) return true;
+            chunk = null; return false;
         }
 
         // Background worker that continually ensures required chunks around player are scheduled.
@@ -646,7 +673,7 @@ namespace MVGE_GEN
                 down.FaceSolidPosY && up.FaceSolidNegY &&
                 back.FaceSolidPosZ && front.FaceSolidNegZ)
             {
-                ch.BuriedByNeighbors = true;
+                ch.SetNeighborBuried();
             }
         }
     }
