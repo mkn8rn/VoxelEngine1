@@ -389,7 +389,9 @@ namespace MVGE_GEN.Terrain
                 // our own 6 face flags
                 FaceSolidNegX, FaceSolidPosX, FaceSolidNegY, FaceSolidPosY, FaceSolidNegZ, FaceSolidPosZ,
                 // neighbor opposing faces (any missing neighbor left as false)
-                NeighborNegXFaceSolidPosX, NeighborPosXFaceSolidNegX, NeighborNegYFaceSolidPosY, NeighborPosYFaceSolidNegY, NeighborNegZFaceSolidPosZ, NeighborPosZFaceSolidNegZ);
+                NeighborNegXFaceSolidPosX, NeighborPosXFaceSolidNegX, NeighborNegYFaceSolidPosY, NeighborPosYFaceSolidNegY, NeighborNegZFaceSolidPosZ, NeighborPosZFaceSolidNegZ,
+                // uniform single-block fast path flags
+                AllOneBlockChunk, AllOneBlockBlockId);
         }
 
         // Per-face solidity helpers

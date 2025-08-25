@@ -45,6 +45,10 @@ namespace MVGE_GFX.Terrain
         // Neighbor opposing face solidity flags
         private readonly bool nNegXPosX, nPosXNegX, nNegYPosY, nPosYNegY, nNegZPosZ, nPosZNegZ;
 
+        // Uniform single-solid fast path flags (set when chunk known to be one block id everywhere)
+        private readonly bool forceSingleSolid;
+        private readonly ushort forceSingleSolidBlockId;
+
         // Dense LUT fields (legacy). Left in place for fallback but not used in sparse mode.
         private static byte[] uvLut; // null in sparse mode
         private static int uvLutBlockCount;
@@ -79,7 +83,9 @@ namespace MVGE_GFX.Terrain
                                  bool nNegYPosY = false,
                                  bool nPosYNegY = false,
                                  bool nNegZPosZ = false,
-                                 bool nPosZNegZ = false)
+                                 bool nPosZNegZ = false,
+                                 bool forceSingleSolid = false,
+                                 ushort forceSingleSolidBlockId = 0)
         {
             this.chunkWorldPosition = chunkWorldPosition;
             this.maxX = maxX; this.maxY = maxY; this.maxZ = maxZ;
@@ -91,6 +97,7 @@ namespace MVGE_GFX.Terrain
             this.preFlattenedLocalBlocks = preFlattenedLocalBlocks; // may be null
             this.faceNegX = faceNegX; this.facePosX = facePosX; this.faceNegY = faceNegY; this.facePosY = facePosY; this.faceNegZ = faceNegZ; this.facePosZ = facePosZ;
             this.nNegXPosX = nNegXPosX; this.nPosXNegX = nPosXNegX; this.nNegYPosY = nNegYPosY; this.nPosYNegY = nPosYNegY; this.nNegZPosZ = nNegZPosZ; this.nPosZNegZ = nPosZNegZ;
+            this.forceSingleSolid = forceSingleSolid; this.forceSingleSolidBlockId = forceSingleSolidBlockId;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -298,6 +305,102 @@ namespace MVGE_GFX.Terrain
             // Ensure UV LUT ready
             EnsureUvLut(atlas);
 
+            // ----- UNIFORM SINGLE-SOLID FAST PATH -----
+            if (forceSingleSolid)
+            {
+                // Fully occluded early exit (all our faces + neighbor opposing faces solid)
+                if (faceNegX && facePosX && faceNegY && facePosY && faceNegZ && facePosZ &&
+                    nNegXPosX && nPosXNegX && nNegYPosY && nPosYNegY && nNegZPosZ && nPosZNegZ)
+                {
+                    return new BuildResult { UseUShort = true, HasSingleOpaque = true, VertBuffer = EMPTY_BYTES, UVBuffer = EMPTY_BYTES, IndicesUShortBuffer = EMPTY_USHORTS, IndicesUIntBuffer = null, VertBytesUsed = 0, UVBytesUsed = 0, IndicesUsed = 0 };
+                }
+                // Determine which boundary planes are potentially visible (not mutually occluded by neighbor)
+                bool emitLeft = !(faceNegX && nNegXPosX);
+                bool emitRight = !(facePosX && nPosXNegX);
+                bool emitBottom = !(faceNegY && nNegYPosY);
+                bool emitTop = !(facePosY && nPosYNegY);
+                bool emitBack = !(faceNegZ && nNegZPosZ);
+                bool emitFront = !(facePosZ && nPosZNegZ);
+
+                int faces = 0;
+                if (emitLeft) faces += maxY * maxZ;
+                if (emitRight) faces += maxY * maxZ;
+                if (emitBottom) faces += maxX * maxZ;
+                if (emitTop) faces += maxX * maxZ;
+                if (emitBack) faces += maxX * maxY;
+                if (emitFront) faces += maxX * maxY;
+                if (faces == 0)
+                {
+                    return new BuildResult { UseUShort = true, HasSingleOpaque = true, VertBuffer = EMPTY_BYTES, UVBuffer = EMPTY_BYTES, IndicesUShortBuffer = EMPTY_USHORTS, IndicesUIntBuffer = null, VertBytesUsed = 0, UVBytesUsed = 0, IndicesUsed = 0 };
+                }
+                int totalVerts = faces * 4;
+                bool useUShort = totalVerts <= 65535;
+                byte[] vertBuffer = ArrayPool<byte>.Shared.Rent(totalVerts * 3);
+                byte[] uvBuffer = ArrayPool<byte>.Shared.Rent(totalVerts * 2);
+                ushort[] indicesUShortBuffer = useUShort ? ArrayPool<ushort>.Shared.Rent(faces * 6) : null;
+                uint[] indicesUIntBuffer = useUShort ? null : ArrayPool<uint>.Shared.Rent(faces * 6);
+                byte[] uvConcat = GetSingleSolidUVConcat(forceSingleSolidBlockId) ?? new byte[48];
+                int faceIndex = 0;
+
+                // Emit boundary planes
+                if (emitLeft)
+                {
+                    int x = 0;
+                    for (int z = 0; z < maxZ; z++)
+                        for (int y = 0; y < maxY; y++)
+                            WriteFaceSingle(Faces.LEFT, (byte)x, (byte)y, (byte)z, ref faceIndex, uvConcat, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
+                }
+                if (emitRight)
+                {
+                    int x = maxX - 1;
+                    for (int z = 0; z < maxZ; z++)
+                        for (int y = 0; y < maxY; y++)
+                            WriteFaceSingle(Faces.RIGHT, (byte)x, (byte)y, (byte)z, ref faceIndex, uvConcat, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
+                }
+                if (emitBottom)
+                {
+                    int y = 0;
+                    for (int x = 0; x < maxX; x++)
+                        for (int z = 0; z < maxZ; z++)
+                            WriteFaceSingle(Faces.BOTTOM, (byte)x, (byte)y, (byte)z, ref faceIndex, uvConcat, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
+                }
+                if (emitTop)
+                {
+                    int y = maxY - 1;
+                    for (int x = 0; x < maxX; x++)
+                        for (int z = 0; z < maxZ; z++)
+                            WriteFaceSingle(Faces.TOP, (byte)x, (byte)y, (byte)z, ref faceIndex, uvConcat, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
+                }
+                if (emitBack)
+                {
+                    int z = 0;
+                    for (int x = 0; x < maxX; x++)
+                        for (int y = 0; y < maxY; y++)
+                            WriteFaceSingle(Faces.BACK, (byte)x, (byte)y, (byte)z, ref faceIndex, uvConcat, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
+                }
+                if (emitFront)
+                {
+                    int z = maxZ - 1;
+                    for (int x = 0; x < maxX; x++)
+                        for (int y = 0; y < maxY; y++)
+                            WriteFaceSingle(Faces.FRONT, (byte)x, (byte)y, (byte)z, ref faceIndex, uvConcat, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
+                }
+
+                return new BuildResult
+                {
+                    UseUShort = useUShort,
+                    HasSingleOpaque = true,
+                    VertBuffer = vertBuffer,
+                    UVBuffer = uvBuffer,
+                    IndicesUIntBuffer = indicesUIntBuffer,
+                    IndicesUShortBuffer = indicesUShortBuffer,
+                    VertBytesUsed = totalVerts * 3,
+                    UVBytesUsed = totalVerts * 2,
+                    IndicesUsed = faces * 6
+                };
+            }
+
+            // ----- GENERAL / EXISTING PATH -----
             int yzPlaneBits = maxY * maxZ;
             int yzWC = (yzPlaneBits + 63) >> 6;
             int xzPlaneBits = maxX * maxZ; int xzWC = (xzPlaneBits + 63) >> 6;

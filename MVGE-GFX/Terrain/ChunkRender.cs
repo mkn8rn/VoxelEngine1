@@ -58,6 +58,10 @@ namespace MVGE_GFX.Terrain
         // Neighbor opposing face solidity flags
         private readonly bool nNegXPosX, nPosXNegX, nNegYPosY, nPosYNegY, nNegZPosZ, nPosZNegZ;
 
+        // Uniform single-block fast path (post-replacement) flags
+        private readonly bool allOneBlock;
+        private readonly ushort allOneBlockId;
+
         private enum IndexFormat : byte { UShort, UInt }
         private IndexFormat indexFormat;
 
@@ -104,7 +108,9 @@ namespace MVGE_GFX.Terrain
             bool nNegYPosY,
             bool nPosYNegY,
             bool nNegZPosZ,
-            bool nPosZNegZ)
+            bool nPosZNegZ,
+            bool allOneBlock = false,
+            ushort allOneBlockId = 0)
         {
             chunkMeta = chunkData;
             getWorldBlock = worldBlockGetter;
@@ -113,6 +119,7 @@ namespace MVGE_GFX.Terrain
             chunkWorldPosition = new Vector3(chunkData.x, chunkData.y, chunkData.z);
             this.faceNegX = faceNegX; this.facePosX = facePosX; this.faceNegY = faceNegY; this.facePosY = facePosY; this.faceNegZ = faceNegZ; this.facePosZ = facePosZ;
             this.nNegXPosX = nNegXPosX; this.nPosXNegX = nPosXNegX; this.nNegYPosY = nNegYPosY; this.nPosYNegY = nPosYNegY; this.nNegZPosZ = nNegZPosZ; this.nPosZNegZ = nPosZNegZ;
+            this.allOneBlock = allOneBlock; this.allOneBlockId = allOneBlockId;
             GenerateFaces();
         }
 
@@ -261,7 +268,8 @@ namespace MVGE_GFX.Terrain
                     chunkWorldPosition, maxX, maxY, maxZ, emptyBlock,
                     getWorldBlock, null, null, terrainTextureAtlas, flatBlocks,
                     faceNegX, facePosX, faceNegY, facePosY, faceNegZ, facePosZ,
-                    nNegXPosX, nPosXNegX, nNegYPosY, nPosYNegY, nNegZPosZ, nPosZNegZ);
+                    nNegXPosX, nPosXNegX, nNegYPosY, nPosYNegY, nNegZPosZ, nPosZNegZ,
+                    allOneBlock, allOneBlockId);
                 var res = builder.Build();
                 usedPooling = true;
                 useUShort = res.UseUShort;
@@ -273,6 +281,13 @@ namespace MVGE_GFX.Terrain
             }
             else
             {
+                // If we are in list mode but the chunk is uniform, we can still exploit a simpler path by building faces directly.
+                if (allOneBlock)
+                {
+                    GenerateUniformFacesList();
+                    ReturnFlat();
+                    return;
+                }
                 GenerateFacesListFlatMaskedTwoPass_BB();
                 ReturnFlat();
             }
@@ -337,6 +352,122 @@ namespace MVGE_GFX.Terrain
                     if (getWorldBlock(baseWX + x, baseWY + y, baseWZ + maxZ) == emptyBlock) return false;
                 }
             return true;
+        }
+
+        // Fast uniform faces list builder for non-pooled path when chunk is a single block id
+        private void GenerateUniformFacesList()
+        {
+            // Determine which boundary planes are potentially visible (not mutually occluded by neighbor)
+            bool emitLeft = !(faceNegX && nNegXPosX);
+            bool emitRight = !(facePosX && nPosXNegX);
+            bool emitBottom = !(faceNegY && nNegYPosY);
+            bool emitTop = !(facePosY && nPosYNegY);
+            bool emitBack = !(faceNegZ && nNegZPosZ);
+            bool emitFront = !(facePosZ && nPosZNegZ);
+
+            int faces = 0;
+            if (emitLeft) faces += maxY * maxZ;
+            if (emitRight) faces += maxY * maxZ;
+            if (emitBottom) faces += maxX * maxZ;
+            if (emitTop) faces += maxX * maxZ;
+            if (emitBack) faces += maxX * maxY;
+            if (emitFront) faces += maxX * maxY;
+            if (faces == 0)
+            {
+                chunkVertsList = new List<byte>(0);
+                chunkUVsList = new List<byte>(0);
+                chunkIndicesList = new List<uint>(0);
+                indexFormat = IndexFormat.UInt;
+                return;
+            }
+
+            int totalVerts = faces * 4;
+            bool useUShortIndices = totalVerts <= 65535;
+            indexFormat = useUShortIndices ? IndexFormat.UShort : IndexFormat.UInt;
+            chunkVertsList = new List<byte>(totalVerts * 3);
+            chunkUVsList = new List<byte>(totalVerts * 2);
+            if (useUShortIndices) chunkIndicesUShortList = new List<ushort>(faces * 6); else chunkIndicesList = new List<uint>(faces * 6);
+
+            int currentVertexBase = 0;
+            // Helper local lambda to emit a face for uniform block
+            void EmitFace(Faces face, byte x, byte y, byte z)
+            {
+                var verts = RawFaceData.rawVertexData[face];
+                foreach (var v in verts)
+                {
+                    chunkVertsList.Add((byte)(v.x + x));
+                    chunkVertsList.Add((byte)(v.y + y));
+                    chunkVertsList.Add((byte)(v.z + z));
+                }
+                var blockUVs = terrainTextureAtlas.GetBlockUVs(allOneBlockId, face);
+                foreach (var uv in blockUVs)
+                {
+                    chunkUVsList.Add(uv.x);
+                    chunkUVsList.Add(uv.y);
+                }
+                if (useUShortIndices)
+                {
+                    chunkIndicesUShortList.Add((ushort)(currentVertexBase + 0));
+                    chunkIndicesUShortList.Add((ushort)(currentVertexBase + 1));
+                    chunkIndicesUShortList.Add((ushort)(currentVertexBase + 2));
+                    chunkIndicesUShortList.Add((ushort)(currentVertexBase + 2));
+                    chunkIndicesUShortList.Add((ushort)(currentVertexBase + 3));
+                    chunkIndicesUShortList.Add((ushort)(currentVertexBase + 0));
+                }
+                else
+                {
+                    chunkIndicesList.Add((uint)(currentVertexBase + 0));
+                    chunkIndicesList.Add((uint)(currentVertexBase + 1));
+                    chunkIndicesList.Add((uint)(currentVertexBase + 2));
+                    chunkIndicesList.Add((uint)(currentVertexBase + 2));
+                    chunkIndicesList.Add((uint)(currentVertexBase + 3));
+                    chunkIndicesList.Add((uint)(currentVertexBase + 0));
+                }
+                currentVertexBase += 4;
+            }
+
+            if (emitLeft)
+            {
+                int x = 0;
+                for (int z = 0; z < maxZ; z++)
+                    for (int y = 0; y < maxY; y++)
+                        EmitFace(Faces.LEFT, (byte)x, (byte)y, (byte)z);
+            }
+            if (emitRight)
+            {
+                int x = maxX - 1;
+                for (int z = 0; z < maxZ; z++)
+                    for (int y = 0; y < maxY; y++)
+                        EmitFace(Faces.RIGHT, (byte)x, (byte)y, (byte)z);
+            }
+            if (emitBottom)
+            {
+                int y = 0;
+                for (int x = 0; x < maxX; x++)
+                    for (int z = 0; z < maxZ; z++)
+                        EmitFace(Faces.BOTTOM, (byte)x, (byte)y, (byte)z);
+            }
+            if (emitTop)
+            {
+                int y = maxY - 1;
+                for (int x = 0; x < maxX; x++)
+                    for (int z = 0; z < maxZ; z++)
+                        EmitFace(Faces.TOP, (byte)x, (byte)y, (byte)z);
+            }
+            if (emitBack)
+            {
+                int z = 0;
+                for (int x = 0; x < maxX; x++)
+                    for (int y = 0; y < maxY; y++)
+                        EmitFace(Faces.BACK, (byte)x, (byte)y, (byte)z);
+            }
+            if (emitFront)
+            {
+                int z = maxZ - 1;
+                for (int x = 0; x < maxX; x++)
+                    for (int y = 0; y < maxY; y++)
+                        EmitFace(Faces.FRONT, (byte)x, (byte)y, (byte)z);
+            }
         }
 
         // Bounding-box aware masked two-pass generation.
