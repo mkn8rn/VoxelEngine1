@@ -79,6 +79,9 @@ namespace MVGE_GEN.Terrain
         public bool AllStoneChunk { get; private set; }
         // Fast path: entire chunk volume is uniform soil (no stone/air inside)
         public bool AllSoilChunk { get; private set; }
+        // Post-replacement fast path: entire chunk still a single non-air block (originally stone or soil, may have been transformed by replacement rules)
+        public bool AllOneBlockChunk { get; private set; }
+        public ushort AllOneBlockBlockId { get; private set; } // The uniform non-air block id for AllOneBlockChunk
 
         // per-face full solidity flags (all boundary voxels on that face are non-empty)
         // Naming: NegX = x==0 face ("left"), PosX = x==dimX-1 ("right"), etc.

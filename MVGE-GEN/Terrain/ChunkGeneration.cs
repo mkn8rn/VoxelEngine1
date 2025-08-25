@@ -648,6 +648,49 @@ namespace MVGE_GEN.Terrain
             // Apply ordered biome replacement rules (e.g., convert some stone to ore) using palette/section optimizations.
             ApplySimpleReplacementRules(chunkBaseY, topOfChunk);
 
+            // ----- POST-REPLACEMENT UNIFORMITY CHECK -----
+            // If the chunk started as AllStoneChunk or AllSoilChunk it may still be fully uniform after replacement rules
+            // (either unchanged or transformed into a different single block id). We record this as a generic uniform block fast-path.
+            if (AllStoneChunk || AllSoilChunk)
+            {
+                ushort uniformId = 0;
+                bool stillUniform = true;
+                // Scan sections until a differing/non-uniform section found.
+                for (int sx = 0; sx < sectionsX && stillUniform; sx++)
+                {
+                    for (int sy = 0; sy < sectionsY && stillUniform; sy++)
+                    {
+                        for (int sz = 0; sz < sectionsZ && stillUniform; sz++)
+                        {
+                            var sec = sections[sx, sy, sz];
+                            if (sec == null || sec.IsAllAir)
+                            {
+                                // A null/air section would contradict earlier AllStoneChunk/AllSoilChunk classification, treat as non-uniform safety.
+                                stillUniform = false; break;
+                            }
+                            if (!(sec.Palette != null && sec.Palette.Count == 2 && sec.Palette[0] == ChunkSection.AIR && sec.NonAirCount == sec.VoxelCount && sec.VoxelCount != 0))
+                            {
+                                stillUniform = false; break;
+                            }
+                            ushort id = sec.Palette[1];
+                            if (uniformId == 0)
+                            {
+                                uniformId = id; // first section's block id
+                            }
+                            else if (uniformId != id)
+                            {
+                                stillUniform = false; break;
+                            }
+                        }
+                    }
+                }
+                if (stillUniform && uniformId != 0)
+                {
+                    AllOneBlockChunk = true;
+                    AllOneBlockBlockId = uniformId;
+                }
+            }
+
             // Release heightmap reference now that generation for this chunk is complete.
             precomputedHeightmap = null;
         }
