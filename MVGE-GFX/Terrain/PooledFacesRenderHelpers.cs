@@ -139,37 +139,6 @@ namespace MVGE_GFX.Terrain
             faceIndex++;
         }
 
-        // Helper local greedy merge for a 2D boolean mask. Produces list of rectangles.
-        static void GreedyRectangles(Span<bool> mask, int rows, int cols, List<(int r, int c, int h, int w)> outRects)
-        {
-            for (int r = 0; r < rows; r++)
-            {
-                for (int c = 0; c < cols; c++)
-                {
-                    int idx = r * cols + c;
-                    if (!mask[idx]) continue;
-                    // Determine max width
-                    int w = 1;
-                    while (c + w < cols && mask[r * cols + c + w]) w++;
-                    // Determine max height with same width
-                    int h = 1; bool expand = true;
-                    while (r + h < rows && expand)
-                    {
-                        for (int k = 0; k < w; k++)
-                        {
-                            if (!mask[(r + h) * cols + (c + k)]) { expand = false; break; }
-                        }
-                        if (expand) h++;
-                    }
-                    // Mark consumed
-                    for (int rr = 0; rr < h; rr++)
-                        for (int cc = 0; cc < w; cc++)
-                            mask[(r + rr) * cols + (c + cc)] = false;
-                    outRects.Add((r, c, h, w));
-                }
-            }
-        }
-
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static int LocalIndex(int x, int y, int z, int maxY, int maxZ) => (x * maxZ + z) * maxY + y;
     }

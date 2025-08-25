@@ -167,239 +167,85 @@ namespace MVGE_GFX.Terrain
             for (int i = 0; i < len; i++) arr[i] = 0UL;
         }
 
-        // Extracted uniform single-solid fast path (lines 340-586 original Build)
+        // ----- UNIFORM SINGLE-SOLID FAST PATH -----
         private BuildResult BuildUniformSingleSolidFastPath()
         {
             // Fully occluded early exit (all our faces + neighbor opposing faces solid)
-            if (IsFullyOccludedByFlags())
+            if (faceNegX && facePosX && faceNegY && facePosY && faceNegZ && facePosZ &&
+                nNegXPosX && nPosXNegX && nNegYPosY && nPosYNegY && nNegZPosZ && nPosZNegZ)
             {
-                return EmptyBuildResult(true);
+                return new BuildResult { UseUShort = true, HasSingleOpaque = true, VertBuffer = EMPTY_BYTES, UVBuffer = EMPTY_BYTES, IndicesUShortBuffer = EMPTY_USHORTS, IndicesUIntBuffer = null, VertBytesUsed = 0, UVBytesUsed = 0, IndicesUsed = 0 };
             }
+            // Determine which boundary planes are potentially visible (not mutually occluded by neighbor)
+            bool emitLeft = !(faceNegX && nNegXPosX);
+            bool emitRight = !(facePosX && nPosXNegX);
+            bool emitBottom = !(faceNegY && nNegYPosY);
+            bool emitTop = !(facePosY && nPosYNegY);
+            bool emitBack = !(faceNegZ && nNegZPosZ);
+            bool emitFront = !(facePosZ && nPosZNegZ);
 
-            // Determine plane emission (if plane and opposing neighbor plane both solid we skip entirely)
-            bool emitLeft, emitRight, emitBottom, emitTop, emitBack, emitFront;
-            if (!DetermineSingleSolidPlaneEmission(out emitLeft, out emitRight, out emitBottom, out emitTop, out emitBack, out emitFront))
+            int faces = 0;
+            if (emitLeft) faces += maxY * maxZ;
+            if (emitRight) faces += maxY * maxZ;
+            if (emitBottom) faces += maxX * maxZ;
+            if (emitTop) faces += maxX * maxZ;
+            if (emitBack) faces += maxX * maxY;
+            if (emitFront) faces += maxX * maxY;
+            if (faces == 0)
             {
-                return EmptyBuildResult(true);
+                return new BuildResult { UseUShort = true, HasSingleOpaque = true, VertBuffer = EMPTY_BYTES, UVBuffer = EMPTY_BYTES, IndicesUShortBuffer = EMPTY_USHORTS, IndicesUIntBuffer = null, VertBytesUsed = 0, UVBytesUsed = 0, IndicesUsed = 0 };
             }
-
-            // Collect merged quads per plane (face, origin, size)
-            var merged = new List<(Faces face, byte x, byte y, byte z, byte h, byte w)>(32);
-
-            // UV concat for the block
+            int totalVerts = faces * 4;
+            bool useUShort = totalVerts <= 65535;
+            byte[] vertBuffer = ArrayPool<byte>.Shared.Rent(totalVerts * 3);
+            byte[] uvBuffer = ArrayPool<byte>.Shared.Rent(totalVerts * 2);
+            ushort[] indicesUShortBuffer = useUShort ? ArrayPool<ushort>.Shared.Rent(faces * 6) : null;
+            uint[] indicesUIntBuffer = useUShort ? null : ArrayPool<uint>.Shared.Rent(faces * 6);
             byte[] uvConcat = GetSingleSolidUVConcat(forceSingleSolidBlockId) ?? new byte[48];
+            int faceIndex = 0;
 
-            // For each plane we build visibility mask from neighbor emptiness.
-            // NOTE: We intentionally stretch texture over merged quad (no tiling) for performance.
-            // Left / Right planes (Y x Z grid)
+            // Emit boundary planes
             if (emitLeft)
             {
-                int rows = maxY, cols = maxZ;
-                Span<bool> mask = stackalloc bool[256]; // supports up to 16x16; for larger sizes fallback to heap
-                if (rows * cols > 256) mask = new bool[rows * cols];
-                for (int y = 0; y < maxY; y++)
-                    for (int z = 0; z < maxZ; z++)
-                        mask[y * maxZ + z] = getWorldBlock((int)chunkWorldPosition.X - 1, (int)chunkWorldPosition.Y + y, (int)chunkWorldPosition.Z + z) == emptyBlock;
-                var rects = new List<(int r,int c,int h,int w)>();
-                // Quick full plane check
-                if (rects.Capacity == 0) { }
-                bool full = true;
-                for (int i = 0, n = rows * cols; i < n; i++) if (!mask[i]) { full = false; break; }
-                if (full)
-                {
-                    merged.Add((Faces.LEFT, 0, 0, 0, (byte)rows, (byte)cols));
-                }
-                else
-                {
-                    GreedyRectangles(mask, rows, cols, rects);
-                    foreach (var r in rects)
-                        merged.Add((Faces.LEFT, 0, (byte)r.r, (byte)r.c, (byte)r.h, (byte)r.w));
-                }
+                int x = 0;
+                for (int z = 0; z < maxZ; z++)
+                    for (int y = 0; y < maxY; y++)
+                        WriteFaceSingle(Faces.LEFT, (byte)x, (byte)y, (byte)z, ref faceIndex, uvConcat, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
             }
             if (emitRight)
             {
-                int rows = maxY, cols = maxZ;
-                Span<bool> mask = stackalloc bool[256]; if (rows * cols > 256) mask = new bool[rows * cols];
-                for (int y = 0; y < maxY; y++)
-                    for (int z = 0; z < maxZ; z++)
-                        mask[y * maxZ + z] = getWorldBlock((int)chunkWorldPosition.X + maxX, (int)chunkWorldPosition.Y + y, (int)chunkWorldPosition.Z + z) == emptyBlock;
-                var rects = new List<(int r,int c,int h,int w)>();
-                bool full = true;
-                for (int i = 0, n = rows * cols; i < n; i++) if (!mask[i]) { full = false; break; }
-                if (full)
-                {
-                    merged.Add((Faces.RIGHT, (byte)(maxX - 1), 0, 0, (byte)rows, (byte)cols));
-                }
-                else
-                {
-                    GreedyRectangles(mask, rows, cols, rects);
-                    foreach (var r in rects)
-                        merged.Add((Faces.RIGHT, (byte)(maxX - 1), (byte)r.r, (byte)r.c, (byte)r.h, (byte)r.w));
-                }
+                int x = maxX - 1;
+                for (int z = 0; z < maxZ; z++)
+                    for (int y = 0; y < maxY; y++)
+                        WriteFaceSingle(Faces.RIGHT, (byte)x, (byte)y, (byte)z, ref faceIndex, uvConcat, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
             }
-            // Bottom / Top planes (X x Z grid)
             if (emitBottom)
             {
-                int rows = maxX, cols = maxZ;
-                Span<bool> mask = stackalloc bool[256]; if (rows * cols > 256) mask = new bool[rows * cols];
+                int y = 0;
                 for (int x = 0; x < maxX; x++)
                     for (int z = 0; z < maxZ; z++)
-                        mask[x * maxZ + z] = getWorldBlock((int)chunkWorldPosition.X + x, (int)chunkWorldPosition.Y - 1, (int)chunkWorldPosition.Z + z) == emptyBlock;
-                var rects = new List<(int r,int c,int h,int w)>();
-                bool full = true; for (int i = 0, n = rows * cols; i < n; i++) if (!mask[i]) { full = false; break; }
-                if (full)
-                    merged.Add((Faces.BOTTOM, 0, 0, 0, (byte)rows, (byte)cols));
-                else
-                {
-                    GreedyRectangles(mask, rows, cols, rects);
-                    foreach (var r in rects)
-                        merged.Add((Faces.BOTTOM, (byte)r.r, 0, (byte)r.c, (byte)r.h, (byte)r.w));
-                }
+                        WriteFaceSingle(Faces.BOTTOM, (byte)x, (byte)y, (byte)z, ref faceIndex, uvConcat, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
             }
             if (emitTop)
             {
-                int rows = maxX, cols = maxZ;
-                Span<bool> mask = stackalloc bool[256]; if (rows * cols > 256) mask = new bool[rows * cols];
+                int y = maxY - 1;
                 for (int x = 0; x < maxX; x++)
                     for (int z = 0; z < maxZ; z++)
-                        mask[x * maxZ + z] = getWorldBlock((int)chunkWorldPosition.X + x, (int)chunkWorldPosition.Y + maxY, (int)chunkWorldPosition.Z + z) == emptyBlock;
-                var rects = new List<(int r,int c,int h,int w)>();
-                bool full = true; for (int i = 0, n = rows * cols; i < n; i++) if (!mask[i]) { full = false; break; }
-                if (full)
-                    merged.Add((Faces.TOP, 0, (byte)(maxY - 1), 0, (byte)rows, (byte)cols));
-                else
-                {
-                    GreedyRectangles(mask, rows, cols, rects);
-                    foreach (var r in rects)
-                        merged.Add((Faces.TOP, (byte)r.r, (byte)(maxY - 1), (byte)r.c, (byte)r.h, (byte)r.w));
-                }
+                        WriteFaceSingle(Faces.TOP, (byte)x, (byte)y, (byte)z, ref faceIndex, uvConcat, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
             }
-            // Back / Front planes (X x Y grid)
             if (emitBack)
             {
-                int rows = maxX, cols = maxY;
-                Span<bool> mask = stackalloc bool[256]; if (rows * cols > 256) mask = new bool[rows * cols];
+                int z = 0;
                 for (int x = 0; x < maxX; x++)
                     for (int y = 0; y < maxY; y++)
-                        mask[x * maxY + y] = getWorldBlock((int)chunkWorldPosition.X + x, (int)chunkWorldPosition.Y + y, (int)chunkWorldPosition.Z - 1) == emptyBlock;
-                var rects = new List<(int r,int c,int h,int w)>();
-                bool full = true; for (int i = 0, n = rows * cols; i < n; i++) if (!mask[i]) { full = false; break; }
-                if (full)
-                    merged.Add((Faces.BACK, 0, 0, 0, (byte)rows, (byte)cols));
-                else
-                {
-                    GreedyRectangles(mask, rows, cols, rects);
-                    foreach (var r in rects)
-                        merged.Add((Faces.BACK, (byte)r.r, (byte)r.c, 0, (byte)r.h, (byte)r.w));
-                }
+                        WriteFaceSingle(Faces.BACK, (byte)x, (byte)y, (byte)z, ref faceIndex, uvConcat, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
             }
             if (emitFront)
             {
-                int rows = maxX, cols = maxY;
-                Span<bool> mask = stackalloc bool[256]; if (rows * cols > 256) mask = new bool[rows * cols];
+                int z = maxZ - 1;
                 for (int x = 0; x < maxX; x++)
                     for (int y = 0; y < maxY; y++)
-                        mask[x * maxY + y] = getWorldBlock((int)chunkWorldPosition.X + x, (int)chunkWorldPosition.Y + y, (int)chunkWorldPosition.Z + maxZ) == emptyBlock;
-                var rects = new List<(int r,int c,int h,int w)>();
-                bool full = true; for (int i = 0, n = rows * cols; i < n; i++) if (!mask[i]) { full = false; break; }
-                if (full)
-                    merged.Add((Faces.FRONT, 0, 0, (byte)(maxZ - 1), (byte)rows, (byte)cols));
-                else
-                {
-                    GreedyRectangles(mask, rows, cols, rects);
-                    foreach (var r in rects)
-                        merged.Add((Faces.FRONT, (byte)r.r, (byte)r.c, (byte)(maxZ - 1), (byte)r.h, (byte)r.w));
-                }
-            }
-
-            int faceCount = merged.Count;
-            int totalVerts = faceCount * 4;
-            bool useUShort = totalVerts <= 65535;
-            byte[] vertBuffer = ArrayPool<byte>.Shared.Rent(Math.Max(1, totalVerts * 3));
-            byte[] uvBuffer = ArrayPool<byte>.Shared.Rent(Math.Max(1, totalVerts * 2));
-            ushort[] indicesUShortBuffer = useUShort ? ArrayPool<ushort>.Shared.Rent(Math.Max(1, faceCount * 6)) : null;
-            uint[] indicesUIntBuffer = useUShort ? null : ArrayPool<uint>.Shared.Rent(Math.Max(1, faceCount * 6));
-
-            // Emit merged quads
-            int faceIndex = 0;
-            foreach (var mf in merged)
-            {
-                // Build stretched quad vertices per face orientation
-                int baseVertexIndex = faceIndex * 4;
-                int vertexByteOffset = baseVertexIndex * 3;
-                int uvByteOffset = baseVertexIndex * 2;
-                int indexOffset = faceIndex * 6;
-
-                // Helper local to write indices
-                void WriteIdx()
-                {
-                    if (useUShort)
-                    {
-                        indicesUShortBuffer[indexOffset + 0] = (ushort)(baseVertexIndex + 0);
-                        indicesUShortBuffer[indexOffset + 1] = (ushort)(baseVertexIndex + 1);
-                        indicesUShortBuffer[indexOffset + 2] = (ushort)(baseVertexIndex + 2);
-                        indicesUShortBuffer[indexOffset + 3] = (ushort)(baseVertexIndex + 2);
-                        indicesUShortBuffer[indexOffset + 4] = (ushort)(baseVertexIndex + 3);
-                        indicesUShortBuffer[indexOffset + 5] = (ushort)(baseVertexIndex + 0);
-                    }
-                    else
-                    {
-                        indicesUIntBuffer[indexOffset + 0] = (uint)(baseVertexIndex + 0);
-                        indicesUIntBuffer[indexOffset + 1] = (uint)(baseVertexIndex + 1);
-                        indicesUIntBuffer[indexOffset + 2] = (uint)(baseVertexIndex + 2);
-                        indicesUIntBuffer[indexOffset + 3] = (uint)(baseVertexIndex + 2);
-                        indicesUIntBuffer[indexOffset + 4] = (uint)(baseVertexIndex + 3);
-                        indicesUIntBuffer[indexOffset + 5] = (uint)(baseVertexIndex + 0);
-                    }
-                }
-
-                byte x = mf.x, y = mf.y, z = mf.z, h = mf.h, w = mf.w;
-                switch (mf.face)
-                {
-                    case Faces.LEFT:
-                    case Faces.RIGHT:
-                    {
-                        // h-> along Y, w-> along Z
-                        byte xConst = x;
-                        // Vertex order matches existing single face winding
-                        // (0) (xConst, y, z)
-                        // (1) (xConst, y + h, z)
-                        // (2) (xConst, y + h, z + w)
-                        // (3) (xConst, y, z + w)
-                        vertBuffer[vertexByteOffset + 0] = xConst; vertBuffer[vertexByteOffset + 1] = y; vertBuffer[vertexByteOffset + 2] = z;
-                        vertBuffer[vertexByteOffset + 3] = xConst; vertBuffer[vertexByteOffset + 4] = (byte)(y + h); vertBuffer[vertexByteOffset + 5] = z;
-                        vertBuffer[vertexByteOffset + 6] = xConst; vertBuffer[vertexByteOffset + 7] = (byte)(y + h); vertBuffer[vertexByteOffset + 8] = (byte)(z + w);
-                        vertBuffer[vertexByteOffset + 9] = xConst; vertBuffer[vertexByteOffset +10] = y; vertBuffer[vertexByteOffset +11] = (byte)(z + w);
-                        break;
-                    }
-                    case Faces.BOTTOM:
-                    case Faces.TOP:
-                    {
-                        // h-> along X, w-> along Z (we stored r as X, w as width along Z)
-                        byte yConst = y;
-                        vertBuffer[vertexByteOffset + 0] = x; vertBuffer[vertexByteOffset + 1] = yConst; vertBuffer[vertexByteOffset + 2] = z;
-                        vertBuffer[vertexByteOffset + 3] = (byte)(x + h); vertBuffer[vertexByteOffset + 4] = yConst; vertBuffer[vertexByteOffset + 5] = z;
-                        vertBuffer[vertexByteOffset + 6] = (byte)(x + h); vertBuffer[vertexByteOffset + 7] = yConst; vertBuffer[vertexByteOffset + 8] = (byte)(z + w);
-                        vertBuffer[vertexByteOffset + 9] = x; vertBuffer[vertexByteOffset +10] = yConst; vertBuffer[vertexByteOffset +11] = (byte)(z + w);
-                        break;
-                    }
-                    case Faces.BACK:
-                    case Faces.FRONT:
-                    {
-                        // h-> along X, w-> along Y (r as X, w as height along Y)
-                        byte zConst = z;
-                        vertBuffer[vertexByteOffset + 0] = x; vertBuffer[vertexByteOffset + 1] = y; vertBuffer[vertexByteOffset + 2] = zConst;
-                        vertBuffer[vertexByteOffset + 3] = (byte)(x + h); vertBuffer[vertexByteOffset + 4] = y; vertBuffer[vertexByteOffset + 5] = zConst;
-                        vertBuffer[vertexByteOffset + 6] = (byte)(x + h); vertBuffer[vertexByteOffset + 7] = (byte)(y + w); vertBuffer[vertexByteOffset + 8] = zConst;
-                        vertBuffer[vertexByteOffset + 9] = x; vertBuffer[vertexByteOffset +10] = (byte)(y + w); vertBuffer[vertexByteOffset +11] = zConst;
-                        break;
-                    }
-                }
-                // UVs (same 4 corners stretched)
-                int uvOff = ((int)mf.face) * 8;
-                for (int i = 0; i < 8; i++) uvBuffer[uvByteOffset + i] = uvConcat[uvOff + i];
-                WriteIdx();
-                faceIndex++;
+                        WriteFaceSingle(Faces.FRONT, (byte)x, (byte)y, (byte)z, ref faceIndex, uvConcat, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
             }
 
             return new BuildResult
@@ -412,7 +258,7 @@ namespace MVGE_GFX.Terrain
                 IndicesUShortBuffer = indicesUShortBuffer,
                 VertBytesUsed = totalVerts * 3,
                 UVBytesUsed = totalVerts * 2,
-                IndicesUsed = faceCount * 6
+                IndicesUsed = faces * 6
             };
         }
     }
