@@ -25,6 +25,11 @@ namespace MVGE_GFX.Terrain
             public int IndicesUsed;
         }
 
+        // Static empty arrays to avoid renting tiny buffers for empty/fully-occluded chunks
+        private static readonly byte[] EMPTY_BYTES = Array.Empty<byte>();
+        private static readonly ushort[] EMPTY_USHORTS = Array.Empty<ushort>();
+        private static readonly uint[] EMPTY_UINTS = Array.Empty<uint>();
+
         private readonly Vector3 chunkWorldPosition;
         private readonly int maxX, maxY, maxZ;
         private readonly ushort emptyBlock;
@@ -377,20 +382,14 @@ namespace MVGE_GFX.Terrain
                 // Early empty
                 if (solidCount == 0)
                 {
-                    byte[] vbE = ArrayPool<byte>.Shared.Rent(1);
-                    byte[] ubE = ArrayPool<byte>.Shared.Rent(1);
-                    ushort[] ibE = ArrayPool<ushort>.Shared.Rent(1);
-                    return new BuildResult { UseUShort = true, HasSingleOpaque = false, VertBuffer = vbE, UVBuffer = ubE, IndicesUShortBuffer = ibE, IndicesUIntBuffer = null, VertBytesUsed = 0, UVBytesUsed = 0, IndicesUsed = 0 };
+                    return new BuildResult { UseUShort = true, HasSingleOpaque = false, VertBuffer = EMPTY_BYTES, UVBuffer = EMPTY_BYTES, IndicesUShortBuffer = EMPTY_USHORTS, IndicesUIntBuffer = null, VertBytesUsed = 0, UVBytesUsed = 0, IndicesUsed = 0 };
                 }
 
                 // Flag-based full occlusion (all our faces + neighbor opposing faces solid)
                 if (faceNegX && facePosX && faceNegY && facePosY && faceNegZ && facePosZ &&
                     nNegXPosX && nPosXNegX && nNegYPosY && nPosYNegY && nNegZPosZ && nPosZNegZ)
                 {
-                    byte[] vbF = ArrayPool<byte>.Shared.Rent(1);
-                    byte[] ubF = ArrayPool<byte>.Shared.Rent(1);
-                    ushort[] ibF = ArrayPool<ushort>.Shared.Rent(1);
-                    return new BuildResult { UseUShort = true, HasSingleOpaque = hasSingleOpaque, VertBuffer = vbF, UVBuffer = ubF, IndicesUShortBuffer = ibF, IndicesUIntBuffer = null, VertBytesUsed = 0, UVBytesUsed = 0, IndicesUsed = 0 };
+                    return new BuildResult { UseUShort = true, HasSingleOpaque = hasSingleOpaque, VertBuffer = EMPTY_BYTES, UVBuffer = EMPTY_BYTES, IndicesUShortBuffer = EMPTY_USHORTS, IndicesUIntBuffer = null, VertBytesUsed = 0, UVBytesUsed = 0, IndicesUsed = 0 };
                 }
 
                 bool maybeFullySolid = solidCount == voxelCount;
@@ -408,10 +407,7 @@ namespace MVGE_GFX.Terrain
                         AllBitsSet(neighborBottom, xzPlaneBits) && AllBitsSet(neighborTop, xzPlaneBits) &&
                         AllBitsSet(neighborBack, xyPlaneBits) && AllBitsSet(neighborFront, xyPlaneBits))
                     {
-                        byte[] vb = ArrayPool<byte>.Shared.Rent(1);
-                        byte[] ub = ArrayPool<byte>.Shared.Rent(1);
-                        ushort[] ib = ArrayPool<ushort>.Shared.Rent(1);
-                        return new BuildResult { UseUShort = true, HasSingleOpaque = hasSingleOpaque, VertBuffer = vb, UVBuffer = ub, IndicesUShortBuffer = ib, IndicesUIntBuffer = null, VertBytesUsed = 0, UVBytesUsed = 0, IndicesUsed = 0 };
+                        return new BuildResult { UseUShort = true, HasSingleOpaque = hasSingleOpaque, VertBuffer = EMPTY_BYTES, UVBuffer = EMPTY_BYTES, IndicesUShortBuffer = EMPTY_USHORTS, IndicesUIntBuffer = null, VertBytesUsed = 0, UVBytesUsed = 0, IndicesUsed = 0 };
                     }
                 }
 
@@ -689,8 +685,8 @@ namespace MVGE_GFX.Terrain
                                     {
                                         int t = BitOperations.TrailingZeroCount(bits);
                                         int xyIndex = (w << 6) + t; if (xyIndex >= xyPlaneBits) break;
-                                        int x2 = xyIndex / maxY; int y2 = xyIndex % maxY; int li = LocalIndex(x2, y2, z, maxY, maxZ);
-                                        WriteFaceMulti(localBlocks[li], Faces.BACK, (byte)x2, (byte)y2, (byte)z, ref faceIndex, emptyBlock, atlas, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
+                                        int x2 = xyIndex / maxY; int y2 = xyIndex % maxY; // int li = LocalIndex(x2, y2, z, maxY, maxZ); block id not needed for uniform UVs
+                                        WriteFaceSingle(Faces.BACK, (byte)x2, (byte)y2, (byte)z, ref faceIndex, singleSolidUVConcat, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
                                         bits &= bits - 1;
                                     }
                                 }
@@ -704,8 +700,8 @@ namespace MVGE_GFX.Terrain
                                     {
                                         int t = BitOperations.TrailingZeroCount(bits);
                                         int xyIndex = (w << 6) + t; if (xyIndex >= xyPlaneBits) break;
-                                        int x2 = xyIndex / maxY; int y2 = xyIndex % maxY; int li = LocalIndex(x2, y2, z, maxY, maxZ);
-                                        WriteFaceMulti(localBlocks[li], Faces.FRONT, (byte)x2, (byte)y2, (byte)z, ref faceIndex, emptyBlock, atlas, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
+                                        int x2 = xyIndex / maxY; int y2 = xyIndex % maxY; // int li = LocalIndex(x2, y2, z, maxY, maxZ);
+                                        WriteFaceSingle(Faces.FRONT, (byte)x2, (byte)y2, (byte)z, ref faceIndex, singleSolidUVConcat, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
                                         bits &= bits - 1;
                                     }
                                 }
