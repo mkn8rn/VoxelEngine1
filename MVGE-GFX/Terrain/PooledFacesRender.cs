@@ -45,7 +45,7 @@ namespace MVGE_GFX.Terrain
         private static int uvLutBlockCount;
         private static readonly object uvInitLock = new();
 
-        // Sparse LUT (new): maps blockId -> 48-byte array (6 faces * 8 bytes)
+        // Sparse LUT maps blockId -> 48-byte array (6 faces * 8 bytes)
         private static Dictionary<ushort, byte[]> uvLutSparse; // null until built
 
         // Cache for single solid UV concat (references same 48-byte arrays in sparse mode)

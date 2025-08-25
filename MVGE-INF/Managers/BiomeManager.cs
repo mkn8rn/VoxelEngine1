@@ -95,6 +95,7 @@ namespace MVGE_INF.Managers
 
                             // Build list of base block types to replace
                             var baseList = new List<BaseBlockType>();
+                            var blockList = new List<BlockType>();
                             if (rule.base_blocks_to_replace != null && rule.base_blocks_to_replace.Count > 0)
                             {
                                 foreach (var bb in rule.base_blocks_to_replace)
@@ -103,27 +104,27 @@ namespace MVGE_INF.Managers
                                         baseList.Add((BaseBlockType)bb);
                                 }
                             }
-                            else if (rule.blocks_to_replace != null && rule.blocks_to_replace.Count > 0)
+                            
+                            if (rule.blocks_to_replace != null && rule.blocks_to_replace.Count > 0)
                             {
-                                // Derive base types from specific block IDs
+                                // Derive block types from specific block IDs
                                 foreach (var btId in rule.blocks_to_replace)
                                 {
-                                    var bt = TerrainLoader.allBlockTypeObjects.Find(b => b.ID == btId);
-                                    if (bt != null && !baseList.Contains(bt.BaseType))
-                                        baseList.Add(bt.BaseType);
+                                    var blockType = TerrainLoader.allBlockTypeObjects.Find(b => b.ID == btId);
+                                    if (blockType != null && !blockList.Contains(blockType))
+                                        blockList.Add(blockType);
                                 }
                             }
 
                             var simpleRule = new SimpleReplacementRule
                             {
-                                blocks_to_replace = baseList,
+                                base_blocks_to_replace = baseList,
+                                blocks_to_replace = blockList,
                                 block_type = targetBlock,
                                 priority = rule.priority,
                                 microbiomeId = rule.microbiome_id,
                                 absoluteMinYlevel = rule.absolute_min_ylevel,
-                                absoluteMaxYlevel = rule.absolute_max_ylevel,
-                                relativeMinDepth = rule.relative_min_depth,
-                                relativeMaxDepth = rule.relative_max_depth
+                                absoluteMaxYlevel = rule.absolute_max_ylevel
                             };
                             simpleReplacementRules.Add(simpleRule);
                         }

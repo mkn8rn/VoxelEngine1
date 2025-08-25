@@ -9,7 +9,8 @@ namespace MVGE_INF.Models.Generation
 {
     public class SimpleReplacementRule
     {
-        public required List<BaseBlockType> blocks_to_replace { get; set; }
+        public required List<BlockType> blocks_to_replace { get; set; }
+        public required List<BaseBlockType> base_blocks_to_replace { get; set; }
         public required BlockType block_type { get; set; }
         public required int priority { get; set; }
 
@@ -17,7 +18,5 @@ namespace MVGE_INF.Models.Generation
 
         public required int? absoluteMinYlevel { get; set; }
         public required int? absoluteMaxYlevel { get; set; }
-        public required int? relativeMinDepth { get; set; }
-        public required int? relativeMaxDepth { get; set; }
     }
 }

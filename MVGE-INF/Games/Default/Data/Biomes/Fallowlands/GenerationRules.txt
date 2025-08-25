@@ -3,12 +3,20 @@
     "generation_type": "SimpleReplacement",
     "blocks_to_replace": [],
     "base_blocks_to_replace": [6],
-    "block_type_id": 101,
+    "block_type_id": 102,
     "priority": 1,
     "microbiome_id": null,
     "absolute_min_ylevel": null,
-    "absolute_max_ylevel": null,
-    "relative_min_depth": null,
-    "relative_max_depth": null
+    "absolute_max_ylevel": null
+  },
+  {
+    "generation_type": "SimpleReplacement",
+    "blocks_to_replace": [],
+    "base_blocks_to_replace": [5],
+    "block_type_id": 401,
+    "priority": 2,
+    "microbiome_id": null,
+    "absolute_min_ylevel": null,
+    "absolute_max_ylevel": null
   }
 ]
