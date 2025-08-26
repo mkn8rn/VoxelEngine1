@@ -310,13 +310,28 @@ namespace MVGE_GEN.Terrain
                         {
                             int baseY = sy * sectionSize; if (baseY >= dimY) break;
                             var sec = sections[sx, sy, sz];
-                            if (sec == null || sec.IsAllAir) continue;
 
                             int maxLocalX = Math.Min(sectionSize, dimX - baseX);
                             int maxLocalZ = Math.Min(sectionSize, dimZ - baseZ);
                             int maxLocalY = Math.Min(sectionSize, dimY - baseY);
 
-                        // Uniform non-air fast path
+                            // Early section culling / air-section zero fill (we no longer pre-zero the whole dest array)
+                            if (sec == null || sec.IsAllAir || sec.NonAirCount == 0)
+                            {
+                                // Ensure any stale data from pooled array is cleared for this air region only
+                                for (int lx = 0; lx < maxLocalX; lx++)
+                                {
+                                    int gx = baseX + lx; int destXBase = gx * strideX;
+                                    for (int lz = 0; lz < maxLocalZ; lz++)
+                                    {
+                                        int gz = baseZ + lz; int destZBase = destXBase + gz * strideZ + baseY;
+                                        dest.AsSpan(destZBase, maxLocalY).Clear();
+                                    }
+                                }
+                                continue;
+                            }
+
+                            // Uniform non-air fast path
                             if (sec.Palette != null &&
                                 sec.Palette.Count == 2 &&
                                 sec.Palette[0] == ChunkSection.AIR &&
@@ -360,7 +375,7 @@ namespace MVGE_GEN.Terrain
                                 continue;
                             }
 
-                        // General path
+                            // General path
                             int sectionPlane = sectionSize * sectionSize; // 256
                             int bitsPer = sec.BitsPerIndex;
                             uint[] bitData = sec.BitData;
@@ -376,28 +391,34 @@ namespace MVGE_GEN.Terrain
                                 {
                                     int gz = baseZ + lz; int destZBase = destXBase + gz * strideZ;
                                     bool boundaryXZ = boundaryX || gz == 0 || gz == dimZ - 1;
-                                    int baseXZ = lz * sectionSize + lx;
+                                    int baseXZ = lz * sectionSize + lx; // add ly*256 inside y loop
                                     for (int ly = 0; ly < maxLocalY; ly++)
                                     {
                                         int gy = baseY + ly;
-                                        int linear = (ly * sectionPlane) + baseXZ;
+                                        int linear = (ly * sectionPlane) + baseXZ; // (y*256)+(z*16)+x
                                         long bitPos = (long)linear * bitsPer;
                                         int dataIndex = (int)(bitPos >> 5);
                                         int bitOffset = (int)(bitPos & 31);
                                         uint value = bitData[dataIndex] >> bitOffset;
                                         int remaining = 32 - bitOffset;
-                                        if (remaining < bitsPer) value |= bitData[dataIndex + 1] << remaining;
+                                        if (remaining < bitsPer)
+                                        {
+                                            value |= bitData[dataIndex + 1] << remaining;
+                                        }
                                         int paletteIndex = (int)(value & (uint)mask);
                                         ushort id = palette[paletteIndex];
-                                        dest[destZBase + gy] = id;
+                                        dest[destZBase + gy] = id; // writes both air and solid
                                         if (id != ChunkSection.AIR)
                                         {
                                             nonAirTotal++;
-                                            if (!HasAnyBoundarySolid && (boundaryXZ || gy == 0 || gy == dimY - 1)) HasAnyBoundarySolid = true;
+                                            if (!HasAnyBoundarySolid && (boundaryXZ || gy == 0 || gy == dimY - 1))
+                                                HasAnyBoundarySolid = true;
+
                                             localStats.AccumulateBounds(gx, gy, gz);
                                             if (!xSliceMarked[gx]) { xSliceMarked[gx] = true; localStats.XNonEmpty++; }
                                             if (!ySliceMarked[gy]) { ySliceMarked[gy] = true; localStats.YNonEmpty++; }
                                             if (!zSliceMarked[gz]) { zSliceMarked[gz] = true; localStats.ZNonEmpty++; }
+
                                             exposureEstimate += 6;
                                             if (gx > 0 && dest[(gx - 1) * strideX + gz * strideZ + gy] != ChunkSection.AIR) exposureEstimate -= 2;
                                             if (gz > 0 && dest[gx * strideX + (gz - 1) * strideZ + gy] != ChunkSection.AIR) exposureEstimate -= 2;
@@ -435,7 +456,7 @@ namespace MVGE_GEN.Terrain
 
             int voxelCount = dimX * dimY * dimZ;
             ushort[] flat = ArrayPool<ushort>.Shared.Rent(voxelCount);
-            for (int i = 0; i < flat.Length; i++) flat[i] = EMPTY; // initialize (air)
+            // Removed full zero init (empty block == 0); per-section zero fill applied selectively in FlattenSectionsInto
             int nonAir = FlattenSectionsInto(flat);
 
             if (nonAir == 0)
