@@ -6,7 +6,7 @@ using MVGE_INF.Models.Terrain;
 
 namespace MVGE_GFX.Terrain
 {
-    public partial class PooledFacesRender
+    public partial class DenseChunkRender
     {
         private static bool AllBitsSet(ulong[] arr, int bitCount)
         {

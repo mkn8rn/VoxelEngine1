@@ -12,7 +12,7 @@ using MVGE_GFX.Textures;
 
 namespace MVGE_GFX.Terrain
 {
-    public partial class PooledFacesRender
+    public partial class DenseChunkRender
     {
         internal struct BuildResult
         {

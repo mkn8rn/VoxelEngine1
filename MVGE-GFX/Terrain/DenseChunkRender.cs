@@ -11,7 +11,7 @@ using MVGE_GFX.Textures;
 
 namespace MVGE_GFX.Terrain
 {
-    public partial class PooledFacesRender
+    public partial class DenseChunkRender
     {
         // Static empty arrays to avoid renting tiny buffers for empty/fully-occluded chunks
         private static readonly byte[] EMPTY_BYTES = Array.Empty<byte>();
@@ -83,7 +83,7 @@ namespace MVGE_GFX.Terrain
             stack.Push(arr);
         }
 
-        public PooledFacesRender(Vector3 chunkWorldPosition,
+        public DenseChunkRender(Vector3 chunkWorldPosition,
                                  int maxX, int maxY, int maxZ,
                                  ushort emptyBlock,
                                  Func<int, int, int, ushort> worldGetter,

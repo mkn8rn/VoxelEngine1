@@ -139,30 +139,7 @@ namespace MVGE_GFX.Terrain
             int solidVoxelCount = prepassSolidCount;
             long exposureEstimate = prepassExposureEstimate;
 
-            // ------------ Path Selection Heuristics (using generation prepass) --------------
-            bool pooledFeatureEnabled = FlagManager.flags.useFacePooling.GetValueOrDefault();
-            int pooledVoxelThreshold = pooledFeatureEnabled ? FlagManager.flags.faceAmountToPool.GetValueOrDefault(int.MaxValue) : int.MaxValue;
-            bool choosePooled = pooledFeatureEnabled && solidVoxelCount >= pooledVoxelThreshold;
-            if (choosePooled)
-            {
-                var pooledBuilder = new PooledFacesRender(
-                    chunkWorldPosition, maxX, maxY, maxZ, emptyBlock,
-                    getWorldBlock, null, null, terrainTextureAtlas, flatBlocks,
-                    faceNegX, facePosX, faceNegY, facePosY, faceNegZ, facePosZ,
-                    nNegXPosX, nPosXNegX, nNegYPosY, nPosYNegY, nNegZPosZ, nPosZNegZ,
-                    allOneBlock, allOneBlockId);
-                var pooledResult = pooledBuilder.Build();
-                usedPooling = true;
-                useUShort = pooledResult.UseUShort;
-                vertBuffer = pooledResult.VertBuffer; uvBuffer = pooledResult.UVBuffer;
-                indicesUIntBuffer = pooledResult.IndicesUIntBuffer; indicesUShortBuffer = pooledResult.IndicesUShortBuffer;
-                vertBytesUsed = pooledResult.VertBytesUsed; uvBytesUsed = pooledResult.UVBytesUsed; indicesUsed = pooledResult.IndicesUsed;
-                indexFormat = useUShort ? IndexFormat.UShort : IndexFormat.UInt;
-                ReturnFlat();
-                return;
-            }
-
-            // Uniform single-block shortcut still beats sparse/list overhead
+            // --- Uniform single-block shortcut (fastest path) ---
             if (allOneBlock)
             {
                 GenerateUniformFacesList();
@@ -170,21 +147,14 @@ namespace MVGE_GFX.Terrain
                 return;
             }
 
-            // Compute density & average exposure per solid voxel for sparse heuristic
-            float density = solidVoxelCount == 0 ? 0f : (float)solidVoxelCount / voxelCount;
+            // --- Sparse path ---
+            bool sparseFeatureEnabled = true;
             float avgExposurePerSolid = solidVoxelCount == 0 ? 0f : (float)exposureEstimate / solidVoxelCount;
-
-            // Heuristic thresholds (tunable; intentionally descriptive variable names)
-            const float SparseDensityUpperLimit = 0.25f;          // below this we consider chunk "sparse"
-            const float SparseMinAvgExposure = 3.2f;              // average exposed faces per solid to justify sparse path
-            const int   SparseAbsoluteSolidCap = 1 << 20;          // do not use sparse path above this solid count (avoid huge arrays)
-
+            const float SparseMinAvgExposure = 0.25f;     // average exposed faces per solid to justify sparse path
             bool chooseSparse = solidVoxelCount > 0 &&
-                                 density < SparseDensityUpperLimit &&
-                                 avgExposurePerSolid >= SparseMinAvgExposure &&
-                                 solidVoxelCount <= SparseAbsoluteSolidCap;
+                                 avgExposurePerSolid >= SparseMinAvgExposure;
 
-            if (chooseSparse)
+            if (chooseSparse && sparseFeatureEnabled)
             {
                 var sparseBuilder = new SparseChunkRender(
                     chunkWorldPosition,
@@ -206,6 +176,29 @@ namespace MVGE_GFX.Terrain
                 vertBuffer = sparseResult.VertBuffer; uvBuffer = sparseResult.UVBuffer;
                 indicesUIntBuffer = sparseResult.IndicesUIntBuffer; indicesUShortBuffer = sparseResult.IndicesUShortBuffer;
                 vertBytesUsed = sparseResult.VertBytesUsed; uvBytesUsed = sparseResult.UVBytesUsed; indicesUsed = sparseResult.IndicesUsed;
+                indexFormat = useUShort ? IndexFormat.UShort : IndexFormat.UInt;
+                ReturnFlat();
+                return;
+            }
+
+            // --- Dense path (formerly: pooled) ---
+            bool pooledFeatureEnabled = FlagManager.flags.useFacePooling.GetValueOrDefault();
+            int pooledVoxelThreshold = pooledFeatureEnabled ? FlagManager.flags.faceAmountToPool.GetValueOrDefault(int.MaxValue) : int.MaxValue;
+            bool choosePooled = solidVoxelCount >= pooledVoxelThreshold;
+            if (choosePooled && pooledFeatureEnabled)
+            {
+                var pooledBuilder = new DenseChunkRender(
+                    chunkWorldPosition, maxX, maxY, maxZ, emptyBlock,
+                    getWorldBlock, null, null, terrainTextureAtlas, flatBlocks,
+                    faceNegX, facePosX, faceNegY, facePosY, faceNegZ, facePosZ,
+                    nNegXPosX, nPosXNegX, nNegYPosY, nPosYNegY, nNegZPosZ, nPosZNegZ,
+                    allOneBlock, allOneBlockId);
+                var pooledResult = pooledBuilder.Build();
+                usedPooling = true;
+                useUShort = pooledResult.UseUShort;
+                vertBuffer = pooledResult.VertBuffer; uvBuffer = pooledResult.UVBuffer;
+                indicesUIntBuffer = pooledResult.IndicesUIntBuffer; indicesUShortBuffer = pooledResult.IndicesUShortBuffer;
+                vertBytesUsed = pooledResult.VertBytesUsed; uvBytesUsed = pooledResult.UVBytesUsed; indicesUsed = pooledResult.IndicesUsed;
                 indexFormat = useUShort ? IndexFormat.UShort : IndexFormat.UInt;
                 ReturnFlat();
                 return;
