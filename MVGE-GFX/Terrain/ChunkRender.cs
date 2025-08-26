@@ -236,6 +236,14 @@ namespace MVGE_GFX.Terrain
 
         private void GenerateFaces()
         {
+            // if enclosed (all boundary voxels solid and neighbors sealing) skip mesh generation entirely
+            if (CheckFullyOccluded(maxX, maxY, maxZ))
+            {
+                fullyOccluded = true;
+                ReturnFlat();
+                return;
+            }
+
             // Decide if pooling should be used based on non-empty voxel count instead of raw volume
             bool usePooling = false;
             if (FlagManager.flags.useFacePooling.GetValueOrDefault())
