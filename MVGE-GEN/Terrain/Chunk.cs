@@ -16,6 +16,28 @@ namespace MVGE_GEN.Terrain
 {
     public partial class Chunk
     {
+        // Mesh prepass stats generated during flattening to avoid extra scans in ChunkRender
+        internal struct ChunkMeshPrepassStats
+        {
+            public int SolidCount;
+            public int ExposureEstimate;
+            public int MinX, MinY, MinZ, MaxX, MaxY, MaxZ; // inclusive bounds
+            public int XNonEmpty, YNonEmpty, ZNonEmpty;     // counts of slices with any solid
+            public bool HasStats;
+            public void AccumulateBounds(int x, int y, int z)
+            {
+                if (!HasStats)
+                {
+                    MinX = MaxX = x; MinY = MaxY = y; MinZ = MaxZ = z; HasStats = true; return;
+                }
+                if (x < MinX) MinX = x; else if (x > MaxX) MaxX = x;
+                if (y < MinY) MinY = y; else if (y > MaxY) MaxY = y;
+                if (z < MinZ) MinZ = z; else if (z > MaxZ) MaxZ = z;
+            }
+        }
+
+        internal ChunkMeshPrepassStats MeshPrepassStats; // changed to field to allow direct mutation
+
         public Vector3 position { get; set; }
         public ChunkRender chunkRender;
         public ChunkData chunkData;
@@ -267,94 +289,137 @@ namespace MVGE_GEN.Terrain
             int nonAirTotal = 0;
             HasAnyBoundarySolid = false;
 
-            for (int sx = 0; sx < sectionsX; sx++)
-            {
-                int baseX = sx * sectionSize; if (baseX >= dimX) break;
-                for (int sz = 0; sz < sectionsZ; sz++)
-                {
-                    int baseZ = sz * sectionSize; if (baseZ >= dimZ) break;
-                    for (int sy = 0; sy < sectionsY; sy++)
-                    {
-                        int baseY = sy * sectionSize; if (baseY >= dimY) break;
-                        var sec = sections[sx, sy, sz];
-                        if (sec == null || sec.IsAllAir) continue;
+            ChunkMeshPrepassStats localStats = default;
+            int exposureEstimate = 0; // 6 per solid minus 2 per prior neighbor in -X,-Z,-Y directions
+            bool[] xSliceMarked = ArrayPool<bool>.Shared.Rent(dimX);
+            bool[] ySliceMarked = ArrayPool<bool>.Shared.Rent(dimY);
+            bool[] zSliceMarked = ArrayPool<bool>.Shared.Rent(dimZ);
+            Array.Clear(xSliceMarked, 0, dimX);
+            Array.Clear(ySliceMarked, 0, dimY);
+            Array.Clear(zSliceMarked, 0, dimZ);
 
-                        int maxLocalX = Math.Min(sectionSize, dimX - baseX);
-                        int maxLocalZ = Math.Min(sectionSize, dimZ - baseZ);
-                        int maxLocalY = Math.Min(sectionSize, dimY - baseY);
+            try
+            {
+                for (int sx = 0; sx < sectionsX; sx++)
+                {
+                    int baseX = sx * sectionSize; if (baseX >= dimX) break;
+                    for (int sz = 0; sz < sectionsZ; sz++)
+                    {
+                        int baseZ = sz * sectionSize; if (baseZ >= dimZ) break;
+                        for (int sy = 0; sy < sectionsY; sy++)
+                        {
+                            int baseY = sy * sectionSize; if (baseY >= dimY) break;
+                            var sec = sections[sx, sy, sz];
+                            if (sec == null || sec.IsAllAir) continue;
+
+                            int maxLocalX = Math.Min(sectionSize, dimX - baseX);
+                            int maxLocalZ = Math.Min(sectionSize, dimZ - baseZ);
+                            int maxLocalY = Math.Min(sectionSize, dimY - baseY);
 
                         // Uniform non-air fast path
-                        if (sec.Palette != null &&
-                            sec.Palette.Count == 2 &&
-                            sec.Palette[0] == ChunkSection.AIR &&
-                            sec.NonAirCount == sec.VoxelCount &&
-                            sec.VoxelCount != 0)
-                        {
-                            ushort solid = sec.Palette[1];
-                            int voxels = maxLocalX * maxLocalZ * maxLocalY;
-                            nonAirTotal += voxels;
-                            // Boundary contact check
-                            if (!HasAnyBoundarySolid && (baseX == 0 || baseY == 0 || baseZ == 0 || baseX + maxLocalX == dimX || baseY + maxLocalY == dimY || baseZ + maxLocalZ == dimZ))
-                                HasAnyBoundarySolid = true;
+                            if (sec.Palette != null &&
+                                sec.Palette.Count == 2 &&
+                                sec.Palette[0] == ChunkSection.AIR &&
+                                sec.NonAirCount == sec.VoxelCount &&
+                                sec.VoxelCount != 0)
+                            {
+                                ushort solid = sec.Palette[1];
+                                int voxels = maxLocalX * maxLocalZ * maxLocalY;
+                                nonAirTotal += voxels;
+                                for (int lx = 0; lx < maxLocalX; lx++)
+                                {
+                                    int gx = baseX + lx;
+                                    for (int lz = 0; lz < maxLocalZ; lz++)
+                                    {
+                                        int gz = baseZ + lz;
+                                        for (int ly = 0; ly < maxLocalY; ly++)
+                                        {
+                                            int gy = baseY + ly;
+                                            localStats.AccumulateBounds(gx, gy, gz);
+                                            if (!xSliceMarked[gx]) { xSliceMarked[gx] = true; localStats.XNonEmpty++; }
+                                            if (!ySliceMarked[gy]) { ySliceMarked[gy] = true; localStats.YNonEmpty++; }
+                                            if (!zSliceMarked[gz]) { zSliceMarked[gz] = true; localStats.ZNonEmpty++; }
+                                            exposureEstimate += 6;
+                                            if (lx > 0) exposureEstimate -= 2;
+                                            if (lz > 0) exposureEstimate -= 2;
+                                            if (ly > 0) exposureEstimate -= 2;
+                                        }
+                                    }
+                                }
+                                if (!HasAnyBoundarySolid && (baseX == 0 || baseY == 0 || baseZ == 0 || baseX + maxLocalX == dimX || baseY + maxLocalY == dimY || baseZ + maxLocalZ == dimZ))
+                                    HasAnyBoundarySolid = true;
+                                for (int lx = 0; lx < maxLocalX; lx++)
+                                {
+                                    int gx = baseX + lx; int destXBase = gx * strideX;
+                                    for (int lz = 0; lz < maxLocalZ; lz++)
+                                    {
+                                        int gz = baseZ + lz; int destZBase = destXBase + gz * strideZ + baseY;
+                                        dest.AsSpan(destZBase, maxLocalY).Fill(solid);
+                                    }
+                                }
+                                continue;
+                            }
+
+                        // General path
+                            int sectionPlane = sectionSize * sectionSize; // 256
+                            int bitsPer = sec.BitsPerIndex;
+                            uint[] bitData = sec.BitData;
+                            var palette = sec.Palette;
+                            if (bitsPer == 0 || bitData == null || palette == null) continue;
+                            int mask = (1 << bitsPer) - 1;
+
                             for (int lx = 0; lx < maxLocalX; lx++)
                             {
                                 int gx = baseX + lx; int destXBase = gx * strideX;
+                                bool boundaryX = gx == 0 || gx == dimX - 1;
                                 for (int lz = 0; lz < maxLocalZ; lz++)
                                 {
-                                    int gz = baseZ + lz; int destZBase = destXBase + gz * strideZ + baseY;
-                                    dest.AsSpan(destZBase, maxLocalY).Fill(solid);
-                                }
-                            }
-                            continue;
-                        }
-
-                        // General path
-                        int sectionPlane = sectionSize * sectionSize; // 256
-                        int bitsPer = sec.BitsPerIndex;
-                        uint[] bitData = sec.BitData;
-                        var palette = sec.Palette;
-                        if (bitsPer == 0 || bitData == null || palette == null) continue;
-
-                        int mask = (1 << bitsPer) - 1;
-
-                        for (int lx = 0; lx < maxLocalX; lx++)
-                        {
-                            int gx = baseX + lx; int destXBase = gx * strideX;
-                            bool boundaryX = gx == 0 || gx == dimX - 1;
-                            for (int lz = 0; lz < maxLocalZ; lz++)
-                            {
-                                int gz = baseZ + lz; int destZBase = destXBase + gz * strideZ;
-                                bool boundaryXZ = boundaryX || gz == 0 || gz == dimZ - 1;
-                                int baseXZ = lz * sectionSize + lx; // add ly*256 inside y loop
-                                for (int ly = 0; ly < maxLocalY; ly++)
-                                {
-                                    int gy = baseY + ly;
-                                    int linear = (ly * sectionPlane) + baseXZ; // (y*256)+(z*16)+x
-                                    long bitPos = (long)linear * bitsPer;
-                                    int dataIndex = (int)(bitPos >> 5);
-                                    int bitOffset = (int)(bitPos & 31);
-                                    uint value = bitData[dataIndex] >> bitOffset;
-                                    int remaining = 32 - bitOffset;
-                                    if (remaining < bitsPer)
+                                    int gz = baseZ + lz; int destZBase = destXBase + gz * strideZ;
+                                    bool boundaryXZ = boundaryX || gz == 0 || gz == dimZ - 1;
+                                    int baseXZ = lz * sectionSize + lx;
+                                    for (int ly = 0; ly < maxLocalY; ly++)
                                     {
-                                        value |= bitData[dataIndex + 1] << remaining;
-                                    }
-                                    int paletteIndex = (int)(value & (uint)mask);
-                                    ushort id = palette[paletteIndex];
-                                    dest[destZBase + gy] = id;
-                                    if (id != ChunkSection.AIR)
-                                    {
-                                        nonAirTotal++;
-                                        if (!HasAnyBoundarySolid && (boundaryXZ || gy == 0 || gy == dimY - 1))
-                                            HasAnyBoundarySolid = true;
+                                        int gy = baseY + ly;
+                                        int linear = (ly * sectionPlane) + baseXZ;
+                                        long bitPos = (long)linear * bitsPer;
+                                        int dataIndex = (int)(bitPos >> 5);
+                                        int bitOffset = (int)(bitPos & 31);
+                                        uint value = bitData[dataIndex] >> bitOffset;
+                                        int remaining = 32 - bitOffset;
+                                        if (remaining < bitsPer) value |= bitData[dataIndex + 1] << remaining;
+                                        int paletteIndex = (int)(value & (uint)mask);
+                                        ushort id = palette[paletteIndex];
+                                        dest[destZBase + gy] = id;
+                                        if (id != ChunkSection.AIR)
+                                        {
+                                            nonAirTotal++;
+                                            if (!HasAnyBoundarySolid && (boundaryXZ || gy == 0 || gy == dimY - 1)) HasAnyBoundarySolid = true;
+                                            localStats.AccumulateBounds(gx, gy, gz);
+                                            if (!xSliceMarked[gx]) { xSliceMarked[gx] = true; localStats.XNonEmpty++; }
+                                            if (!ySliceMarked[gy]) { ySliceMarked[gy] = true; localStats.YNonEmpty++; }
+                                            if (!zSliceMarked[gz]) { zSliceMarked[gz] = true; localStats.ZNonEmpty++; }
+                                            exposureEstimate += 6;
+                                            if (gx > 0 && dest[(gx - 1) * strideX + gz * strideZ + gy] != ChunkSection.AIR) exposureEstimate -= 2;
+                                            if (gz > 0 && dest[gx * strideX + (gz - 1) * strideZ + gy] != ChunkSection.AIR) exposureEstimate -= 2;
+                                            if (gy > 0 && dest[gx * strideX + gz * strideZ + (gy - 1)] != ChunkSection.AIR) exposureEstimate -= 2;
+                                        }
                                     }
                                 }
                             }
                         }
                     }
                 }
+                IsEmpty = nonAirTotal == 0;
+                localStats.SolidCount = nonAirTotal;
+                localStats.ExposureEstimate = exposureEstimate;
+                MeshPrepassStats = localStats;
             }
-            IsEmpty = nonAirTotal == 0;
+            finally
+            {
+                ArrayPool<bool>.Shared.Return(xSliceMarked, false);
+                ArrayPool<bool>.Shared.Return(ySliceMarked, false);
+                ArrayPool<bool>.Shared.Return(zSliceMarked, false);
+            }
             return nonAirTotal;
         }
 
@@ -391,7 +456,9 @@ namespace MVGE_GEN.Terrain
                 // neighbor opposing faces (any missing neighbor left as false)
                 NeighborNegXFaceSolidPosX, NeighborPosXFaceSolidNegX, NeighborNegYFaceSolidPosY, NeighborPosYFaceSolidNegY, NeighborNegZFaceSolidPosZ, NeighborPosZFaceSolidNegZ,
                 // uniform single-block fast path flags
-                AllOneBlockChunk, AllOneBlockBlockId);
+                AllOneBlockChunk, AllOneBlockBlockId,
+                // prepass metrics
+                MeshPrepassStats.SolidCount, MeshPrepassStats.ExposureEstimate);
         }
 
         // Per-face solidity helpers

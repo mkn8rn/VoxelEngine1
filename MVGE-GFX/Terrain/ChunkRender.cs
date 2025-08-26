@@ -83,6 +83,10 @@ namespace MVGE_GFX.Terrain
         private const byte FACE_FRONT = 1 << 4;
         private const byte FACE_BACK = 1 << 5;
 
+        // Prepass data (ALWAYS supplied by generation; no legacy scan fallback)
+        private readonly int prepassSolidCount;
+        private readonly int prepassExposureEstimate;
+
         public ChunkRender(
             ChunkData chunkData,
             Func<int, int, int, ushort> worldBlockGetter,
@@ -103,8 +107,13 @@ namespace MVGE_GFX.Terrain
             bool nNegZPosZ,
             bool nPosZNegZ,
             bool allOneBlock = false,
-            ushort allOneBlockId = 0)
+            ushort allOneBlockId = 0,
+            int prepassSolidCount = 0,
+            int prepassExposureEstimate = 0)
         {
+            // Prepass values MUST be supplied by generation phase.
+            this.prepassSolidCount = prepassSolidCount;
+            this.prepassExposureEstimate = prepassExposureEstimate;
             chunkMeta = chunkData;
             getWorldBlock = worldBlockGetter;
             this.flatBlocks = flatBlocks;
@@ -126,51 +135,15 @@ namespace MVGE_GFX.Terrain
                 return;
             }
 
-            // ------------ Unified first scan --------------
-            // We always perform a single density / exposure scan so we can choose between:
-            //  * PooledFacesRender (dense)
-            //  * SparseChunkRender (high exposure, low density, jagged)
-            //  * Legacy list two-pass (remaining cases)
-
             int voxelCount = maxX * maxY * maxZ;
-            int strideX = maxZ * maxY; // distance between x slices
-            int strideZ = maxY;        // distance between z rows
+            int solidVoxelCount = prepassSolidCount;
+            long exposureEstimate = prepassExposureEstimate;
 
+            // ------------ Path Selection Heuristics (using generation prepass) --------------
             bool pooledFeatureEnabled = FlagManager.flags.useFacePooling.GetValueOrDefault();
             int pooledVoxelThreshold = pooledFeatureEnabled ? FlagManager.flags.faceAmountToPool.GetValueOrDefault(int.MaxValue) : int.MaxValue;
-
-            int solidVoxelCount = 0;            // number of non-empty voxels
-            long exposureEstimate = 0;          // approximate visible faces (6 - 2 per shared prior neighbor)
-            bool choosePooled = false;          // decision flag for pooled path
-
-            for (int x = 0; x < maxX && !choosePooled; x++)
-            {
-                int slabBase = x * strideX;
-                for (int z = 0; z < maxZ && !choosePooled; z++)
-                {
-                    int rowBase = slabBase + z * strideZ;
-                    for (int y = 0; y < maxY; y++)
-                    {
-                        int li = rowBase + y;
-                        if (flatBlocks[li] == emptyBlock) continue;
-                        solidVoxelCount++;
-                        // pooled early threshold: once crossed we commit to pooled path for dense / large cases
-                        if (solidVoxelCount >= pooledVoxelThreshold)
-                        {
-                            choosePooled = true;
-                            break;
-                        }
-                        exposureEstimate += 6; // start with 6 faces
-                        if (x > 0 && flatBlocks[li - strideX] != emptyBlock) exposureEstimate -= 2; // shared -X
-                        if (z > 0 && flatBlocks[li - strideZ] != emptyBlock) exposureEstimate -= 2; // shared -Z
-                        if (y > 0 && flatBlocks[li - 1] != emptyBlock)      exposureEstimate -= 2; // shared -Y
-                    }
-                }
-            }
-
-            // ------------ Path Selection Heuristics --------------
-            // If pooled threshold hit -> pooled path (dense or very large chunk fill)
-            if (choosePooled && pooledFeatureEnabled)
+            bool choosePooled = pooledFeatureEnabled && solidVoxelCount >= pooledVoxelThreshold;
+            if (choosePooled)
             {
                 var pooledBuilder = new PooledFacesRender(
                     chunkWorldPosition, maxX, maxY, maxZ, emptyBlock,
@@ -204,15 +177,14 @@ namespace MVGE_GFX.Terrain
             // Heuristic thresholds (tunable; intentionally descriptive variable names)
             const float SparseDensityUpperLimit = 0.25f;          // below this we consider chunk "sparse"
             const float SparseMinAvgExposure = 3.2f;              // average exposed faces per solid to justify sparse path
-            const int   SparseAbsoluteSolidCap = 81920000;            // do not use sparse path above this solid count (avoid huge arrays)
+            const int   SparseAbsoluteSolidCap = 1 << 20;          // do not use sparse path above this solid count (avoid huge arrays)
 
-            bool sparseFeatureEnabled = true;
             bool chooseSparse = solidVoxelCount > 0 &&
                                  density < SparseDensityUpperLimit &&
                                  avgExposurePerSolid >= SparseMinAvgExposure &&
                                  solidVoxelCount <= SparseAbsoluteSolidCap;
 
-            if (chooseSparse && sparseFeatureEnabled)
+            if (chooseSparse)
             {
                 var sparseBuilder = new SparseChunkRender(
                     chunkWorldPosition,
@@ -279,7 +251,7 @@ namespace MVGE_GFX.Terrain
                     ? new IBO(indicesUShortBuffer, indicesUsed)
                     : new IBO(indicesUIntBuffer, indicesUsed);
 
-                // Return pooled buffers
+                // Null checks before returning to pool to avoid ArgumentNullException if state inconsistent
                 if (vertBuffer != null) ArrayPool<byte>.Shared.Return(vertBuffer, false);
                 if (uvBuffer != null) ArrayPool<byte>.Shared.Return(uvBuffer, false);
                 if (useUShort)
@@ -294,7 +266,7 @@ namespace MVGE_GFX.Terrain
             }
             else
             {
-                // indexFormat already decided during generation (two-pass list path)
+                // indexFormat already decided during generation (two-pass)
                 chunkVertexVBO = new VBO(chunkVertsList);
                 chunkVertexVBO.Bind();
                 chunkVAO.LinkToVAO(0, 3, VertexAttribPointerType.UnsignedByte, false, chunkVertexVBO);
