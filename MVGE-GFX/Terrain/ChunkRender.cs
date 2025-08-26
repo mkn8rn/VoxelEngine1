@@ -150,9 +150,8 @@ namespace MVGE_GFX.Terrain
             // --- Sparse path ---
             bool sparseFeatureEnabled = true;
             float avgExposurePerSolid = solidVoxelCount == 0 ? 0f : (float)exposureEstimate / solidVoxelCount;
-            const float SparseMinAvgExposure = 0.25f;     // average exposed faces per solid to justify sparse path
-            bool chooseSparse = solidVoxelCount > 0 &&
-                                 avgExposurePerSolid >= SparseMinAvgExposure;
+            const float SparseMinAvgExposure = 0.5f;     // average exposed faces per solid to justify sparse path
+            bool chooseSparse = avgExposurePerSolid >= SparseMinAvgExposure;
 
             if (chooseSparse && sparseFeatureEnabled)
             {

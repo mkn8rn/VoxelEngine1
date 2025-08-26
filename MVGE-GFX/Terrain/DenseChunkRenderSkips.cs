@@ -85,22 +85,6 @@ namespace MVGE_GFX.Terrain
             faceNegX && facePosX && faceNegY && facePosY && faceNegZ && facePosZ &&
             nNegXPosX && nPosXNegX && nNegYPosY && nPosYNegY && nNegZPosZ && nPosZNegZ;
 
-        // Determine plane emission (if plane and opposing neighbor plane both solid we skip entirely)
-        // Returns false if nothing is visible (all planes skipped)
-        private bool DetermineSingleSolidPlaneEmission(out bool emitLeft, out bool emitRight,
-                                                       out bool emitBottom, out bool emitTop,
-                                                       out bool emitBack, out bool emitFront)
-        {
-            emitLeft = !(faceNegX && nNegXPosX);
-            emitRight = !(facePosX && nPosXNegX);
-            emitBottom = !(faceNegY && nNegYPosY);
-            emitTop = !(facePosY && nPosYNegY);
-            emitBack = !(faceNegZ && nNegZPosZ);
-            emitFront = !(facePosZ && nPosZNegZ);
-            // Early if nothing visible
-            return (emitLeft || emitRight || emitBottom || emitTop || emitBack || emitFront);
-        }
-
         // BuildResult factory for empty returns
         private static BuildResult EmptyBuildResult(bool hasSingleOpaque) => new BuildResult
         {
@@ -127,8 +111,13 @@ namespace MVGE_GFX.Terrain
             return false;
         }
 
-        // Need all six neighbor planes and all set to consider occluded
-        // Returns true if fully solid chunk is also fully occluded by neighbors (and supplies empty result)
+        private static void ClearUlongsStatic(ulong[] arr, int len)
+        {
+            for (int i = 0; i < len; i++) arr[i] = 0UL;
+        }
+
+        // Simplified fully solid neighbor occlusion test (retained to satisfy existing call sites).
+        // If chunk is entirely solid and all neighbor touching planes are also fully solid, we early out.
         private bool TryFullySolidNeighborOcclusion(long solidCount, int voxelCount,
                                                      int yzWC, int xzWC, int xyWC,
                                                      int yzPlaneBits, int xzPlaneBits, int xyPlaneBits,
@@ -143,7 +132,7 @@ namespace MVGE_GFX.Terrain
                                                      out BuildResult result)
         {
             result = default;
-            if (solidCount != voxelCount) return false;
+            if (solidCount != voxelCount) return false; // only consider fully solid volume
 
             neighborLeft = ArrayPool<ulong>.Shared.Rent(yzWC); ClearUlongsStatic(neighborLeft, yzWC); PrefetchNeighborPlane(getWorldBlockFast, getWorldBlock, neighborLeft, baseWX - 1, baseWY, baseWZ, maxY, maxZ, yzWC, plane: 'X'); loadedLeft = true;
             neighborRight = ArrayPool<ulong>.Shared.Rent(yzWC); ClearUlongsStatic(neighborRight, yzWC); PrefetchNeighborPlane(getWorldBlockFast, getWorldBlock, neighborRight, baseWX + maxX, baseWY, baseWZ, maxY, maxZ, yzWC, plane: 'X'); loadedRight = true;
@@ -162,21 +151,13 @@ namespace MVGE_GFX.Terrain
             return false;
         }
 
-        private static void ClearUlongsStatic(ulong[] arr, int len)
-        {
-            for (int i = 0; i < len; i++) arr[i] = 0UL;
-        }
-
         // ----- UNIFORM SINGLE-SOLID FAST PATH -----
         private BuildResult BuildUniformSingleSolidFastPath()
         {
-            // Fully occluded early exit (all our faces + neighbor opposing faces solid)
-            if (faceNegX && facePosX && faceNegY && facePosY && faceNegZ && facePosZ &&
-                nNegXPosX && nPosXNegX && nNegYPosY && nPosYNegY && nNegZPosZ && nPosZNegZ)
+            if (IsFullyOccludedByFlags())
             {
                 return new BuildResult { UseUShort = true, HasSingleOpaque = true, VertBuffer = EMPTY_BYTES, UVBuffer = EMPTY_BYTES, IndicesUShortBuffer = EMPTY_USHORTS, IndicesUIntBuffer = null, VertBytesUsed = 0, UVBytesUsed = 0, IndicesUsed = 0 };
             }
-            // Determine which boundary planes are potentially visible (not mutually occluded by neighbor)
             bool emitLeft = !(faceNegX && nNegXPosX);
             bool emitRight = !(facePosX && nPosXNegX);
             bool emitBottom = !(faceNegY && nNegYPosY);
@@ -204,7 +185,6 @@ namespace MVGE_GFX.Terrain
             byte[] uvConcat = GetSingleSolidUVConcat(forceSingleSolidBlockId) ?? new byte[48];
             int faceIndex = 0;
 
-            // Emit boundary planes
             if (emitLeft)
             {
                 int x = 0;
