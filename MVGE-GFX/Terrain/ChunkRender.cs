@@ -289,7 +289,7 @@ namespace MVGE_GFX.Terrain
                 0);
         }
 
-        // Bounding-box aware masked two-pass generation.
+        // Bounding-box aware masked two-pass generation (list path, no ArrayPool usage for neighbor planes / masks now).
         private void GenerateFacesListFlatMaskedTwoPass_BB()
         {
             int strideX = maxZ * maxY;
@@ -337,8 +337,7 @@ namespace MVGE_GFX.Terrain
             int spanZ = maxZb - minZ + 1;
             int regionVolume = spanX * spanY * spanZ;
 
-            byte[] masks = ArrayPool<byte>.Shared.Rent(regionVolume);
-            Array.Clear(masks, 0, regionVolume);
+            byte[] masks = new byte[regionVolume];
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             int MaskIndex(int x, int y, int z) => ((x - minX) * spanZ + (z - minZ)) * spanY + (y - minY);
@@ -355,50 +354,42 @@ namespace MVGE_GFX.Terrain
             bool backVisible = !(faceNegZ && nNegZPosZ);
             bool frontVisible = !(facePosZ && nPosZNegZ);
 
-            // Neighbor plane bitsets (only allocate if bounding box touches that boundary & visibility true)
+            // Neighbor plane bitsets (allocate plain arrays now)
             ulong[] nLeft = null, nRight = null, nBottom = null, nTop = null, nBack = null, nFront = null;
             int yzBits = maxY * maxZ; int yzWC = (yzBits + 63) >> 6;
             int xzBits = maxX * maxZ; int xzWC = (xzBits + 63) >> 6;
             int xyBits = maxX * maxY; int xyWC = (xyBits + 63) >> 6;
 
-            void ReturnNeighborPlanes()
-            {
-                if (nLeft != null) ArrayPool<ulong>.Shared.Return(nLeft, false);
-                if (nRight != null) ArrayPool<ulong>.Shared.Return(nRight, false);
-                if (nBottom != null) ArrayPool<ulong>.Shared.Return(nBottom, false);
-                if (nTop != null) ArrayPool<ulong>.Shared.Return(nTop, false);
-                if (nBack != null) ArrayPool<ulong>.Shared.Return(nBack, false);
-                if (nFront != null) ArrayPool<ulong>.Shared.Return(nFront, false);
-            }
+            void ReturnNeighborPlanes() { /* no-op now */ }
 
             if (leftVisible && minX == 0)
             {
-                nLeft = ArrayPool<ulong>.Shared.Rent(yzWC); Array.Clear(nLeft, 0, yzWC);
+                nLeft = new ulong[yzWC];
                 PrefetchNeighborPlaneList(nLeft, baseWX - 1, baseWY, baseWZ, maxY, maxZ, 'X');
             }
             if (rightVisible && maxXb == maxX - 1)
             {
-                nRight = ArrayPool<ulong>.Shared.Rent(yzWC); Array.Clear(nRight, 0, yzWC);
+                nRight = new ulong[yzWC];
                 PrefetchNeighborPlaneList(nRight, baseWX + maxX, baseWY, baseWZ, maxY, maxZ, 'X');
             }
             if (bottomVisible && minY == 0)
             {
-                nBottom = ArrayPool<ulong>.Shared.Rent(xzWC); Array.Clear(nBottom, 0, xzWC);
+                nBottom = new ulong[xzWC];
                 PrefetchNeighborPlaneList(nBottom, baseWX, baseWY - 1, baseWZ, maxX, maxZ, 'Y');
             }
             if (topVisible && maxYb == maxY - 1)
             {
-                nTop = ArrayPool<ulong>.Shared.Rent(xzWC); Array.Clear(nTop, 0, xzWC);
+                nTop = new ulong[xzWC];
                 PrefetchNeighborPlaneList(nTop, baseWX, baseWY + maxY, baseWZ, maxX, maxZ, 'Y');
             }
             if (backVisible && minZ == 0)
             {
-                nBack = ArrayPool<ulong>.Shared.Rent(xyWC); Array.Clear(nBack, 0, xyWC);
+                nBack = new ulong[xyWC];
                 PrefetchNeighborPlaneList(nBack, baseWX, baseWY, baseWZ - 1, maxX, maxY, 'Z');
             }
             if (frontVisible && maxZb == maxZ - 1)
             {
-                nFront = ArrayPool<ulong>.Shared.Rent(xyWC); Array.Clear(nFront, 0, xyWC);
+                nFront = new ulong[xyWC];
                 PrefetchNeighborPlaneList(nFront, baseWX, baseWY, baseWZ + maxZ, maxX, maxY, 'Z');
             }
 
@@ -414,8 +405,8 @@ namespace MVGE_GFX.Terrain
                         int zBase = xBase + z * maxY;
                         bool chunkMinZ = z == 0;
                         bool chunkMaxZ = z == maxZ - 1;
-                        int yzBaseOffset = z * maxY; // for yz index
-                        int xzBaseOffset = x * maxZ + z; // for xz index
+                        int yzBaseOffset = z * maxY; // yz index base
+                        int xzBaseOffset = x * maxZ + z; // xz index base
                         for (int y = minY; y <= maxYb; y++)
                         {
                             int li = zBase + y;
@@ -448,7 +439,6 @@ namespace MVGE_GFX.Terrain
                 chunkUVsList = new List<byte>(0);
                 chunkIndicesList = new List<uint>(0);
                 indexFormat = IndexFormat.UInt;
-                ArrayPool<byte>.Shared.Return(masks, false);
                 return;
             }
 
@@ -480,16 +470,13 @@ namespace MVGE_GFX.Terrain
                     }
                 }
             }
-
-            ArrayPool<byte>.Shared.Return(masks, false);
         }
 
-        // Fallback full-volume masked two-pass (previous implementation) when bounding box covers whole chunk
+        // Full-volume masked two-pass (list path, no ArrayPool usage for neighbor planes / masks now)
         private void GenerateFacesListFlatMaskedTwoPass_Full()
         {
             int strideX = maxZ * maxY; int strideZ = maxY;
-            byte[] masks = ArrayPool<byte>.Shared.Rent(flatBlocks.Length);
-            Array.Clear(masks, 0, flatBlocks.Length);
+            byte[] masks = new byte[flatBlocks.Length];
             int totalFaces = 0; int baseWX = (int)chunkWorldPosition.X; int baseWY = (int)chunkWorldPosition.Y; int baseWZ = (int)chunkWorldPosition.Z;
 
             bool leftVisible = !(faceNegX && nNegXPosX);
@@ -499,28 +486,18 @@ namespace MVGE_GFX.Terrain
             bool backVisible = !(faceNegZ && nNegZPosZ);
             bool frontVisible = !(facePosZ && nPosZNegZ);
 
-            // Neighbor plane bitsets (only allocate if boundary touched & visibility true)
             ulong[] nLeft = null, nRight = null, nBottom = null, nTop = null, nBack = null, nFront = null;
             int yzBits = maxY * maxZ; int yzWC = (yzBits + 63) >> 6;
             int xzBits = maxX * maxZ; int xzWC = (xzBits + 63) >> 6;
             int xyBits = maxX * maxY; int xyWC = (xyBits + 63) >> 6;
+            void ReturnNeighborPlanes() { }
 
-            void ReturnNeighborPlanes()
-            {
-                if (nLeft != null) ArrayPool<ulong>.Shared.Return(nLeft, false);
-                if (nRight != null) ArrayPool<ulong>.Shared.Return(nRight, false);
-                if (nBottom != null) ArrayPool<ulong>.Shared.Return(nBottom, false);
-                if (nTop != null) ArrayPool<ulong>.Shared.Return(nTop, false);
-                if (nBack != null) ArrayPool<ulong>.Shared.Return(nBack, false);
-                if (nFront != null) ArrayPool<ulong>.Shared.Return(nFront, false);
-            }
-
-            if (leftVisible) { nLeft = ArrayPool<ulong>.Shared.Rent(yzWC); Array.Clear(nLeft, 0, yzWC); PrefetchNeighborPlaneList(nLeft, baseWX - 1, baseWY, baseWZ, maxY, maxZ, 'X'); }
-            if (rightVisible) { nRight = ArrayPool<ulong>.Shared.Rent(yzWC); Array.Clear(nRight, 0, yzWC); PrefetchNeighborPlaneList(nRight, baseWX + maxX, baseWY, baseWZ, maxY, maxZ, 'X'); }
-            if (bottomVisible) { nBottom = ArrayPool<ulong>.Shared.Rent(xzWC); Array.Clear(nBottom, 0, xzWC); PrefetchNeighborPlaneList(nBottom, baseWX, baseWY - 1, baseWZ, maxX, maxZ, 'Y'); }
-            if (topVisible) { nTop = ArrayPool<ulong>.Shared.Rent(xzWC); Array.Clear(nTop, 0, xzWC); PrefetchNeighborPlaneList(nTop, baseWX, baseWY + maxY, baseWZ, maxX, maxZ, 'Y'); }
-            if (backVisible) { nBack = ArrayPool<ulong>.Shared.Rent(xyWC); Array.Clear(nBack, 0, xyWC); PrefetchNeighborPlaneList(nBack, baseWX, baseWY, baseWZ - 1, maxX, maxY, 'Z'); }
-            if (frontVisible) { nFront = ArrayPool<ulong>.Shared.Rent(xyWC); Array.Clear(nFront, 0, xyWC); PrefetchNeighborPlaneList(nFront, baseWX, baseWY, baseWZ + maxZ, maxX, maxY, 'Z'); }
+            if (leftVisible) { nLeft = new ulong[yzWC]; PrefetchNeighborPlaneList(nLeft, baseWX - 1, baseWY, baseWZ, maxY, maxZ, 'X'); }
+            if (rightVisible) { nRight = new ulong[yzWC]; PrefetchNeighborPlaneList(nRight, baseWX + maxX, baseWY, baseWZ, maxY, maxZ, 'X'); }
+            if (bottomVisible) { nBottom = new ulong[xzWC]; PrefetchNeighborPlaneList(nBottom, baseWX, baseWY - 1, baseWZ, maxX, maxZ, 'Y'); }
+            if (topVisible) { nTop = new ulong[xzWC]; PrefetchNeighborPlaneList(nTop, baseWX, baseWY + maxY, baseWZ, maxX, maxZ, 'Y'); }
+            if (backVisible) { nBack = new ulong[xyWC]; PrefetchNeighborPlaneList(nBack, baseWX, baseWY, baseWZ - 1, maxX, maxY, 'Z'); }
+            if (frontVisible) { nFront = new ulong[xyWC]; PrefetchNeighborPlaneList(nFront, baseWX, baseWY, baseWZ + maxZ, maxX, maxY, 'Z'); }
 
             try
             {
@@ -552,7 +529,7 @@ namespace MVGE_GFX.Terrain
 
             if (totalFaces == 0)
             {
-                chunkVertsList = new List<byte>(0); chunkUVsList = new List<byte>(0); chunkIndicesList = new List<uint>(0); indexFormat = IndexFormat.UInt; ArrayPool<byte>.Shared.Return(masks, false); return;
+                chunkVertsList = new List<byte>(0); chunkUVsList = new List<byte>(0); chunkIndicesList = new List<uint>(0); indexFormat = IndexFormat.UInt; return;
             }
             int totalVerts = totalFaces * 4; bool useUShortIndices = totalVerts <= 65535; indexFormat = useUShortIndices ? IndexFormat.UShort : IndexFormat.UInt;
             chunkVertsList = new List<byte>(totalVerts * 3); chunkUVsList = new List<byte>(totalVerts * 2); if (useUShortIndices) chunkIndicesUShortList = new List<ushort>(totalFaces * 6); else chunkIndicesList = new List<uint>(totalFaces * 6);
@@ -575,7 +552,6 @@ namespace MVGE_GFX.Terrain
                     }
                 }
             }
-            ArrayPool<byte>.Shared.Return(masks, false);
         }
     }
 }
