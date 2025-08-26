@@ -202,16 +202,17 @@ namespace MVGE_GFX.Terrain
             float avgExposurePerSolid = solidVoxelCount == 0 ? 0f : (float)exposureEstimate / solidVoxelCount;
 
             // Heuristic thresholds (tunable; intentionally descriptive variable names)
-            const float SparseDensityUpperLimit = 0.18f;          // below this we consider chunk "sparse"
+            const float SparseDensityUpperLimit = 0.25f;          // below this we consider chunk "sparse"
             const float SparseMinAvgExposure = 3.2f;              // average exposed faces per solid to justify sparse path
-            const int   SparseAbsoluteSolidCap = 8192;            // do not use sparse path above this solid count (avoid huge arrays)
+            const int   SparseAbsoluteSolidCap = 81920000;            // do not use sparse path above this solid count (avoid huge arrays)
 
+            bool sparseFeatureEnabled = true;
             bool chooseSparse = solidVoxelCount > 0 &&
                                  density < SparseDensityUpperLimit &&
                                  avgExposurePerSolid >= SparseMinAvgExposure &&
                                  solidVoxelCount <= SparseAbsoluteSolidCap;
 
-            if (chooseSparse)
+            if (chooseSparse && sparseFeatureEnabled)
             {
                 var sparseBuilder = new SparseChunkRender(
                     chunkWorldPosition,

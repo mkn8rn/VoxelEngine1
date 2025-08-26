@@ -7,7 +7,7 @@ using MVGE_GFX.Textures;
 
 namespace MVGE_GFX.Terrain
 {
-    // Sparse-focused renderer: O(nonEmpty) face discovery.
+    // Sparse-focused renderer: O(nonEmpty) face discovery with optional microcell (8x8x8) partitioning
     internal sealed partial class SparseChunkRender
     {
         internal struct BuildResult
@@ -53,12 +53,8 @@ namespace MVGE_GFX.Terrain
             this.flatBlocks = flatBlocks;
             getWorldBlock = worldGetter;
             this.atlas = atlas;
-            this.faceNegX = faceNegX; this.facePosX = facePosX;
-            this.faceNegY = faceNegY; this.facePosY = facePosY;
-            this.faceNegZ = faceNegZ; this.facePosZ = facePosZ;
-            this.nNegXPosX = nNegXPosX; this.nPosXNegX = nPosXNegX;
-            this.nNegYPosY = nNegYPosY; this.nPosYNegY = nPosYNegY;
-            this.nNegZPosZ = nNegZPosZ; this.nPosZNegZ = nPosZNegZ;
+            this.faceNegX = faceNegX; this.facePosX = facePosX; this.faceNegY = faceNegY; this.facePosY = facePosY; this.faceNegZ = faceNegZ; this.facePosZ = facePosZ;
+            this.nNegXPosX = nNegXPosX; this.nPosXNegX = nPosXNegX; this.nNegYPosY = nNegYPosY; this.nPosYNegY = nPosYNegY; this.nNegZPosZ = nNegZPosZ; this.nPosZNegZ = nPosZNegZ;
         }
 
         private static readonly byte FACE_LEFT   = 1 << 0;
@@ -67,6 +63,10 @@ namespace MVGE_GFX.Terrain
         private static readonly byte FACE_BOTTOM = 1 << 3;
         private static readonly byte FACE_FRONT  = 1 << 4;
         private static readonly byte FACE_BACK   = 1 << 5;
+
+        private const int MICRO_CELL_SIZE = 8;              // 8x8x8 = 512 voxels
+        private const int MICRO_CELL_BITS_PER_CELL = 512;   // occupancy bits per microcell
+        private const int MICRO_CELL_WORDS = MICRO_CELL_BITS_PER_CELL / 64; // 8 ulongs
 
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
         private static void Decode(int li, int maxY, int maxZ, out int x, out int y, out int z)
@@ -82,51 +82,14 @@ namespace MVGE_GFX.Terrain
         {
             int w = idx >> 6;
             int b = idx & 63;
-            return (bits[w] & (1UL << b)) != 0;
+            return (bits[w] & (1UL << b)) != 0UL;
         }
 
         public BuildResult Build()
         {
             int voxelCount = maxX * maxY * maxZ;
-            int wordCount = (voxelCount + 63) >> 6;
-
-            // Pass 0: collect occupied indices
-            ulong[] occupancy = ArrayPool<ulong>.Shared.Rent(wordCount);
-            Array.Clear(occupancy, 0, wordCount);
-            int[] indices = ArrayPool<int>.Shared.Rent(Math.Max(16, voxelCount / 8)); // rough initial; may resize
-            ushort[] blocks = ArrayPool<ushort>.Shared.Rent(indices.Length);
-
-            int count = 0;
-            for (int li = 0; li < voxelCount; li++)
+            if (voxelCount == 0)
             {
-                ushort id = flatBlocks[li];
-                if (id == emptyBlock) continue;
-                int w = li >> 6;
-                int b = li & 63;
-                occupancy[w] |= 1UL << b;
-                if (count == indices.Length)
-                {
-                    // grow
-                    int newLen = indices.Length * 2;
-                    var newIdx = ArrayPool<int>.Shared.Rent(newLen);
-                    var newBlk = ArrayPool<ushort>.Shared.Rent(newLen);
-                    Array.Copy(indices, newIdx, count);
-                    Array.Copy(blocks, newBlk, count);
-                    ArrayPool<int>.Shared.Return(indices, false);
-                    ArrayPool<ushort>.Shared.Return(blocks, false);
-                    indices = newIdx;
-                    blocks = newBlk;
-                }
-                indices[count] = li;
-                blocks[count] = id;
-                count++;
-            }
-
-            if (count == 0)
-            {
-                ArrayPool<ulong>.Shared.Return(occupancy, false);
-                ArrayPool<int>.Shared.Return(indices, false);
-                ArrayPool<ushort>.Shared.Return(blocks, false);
                 return new BuildResult
                 {
                     UseUShort = true,
@@ -140,128 +103,205 @@ namespace MVGE_GFX.Terrain
                 };
             }
 
-            // Pass 1: face counting + mask build
-            byte[] faceMasks = ArrayPool<byte>.Shared.Rent(count);
+            // Global occupancy bitset (still used for inter-cell neighbor tests)
+            int globalWordCount = (voxelCount + 63) >> 6;
+            ulong[] globalOccupancy = ArrayPool<ulong>.Shared.Rent(globalWordCount);
+            Array.Clear(globalOccupancy, 0, globalWordCount);
+
+            // ---- Microcell grid layout ----
+            int cellsX = (maxX + MICRO_CELL_SIZE - 1) / MICRO_CELL_SIZE;
+            int cellsY = (maxY + MICRO_CELL_SIZE - 1) / MICRO_CELL_SIZE;
+            int cellsZ = (maxZ + MICRO_CELL_SIZE - 1) / MICRO_CELL_SIZE;
+            int microCellCount = cellsX * cellsY * cellsZ;
+
+            // Per-cell counts (first pass)
+            int[] cellVoxelCounts = ArrayPool<int>.Shared.Rent(microCellCount);
+            Array.Clear(cellVoxelCounts, 0, microCellCount);
+
+            // First pass – count per microcell & global occupancy bits
+            int solidTotal = 0;
+            for (int li = 0; li < voxelCount; li++)
+            {
+                ushort id = flatBlocks[li];
+                if (id == emptyBlock) continue;
+                // global occupancy
+                globalOccupancy[li >> 6] |= 1UL << (li & 63);
+                solidTotal++;
+                // cell index
+                Decode(li, maxY, maxZ, out int vx, out int vy, out int vz);
+                int cx = vx / MICRO_CELL_SIZE;
+                int cy = vy / MICRO_CELL_SIZE;
+                int cz = vz / MICRO_CELL_SIZE;
+                int cellIndex = (cx * cellsZ + cz) * cellsY + cy; // x-major, then z, then y (match flat ordering logic)
+                cellVoxelCounts[cellIndex]++;
+            }
+
+            if (solidTotal == 0)
+            {
+                CleanupEarly();
+                return new BuildResult
+                {
+                    UseUShort = true,
+                    VertBuffer = Array.Empty<byte>(),
+                    UVBuffer = Array.Empty<byte>(),
+                    IndicesUShortBuffer = Array.Empty<ushort>(),
+                    IndicesUIntBuffer = null,
+                    VertBytesUsed = 0,
+                    UVBytesUsed = 0,
+                    IndicesUsed = 0
+                };
+            }
+
+            // Build prefix sums for per-cell storage (stable ordering inside cell not required)
+            int[] cellStart = ArrayPool<int>.Shared.Rent(microCellCount + 1);
+            int running = 0;
+            for (int ci = 0; ci < microCellCount; ci++)
+            {
+                cellStart[ci] = running;
+                running += cellVoxelCounts[ci];
+            }
+            cellStart[microCellCount] = running; // sentinel
+
+            // Allocate compact contiguous arrays for occupied linear indices and block IDs (grouped by cell)
+            int[] occupiedLinearIndices = ArrayPool<int>.Shared.Rent(solidTotal);
+            ushort[] occupiedBlocks = ArrayPool<ushort>.Shared.Rent(solidTotal);
+
+            // We'll reuse cellVoxelCounts as a write cursor array: zero then increment.
+            Array.Clear(cellVoxelCounts, 0, microCellCount);
+
+            // Second pass – fill grouped arrays
+            for (int li = 0; li < voxelCount; li++)
+            {
+                if (flatBlocks[li] == emptyBlock) continue;
+                Decode(li, maxY, maxZ, out int vx, out int vy, out int vz);
+                int cx = vx / MICRO_CELL_SIZE;
+                int cy = vy / MICRO_CELL_SIZE;
+                int cz = vz / MICRO_CELL_SIZE;
+                int cellIndex = (cx * cellsZ + cz) * cellsY + cy;
+                int writePos = cellStart[cellIndex] + cellVoxelCounts[cellIndex]++;
+                occupiedLinearIndices[writePos] = li;
+                occupiedBlocks[writePos] = flatBlocks[li];
+            }
+
+            // Face mask array (aligned with occupied* arrays)
+            byte[] faceMasks = ArrayPool<byte>.Shared.Rent(solidTotal);
             int totalFaces = 0;
 
             int baseWX = (int)chunkWorldPosition.X;
             int baseWY = (int)chunkWorldPosition.Y;
             int baseWZ = (int)chunkWorldPosition.Z;
 
-            for (int i = 0; i < count; i++)
+            // Iterate microcells; within each cell process only its voxels for masks
+            for (int ci = 0; ci < microCellCount; ci++)
             {
-                int li = indices[i];
-                Decode(li, maxY, maxZ, out int x, out int y, out int z);
-                ushort block = blocks[i];
-
-                byte mask = 0;
-
-                // LEFT
-                if (x == 0)
+                int start = cellStart[ci];
+                int end = cellStart[ci + 1];
+                if (start == end) continue; // empty cell
+                for (int idx = start; idx < end; idx++)
                 {
-                    if (!(faceNegX && nNegXPosX))
+                    int li = occupiedLinearIndices[idx];
+                    Decode(li, maxY, maxZ, out int x, out int y, out int z);
+                    byte mask = 0;
+
+                    // LEFT
+                    if (x == 0)
                     {
-                        ushort nb = getWorldBlock(baseWX - 1, baseWY + y, baseWZ + z);
-                        if (nb == emptyBlock) mask |= FACE_LEFT;
+                        if (!(faceNegX && nNegXPosX))
+                        {
+                            ushort nb = getWorldBlock(baseWX - 1, baseWY + y, baseWZ + z);
+                            if (nb == emptyBlock) mask |= FACE_LEFT;
+                        }
                     }
-                }
-                else
-                {
-                    int liN = li - (maxZ * maxY);
-                    if (!BitTest(occupancy, liN)) mask |= FACE_LEFT;
-                }
-
-                // RIGHT
-                if (x == maxX - 1)
-                {
-                    if (!(facePosX && nPosXNegX))
+                    else
                     {
-                        ushort nb = getWorldBlock(baseWX + maxX, baseWY + y, baseWZ + z);
-                        if (nb == emptyBlock) mask |= FACE_RIGHT;
+                        int liN = li - (maxZ * maxY);
+                        if (!BitTest(globalOccupancy, liN)) mask |= FACE_LEFT;
                     }
-                }
-                else
-                {
-                    int liN = li + (maxZ * maxY);
-                    if (!BitTest(occupancy, liN)) mask |= FACE_RIGHT;
-                }
 
-                // BOTTOM
-                if (y == 0)
-                {
-                    if (!(faceNegY && nNegYPosY))
+                    // RIGHT
+                    if (x == maxX - 1)
                     {
-                        ushort nb = getWorldBlock(baseWX + x, baseWY - 1, baseWZ + z);
-                        if (nb == emptyBlock) mask |= FACE_BOTTOM;
+                        if (!(facePosX && nPosXNegX))
+                        {
+                            ushort nb = getWorldBlock(baseWX + maxX, baseWY + y, baseWZ + z);
+                            if (nb == emptyBlock) mask |= FACE_RIGHT;
+                        }
                     }
-                }
-                else
-                {
-                    if (!BitTest(occupancy, li - 1)) mask |= FACE_BOTTOM;
-                }
-
-                // TOP
-                if (y == maxY - 1)
-                {
-                    if (!(facePosY && nPosYNegY))
+                    else
                     {
-                        ushort nb = getWorldBlock(baseWX + x, baseWY + maxY, baseWZ + z);
-                        if (nb == emptyBlock) mask |= FACE_TOP;
+                        int liN = li + (maxZ * maxY);
+                        if (!BitTest(globalOccupancy, liN)) mask |= FACE_RIGHT;
                     }
-                }
-                else
-                {
-                    if (!BitTest(occupancy, li + 1)) mask |= FACE_TOP;
-                }
 
-                // BACK (negative Z)
-                if (z == 0)
-                {
-                    if (!(faceNegZ && nNegZPosZ))
+                    // BOTTOM
+                    if (y == 0)
                     {
-                        ushort nb = getWorldBlock(baseWX + x, baseWY + y, baseWZ - 1);
-                        if (nb == emptyBlock) mask |= FACE_BACK;
+                        if (!(faceNegY && nNegYPosY))
+                        {
+                            ushort nb = getWorldBlock(baseWX + x, baseWY - 1, baseWZ + z);
+                            if (nb == emptyBlock) mask |= FACE_BOTTOM;
+                        }
                     }
-                }
-                else
-                {
-                    int liN = li - (maxY);
-                    if (!BitTest(occupancy, liN)) mask |= FACE_BACK;
-                }
+                    else if (!BitTest(globalOccupancy, li - 1)) mask |= FACE_BOTTOM;
 
-                // FRONT (positive Z)
-                if (z == maxZ - 1)
-                {
-                    if (!(facePosZ && nPosZNegZ))
+                    // TOP
+                    if (y == maxY - 1)
                     {
-                        ushort nb = getWorldBlock(baseWX + x, baseWY + y, baseWZ + maxZ);
-                        if (nb == emptyBlock) mask |= FACE_FRONT;
+                        if (!(facePosY && nPosYNegY))
+                        {
+                            ushort nb = getWorldBlock(baseWX + x, baseWY + maxY, baseWZ + z);
+                            if (nb == emptyBlock) mask |= FACE_TOP;
+                        }
                     }
-                }
-                else
-                {
-                    int liN = li + (maxY);
-                    if (!BitTest(occupancy, liN)) mask |= FACE_FRONT;
-                }
+                    else if (!BitTest(globalOccupancy, li + 1)) mask |= FACE_TOP;
 
-                if (mask != 0)
-                {
-                    // popcount of up to 6 bits (manual small-table optional)
-                    int faces =
-                        ((mask & FACE_LEFT) != 0 ? 1 : 0) +
-                        ((mask & FACE_RIGHT) != 0 ? 1 : 0) +
-                        ((mask & FACE_TOP) != 0 ? 1 : 0) +
-                        ((mask & FACE_BOTTOM) != 0 ? 1 : 0) +
-                        ((mask & FACE_FRONT) != 0 ? 1 : 0) +
-                        ((mask & FACE_BACK) != 0 ? 1 : 0);
-                    totalFaces += faces;
+                    // BACK (negative Z)
+                    if (z == 0)
+                    {
+                        if (!(faceNegZ && nNegZPosZ))
+                        {
+                            ushort nb = getWorldBlock(baseWX + x, baseWY + y, baseWZ - 1);
+                            if (nb == emptyBlock) mask |= FACE_BACK;
+                        }
+                    }
+                    else
+                    {
+                        int liN = li - maxY;
+                        if (!BitTest(globalOccupancy, liN)) mask |= FACE_BACK;
+                    }
+
+                    // FRONT (positive Z)
+                    if (z == maxZ - 1)
+                    {
+                        if (!(facePosZ && nPosZNegZ))
+                        {
+                            ushort nb = getWorldBlock(baseWX + x, baseWY + y, baseWZ + maxZ);
+                            if (nb == emptyBlock) mask |= FACE_FRONT;
+                        }
+                    }
+                    else
+                    {
+                        int liN = li + maxY;
+                        if (!BitTest(globalOccupancy, liN)) mask |= FACE_FRONT;
+                    }
+
+                    if (mask != 0)
+                    {
+                        int faces = ((mask & FACE_LEFT) != 0 ? 1 : 0) +
+                                    ((mask & FACE_RIGHT) != 0 ? 1 : 0) +
+                                    ((mask & FACE_TOP) != 0 ? 1 : 0) +
+                                    ((mask & FACE_BOTTOM) != 0 ? 1 : 0) +
+                                    ((mask & FACE_FRONT) != 0 ? 1 : 0) +
+                                    ((mask & FACE_BACK) != 0 ? 1 : 0);
+                        totalFaces += faces;
+                    }
+                    faceMasks[idx] = mask;
                 }
-                faceMasks[i] = mask;
             }
 
             if (totalFaces == 0)
             {
-                Cleanup();
+                CleanupAll();
                 return new BuildResult
                 {
                     UseUShort = true,
@@ -277,27 +317,26 @@ namespace MVGE_GFX.Terrain
 
             int totalVerts = totalFaces * 4;
             bool useUShort = totalVerts <= 65535;
-
             byte[] vertBuf = ArrayPool<byte>.Shared.Rent(totalVerts * 3);
             byte[] uvBuf = ArrayPool<byte>.Shared.Rent(totalVerts * 2);
             ushort[] idxU16 = useUShort ? ArrayPool<ushort>.Shared.Rent(totalFaces * 6) : null;
             uint[] idxU32 = useUShort ? null : ArrayPool<uint>.Shared.Rent(totalFaces * 6);
 
             int faceIndex = 0;
-
-            // Emit
-            for (int i = 0; i < count; i++)
+            for (int ci = 0; ci < microCellCount; ci++)
             {
-                byte mask = faceMasks[i];
-                if (mask == 0) continue;
-                int li = indices[i];
-                Decode(li, maxY, maxZ, out int x, out int y, out int z);
-                ushort block = blocks[i];
-
-                Emit(mask, block, (byte)x, (byte)y, (byte)z,
-                     ref faceIndex,
-                     vertBuf, uvBuf,
-                     useUShort, idxU16, idxU32);
+                int start = cellStart[ci];
+                int end = cellStart[ci + 1];
+                if (start == end) continue;
+                for (int idx = start; idx < end; idx++)
+                {
+                    byte mask = faceMasks[idx];
+                    if (mask == 0) continue;
+                    int li = occupiedLinearIndices[idx];
+                    Decode(li, maxY, maxZ, out int x, out int y, out int z);
+                    ushort block = occupiedBlocks[idx];
+                    Emit(mask, block, (byte)x, (byte)y, (byte)z, ref faceIndex, vertBuf, uvBuf, useUShort, idxU16, idxU32);
+                }
             }
 
             var result = new BuildResult
@@ -312,14 +351,22 @@ namespace MVGE_GFX.Terrain
                 IndicesUsed = totalFaces * 6
             };
 
-            Cleanup();
+            CleanupAll();
             return result;
 
-            void Cleanup()
+            // ----- Local cleanup helpers -----
+            void CleanupEarly()
             {
-                ArrayPool<ulong>.Shared.Return(occupancy, false);
-                ArrayPool<int>.Shared.Return(indices, false);
-                ArrayPool<ushort>.Shared.Return(blocks, false);
+                ArrayPool<ulong>.Shared.Return(globalOccupancy, false);
+                ArrayPool<int>.Shared.Return(cellVoxelCounts, false);
+            }
+            void CleanupAll()
+            {
+                ArrayPool<ulong>.Shared.Return(globalOccupancy, false);
+                ArrayPool<int>.Shared.Return(cellVoxelCounts, false);
+                ArrayPool<int>.Shared.Return(cellStart, false);
+                ArrayPool<int>.Shared.Return(occupiedLinearIndices, false);
+                ArrayPool<ushort>.Shared.Return(occupiedBlocks, false);
                 ArrayPool<byte>.Shared.Return(faceMasks, false);
             }
         }
@@ -333,7 +380,6 @@ namespace MVGE_GFX.Terrain
                           ushort[] indicesUShortBuffer,
                           uint[] indicesUIntBuffer)
         {
-            // Emit each set face in fixed order to match existing orientation logic
             if ((mask & FACE_LEFT) != 0)  WriteFace(block, Faces.LEFT,   x, y, z, ref faceIndex, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
             if ((mask & FACE_RIGHT) != 0) WriteFace(block, Faces.RIGHT,  x, y, z, ref faceIndex, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
             if ((mask & FACE_TOP) != 0)   WriteFace(block, Faces.TOP,    x, y, z, ref faceIndex, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
