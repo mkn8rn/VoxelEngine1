@@ -25,7 +25,7 @@ namespace MVGE_GFX.Terrain
         private List<uint> chunkIndicesList;
         private List<ushort> chunkIndicesUShortList;
 
-        // Pooled buffers for large chunks
+        // Pooled / sparse buffers (shared handling path)
         private byte[] vertBuffer;
         private byte[] uvBuffer;
         private uint[] indicesUIntBuffer;
@@ -34,7 +34,8 @@ namespace MVGE_GFX.Terrain
         private int uvBytesUsed;
         private int indicesUsed;
         private bool useUShort;
-        private bool usedPooling;
+        private bool usedPooling;   // true when PooledFacesRender chosen
+        private bool usedSparse;    // true when SparseChunkRender chosen
 
         private VAO chunkVAO;
         private VBO chunkVertexVBO;
@@ -117,7 +118,7 @@ namespace MVGE_GFX.Terrain
 
         private void GenerateFaces()
         {
-            // if enclosed (all boundary voxels solid and neighbors sealing) skip mesh generation entirely
+            // Full enclosure early exit (cheap flags + boundary scans inside helper)
             if (CheckFullyOccluded(maxX, maxY, maxZ))
             {
                 fullyOccluded = true;
@@ -125,73 +126,121 @@ namespace MVGE_GFX.Terrain
                 return;
             }
 
-            bool usePooling = false;
-            int nonEmpty = 0; // total solid voxels
-            long faceEstimate = 0; // approximate visible face count (only valid if we finish full pass without triggering classic threshold)
+            // ------------ Unified first scan --------------
+            // We always perform a single density / exposure scan so we can choose between:
+            //  * PooledFacesRender (dense)
+            //  * SparseChunkRender (high exposure, low density, jagged)
+            //  * Legacy list two-pass (remaining cases)
 
-            if (FlagManager.flags.useFacePooling.GetValueOrDefault())
+            int voxelCount = maxX * maxY * maxZ;
+            int strideX = maxZ * maxY; // distance between x slices
+            int strideZ = maxY;        // distance between z rows
+
+            bool pooledFeatureEnabled = FlagManager.flags.useFacePooling.GetValueOrDefault();
+            int pooledVoxelThreshold = pooledFeatureEnabled ? FlagManager.flags.faceAmountToPool.GetValueOrDefault(int.MaxValue) : int.MaxValue;
+
+            int solidVoxelCount = 0;            // number of non-empty voxels
+            long exposureEstimate = 0;          // approximate visible faces (6 - 2 per shared prior neighbor)
+            bool choosePooled = false;          // decision flag for pooled path
+
+            for (int x = 0; x < maxX && !choosePooled; x++)
             {
-                int threshold = FlagManager.flags.faceAmountToPool.GetValueOrDefault(int.MaxValue);
-                int strideX = maxZ * maxY; // distance between x slices
-                int strideZ = maxY;         // distance between z rows
-
-                // Single unified pass: counts solids & (unless early threshold trigger) accumulates face estimate.
-                for (int x = 0; x < maxX && !usePooling; x++)
+                int slabBase = x * strideX;
+                for (int z = 0; z < maxZ && !choosePooled; z++)
                 {
-                    int slabBase = x * strideX;
-                    for (int z = 0; z < maxZ && !usePooling; z++)
+                    int rowBase = slabBase + z * strideZ;
+                    for (int y = 0; y < maxY; y++)
                     {
-                        int rowBase = slabBase + z * strideZ;
-                        for (int y = 0; y < maxY; y++)
+                        int li = rowBase + y;
+                        if (flatBlocks[li] == emptyBlock) continue;
+                        solidVoxelCount++;
+                        // pooled early threshold: once crossed we commit to pooled path for dense / large cases
+                        if (solidVoxelCount >= pooledVoxelThreshold)
                         {
-                            int li = rowBase + y;
-                            if (flatBlocks[li] == emptyBlock) continue;
-                            nonEmpty++;
-                            // Classic threshold check – if reached we select pooled path & abandon face estimate refinement.
-                            if (nonEmpty >= threshold)
-                            {
-                                usePooling = true;
-                                break;
-                            }
-                            // Exposure estimate: add 6, subtract 2 per previously visited solid neighbor (x-1, y-1, z-1)
-                            faceEstimate += 6;
-                            if (x > 0 && flatBlocks[li - strideX] != emptyBlock) faceEstimate -= 2; // -X shared pair
-                            if (z > 0 && flatBlocks[li - strideZ] != emptyBlock) faceEstimate -= 2; // -Z shared pair
-                            if (y > 0 && flatBlocks[li - 1] != emptyBlock) faceEstimate -= 2;       // -Y shared pair
+                            choosePooled = true;
+                            break;
                         }
+                        exposureEstimate += 6; // start with 6 faces
+                        if (x > 0 && flatBlocks[li - strideX] != emptyBlock) exposureEstimate -= 2; // shared -X
+                        if (z > 0 && flatBlocks[li - strideZ] != emptyBlock) exposureEstimate -= 2; // shared -Z
+                        if (y > 0 && flatBlocks[li - 1] != emptyBlock)      exposureEstimate -= 2; // shared -Y
                     }
                 }
             }
 
-            if (usePooling)
+            // ------------ Path Selection Heuristics --------------
+            // If pooled threshold hit -> pooled path (dense or very large chunk fill)
+            if (choosePooled && pooledFeatureEnabled)
             {
-                var builder = new PooledFacesRender(
+                var pooledBuilder = new PooledFacesRender(
                     chunkWorldPosition, maxX, maxY, maxZ, emptyBlock,
                     getWorldBlock, null, null, terrainTextureAtlas, flatBlocks,
                     faceNegX, facePosX, faceNegY, facePosY, faceNegZ, facePosZ,
                     nNegXPosX, nPosXNegX, nNegYPosY, nPosYNegY, nNegZPosZ, nPosZNegZ,
                     allOneBlock, allOneBlockId);
-                var res = builder.Build();
+                var pooledResult = pooledBuilder.Build();
                 usedPooling = true;
-                useUShort = res.UseUShort;
-                vertBuffer = res.VertBuffer; uvBuffer = res.UVBuffer;
-                indicesUIntBuffer = res.IndicesUIntBuffer; indicesUShortBuffer = res.IndicesUShortBuffer;
-                vertBytesUsed = res.VertBytesUsed; uvBytesUsed = res.UVBytesUsed; indicesUsed = res.IndicesUsed;
+                useUShort = pooledResult.UseUShort;
+                vertBuffer = pooledResult.VertBuffer; uvBuffer = pooledResult.UVBuffer;
+                indicesUIntBuffer = pooledResult.IndicesUIntBuffer; indicesUShortBuffer = pooledResult.IndicesUShortBuffer;
+                vertBytesUsed = pooledResult.VertBytesUsed; uvBytesUsed = pooledResult.UVBytesUsed; indicesUsed = pooledResult.IndicesUsed;
                 indexFormat = useUShort ? IndexFormat.UShort : IndexFormat.UInt;
                 ReturnFlat();
+                return;
             }
-            else
+
+            // Uniform single-block shortcut still beats sparse/list overhead
+            if (allOneBlock)
             {
-                // If we are in list mode but the chunk is uniform, we can still exploit a simpler path by building faces directly.
-                if (allOneBlock)
-                {
-                    GenerateUniformFacesList();
-                    ReturnFlat();
-                    return;
-                }
-                GenerateFacesListMaskedTwoPass();
+                GenerateUniformFacesList();
                 ReturnFlat();
+                return;
             }
+
+            // Compute density & average exposure per solid voxel for sparse heuristic
+            float density = solidVoxelCount == 0 ? 0f : (float)solidVoxelCount / voxelCount;
+            float avgExposurePerSolid = solidVoxelCount == 0 ? 0f : (float)exposureEstimate / solidVoxelCount;
+
+            // Heuristic thresholds (tunable; intentionally descriptive variable names)
+            const float SparseDensityUpperLimit = 0.18f;          // below this we consider chunk "sparse"
+            const float SparseMinAvgExposure = 3.2f;              // average exposed faces per solid to justify sparse path
+            const int   SparseAbsoluteSolidCap = 8192;            // do not use sparse path above this solid count (avoid huge arrays)
+
+            bool chooseSparse = solidVoxelCount > 0 &&
+                                 density < SparseDensityUpperLimit &&
+                                 avgExposurePerSolid >= SparseMinAvgExposure &&
+                                 solidVoxelCount <= SparseAbsoluteSolidCap;
+
+            if (chooseSparse)
+            {
+                var sparseBuilder = new SparseChunkRender(
+                    chunkWorldPosition,
+                    maxX, maxY, maxZ,
+                    emptyBlock,
+                    flatBlocks,
+                    getWorldBlock,
+                    terrainTextureAtlas,
+                    faceNegX, facePosX,
+                    faceNegY, facePosY,
+                    faceNegZ, facePosZ,
+                    nNegXPosX, nPosXNegX,
+                    nNegYPosY, nPosYNegY,
+                    nNegZPosZ, nPosZNegZ);
+
+                var sparseResult = sparseBuilder.Build();
+                usedSparse = true;
+                useUShort = sparseResult.UseUShort;
+                vertBuffer = sparseResult.VertBuffer; uvBuffer = sparseResult.UVBuffer;
+                indicesUIntBuffer = sparseResult.IndicesUIntBuffer; indicesUShortBuffer = sparseResult.IndicesUShortBuffer;
+                vertBytesUsed = sparseResult.VertBytesUsed; uvBytesUsed = sparseResult.UVBytesUsed; indicesUsed = sparseResult.IndicesUsed;
+                indexFormat = useUShort ? IndexFormat.UShort : IndexFormat.UInt;
+                ReturnFlat();
+                return;
+            }
+
+            // Fallback: legacy masked two-pass list builder (handles mid-density irregular cases)
+            GenerateFacesListMaskedTwoPass();
+            ReturnFlat();
         }
         public void Build()
         {
@@ -214,8 +263,9 @@ namespace MVGE_GFX.Terrain
             chunkVAO = new VAO();
             chunkVAO.Bind();
 
-            if (usedPooling)
+            if (usedPooling || usedSparse)
             {
+                // Shared upload path for pooled & sparse builders
                 chunkVertexVBO = new VBO(vertBuffer, vertBytesUsed);
                 chunkVertexVBO.Bind();
                 chunkVAO.LinkToVAO(0, 3, VertexAttribPointerType.UnsignedByte, false, chunkVertexVBO);
@@ -228,7 +278,7 @@ namespace MVGE_GFX.Terrain
                     ? new IBO(indicesUShortBuffer, indicesUsed)
                     : new IBO(indicesUIntBuffer, indicesUsed);
 
-                // Null checks before returning to pool to avoid ArgumentNullException if state inconsistent
+                // Return pooled buffers
                 if (vertBuffer != null) ArrayPool<byte>.Shared.Return(vertBuffer, false);
                 if (uvBuffer != null) ArrayPool<byte>.Shared.Return(uvBuffer, false);
                 if (useUShort)
@@ -243,7 +293,7 @@ namespace MVGE_GFX.Terrain
             }
             else
             {
-                // indexFormat already decided during generation (two-pass)
+                // indexFormat already decided during generation (two-pass list path)
                 chunkVertexVBO = new VBO(chunkVertsList);
                 chunkVertexVBO.Bind();
                 chunkVAO.LinkToVAO(0, 3, VertexAttribPointerType.UnsignedByte, false, chunkVertexVBO);
@@ -284,7 +334,7 @@ namespace MVGE_GFX.Terrain
             GL.DrawElements(
                 PrimitiveType.Triangles,
                 count,
-                (usedPooling && useUShort) || (!usedPooling && indexFormat == IndexFormat.UShort)
+                (usedPooling || usedSparse) && useUShort || (!usedPooling && !usedSparse && indexFormat == IndexFormat.UShort)
                     ? DrawElementsType.UnsignedShort
                     : DrawElementsType.UnsignedInt,
                 0);
