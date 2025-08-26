@@ -51,6 +51,37 @@ namespace MVGE_GFX.Terrain
         // Heuristic threshold
         private const float IDENTICAL_SLAB_FILL_THRESHOLD = 0.70f; // 70%
 
+        // ----- Thread local plane bitset pool (yz/xz/xy plane sized) -----
+        // These are small compared to full slab arrays; pooling per thread reduces contention.
+        [ThreadStatic] private static Dictionary<int, Stack<ulong[]>> tlPlanePools;
+        private static ulong[] TLPlaneRent(int len)
+        {
+            var pools = tlPlanePools;
+            if (pools != null && pools.TryGetValue(len, out var stack) && stack.Count > 0)
+            {
+                var arr = stack.Pop();
+                Array.Clear(arr, 0, arr.Length);
+                return arr;
+            }
+            return new ulong[len];
+        }
+        private static void TLPlaneReturn(ulong[] arr)
+        {
+            if (arr == null) return;
+            var pools = tlPlanePools;
+            if (pools == null)
+            {
+                pools = new Dictionary<int, Stack<ulong[]>>(4);
+                tlPlanePools = pools;
+            }
+            if (!pools.TryGetValue(arr.Length, out var stack))
+            {
+                stack = new Stack<ulong[]>(4);
+                pools[arr.Length] = stack;
+            }
+            stack.Push(arr);
+        }
+
         public PooledFacesRender(Vector3 chunkWorldPosition,
                                  int maxX, int maxY, int maxZ,
                                  ushort emptyBlock,
@@ -117,18 +148,19 @@ namespace MVGE_GFX.Terrain
             bool[] ySlabNonEmpty = ArrayPool<bool>.Shared.Rent(maxY);
             bool[] zSlabNonEmpty = ArrayPool<bool>.Shared.Rent(maxZ);
 
-            static void ClearUlongs(ulong[] arr, int len) { for (int i = 0; i < len; i++) arr[i] = 0UL; }
-            static void ClearBools(bool[] arr, int len) { for (int i = 0; i < len; i++) arr[i] = false; }
-            ClearUlongs(xSlabs, maxX * yzWC);
-            ClearUlongs(ySlabs, maxY * xzWC);
-            ClearUlongs(zSlabs, maxZ * xyWC);
-            ClearBools(xSlabNonEmpty, maxX);
-            ClearBools(ySlabNonEmpty, maxY);
-            ClearBools(zSlabNonEmpty, maxZ);
+            // Replace manual clears with Array.Clear for potential vectorized zeroing
+            Array.Clear(xSlabs, 0, maxX * yzWC);
+            Array.Clear(ySlabs, 0, maxY * xzWC);
+            Array.Clear(zSlabs, 0, maxZ * xyWC);
+            Array.Clear(xSlabNonEmpty, 0, maxX);
+            Array.Clear(ySlabNonEmpty, 0, maxY);
+            Array.Clear(zSlabNonEmpty, 0, maxZ);
 
             // Neighbor planes (lazy). We allocate & populate only when required by a boundary face.
             ulong[] neighborLeft = null, neighborRight = null, neighborBottom = null, neighborTop = null, neighborBack = null, neighborFront = null;
             bool loadedLeft = false, loadedRight = false, loadedBottom = false, loadedTop = false, loadedBack = false, loadedFront = false;
+            // Track if neighbor planes came from thread-local pool (vs ArrayPool in another partial path)
+            bool leftFromTL = false, rightFromTL = false, bottomFromTL = false, topFromTL = false, backFromTL = false, frontFromTL = false;
 
             bool haveSolid = false; bool detectSingleSolid = true; ushort singleSolidId = 0;
             long solidCount = 0; int xNonEmptyCount = 0, yNonEmptyCount = 0, zNonEmptyCount = 0;
@@ -201,12 +233,12 @@ namespace MVGE_GFX.Terrain
                     return fullySolidOccluded;
                 }
 
-                // Helpers to lazily load needed neighbor plane for boundary tests
-                ulong[] GetNeighbor(ref ulong[] arr, ref bool loaded, int wc, int dimA, int dimB, char plane, int ox, int oy, int oz)
+                // Helpers to lazily load needed neighbor plane for boundary tests (explicit reorder to avoid allocation when cur==0)
+                ulong[] GetNeighbor(ref ulong[] arr, ref bool loaded, ref bool fromTL, int wc, int dimA, int dimB, char plane, int ox, int oy, int oz)
                 {
                     if (loaded) return arr;
-                    arr = ArrayPool<ulong>.Shared.Rent(wc);
-                    ClearUlongs(arr, wc);
+                    arr = TLPlaneRent(wc); // thread-local rent
+                    fromTL = true;
                     PrefetchNeighborPlane(getWorldBlockFast, getWorldBlock, arr, ox, oy, oz, dimA, dimB, wc, plane);
                     loaded = true;
                     return arr;
@@ -269,26 +301,34 @@ namespace MVGE_GFX.Terrain
                     int curOff = x * yzWC; int prevOff = (x - 1) * yzWC; int nextOff = (x + 1) * yzWC;
                     for (int w = 0; w < yzWC; w++)
                     {
-                        ulong cur = xSlabs[curOff + w]; if (cur == 0) continue;
-                        if (!skipLeft)
+                        ulong cur = xSlabs[curOff + w]; if (cur == 0) continue; // skip neighbor load entirely when empty
+                        if (!skipLeft && !(x == 0 && occludeLeft))
                         {
-                            if (!(x == 0 && occludeLeft))
+                            ulong leftBits;
+                            if (x == 0)
                             {
-                                ulong leftBits = (x == 0)
-                                    ? (cur & ~GetNeighbor(ref neighborLeft, ref loadedLeft, yzWC, maxY, maxZ, 'X', baseWX - 1, baseWY, baseWZ)[w])
-                                    : (cur & ~xSlabs[prevOff + w]);
-                                if (leftBits != 0) totalFaces += BitOperations.PopCount(leftBits);
+                                var nl = GetNeighbor(ref neighborLeft, ref loadedLeft, ref leftFromTL, yzWC, maxY, maxZ, 'X', baseWX - 1, baseWY, baseWZ);
+                                leftBits = cur & ~nl[w];
                             }
+                            else
+                            {
+                                leftBits = cur & ~xSlabs[prevOff + w];
+                            }
+                            if (leftBits != 0) totalFaces += BitOperations.PopCount(leftBits);
                         }
-                        if (!skipRight)
+                        if (!skipRight && !(x == maxX - 1 && occludeRight))
                         {
-                            if (!(x == maxX - 1 && occludeRight))
+                            ulong rightBits;
+                            if (x == maxX - 1)
                             {
-                                ulong rightBits = (x == maxX - 1)
-                                    ? (cur & ~GetNeighbor(ref neighborRight, ref loadedRight, yzWC, maxY, maxZ, 'X', baseWX + maxX, baseWY, baseWZ)[w])
-                                    : (cur & ~xSlabs[nextOff + w]);
-                                if (rightBits != 0) totalFaces += BitOperations.PopCount(rightBits);
+                                var nr = GetNeighbor(ref neighborRight, ref loadedRight, ref rightFromTL, yzWC, maxY, maxZ, 'X', baseWX + maxX, baseWY, baseWZ);
+                                rightBits = cur & ~nr[w];
                             }
+                            else
+                            {
+                                rightBits = cur & ~xSlabs[nextOff + w];
+                            }
+                            if (rightBits != 0) totalFaces += BitOperations.PopCount(rightBits);
                         }
                     }
                 }
@@ -302,25 +342,33 @@ namespace MVGE_GFX.Terrain
                     for (int w = 0; w < xzWC; w++)
                     {
                         ulong cur = ySlabs[curOff + w]; if (cur == 0) continue;
-                        if (!skipBottom)
+                        if (!skipBottom && !(y == 0 && occludeBottom))
                         {
-                            if (!(y == 0 && occludeBottom))
+                            ulong bottomBits;
+                            if (y == 0)
                             {
-                                ulong bottomBits = (y == 0)
-                                    ? (cur & ~GetNeighbor(ref neighborBottom, ref loadedBottom, xzWC, maxX, maxZ, 'Y', baseWX, baseWY - 1, baseWZ)[w])
-                                    : (cur & ~ySlabs[prevOff + w]);
-                                if (bottomBits != 0) totalFaces += BitOperations.PopCount(bottomBits);
+                                var nb = GetNeighbor(ref neighborBottom, ref loadedBottom, ref bottomFromTL, xzWC, maxX, maxZ, 'Y', baseWX, baseWY - 1, baseWZ);
+                                bottomBits = cur & ~nb[w];
                             }
+                            else
+                            {
+                                bottomBits = cur & ~ySlabs[prevOff + w];
+                            }
+                            if (bottomBits != 0) totalFaces += BitOperations.PopCount(bottomBits);
                         }
-                        if (!skipTop)
+                        if (!skipTop && !(y == maxY - 1 && occludeTop))
                         {
-                            if (!(y == maxY - 1 && occludeTop))
+                            ulong topBits;
+                            if (y == maxY - 1)
                             {
-                                ulong topBits = (y == maxY - 1)
-                                    ? (cur & ~GetNeighbor(ref neighborTop, ref loadedTop, xzWC, maxX, maxZ, 'Y', baseWX, baseWY + maxY, baseWZ)[w])
-                                    : (cur & ~ySlabs[nextOff + w]);
-                                if (topBits != 0) totalFaces += BitOperations.PopCount(topBits);
+                                var nt = GetNeighbor(ref neighborTop, ref loadedTop, ref topFromTL, xzWC, maxX, maxZ, 'Y', baseWX, baseWY + maxY, baseWZ);
+                                topBits = cur & ~nt[w];
                             }
+                            else
+                            {
+                                topBits = cur & ~ySlabs[nextOff + w];
+                            }
+                            if (topBits != 0) totalFaces += BitOperations.PopCount(topBits);
                         }
                     }
                 }
@@ -334,25 +382,33 @@ namespace MVGE_GFX.Terrain
                     for (int w = 0; w < xyWC; w++)
                     {
                         ulong cur = zSlabs[curOff + w]; if (cur == 0) continue;
-                        if (!skipBack)
+                        if (!skipBack && !(z == 0 && occludeBack))
                         {
-                            if (!(z == 0 && occludeBack))
+                            ulong backBits;
+                            if (z == 0)
                             {
-                                ulong backBits = (z == 0)
-                                    ? (cur & ~GetNeighbor(ref neighborBack, ref loadedBack, xyWC, maxX, maxY, 'Z', baseWX, baseWY, baseWZ - 1)[w])
-                                    : (cur & ~zSlabs[prevOff + w]);
-                                if (backBits != 0) totalFaces += BitOperations.PopCount(backBits);
+                                var nbk = GetNeighbor(ref neighborBack, ref loadedBack, ref backFromTL, xyWC, maxX, maxY, 'Z', baseWX, baseWY, baseWZ - 1);
+                                backBits = cur & ~nbk[w];
                             }
+                            else
+                            {
+                                backBits = cur & ~zSlabs[prevOff + w];
+                            }
+                            if (backBits != 0) totalFaces += BitOperations.PopCount(backBits);
                         }
-                        if (!skipFront)
+                        if (!skipFront && !(z == maxZ - 1 && occludeFront))
                         {
-                            if (!(z == maxZ - 1 && occludeFront))
+                            ulong frontBits;
+                            if (z == maxZ - 1)
                             {
-                                ulong frontBits = (z == maxZ - 1)
-                                    ? (cur & ~GetNeighbor(ref neighborFront, ref loadedFront, xyWC, maxX, maxY, 'Z', baseWX, baseWY, baseWZ + maxZ)[w])
-                                    : (cur & ~zSlabs[nextOff + w]);
-                                if (frontBits != 0) totalFaces += BitOperations.PopCount(frontBits);
+                                var nf = GetNeighbor(ref neighborFront, ref loadedFront, ref frontFromTL, xyWC, maxX, maxY, 'Z', baseWX, baseWY, baseWZ + maxZ);
+                                frontBits = cur & ~nf[w];
                             }
+                            else
+                            {
+                                frontBits = cur & ~zSlabs[nextOff + w];
+                            }
+                            if (frontBits != 0) totalFaces += BitOperations.PopCount(frontBits);
                         }
                     }
                 }
@@ -380,36 +436,30 @@ namespace MVGE_GFX.Terrain
                         for (int w = 0; w < yzWC; w++)
                         {
                             ulong cur = xSlabs[curOff + w]; if (cur == 0) continue;
-                            if (!skipLeft)
+                            if (!skipLeft && !(x == 0 && occludeLeft))
                             {
-                                if (!(x == 0 && occludeLeft))
+                                ulong leftBits = (x == 0) ? (cur & ~neighborLeft[w]) : (cur & ~xSlabs[prevOff + w]);
+                                ulong bits = leftBits;
+                                while (bits != 0)
                                 {
-                                    ulong leftBits = (x == 0) ? (cur & ~neighborLeft[w]) : (cur & ~xSlabs[prevOff + w]);
-                                    ulong bits = leftBits;
-                                    while (bits != 0)
-                                    {
-                                        int t = BitOperations.TrailingZeroCount(bits);
-                                        int yzIndex = (w << 6) + t; if (yzIndex >= yzPlaneBits) break;
-                                        int z = yzIndex / maxY; int y = yzIndex % maxY;
-                                        WriteFaceSingle(Faces.LEFT, (byte)x, (byte)y, (byte)z, ref faceIndex, singleSolidUVConcat, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
-                                        bits &= bits - 1;
-                                    }
+                                    int t = BitOperations.TrailingZeroCount(bits);
+                                    int yzIndex = (w << 6) + t; if (yzIndex >= yzPlaneBits) break;
+                                    int z = yzIndex / maxY; int y = yzIndex % maxY;
+                                    WriteFaceSingle(Faces.LEFT, (byte)x, (byte)y, (byte)z, ref faceIndex, singleSolidUVConcat, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
+                                    bits &= bits - 1;
                                 }
                             }
-                            if (!skipRight)
+                            if (!skipRight && !(x == maxX - 1 && occludeRight))
                             {
-                                if (!(x == maxX - 1 && occludeRight))
+                                ulong rightBits = (x == maxX - 1) ? (cur & ~neighborRight[w]) : (cur & ~xSlabs[nextOff + w]);
+                                ulong bits = rightBits;
+                                while (bits != 0)
                                 {
-                                    ulong rightBits = (x == maxX - 1) ? (cur & ~neighborRight[w]) : (cur & ~xSlabs[nextOff + w]);
-                                    ulong bits = rightBits;
-                                    while (bits != 0)
-                                    {
-                                        int t = BitOperations.TrailingZeroCount(bits);
-                                        int yzIndex = (w << 6) + t; if (yzIndex >= yzPlaneBits) break;
-                                        int z = yzIndex / maxY; int y = yzIndex % maxY;
-                                        WriteFaceSingle(Faces.RIGHT, (byte)x, (byte)y, (byte)z, ref faceIndex, singleSolidUVConcat, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
-                                        bits &= bits - 1;
-                                    }
+                                    int t = BitOperations.TrailingZeroCount(bits);
+                                    int yzIndex = (w << 6) + t; if (yzIndex >= yzPlaneBits) break;
+                                    int z = yzIndex / maxY; int y = yzIndex % maxY;
+                                    WriteFaceSingle(Faces.RIGHT, (byte)x, (byte)y, (byte)z, ref faceIndex, singleSolidUVConcat, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
+                                    bits &= bits - 1;
                                 }
                             }
                         }
@@ -424,34 +474,28 @@ namespace MVGE_GFX.Terrain
                         for (int w = 0; w < xzWC; w++)
                         {
                             ulong cur = ySlabs[curOff + w]; if (cur == 0) continue;
-                            if (!skipBottom)
+                            if (!skipBottom && !(y == 0 && occludeBottom))
                             {
-                                if (!(y == 0 && occludeBottom))
+                                ulong bottomBits = (y == 0) ? (cur & ~neighborBottom[w]) : (cur & ~ySlabs[prevOff + w]);
+                                ulong bits = bottomBits; while (bits != 0)
                                 {
-                                    ulong bottomBits = (y == 0) ? (cur & ~neighborBottom[w]) : (cur & ~ySlabs[prevOff + w]);
-                                    ulong bits = bottomBits; while (bits != 0)
-                                    {
-                                        int t = BitOperations.TrailingZeroCount(bits);
-                                        int xzIndex = (w << 6) + t; if (xzIndex >= xzPlaneBits) break;
-                                        int x2 = xzIndex / maxZ; int z2 = xzIndex % maxZ;
-                                        WriteFaceSingle(Faces.BOTTOM, (byte)x2, (byte)y, (byte)z2, ref faceIndex, singleSolidUVConcat, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
-                                        bits &= bits - 1;
-                                    }
+                                    int t = BitOperations.TrailingZeroCount(bits);
+                                    int xzIndex = (w << 6) + t; if (xzIndex >= xzPlaneBits) break;
+                                    int x2 = xzIndex / maxZ; int z2 = xzIndex % maxZ;
+                                    WriteFaceSingle(Faces.BOTTOM, (byte)x2, (byte)y, (byte)z2, ref faceIndex, singleSolidUVConcat, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
+                                    bits &= bits - 1;
                                 }
                             }
-                            if (!skipTop)
+                            if (!skipTop && !(y == maxY - 1 && occludeTop))
                             {
-                                if (!(y == maxY - 1 && occludeTop))
+                                ulong topBits = (y == maxY - 1) ? (cur & ~neighborTop[w]) : (cur & ~ySlabs[nextOff + w]);
+                                ulong bits = topBits; while (bits != 0)
                                 {
-                                    ulong topBits = (y == maxY - 1) ? (cur & ~neighborTop[w]) : (cur & ~ySlabs[nextOff + w]);
-                                    ulong bits = topBits; while (bits != 0)
-                                    {
-                                        int t = BitOperations.TrailingZeroCount(bits);
-                                        int xzIndex = (w << 6) + t; if (xzIndex >= xzPlaneBits) break;
-                                        int x2 = xzIndex / maxZ; int z2 = xzIndex % maxZ;
-                                        WriteFaceSingle(Faces.TOP, (byte)x2, (byte)y, (byte)z2, ref faceIndex, singleSolidUVConcat, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
-                                        bits &= bits - 1;
-                                    }
+                                    int t = BitOperations.TrailingZeroCount(bits);
+                                    int xzIndex = (w << 6) + t; if (xzIndex >= xzPlaneBits) break;
+                                    int x2 = xzIndex / maxZ; int z2 = xzIndex % maxZ;
+                                    WriteFaceSingle(Faces.TOP, (byte)x2, (byte)y, (byte)z2, ref faceIndex, singleSolidUVConcat, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
+                                    bits &= bits - 1;
                                 }
                             }
                         }
@@ -466,34 +510,28 @@ namespace MVGE_GFX.Terrain
                         for (int w = 0; w < xyWC; w++)
                         {
                             ulong cur = zSlabs[curOff + w]; if (cur == 0) continue;
-                            if (!skipBack)
+                            if (!skipBack && !(z == 0 && occludeBack))
                             {
-                                if (!(z == 0 && occludeBack))
+                                ulong backBits = (z == 0) ? (cur & ~neighborBack[w]) : (cur & ~zSlabs[prevOff + w]);
+                                ulong bits = backBits; while (bits != 0)
                                 {
-                                    ulong backBits = (z == 0) ? (cur & ~neighborBack[w]) : (cur & ~zSlabs[prevOff + w]);
-                                    ulong bits = backBits; while (bits != 0)
-                                    {
-                                        int t = BitOperations.TrailingZeroCount(bits);
-                                        int xyIndex = (w << 6) + t; if (xyIndex >= xyPlaneBits) break;
-                                        int x2 = xyIndex / maxY; int y2 = xyIndex % maxY; // int li = LocalIndex(x2, y2, z, maxY, maxZ); block id not needed for uniform UVs
-                                        WriteFaceSingle(Faces.BACK, (byte)x2, (byte)y2, (byte)z, ref faceIndex, singleSolidUVConcat, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
-                                        bits &= bits - 1;
-                                    }
+                                    int t = BitOperations.TrailingZeroCount(bits);
+                                    int xyIndex = (w << 6) + t; if (xyIndex >= xyPlaneBits) break;
+                                    int x2 = xyIndex / maxY; int y2 = xyIndex % maxY; // int li = LocalIndex(x2, y2, z, maxY, maxZ); block id not needed for uniform UVs
+                                    WriteFaceSingle(Faces.BACK, (byte)x2, (byte)y2, (byte)z, ref faceIndex, singleSolidUVConcat, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
+                                    bits &= bits - 1;
                                 }
                             }
-                            if (!skipFront)
+                            if (!skipFront && !(z == maxZ - 1 && occludeFront))
                             {
-                                if (!(z == maxZ - 1 && occludeFront))
+                                ulong frontBits = (z == maxZ - 1) ? (cur & ~neighborFront[w]) : (cur & ~zSlabs[nextOff + w]);
+                                ulong bits = frontBits; while (bits != 0)
                                 {
-                                    ulong frontBits = (z == maxZ - 1) ? (cur & ~neighborFront[w]) : (cur & ~zSlabs[nextOff + w]);
-                                    ulong bits = frontBits; while (bits != 0)
-                                    {
-                                        int t = BitOperations.TrailingZeroCount(bits);
-                                        int xyIndex = (w << 6) + t; if (xyIndex >= xyPlaneBits) break;
-                                        int x2 = xyIndex / maxY; int y2 = xyIndex % maxY; // int li = LocalIndex(x2, y2, z, maxY, maxZ);
-                                        WriteFaceSingle(Faces.FRONT, (byte)x2, (byte)y2, (byte)z, ref faceIndex, singleSolidUVConcat, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
-                                        bits &= bits - 1;
-                                    }
+                                    int t = BitOperations.TrailingZeroCount(bits);
+                                    int xyIndex = (w << 6) + t; if (xyIndex >= xyPlaneBits) break;
+                                    int x2 = xyIndex / maxY; int y2 = xyIndex % maxY; // int li = LocalIndex(x2, y2, z, maxY, maxZ);
+                                    WriteFaceSingle(Faces.FRONT, (byte)x2, (byte)y2, (byte)z, ref faceIndex, singleSolidUVConcat, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
+                                    bits &= bits - 1;
                                 }
                             }
                         }
@@ -511,36 +549,30 @@ namespace MVGE_GFX.Terrain
                         for (int w = 0; w < yzWC; w++)
                         {
                             ulong cur = xSlabs[curOff + w]; if (cur == 0) continue;
-                            if (!skipLeft)
+                            if (!skipLeft && !(x == 0 && occludeLeft))
                             {
-                                if (!(x == 0 && occludeLeft))
+                                ulong leftBits = (x == 0) ? (cur & ~neighborLeft[w]) : (cur & ~xSlabs[prevOff + w]);
+                                ulong bits = leftBits;
+                                while (bits != 0)
                                 {
-                                    ulong leftBits = (x == 0) ? (cur & ~neighborLeft[w]) : (cur & ~xSlabs[prevOff + w]);
-                                    ulong bits = leftBits;
-                                    while (bits != 0)
-                                    {
-                                        int t = BitOperations.TrailingZeroCount(bits);
-                                        int yzIndex = (w << 6) + t; if (yzIndex >= yzPlaneBits) break;
-                                        int z = yzIndex / maxY; int y = yzIndex % maxY; int li = LocalIndex(x, y, z, maxY, maxZ);
-                                        WriteFaceMulti(localBlocks[li], Faces.LEFT, (byte)x, (byte)y, (byte)z, ref faceIndex, emptyBlock, atlas, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
-                                        bits &= bits - 1;
-                                    }
+                                    int t = BitOperations.TrailingZeroCount(bits);
+                                    int yzIndex = (w << 6) + t; if (yzIndex >= yzPlaneBits) break;
+                                    int z = yzIndex / maxY; int y = yzIndex % maxY; int li = LocalIndex(x, y, z, maxY, maxZ);
+                                    WriteFaceMulti(localBlocks[li], Faces.LEFT, (byte)x, (byte)y, (byte)z, ref faceIndex, emptyBlock, atlas, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
+                                    bits &= bits - 1;
                                 }
                             }
-                            if (!skipRight)
+                            if (!skipRight && !(x == maxX - 1 && occludeRight))
                             {
-                                if (!(x == maxX - 1 && occludeRight))
+                                ulong rightBits = (x == maxX - 1) ? (cur & ~neighborRight[w]) : (cur & ~xSlabs[nextOff + w]);
+                                ulong bits = rightBits;
+                                while (bits != 0)
                                 {
-                                    ulong rightBits = (x == maxX - 1) ? (cur & ~neighborRight[w]) : (cur & ~xSlabs[nextOff + w]);
-                                    ulong bits = rightBits;
-                                    while (bits != 0)
-                                    {
-                                        int t = BitOperations.TrailingZeroCount(bits);
-                                        int yzIndex = (w << 6) + t; if (yzIndex >= yzPlaneBits) break;
-                                        int z = yzIndex / maxY; int y = yzIndex % maxY; int li = LocalIndex(x, y, z, maxY, maxZ);
-                                        WriteFaceMulti(localBlocks[li], Faces.RIGHT, (byte)x, (byte)y, (byte)z, ref faceIndex, emptyBlock, atlas, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
-                                        bits &= bits - 1;
-                                    }
+                                    int t = BitOperations.TrailingZeroCount(bits);
+                                    int yzIndex = (w << 6) + t; if (yzIndex >= yzPlaneBits) break;
+                                    int z = yzIndex / maxY; int y = yzIndex % maxY; int li = LocalIndex(x, y, z, maxY, maxZ);
+                                    WriteFaceMulti(localBlocks[li], Faces.RIGHT, (byte)x, (byte)y, (byte)z, ref faceIndex, emptyBlock, atlas, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
+                                    bits &= bits - 1;
                                 }
                             }
                         }
@@ -555,34 +587,28 @@ namespace MVGE_GFX.Terrain
                         for (int w = 0; w < xzWC; w++)
                         {
                             ulong cur = ySlabs[curOff + w]; if (cur == 0) continue;
-                            if (!skipBottom)
+                            if (!skipBottom && !(y == 0 && occludeBottom))
                             {
-                                if (!(y == 0 && occludeBottom))
+                                ulong bottomBits = (y == 0) ? (cur & ~neighborBottom[w]) : (cur & ~ySlabs[prevOff + w]);
+                                ulong bits = bottomBits; while (bits != 0)
                                 {
-                                    ulong bottomBits = (y == 0) ? (cur & ~neighborBottom[w]) : (cur & ~ySlabs[prevOff + w]);
-                                    ulong bits = bottomBits; while (bits != 0)
-                                    {
-                                        int t = BitOperations.TrailingZeroCount(bits);
-                                        int xzIndex = (w << 6) + t; if (xzIndex >= xzPlaneBits) break;
-                                        int x2 = xzIndex / maxZ; int z2 = xzIndex % maxZ; int li = LocalIndex(x2, y, z2, maxY, maxZ);
-                                        WriteFaceMulti(localBlocks[li], Faces.BOTTOM, (byte)x2, (byte)y, (byte)z2, ref faceIndex, emptyBlock, atlas, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
-                                        bits &= bits - 1;
-                                    }
+                                    int t = BitOperations.TrailingZeroCount(bits);
+                                    int xzIndex = (w << 6) + t; if (xzIndex >= xzPlaneBits) break;
+                                    int x2 = xzIndex / maxZ; int z2 = xzIndex % maxZ; int li = LocalIndex(x2, y, z2, maxY, maxZ);
+                                    WriteFaceMulti(localBlocks[li], Faces.BOTTOM, (byte)x2, (byte)y, (byte)z2, ref faceIndex, emptyBlock, atlas, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
+                                    bits &= bits - 1;
                                 }
                             }
-                            if (!skipTop)
+                            if (!skipTop && !(y == maxY - 1 && occludeTop))
                             {
-                                if (!(y == maxY - 1 && occludeTop))
+                                ulong topBits = (y == maxY - 1) ? (cur & ~neighborTop[w]) : (cur & ~ySlabs[nextOff + w]);
+                                ulong bits = topBits; while (bits != 0)
                                 {
-                                    ulong topBits = (y == maxY - 1) ? (cur & ~neighborTop[w]) : (cur & ~ySlabs[nextOff + w]);
-                                    ulong bits = topBits; while (bits != 0)
-                                    {
-                                        int t = BitOperations.TrailingZeroCount(bits);
-                                        int xzIndex = (w << 6) + t; if (xzIndex >= xzPlaneBits) break;
-                                        int x2 = xzIndex / maxZ; int z2 = xzIndex % maxZ; int li = LocalIndex(x2, y, z2, maxY, maxZ);
-                                        WriteFaceMulti(localBlocks[li], Faces.TOP, (byte)x2, (byte)y, (byte)z2, ref faceIndex, emptyBlock, atlas, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
-                                        bits &= bits - 1;
-                                    }
+                                    int t = BitOperations.TrailingZeroCount(bits);
+                                    int xzIndex = (w << 6) + t; if (xzIndex >= xzPlaneBits) break;
+                                    int x2 = xzIndex / maxZ; int z2 = xzIndex % maxZ; int li = LocalIndex(x2, y, z2, maxY, maxZ);
+                                    WriteFaceMulti(localBlocks[li], Faces.TOP, (byte)x2, (byte)y, (byte)z2, ref faceIndex, emptyBlock, atlas, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
+                                    bits &= bits - 1;
                                 }
                             }
                         }
@@ -597,34 +623,28 @@ namespace MVGE_GFX.Terrain
                         for (int w = 0; w < xyWC; w++)
                         {
                             ulong cur = zSlabs[curOff + w]; if (cur == 0) continue;
-                            if (!skipBack)
+                            if (!skipBack && !(z == 0 && occludeBack))
                             {
-                                if (!(z == 0 && occludeBack))
+                                ulong backBits = (z == 0) ? (cur & ~neighborBack[w]) : (cur & ~zSlabs[prevOff + w]);
+                                ulong bits = backBits; while (bits != 0)
                                 {
-                                    ulong backBits = (z == 0) ? (cur & ~neighborBack[w]) : (cur & ~zSlabs[prevOff + w]);
-                                    ulong bits = backBits; while (bits != 0)
-                                    {
-                                        int t = BitOperations.TrailingZeroCount(bits);
-                                        int xyIndex = (w << 6) + t; if (xyIndex >= xyPlaneBits) break;
-                                        int x2 = xyIndex / maxY; int y2 = xyIndex % maxY; int li = LocalIndex(x2, y2, z, maxY, maxZ);
-                                        WriteFaceMulti(localBlocks[li], Faces.BACK, (byte)x2, (byte)y2, (byte)z, ref faceIndex, emptyBlock, atlas, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
-                                        bits &= bits - 1;
-                                    }
+                                    int t = BitOperations.TrailingZeroCount(bits);
+                                    int xyIndex = (w << 6) + t; if (xyIndex >= xyPlaneBits) break;
+                                    int x2 = xyIndex / maxY; int y2 = xyIndex % maxY; int li = LocalIndex(x2, y2, z, maxY, maxZ);
+                                    WriteFaceMulti(localBlocks[li], Faces.BACK, (byte)x2, (byte)y2, (byte)z, ref faceIndex, emptyBlock, atlas, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
+                                    bits &= bits - 1;
                                 }
                             }
-                            if (!skipFront)
+                            if (!skipFront && !(z == maxZ - 1 && occludeFront))
                             {
-                                if (!(z == maxZ - 1 && occludeFront))
+                                ulong frontBits = (z == maxZ - 1) ? (cur & ~neighborFront[w]) : (cur & ~zSlabs[nextOff + w]);
+                                ulong bits = frontBits; while (bits != 0)
                                 {
-                                    ulong frontBits = (z == maxZ - 1) ? (cur & ~neighborFront[w]) : (cur & ~zSlabs[nextOff + w]);
-                                    ulong bits = frontBits; while (bits != 0)
-                                    {
-                                        int t = BitOperations.TrailingZeroCount(bits);
-                                        int xyIndex = (w << 6) + t; if (xyIndex >= xyPlaneBits) break;
-                                        int x2 = xyIndex / maxY; int y2 = xyIndex % maxY; int li = LocalIndex(x2, y2, z, maxY, maxZ);
-                                        WriteFaceMulti(localBlocks[li], Faces.FRONT, (byte)x2, (byte)y2, (byte)z, ref faceIndex, emptyBlock, atlas, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
-                                        bits &= bits - 1;
-                                    }
+                                    int t = BitOperations.TrailingZeroCount(bits);
+                                    int xyIndex = (w << 6) + t; if (xyIndex >= xyPlaneBits) break;
+                                    int x2 = xyIndex / maxY; int y2 = xyIndex % maxY; int li = LocalIndex(x2, y2, z, maxY, maxZ);
+                                    WriteFaceMulti(localBlocks[li], Faces.FRONT, (byte)x2, (byte)y2, (byte)z, ref faceIndex, emptyBlock, atlas, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
+                                    bits &= bits - 1;
                                 }
                             }
                         }
@@ -654,12 +674,13 @@ namespace MVGE_GFX.Terrain
                 ArrayPool<bool>.Shared.Return(xSlabNonEmpty, false);
                 ArrayPool<bool>.Shared.Return(ySlabNonEmpty, false);
                 ArrayPool<bool>.Shared.Return(zSlabNonEmpty, false);
-                if (neighborLeft != null) ArrayPool<ulong>.Shared.Return(neighborLeft, false);
-                if (neighborRight != null) ArrayPool<ulong>.Shared.Return(neighborRight, false);
-                if (neighborBottom != null) ArrayPool<ulong>.Shared.Return(neighborBottom, false);
-                if (neighborTop != null) ArrayPool<ulong>.Shared.Return(neighborTop, false);
-                if (neighborBack != null) ArrayPool<ulong>.Shared.Return(neighborBack, false);
-                if (neighborFront != null) ArrayPool<ulong>.Shared.Return(neighborFront, false);
+                // Return neighbor planes to correct pools (thread-local vs shared) if they were loaded here (not in fully-solid fast path)
+                if (neighborLeft != null) { if (leftFromTL) TLPlaneReturn(neighborLeft); else ArrayPool<ulong>.Shared.Return(neighborLeft, false); }
+                if (neighborRight != null) { if (rightFromTL) TLPlaneReturn(neighborRight); else ArrayPool<ulong>.Shared.Return(neighborRight, false); }
+                if (neighborBottom != null) { if (bottomFromTL) TLPlaneReturn(neighborBottom); else ArrayPool<ulong>.Shared.Return(neighborBottom, false); }
+                if (neighborTop != null) { if (topFromTL) TLPlaneReturn(neighborTop); else ArrayPool<ulong>.Shared.Return(neighborTop, false); }
+                if (neighborBack != null) { if (backFromTL) TLPlaneReturn(neighborBack); else ArrayPool<ulong>.Shared.Return(neighborBack, false); }
+                if (neighborFront != null) { if (frontFromTL) TLPlaneReturn(neighborFront); else ArrayPool<ulong>.Shared.Return(neighborFront, false); }
             }
         }
     }
