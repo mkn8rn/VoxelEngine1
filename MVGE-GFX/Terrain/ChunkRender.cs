@@ -222,7 +222,7 @@ namespace MVGE_GFX.Terrain
             chunkIBO.Bind();
             int count = chunkIBO.Count;
             if (count <= 0) return;
-            OpenTK.Graphics.OpenGL4.GL.DrawElements(
+            GL.DrawElements(
                 PrimitiveType.Triangles,
                 count,
                 (usedPooling && useUShort) || (!usedPooling && indexFormat == IndexFormat.UShort)

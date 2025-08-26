@@ -1,16 +1,100 @@
 ﻿using MVGE_GFX.Models;
+using OpenTK.Mathematics;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
+using Vector3 = OpenTK.Mathematics.Vector3;
+using Vector2 = OpenTK.Mathematics.Vector2;
 
 namespace MVGE_GFX.Terrain
 {
     public partial class PooledFacesRender
     {
+        internal struct BuildResult
+        {
+            public bool UseUShort;
+            public bool HasSingleOpaque;
+            public byte[] VertBuffer;
+            public byte[] UVBuffer;
+            public uint[] IndicesUIntBuffer;
+            public ushort[] IndicesUShortBuffer;
+            public int VertBytesUsed;
+            public int UVBytesUsed;
+            public int IndicesUsed;
+        }
 
+        private static void EnsureUvLut(BlockTextureAtlas atlas)
+        {
+            if (uvLutSparse != null || uvLut != null) return;
+            lock (uvInitLock)
+            {
+                if (uvLutSparse != null || uvLut != null) return;
+
+                // Build sparse dictionary directly from actual block IDs to avoid gaps/reserved ranges.
+                uvLutSparse = new Dictionary<ushort, byte[]>(BlockTextureAtlas.blockTypeUVCoordinates.Count);
+                singleSolidUvCacheSparse = new Dictionary<ushort, byte[]>(BlockTextureAtlas.blockTypeUVCoordinates.Count);
+
+                // Missing texture base (fallback for any future unknown lookups)
+                Vector2 missVec;
+                if (!BlockTextureAtlas.textureCoordinates.TryGetValue("404", out missVec))
+                    missVec = Vector2.Zero;
+                // Precompute the 8 bytes for each face of missing (4 verts * 2 bytes) pattern once
+                byte missX = (byte)missVec.X; byte missY = (byte)missVec.Y;
+                byte[] missingFace = new byte[8];
+                // Order: we mimic GetBlockUVs layout; fill rectangle from (x,y)
+                // We'll reuse for any absent textures (should be rare now).
+                missingFace[0] = (byte)(missX + 1); missingFace[1] = (byte)(missY + 1);
+                missingFace[2] = missX; missingFace[3] = (byte)(missY + 1);
+                missingFace[4] = missX; missingFace[5] = missY;
+                missingFace[6] = (byte)(missX + 1); missingFace[7] = missY;
+
+                foreach (var kvp in BlockTextureAtlas.blockTypeUVCoordinates)
+                {
+                    ushort blockId = kvp.Key;
+                    var concat = new byte[48]; // 6 faces * 8 bytes
+                    for (int f = 0; f < 6; f++)
+                    {
+                        var list = atlas.GetBlockUVs(blockId, (Faces)f); // 4 entries
+                        int baseOffset = f * 8;
+                        for (int i = 0; i < 4; i++)
+                        {
+                            concat[baseOffset + i * 2] = list[i].x;
+                            concat[baseOffset + i * 2 + 1] = list[i].y;
+                        }
+                    }
+                    uvLutSparse[blockId] = concat;
+                    singleSolidUvCacheSparse[blockId] = concat; // same reference; read-only usage
+                }
+
+                // Dense fields remain null; mark count for compatibility
+                uvLutBlockCount = uvLutSparse.Count;
+            }
+        }
+
+        private static byte[] GetSingleSolidUVConcat(ushort blockId)
+        {
+            // Sparse path
+            if (uvLutSparse != null)
+            {
+                return singleSolidUvCacheSparse.TryGetValue(blockId, out var arr) ? arr : null;
+            }
+            // Dense fallback (legacy)
+            if (blockId >= uvLutBlockCount) return null;
+            var cache = singleSolidUvCache[blockId];
+            if (cache != null) return cache;
+            var build = new byte[48];
+            int baseBlock = blockId * 6;
+            for (int f = 0; f < 6; f++)
+            {
+                int lutOffset = (baseBlock + f) * 8;
+                Buffer.BlockCopy(uvLut, lutOffset, build, f * 8, 8);
+            }
+            singleSolidUvCache[blockId] = build;
+            return build;
+        }
 
         // Specialized face writers
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
