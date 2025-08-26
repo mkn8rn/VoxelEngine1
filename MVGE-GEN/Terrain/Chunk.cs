@@ -280,7 +280,7 @@ namespace MVGE_GEN.Terrain
             if (ly == dimY - 1) FaceSolidPosY = ScanFaceSolidPosY();
         }
 
-        private int FlattenSectionsInto(ushort[] dest)
+        private int FlattenSections(ushort[] dest)
         {
             int strideX = dimZ * dimY; // (x * dimZ + z) * dimY + y
             int strideZ = dimY;
@@ -454,10 +454,47 @@ namespace MVGE_GEN.Terrain
                 return; // leave chunkRender null
             }
 
+            // Two-phase stats shortcut: if chunk is uniform single block we can skip full flatten
+            if (AllOneBlockChunk)
+            {
+                int vol = dimX * dimY * dimZ;
+                // Analytical exposure estimate for solid rectangular prism fully filled
+                long internalAdj = (long)(dimX - 1) * dimY * dimZ + (long)dimX * (dimZ - 1) * dimY + (long)dimX * dimZ * (dimY - 1);
+                int exposure = (int)(6L * vol - 2L * internalAdj);
+                MeshPrepassStats = new ChunkMeshPrepassStats
+                {
+                    SolidCount = vol,
+                    ExposureEstimate = exposure,
+                    MinX = 0, MinY = 0, MinZ = 0,
+                    MaxX = dimX - 1, MaxY = dimY - 1, MaxZ = dimZ - 1,
+                    XNonEmpty = dimX, YNonEmpty = dimY, ZNonEmpty = dimZ,
+                    HasStats = true
+                };
+
+                // Provide a fully-populated flat array so ChunkRender logic that still indexes flatBlocks (occlusion checks etc.) is safe.
+                int voxelCountUniform = vol;
+                ushort[] uniformFlat = ArrayPool<ushort>.Shared.Rent(voxelCountUniform);
+                // Fill with uniform block id
+                uniformFlat.AsSpan(0, voxelCountUniform).Fill(AllOneBlockBlockId);
+
+                chunkRender = new ChunkRender(
+                    chunkData,
+                    worldBlockGetter,
+                    uniformFlat,
+                    dimX,
+                    dimY,
+                    dimZ,
+                    FaceSolidNegX, FaceSolidPosX, FaceSolidNegY, FaceSolidPosY, FaceSolidNegZ, FaceSolidPosZ,
+                    NeighborNegXFaceSolidPosX, NeighborPosXFaceSolidNegX, NeighborNegYFaceSolidPosY, NeighborPosYFaceSolidNegY, NeighborNegZFaceSolidPosZ, NeighborPosZFaceSolidNegZ,
+                    AllOneBlockChunk, AllOneBlockBlockId,
+                    MeshPrepassStats.SolidCount, MeshPrepassStats.ExposureEstimate);
+                return;
+            }
+
             int voxelCount = dimX * dimY * dimZ;
             ushort[] flat = ArrayPool<ushort>.Shared.Rent(voxelCount);
-            // Removed full zero init (empty block == 0); per-section zero fill applied selectively in FlattenSectionsInto
-            int nonAir = FlattenSectionsInto(flat);
+            // Removed full zero init (empty block == 0); per-section zero fill applied selectively in FlattenSections
+            int nonAir = FlattenSections(flat);
 
             if (nonAir == 0)
             {
