@@ -41,17 +41,6 @@ namespace MVGE_GFX.Terrain
             if (flatBlocks != null) ArrayPool<ushort>.Shared.Return(flatBlocks, false);
         }
 
-        public static void ProcessPendingDeletes()
-        {
-            while (pendingDeletion.TryDequeue(out var cr)) cr.DeleteGL();
-        }
-
-        public void ScheduleDelete()
-        {
-            if (!isBuilt) return;
-            pendingDeletion.Enqueue(this);
-        }
-
         private void IntegrateFaceListEmit(ushort block, Faces face, ByteVector3 bp, ref int currentVertexBase, bool useUShortIndices)
         {
             var verts = RawFaceData.rawVertexData[face];
