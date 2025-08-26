@@ -375,7 +375,17 @@ namespace MVGE_GEN.Terrain
                                 continue;
                             }
 
-                            // General path
+                            // General path: zero region once, then write only non-air voxels
+                            for (int lx = 0; lx < maxLocalX; lx++)
+                            {
+                                int gx = baseX + lx; int destXBase = gx * strideX;
+                                for (int lz = 0; lz < maxLocalZ; lz++)
+                                {
+                                    int gz = baseZ + lz; int destZBase = destXBase + gz * strideZ + baseY;
+                                    dest.AsSpan(destZBase, maxLocalY).Clear();
+                                }
+                            }
+
                             int sectionPlane = sectionSize * sectionSize; // 256
                             int bitsPer = sec.BitsPerIndex;
                             uint[] bitData = sec.BitData;
@@ -407,9 +417,9 @@ namespace MVGE_GEN.Terrain
                                         }
                                         int paletteIndex = (int)(value & (uint)mask);
                                         ushort id = palette[paletteIndex];
-                                        dest[destZBase + gy] = id; // writes both air and solid
                                         if (id != ChunkSection.AIR)
                                         {
+                                            dest[destZBase + gy] = id;
                                             nonAirTotal++;
                                             if (!HasAnyBoundarySolid && (boundaryXZ || gy == 0 || gy == dimY - 1))
                                                 HasAnyBoundarySolid = true;
