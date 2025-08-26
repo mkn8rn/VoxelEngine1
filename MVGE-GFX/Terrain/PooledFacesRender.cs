@@ -7,6 +7,7 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 using Vector3 = OpenTK.Mathematics.Vector3;
 using Vector2 = OpenTK.Mathematics.Vector2;
+using MVGE_GFX.Textures;
 
 namespace MVGE_GFX.Terrain
 {

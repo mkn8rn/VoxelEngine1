@@ -11,7 +11,7 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 
-namespace MVGE_GFX.Terrain
+namespace MVGE_GFX.Textures
 {
     public class BlockTextureAtlas
     {
@@ -128,7 +128,7 @@ namespace MVGE_GFX.Terrain
                 atlasHeight = tilesY * GameManager.settings.blockTileHeight;
                 ID = GL.GenTexture();
                 GL.BindTexture(TextureTarget.Texture2D, ID);
-                GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba, atlasWidth, atlasHeight, 0, PixelFormat.Rgba, PixelType.UnsignedByte, IntPtr.Zero);
+                GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba, atlasWidth, atlasHeight, 0, PixelFormat.Rgba, PixelType.UnsignedByte, nint.Zero);
                 GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
                 GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.Repeat);
                 GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
@@ -169,7 +169,7 @@ namespace MVGE_GFX.Terrain
 
             ID = GL.GenTexture();
             GL.BindTexture(TextureTarget.Texture2D, ID);
-            GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba, atlasWidth, atlasHeight, 0, PixelFormat.Rgba, PixelType.UnsignedByte, IntPtr.Zero);
+            GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba, atlasWidth, atlasHeight, 0, PixelFormat.Rgba, PixelType.UnsignedByte, nint.Zero);
             GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
             GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.Repeat);
             GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
@@ -188,8 +188,8 @@ namespace MVGE_GFX.Terrain
                 int tileY = currentY / GameManager.settings.blockTileHeight;
                 GL.TexSubImage2D(TextureTarget.Texture2D, 0, currentX, currentY,
                     ri.Width, ri.Height, PixelFormat.Rgba, PixelType.UnsignedByte, ri.Data);
-                float floatCoordsX = (float)currentX / (float)GameManager.settings.blockTileWidth;
-                float floatCoordsY = (float)currentY / (float)GameManager.settings.blockTileHeight;
+                float floatCoordsX = currentX / (float)GameManager.settings.blockTileWidth;
+                float floatCoordsY = currentY / (float)GameManager.settings.blockTileHeight;
                 textureCoordinates[name] = new Vector2(floatCoordsX, floatCoordsY);
                 Console.WriteLine($"[Atlas] Loaded texture '{name}' at tile ({tileX},{tileY}) pixels ({currentX},{currentY}) UV base ({floatCoordsX},{floatCoordsY})");
                 currentX += ri.Width;
@@ -219,7 +219,7 @@ namespace MVGE_GFX.Terrain
 
             ID = GL.GenTexture();
             GL.BindTexture(TextureTarget.Texture2D, ID);
-            GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba, atlasWidth, atlasHeight, 0, PixelFormat.Rgba, PixelType.UnsignedByte, IntPtr.Zero);
+            GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba, atlasWidth, atlasHeight, 0, PixelFormat.Rgba, PixelType.UnsignedByte, nint.Zero);
             GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
             GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.Repeat);
             GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
@@ -285,8 +285,8 @@ namespace MVGE_GFX.Terrain
                 GL.TexSubImage2D(TextureTarget.Texture2D, 0, currentX, currentY,
                     GameManager.settings.blockTileWidth, GameManager.settings.blockTileHeight,
                     PixelFormat.Rgba, PixelType.UnsignedByte, loadedTexture.Data);
-                var floatCoordsX = (float)currentX / (float)GameManager.settings.blockTileWidth;
-                var floatCoordsY = (float)currentY / (float)GameManager.settings.blockTileHeight;
+                var floatCoordsX = currentX / (float)GameManager.settings.blockTileWidth;
+                var floatCoordsY = currentY / (float)GameManager.settings.blockTileHeight;
                 textureCoordinates[textureName] = new Vector2(floatCoordsX, floatCoordsY);
                 Console.WriteLine($"[Atlas] Loaded texture '{textureName}' at tile ({tileX},{tileY}) pixels ({currentX},{currentY}) UV base ({floatCoordsX},{floatCoordsY})");
                 currentX += GameManager.settings.blockTileWidth;
@@ -362,9 +362,9 @@ namespace MVGE_GFX.Terrain
             return new List<ByteVector2>
             {
                 new ByteVector2{ x = (byte)(faceCoords.x + 1), y = (byte)(faceCoords.y + 1) },
-                new ByteVector2{ x = (byte)(faceCoords.x), y = (byte)(faceCoords.y + 1) },
-                new ByteVector2{ x = (byte)(faceCoords.x), y = (byte)(faceCoords.y) },
-                new ByteVector2{ x = (byte)(faceCoords.x + 1), y = (byte)(faceCoords.y) },
+                new ByteVector2{ x = faceCoords.x, y = (byte)(faceCoords.y + 1) },
+                new ByteVector2{ x = faceCoords.x, y = faceCoords.y },
+                new ByteVector2{ x = (byte)(faceCoords.x + 1), y = faceCoords.y },
             };
         }
 

@@ -16,6 +16,7 @@ using MVGE_GFX;
 using MVGE_GFX.Terrain;
 using MVGE_INF.Loaders;
 using MVGE_GEN;
+using MVGE_GFX.Textures;
 
 namespace MVGE_GEN
 {

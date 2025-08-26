@@ -10,6 +10,7 @@ using System.Buffers;
 using System.Runtime.CompilerServices;
 using MVGE_INF.Models.Terrain;
 using Vector3 = OpenTK.Mathematics.Vector3;
+using MVGE_GFX.Textures;
 
 namespace MVGE_GFX.Terrain
 {
