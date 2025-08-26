@@ -114,6 +114,84 @@ namespace MVGE_GFX.Terrain
             GenerateFaces();
         }
 
+        private void GenerateFaces()
+        {
+            // if enclosed (all boundary voxels solid and neighbors sealing) skip mesh generation entirely
+            if (CheckFullyOccluded(maxX, maxY, maxZ))
+            {
+                fullyOccluded = true;
+                ReturnFlat();
+                return;
+            }
+
+            bool usePooling = false;
+            int nonEmpty = 0; // total solid voxels
+            long faceEstimate = 0; // approximate visible face count (only valid if we finish full pass without triggering classic threshold)
+
+            if (FlagManager.flags.useFacePooling.GetValueOrDefault())
+            {
+                int threshold = FlagManager.flags.faceAmountToPool.GetValueOrDefault(int.MaxValue);
+                int strideX = maxZ * maxY; // distance between x slices
+                int strideZ = maxY;         // distance between z rows
+
+                // Single unified pass: counts solids & (unless early threshold trigger) accumulates face estimate.
+                for (int x = 0; x < maxX && !usePooling; x++)
+                {
+                    int slabBase = x * strideX;
+                    for (int z = 0; z < maxZ && !usePooling; z++)
+                    {
+                        int rowBase = slabBase + z * strideZ;
+                        for (int y = 0; y < maxY; y++)
+                        {
+                            int li = rowBase + y;
+                            if (flatBlocks[li] == emptyBlock) continue;
+                            nonEmpty++;
+                            // Classic threshold check – if reached we select pooled path & abandon face estimate refinement.
+                            if (nonEmpty >= threshold)
+                            {
+                                usePooling = true;
+                                break;
+                            }
+                            // Exposure estimate: add 6, subtract 2 per previously visited solid neighbor (x-1, y-1, z-1)
+                            faceEstimate += 6;
+                            if (x > 0 && flatBlocks[li - strideX] != emptyBlock) faceEstimate -= 2; // -X shared pair
+                            if (z > 0 && flatBlocks[li - strideZ] != emptyBlock) faceEstimate -= 2; // -Z shared pair
+                            if (y > 0 && flatBlocks[li - 1] != emptyBlock) faceEstimate -= 2;       // -Y shared pair
+                        }
+                    }
+                }
+            }
+
+            if (usePooling)
+            {
+                var builder = new PooledFacesRender(
+                    chunkWorldPosition, maxX, maxY, maxZ, emptyBlock,
+                    getWorldBlock, null, null, terrainTextureAtlas, flatBlocks,
+                    faceNegX, facePosX, faceNegY, facePosY, faceNegZ, facePosZ,
+                    nNegXPosX, nPosXNegX, nNegYPosY, nPosYNegY, nNegZPosZ, nPosZNegZ,
+                    allOneBlock, allOneBlockId);
+                var res = builder.Build();
+                usedPooling = true;
+                useUShort = res.UseUShort;
+                vertBuffer = res.VertBuffer; uvBuffer = res.UVBuffer;
+                indicesUIntBuffer = res.IndicesUIntBuffer; indicesUShortBuffer = res.IndicesUShortBuffer;
+                vertBytesUsed = res.VertBytesUsed; uvBytesUsed = res.UVBytesUsed; indicesUsed = res.IndicesUsed;
+                indexFormat = useUShort ? IndexFormat.UShort : IndexFormat.UInt;
+                ReturnFlat();
+            }
+            else
+            {
+                // If we are in list mode but the chunk is uniform, we can still exploit a simpler path by building faces directly.
+                if (allOneBlock)
+                {
+                    GenerateUniformFacesList();
+                    ReturnFlat();
+                    return;
+                }
+                GenerateFacesListFlatMaskedTwoPass_BB();
+                ReturnFlat();
+            }
+        }
         public void Build()
         {
             if (isBuilt) return;
