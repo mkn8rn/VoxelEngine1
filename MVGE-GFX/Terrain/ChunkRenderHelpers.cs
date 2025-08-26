@@ -212,5 +212,55 @@ namespace MVGE_GFX.Terrain
             }
             currentVertexBase += 4;
         }
+
+        // plane: 'X' => dims (maxY,maxZ) along Y,Z for constant X; 'Y' => (maxX,maxZ); 'Z' => (maxX,maxY)
+        private void PrefetchNeighborPlaneList(ulong[] target, int baseWX, int baseWY, int baseWZ, int dimA, int dimB, char plane)
+        {
+            if (plane == 'X')
+            {
+                // dimA = maxY, dimB = maxZ (iterate z then y)
+                for (int z = 0; z < dimB; z++)
+                {
+                    for (int y = 0; y < dimA; y++)
+                    {
+                        int idx = z * dimA + y; int w = idx >> 6; int b = idx & 63;
+                        ushort val = getWorldBlock(baseWX, baseWY + y, baseWZ + z);
+                        if (val != emptyBlock) target[w] |= 1UL << b;
+                    }
+                }
+            }
+            else if (plane == 'Y')
+            {
+                // dimA = maxX, dimB = maxZ (iterate x,z)
+                for (int x = 0; x < dimA; x++)
+                {
+                    for (int z = 0; z < dimB; z++)
+                    {
+                        int idx = x * dimB + z; int w = idx >> 6; int b = idx & 63;
+                        ushort val = getWorldBlock(baseWX + x, baseWY, baseWZ + z);
+                        if (val != emptyBlock) target[w] |= 1UL << b;
+                    }
+                }
+            }
+            else // 'Z'
+            {
+                // dimA = maxX, dimB = maxY (iterate x,y)
+                for (int x = 0; x < dimA; x++)
+                {
+                    for (int y = 0; y < dimB; y++)
+                    {
+                        int idx = x * dimB + y; int w = idx >> 6; int b = idx & 63;
+                        ushort val = getWorldBlock(baseWX + x, baseWY + y, baseWZ);
+                        if (val != emptyBlock) target[w] |= 1UL << b;
+                    }
+                }
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool TestBit(ulong[] arr, int index)
+        {
+            int w = index >> 6; int b = index & 63; return (arr[w] & (1UL << b)) != 0UL;
+        }
     }
 }

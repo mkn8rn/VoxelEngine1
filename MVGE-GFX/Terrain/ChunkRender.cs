@@ -270,7 +270,6 @@ namespace MVGE_GFX.Terrain
             int baseWY = (int)chunkWorldPosition.Y;
             int baseWZ = (int)chunkWorldPosition.Z;
 
-            // PASS 1 restricted to bounding box
             bool leftVisible = !(faceNegX && nNegXPosX);
             bool rightVisible = !(facePosX && nPosXNegX);
             bool bottomVisible = !(faceNegY && nNegYPosY);
@@ -278,38 +277,91 @@ namespace MVGE_GFX.Terrain
             bool backVisible = !(faceNegZ && nNegZPosZ);
             bool frontVisible = !(facePosZ && nPosZNegZ);
 
-            for (int x = minX; x <= maxXb; x++)
+            // Neighbor plane bitsets (only allocate if bounding box touches that boundary & visibility true)
+            ulong[] nLeft = null, nRight = null, nBottom = null, nTop = null, nBack = null, nFront = null;
+            int yzBits = maxY * maxZ; int yzWC = (yzBits + 63) >> 6;
+            int xzBits = maxX * maxZ; int xzWC = (xzBits + 63) >> 6;
+            int xyBits = maxX * maxY; int xyWC = (xyBits + 63) >> 6;
+
+            void ReturnNeighborPlanes()
             {
-                int xBase = x * strideX;
-                int wx = baseWX + x;
-                bool chunkMinX = x == 0;
-                bool chunkMaxX = x == maxX - 1;
-                for (int z = minZ; z <= maxZb; z++)
+                if (nLeft != null) ArrayPool<ulong>.Shared.Return(nLeft, false);
+                if (nRight != null) ArrayPool<ulong>.Shared.Return(nRight, false);
+                if (nBottom != null) ArrayPool<ulong>.Shared.Return(nBottom, false);
+                if (nTop != null) ArrayPool<ulong>.Shared.Return(nTop, false);
+                if (nBack != null) ArrayPool<ulong>.Shared.Return(nBack, false);
+                if (nFront != null) ArrayPool<ulong>.Shared.Return(nFront, false);
+            }
+
+            if (leftVisible && minX == 0)
+            {
+                nLeft = ArrayPool<ulong>.Shared.Rent(yzWC); Array.Clear(nLeft, 0, yzWC);
+                PrefetchNeighborPlaneList(nLeft, baseWX - 1, baseWY, baseWZ, maxY, maxZ, 'X');
+            }
+            if (rightVisible && maxXb == maxX - 1)
+            {
+                nRight = ArrayPool<ulong>.Shared.Rent(yzWC); Array.Clear(nRight, 0, yzWC);
+                PrefetchNeighborPlaneList(nRight, baseWX + maxX, baseWY, baseWZ, maxY, maxZ, 'X');
+            }
+            if (bottomVisible && minY == 0)
+            {
+                nBottom = ArrayPool<ulong>.Shared.Rent(xzWC); Array.Clear(nBottom, 0, xzWC);
+                PrefetchNeighborPlaneList(nBottom, baseWX, baseWY - 1, baseWZ, maxX, maxZ, 'Y');
+            }
+            if (topVisible && maxYb == maxY - 1)
+            {
+                nTop = ArrayPool<ulong>.Shared.Rent(xzWC); Array.Clear(nTop, 0, xzWC);
+                PrefetchNeighborPlaneList(nTop, baseWX, baseWY + maxY, baseWZ, maxX, maxZ, 'Y');
+            }
+            if (backVisible && minZ == 0)
+            {
+                nBack = ArrayPool<ulong>.Shared.Rent(xyWC); Array.Clear(nBack, 0, xyWC);
+                PrefetchNeighborPlaneList(nBack, baseWX, baseWY, baseWZ - 1, maxX, maxY, 'Z');
+            }
+            if (frontVisible && maxZb == maxZ - 1)
+            {
+                nFront = ArrayPool<ulong>.Shared.Rent(xyWC); Array.Clear(nFront, 0, xyWC);
+                PrefetchNeighborPlaneList(nFront, baseWX, baseWY, baseWZ + maxZ, maxX, maxY, 'Z');
+            }
+
+            try
+            {
+                for (int x = minX; x <= maxXb; x++)
                 {
-                    int zBase = xBase + z * maxY;
-                    int wz = baseWZ + z;
-                    bool chunkMinZ = z == 0;
-                    bool chunkMaxZ = z == maxZ - 1;
-                    for (int y = minY; y <= maxYb; y++)
+                    int xBase = x * strideX;
+                    bool chunkMinX = x == 0;
+                    bool chunkMaxX = x == maxX - 1;
+                    for (int z = minZ; z <= maxZb; z++)
                     {
-                        int li = zBase + y;
-                        ushort block = flatBlocks[li];
-                        if (block == emptyBlock) continue;
-                        int wy = baseWY + y;
-                        bool chunkMinY = y == 0;
-                        bool chunkMaxY = y == maxY - 1;
-                        byte mask = 0;
-                        if (leftVisible && (chunkMinX ? getWorldBlock(wx - 1, wy, wz) == emptyBlock : flatBlocks[li - strideX] == emptyBlock)) mask |= FACE_LEFT;
-                        if (rightVisible && (chunkMaxX ? getWorldBlock(wx + 1, wy, wz) == emptyBlock : flatBlocks[li + strideX] == emptyBlock)) mask |= FACE_RIGHT;
-                        if (topVisible && (chunkMaxY ? getWorldBlock(wx, wy + 1, wz) == emptyBlock : flatBlocks[li + 1] == emptyBlock)) mask |= FACE_TOP;
-                        if (bottomVisible && (chunkMinY ? getWorldBlock(wx, wy - 1, wz) == emptyBlock : flatBlocks[li - 1] == emptyBlock)) mask |= FACE_BOTTOM;
-                        if (frontVisible && (chunkMaxZ ? getWorldBlock(wx, wy, wz + 1) == emptyBlock : flatBlocks[li + strideZ] == emptyBlock)) mask |= FACE_FRONT;
-                        if (backVisible && (chunkMinZ ? getWorldBlock(wx, wy, wz - 1) == emptyBlock : flatBlocks[li - strideZ] == emptyBlock)) mask |= FACE_BACK;
-                        if (mask == 0) continue;
-                        masks[MaskIndex(x, y, z)] = mask;
-                        totalFaces += FacePopCount[mask];
+                        int zBase = xBase + z * maxY;
+                        bool chunkMinZ = z == 0;
+                        bool chunkMaxZ = z == maxZ - 1;
+                        int yzBaseOffset = z * maxY; // for yz index
+                        int xzBaseOffset = x * maxZ + z; // for xz index
+                        for (int y = minY; y <= maxYb; y++)
+                        {
+                            int li = zBase + y;
+                            ushort block = flatBlocks[li];
+                            if (block == emptyBlock) continue;
+                            bool chunkMinY = y == 0;
+                            bool chunkMaxY = y == maxY - 1;
+                            byte mask = 0;
+                            if (leftVisible && (chunkMinX ? (nLeft == null ? getWorldBlock(baseWX - 1, baseWY + y, baseWZ + z) == emptyBlock : !TestBit(nLeft, yzBaseOffset + y)) : flatBlocks[li - strideX] == emptyBlock)) mask |= FACE_LEFT;
+                            if (rightVisible && (chunkMaxX ? (nRight == null ? getWorldBlock(baseWX + maxX, baseWY + y, baseWZ + z) == emptyBlock : !TestBit(nRight, yzBaseOffset + y)) : flatBlocks[li + strideX] == emptyBlock)) mask |= FACE_RIGHT;
+                            if (topVisible && (chunkMaxY ? (nTop == null ? getWorldBlock(baseWX + x, baseWY + maxY, baseWZ + z) == emptyBlock : !TestBit(nTop, xzBaseOffset)) : flatBlocks[li + 1] == emptyBlock)) mask |= FACE_TOP;
+                            if (bottomVisible && (chunkMinY ? (nBottom == null ? getWorldBlock(baseWX + x, baseWY - 1, baseWZ + z) == emptyBlock : !TestBit(nBottom, xzBaseOffset)) : flatBlocks[li - 1] == emptyBlock)) mask |= FACE_BOTTOM;
+                            if (frontVisible && (chunkMaxZ ? (nFront == null ? getWorldBlock(baseWX + x, baseWY + y, baseWZ + maxZ) == emptyBlock : !TestBit(nFront, x * maxY + y)) : flatBlocks[li + strideZ] == emptyBlock)) mask |= FACE_FRONT;
+                            if (backVisible && (chunkMinZ ? (nBack == null ? getWorldBlock(baseWX + x, baseWY + y, baseWZ - 1) == emptyBlock : !TestBit(nBack, x * maxY + y)) : flatBlocks[li - strideZ] == emptyBlock)) mask |= FACE_BACK;
+                            if (mask == 0) continue;
+                            masks[MaskIndex(x, y, z)] = mask;
+                            totalFaces += FacePopCount[mask];
+                        }
                     }
                 }
+            }
+            finally
+            {
+                ReturnNeighborPlanes();
             }
 
             if (totalFaces == 0)
@@ -369,25 +421,57 @@ namespace MVGE_GFX.Terrain
             bool backVisible = !(faceNegZ && nNegZPosZ);
             bool frontVisible = !(facePosZ && nPosZNegZ);
 
-            for (int x = 0; x < maxX; x++)
+            // Neighbor plane bitsets (only allocate if boundary touched & visibility true)
+            ulong[] nLeft = null, nRight = null, nBottom = null, nTop = null, nBack = null, nFront = null;
+            int yzBits = maxY * maxZ; int yzWC = (yzBits + 63) >> 6;
+            int xzBits = maxX * maxZ; int xzWC = (xzBits + 63) >> 6;
+            int xyBits = maxX * maxY; int xyWC = (xyBits + 63) >> 6;
+
+            void ReturnNeighborPlanes()
             {
-                int xBase = x * strideX; int wx = baseWX + x; bool atMinX = x == 0; bool atMaxX = x == maxX - 1;
-                for (int z = 0; z < maxZ; z++)
+                if (nLeft != null) ArrayPool<ulong>.Shared.Return(nLeft, false);
+                if (nRight != null) ArrayPool<ulong>.Shared.Return(nRight, false);
+                if (nBottom != null) ArrayPool<ulong>.Shared.Return(nBottom, false);
+                if (nTop != null) ArrayPool<ulong>.Shared.Return(nTop, false);
+                if (nBack != null) ArrayPool<ulong>.Shared.Return(nBack, false);
+                if (nFront != null) ArrayPool<ulong>.Shared.Return(nFront, false);
+            }
+
+            if (leftVisible) { nLeft = ArrayPool<ulong>.Shared.Rent(yzWC); Array.Clear(nLeft, 0, yzWC); PrefetchNeighborPlaneList(nLeft, baseWX - 1, baseWY, baseWZ, maxY, maxZ, 'X'); }
+            if (rightVisible) { nRight = ArrayPool<ulong>.Shared.Rent(yzWC); Array.Clear(nRight, 0, yzWC); PrefetchNeighborPlaneList(nRight, baseWX + maxX, baseWY, baseWZ, maxY, maxZ, 'X'); }
+            if (bottomVisible) { nBottom = ArrayPool<ulong>.Shared.Rent(xzWC); Array.Clear(nBottom, 0, xzWC); PrefetchNeighborPlaneList(nBottom, baseWX, baseWY - 1, baseWZ, maxX, maxZ, 'Y'); }
+            if (topVisible) { nTop = ArrayPool<ulong>.Shared.Rent(xzWC); Array.Clear(nTop, 0, xzWC); PrefetchNeighborPlaneList(nTop, baseWX, baseWY + maxY, baseWZ, maxX, maxZ, 'Y'); }
+            if (backVisible) { nBack = ArrayPool<ulong>.Shared.Rent(xyWC); Array.Clear(nBack, 0, xyWC); PrefetchNeighborPlaneList(nBack, baseWX, baseWY, baseWZ - 1, maxX, maxY, 'Z'); }
+            if (frontVisible) { nFront = ArrayPool<ulong>.Shared.Rent(xyWC); Array.Clear(nFront, 0, xyWC); PrefetchNeighborPlaneList(nFront, baseWX, baseWY, baseWZ + maxZ, maxX, maxY, 'Z'); }
+
+            try
+            {
+                for (int x = 0; x < maxX; x++)
                 {
-                    int zBase = xBase + z * maxY; int wz = baseWZ + z; bool atMinZ = z == 0; bool atMaxZ = z == maxZ - 1;
-                    for (int y = 0; y < maxY; y++)
+                    int xBase = x * strideX; bool atMinX = x == 0; bool atMaxX = x == maxX - 1;
+                    for (int z = 0; z < maxZ; z++)
                     {
-                        int li = zBase + y; ushort block = flatBlocks[li]; if (block == emptyBlock) continue; int wy = baseWY + y; bool atMinY = y == 0; bool atMaxY = y == maxY - 1; byte mask = 0;
-                        if (leftVisible && (atMinX ? getWorldBlock(wx - 1, wy, wz) == emptyBlock : flatBlocks[li - strideX] == emptyBlock)) mask |= FACE_LEFT;
-                        if (rightVisible && (atMaxX ? getWorldBlock(wx + 1, wy, wz) == emptyBlock : flatBlocks[li + strideX] == emptyBlock)) mask |= FACE_RIGHT;
-                        if (topVisible && (atMaxY ? getWorldBlock(wx, wy + 1, wz) == emptyBlock : flatBlocks[li + 1] == emptyBlock)) mask |= FACE_TOP;
-                        if (bottomVisible && (atMinY ? getWorldBlock(wx, wy - 1, wz) == emptyBlock : flatBlocks[li - 1] == emptyBlock)) mask |= FACE_BOTTOM;
-                        if (frontVisible && (atMaxZ ? getWorldBlock(wx, wy, wz + 1) == emptyBlock : flatBlocks[li + strideZ] == emptyBlock)) mask |= FACE_FRONT;
-                        if (backVisible && (atMinZ ? getWorldBlock(wx, wy, wz - 1) == emptyBlock : flatBlocks[li - strideZ] == emptyBlock)) mask |= FACE_BACK;
-                        if (mask == 0) continue; masks[li] = mask; totalFaces += FacePopCount[mask];
+                        int zBase = xBase + z * maxY; bool atMinZ = z == 0; bool atMaxZ = z == maxZ - 1;
+                        int yzBaseOffset = z * maxY; int xzBaseOffset = x * maxZ + z;
+                        for (int y = 0; y < maxY; y++)
+                        {
+                            int li = zBase + y; ushort block = flatBlocks[li]; if (block == emptyBlock) continue; bool atMinY = y == 0; bool atMaxY = y == maxY - 1; byte mask = 0;
+                            if (leftVisible && (atMinX ? (nLeft == null ? getWorldBlock(baseWX - 1, baseWY + y, baseWZ + z) == emptyBlock : !TestBit(nLeft, yzBaseOffset + y)) : flatBlocks[li - strideX] == emptyBlock)) mask |= FACE_LEFT;
+                            if (rightVisible && (atMaxX ? (nRight == null ? getWorldBlock(baseWX + maxX, baseWY + y, baseWZ + z) == emptyBlock : !TestBit(nRight, yzBaseOffset + y)) : flatBlocks[li + strideX] == emptyBlock)) mask |= FACE_RIGHT;
+                            if (topVisible && (atMaxY ? (nTop == null ? getWorldBlock(baseWX + x, baseWY + maxY, baseWZ + z) == emptyBlock : !TestBit(nTop, xzBaseOffset)) : flatBlocks[li + 1] == emptyBlock)) mask |= FACE_TOP;
+                            if (bottomVisible && (atMinY ? (nBottom == null ? getWorldBlock(baseWX + x, baseWY - 1, baseWZ + z) == emptyBlock : !TestBit(nBottom, xzBaseOffset)) : flatBlocks[li - 1] == emptyBlock)) mask |= FACE_BOTTOM;
+                            if (frontVisible && (atMaxZ ? (nFront == null ? getWorldBlock(baseWX + x, baseWY + y, baseWZ + maxZ) == emptyBlock : !TestBit(nFront, x * maxY + y)) : flatBlocks[li + strideZ] == emptyBlock)) mask |= FACE_FRONT;
+                            if (backVisible && (atMinZ ? (nBack == null ? getWorldBlock(baseWX + x, baseWY + y, baseWZ - 1) == emptyBlock : !TestBit(nBack, x * maxY + y)) : flatBlocks[li - strideZ] == emptyBlock)) mask |= FACE_BACK;
+                            if (mask == 0) continue; masks[li] = mask; totalFaces += FacePopCount[mask];
+                        }
                     }
                 }
             }
+            finally
+            {
+                ReturnNeighborPlanes();
+            }
+
             if (totalFaces == 0)
             {
                 chunkVertsList = new List<byte>(0); chunkUVsList = new List<byte>(0); chunkIndicesList = new List<uint>(0); indexFormat = IndexFormat.UInt; ArrayPool<byte>.Shared.Return(masks, false); return;
