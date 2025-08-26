@@ -46,26 +46,82 @@ namespace MVGE_GFX.Terrain
                 return;
             }
 
-            // Decide if pooling should be used based on non-empty voxel count instead of raw volume
             bool usePooling = false;
+            int nonEmpty = 0; // total solid voxels
+            long faceEstimate = 0; // approximate visible face count (only valid if we finish full pass without triggering classic threshold)
+
             if (FlagManager.flags.useFacePooling.GetValueOrDefault())
             {
                 int threshold = FlagManager.flags.faceAmountToPool.GetValueOrDefault(int.MaxValue);
+                int strideX = maxZ * maxY; // distance between x slices
+                int strideZ = maxY;         // distance between z rows
+
+                // Single unified pass: counts solids & (unless early threshold trigger) accumulates face estimate.
                 if (threshold >= 0)
                 {
-                    int nonEmpty = 0;
-                    int total = flatBlocks.Length;
-                    for (int i = 0; i < total; i++)
+                    for (int x = 0; x < maxX && !usePooling; x++)
                     {
-                        if (flatBlocks[i] != emptyBlock)
+                        int slabBase = x * strideX;
+                        for (int z = 0; z < maxZ && !usePooling; z++)
                         {
-                            nonEmpty++;
-                            if (nonEmpty >= threshold)
+                            int rowBase = slabBase + z * strideZ;
+                            for (int y = 0; y < maxY; y++)
                             {
-                                usePooling = true;
-                                break;
+                                int li = rowBase + y;
+                                if (flatBlocks[li] == emptyBlock) continue;
+                                nonEmpty++;
+                                // Classic threshold check – if reached we select pooled path & abandon face estimate refinement.
+                                if (nonEmpty >= threshold)
+                                {
+                                    usePooling = true;
+                                    break;
+                                }
+                                // Exposure estimate: add 6, subtract 2 per previously visited solid neighbor (x-1, y-1, z-1)
+                                faceEstimate += 6;
+                                if (x > 0 && flatBlocks[li - strideX] != emptyBlock) faceEstimate -= 2; // -X shared pair
+                                if (z > 0 && flatBlocks[li - strideZ] != emptyBlock) faceEstimate -= 2; // -Z shared pair
+                                if (y > 0 && flatBlocks[li - 1] != emptyBlock) faceEstimate -= 2;       // -Y shared pair
                             }
                         }
+                    }
+                }
+                else
+                {
+                    // threshold disabled (negative) -> still compute density/exposure in one pass
+                    for (int x = 0; x < maxX; x++)
+                    {
+                        int slabBase = x * strideX;
+                        for (int z = 0; z < maxZ; z++)
+                        {
+                            int rowBase = slabBase + z * strideZ;
+                            for (int y = 0; y < maxY; y++)
+                            {
+                                int li = rowBase + y;
+                                if (flatBlocks[li] == emptyBlock) continue;
+                                nonEmpty++;
+                                faceEstimate += 6;
+                                if (x > 0 && flatBlocks[li - strideX] != emptyBlock) faceEstimate -= 2;
+                                if (z > 0 && flatBlocks[li - strideZ] != emptyBlock) faceEstimate -= 2;
+                                if (y > 0 && flatBlocks[li - 1] != emptyBlock) faceEstimate -= 2;
+                            }
+                        }
+                    }
+                }
+
+                // Exposure-based heuristic only if we did NOT already select pooling via threshold and we have at least one solid.
+                if (!usePooling && nonEmpty > 0)
+                {
+                    int volume = maxX * maxY * maxZ;
+                    float density = nonEmpty / (float)volume;
+                    // faceEstimate counts only if threshold not hit; if threshold hit pooling already true.
+                    float exposureRatio = (float)faceEstimate / (nonEmpty * 6f);
+
+                    const float MinimumDensityThreshold = 0.15f; // low density
+                    const float MaxExposureThreshold = 0.55f;    // high exposure
+
+                    if (density < MinimumDensityThreshold && exposureRatio > MaxExposureThreshold)
+                    {
+                        usePooling = true;
                     }
                 }
             }
