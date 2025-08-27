@@ -126,7 +126,7 @@ namespace MVGE_GFX.Terrain
             GenerateFaces();
         }
 
-        // Store passed pre-render data (for future logic migrations). Currently only flags used.
+        // Preserve full prerender data for downstream dense builder usage
         private readonly ChunkPrerenderData prerenderData;
 
         public ChunkRender(
@@ -138,8 +138,7 @@ namespace MVGE_GFX.Terrain
             int maxZ,
             ChunkPrerenderData prerenderData)
         {
-            // map existing parameters from prerenderData to previous fields
-            this.prerenderData = prerenderData;
+            this.prerenderData = prerenderData; // store original
             this.prepassSolidCount = prerenderData.PrepassSolidCount;
             this.prepassExposureEstimate = prerenderData.PrepassExposureEstimate;
             chunkMeta = chunkData;
@@ -216,10 +215,8 @@ namespace MVGE_GFX.Terrain
             {
                 var pooledBuilder = new DenseChunkRender(
                     chunkWorldPosition, maxX, maxY, maxZ, emptyBlock,
-                    getWorldBlock, null, null, terrainTextureAtlas, flatBlocks,
-                    faceNegX, facePosX, faceNegY, facePosY, faceNegZ, facePosZ,
-                    nNegXPosX, nPosXNegX, nNegYPosY, nPosYNegY, nNegZPosZ, nPosZNegZ,
-                    allOneBlock, allOneBlockId);
+                    terrainTextureAtlas, flatBlocks,
+                    this.prerenderData);
                 var pooledResult = pooledBuilder.Build();
                 usedPooling = true;
                 useUShort = pooledResult.UseUShort;

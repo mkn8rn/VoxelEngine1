@@ -9,6 +9,7 @@ using Vector3 = OpenTK.Mathematics.Vector3;
 using Vector2 = OpenTK.Mathematics.Vector2;
 using MVGE_GFX.Textures;
 using System.Collections.Generic;
+using MVGE_INF.Models.Generation;
 
 namespace MVGE_GFX.Terrain
 {
@@ -22,9 +23,6 @@ namespace MVGE_GFX.Terrain
         private readonly Vector3 chunkWorldPosition;
         private readonly int maxX, maxY, maxZ;
         private readonly ushort emptyBlock;
-        private readonly Func<int, int, int, ushort> getWorldBlock; // legacy path
-        private readonly GetBlockFastDelegate getWorldBlockFast; // renamed for consistency
-        private readonly Func<int, int, int, ushort> getLocalBlock; // fallback delegate path
         private readonly BlockTextureAtlas atlas;
         private readonly ushort[] preFlattenedLocalBlocks; // null if not supplied
 
@@ -32,6 +30,14 @@ namespace MVGE_GFX.Terrain
         private readonly bool faceNegX, facePosX, faceNegY, facePosY, faceNegZ, facePosZ;
         // Neighbor opposing face solidity flags
         private readonly bool nNegXPosX, nPosXNegX, nNegYPosY, nPosYNegY, nNegZPosZ, nPosZNegZ;
+
+        // Neighbor plane caches (may be null if not supplied)
+        private readonly ulong[] neighborPlaneNegX; // neighbor -X (+X face of neighbor)
+        private readonly ulong[] neighborPlanePosX;
+        private readonly ulong[] neighborPlaneNegY;
+        private readonly ulong[] neighborPlanePosY;
+        private readonly ulong[] neighborPlaneNegZ;
+        private readonly ulong[] neighborPlanePosZ;
 
         // Uniform single-solid fast path flags (set when chunk known to be one block id everywhere)
         private readonly bool forceSingleSolid;
@@ -86,37 +92,25 @@ namespace MVGE_GFX.Terrain
         public DenseChunkRender(Vector3 chunkWorldPosition,
                                  int maxX, int maxY, int maxZ,
                                  ushort emptyBlock,
-                                 Func<int, int, int, ushort> worldGetter,
-                                 GetBlockFastDelegate fastGetter,
-                                 Func<int, int, int, ushort> localGetter,
                                  BlockTextureAtlas atlas,
-                                 ushort[] preFlattenedLocalBlocks = null,
-                                 bool faceNegX = false,
-                                 bool facePosX = false,
-                                 bool faceNegY = false,
-                                 bool facePosY = false,
-                                 bool faceNegZ = false,
-                                 bool facePosZ = false,
-                                 bool nNegXPosX = false,
-                                 bool nPosXNegX = false,
-                                 bool nNegYPosY = false,
-                                 bool nPosYNegY = false,
-                                 bool nNegZPosZ = false,
-                                 bool nPosZNegZ = false,
-                                 bool forceSingleSolid = false,
-                                 ushort forceSingleSolidBlockId = 0)
+                                 ushort[] preFlattenedLocalBlocks,
+                                 ChunkPrerenderData prerender)
         {
             this.chunkWorldPosition = chunkWorldPosition;
             this.maxX = maxX; this.maxY = maxY; this.maxZ = maxZ;
             this.emptyBlock = emptyBlock;
-            getWorldBlock = worldGetter;
-            getWorldBlockFast = fastGetter;
-            getLocalBlock = localGetter;
             this.atlas = atlas;
             this.preFlattenedLocalBlocks = preFlattenedLocalBlocks; // may be null
-            this.faceNegX = faceNegX; this.facePosX = facePosX; this.faceNegY = faceNegY; this.facePosY = facePosY; this.faceNegZ = faceNegZ; this.facePosZ = facePosZ;
-            this.nNegXPosX = nNegXPosX; this.nPosXNegX = nPosXNegX; this.nNegYPosY = nNegYPosY; this.nPosYNegY = nPosYNegY; this.nNegZPosZ = nNegZPosZ; this.nPosZNegZ = nPosZNegZ;
-            this.forceSingleSolid = forceSingleSolid; this.forceSingleSolidBlockId = forceSingleSolidBlockId;
+            // flags from prerender struct
+            faceNegX = prerender.FaceNegX; facePosX = prerender.FacePosX; faceNegY = prerender.FaceNegY; facePosY = prerender.FacePosY; faceNegZ = prerender.FaceNegZ; facePosZ = prerender.FacePosZ;
+            nNegXPosX = prerender.NeighborNegXPosX; nPosXNegX = prerender.NeighborPosXNegX; nNegYPosY = prerender.NeighborNegYPosY; nPosYNegY = prerender.NeighborPosYNegY; nNegZPosZ = prerender.NeighborNegZPosZ; nPosZNegZ = prerender.NeighborPosZNegZ;
+            forceSingleSolid = prerender.AllOneBlock; forceSingleSolidBlockId = prerender.AllOneBlockId;
+            neighborPlaneNegX = prerender.NeighborPlaneNegX;
+            neighborPlanePosX = prerender.NeighborPlanePosX;
+            neighborPlaneNegY = prerender.NeighborPlaneNegY;
+            neighborPlanePosY = prerender.NeighborPlanePosY;
+            neighborPlaneNegZ = prerender.NeighborPlaneNegZ;
+            neighborPlanePosZ = prerender.NeighborPlanePosZ;
         }
 
         private static readonly object indexMapLock = new();
@@ -213,10 +207,6 @@ namespace MVGE_GFX.Terrain
             Array.Clear(ySlabNonEmpty, 0, maxY);
             Array.Clear(zSlabNonEmpty, 0, maxZ);
 
-            ulong[] neighborLeft = null, neighborRight = null, neighborBottom = null, neighborTop = null, neighborBack = null, neighborFront = null;
-            bool loadedLeft = false, loadedRight = false, loadedBottom = false, loadedTop = false, loadedBack = false, loadedFront = false;
-            bool leftFromTL = false, rightFromTL = false, bottomFromTL = false, topFromTL = false, backFromTL = false, frontFromTL = false;
-
             long solidCount = 0;
             int baseWX = (int)chunkWorldPosition.X; int baseWY = (int)chunkWorldPosition.Y; int baseWZ = (int)chunkWorldPosition.Z;
 
@@ -227,13 +217,6 @@ namespace MVGE_GFX.Terrain
             bool occludeTop = facePosY && nPosYNegY;
             bool occludeBack = faceNegZ && nNegZPosZ;
             bool occludeFront = facePosZ && nPosZNegZ;
-
-            // Local function to fetch neighbor plane (shared by passes)
-            ulong[] GetNeighborPlane(ref ulong[] arr, ref bool loaded, ref bool fromTL, int wc, int dimA, int dimB, char plane, int ox, int oy, int oz)
-            {
-                if (loaded) return arr;
-                arr = TLPlaneRent(wc); fromTL = true; PrefetchNeighborPlane(getWorldBlockFast, getWorldBlock, arr, ox, oy, oz, dimA, dimB, wc, plane); loaded = true; return arr;
-            }
 
             try
             {
@@ -265,10 +248,7 @@ namespace MVGE_GFX.Terrain
 
                 if (solidCount == 0) return EmptyBuildResult(false);
                 if (TryFlagBasedFullOcclusionEarlyOut(false, out var flagOccluded)) return flagOccluded;
-                if (TryFullySolidNeighborOcclusion(solidCount, voxelCount, yzWC, xzWC, xyWC, yzPlaneBits, xzPlaneBits, xyPlaneBits, baseWX, baseWY, baseWZ,
-                                                   ref neighborLeft, ref neighborRight, ref neighborBottom, ref neighborTop, ref neighborBack, ref neighborFront,
-                                                   ref loadedLeft, ref loadedRight, ref loadedBottom, ref loadedTop, ref loadedBack, ref loadedFront,
-                                                   false, out var fullySolidOccluded)) return fullySolidOccluded;
+                if (TryFullySolidNeighborOcclusion(solidCount, voxelCount, yzPlaneBits, xzPlaneBits, xyPlaneBits, false, out var fullySolidOccluded)) return fullySolidOccluded;
 
                 // First pass: count faces
                 int totalFaces = 0;
@@ -276,43 +256,42 @@ namespace MVGE_GFX.Terrain
                 {
                     if (!xSlabNonEmpty[x]) continue;
                     int curOff = x * yzWC; int prevOff = (x - 1) * yzWC; int nextOff = (x + 1) * yzWC;
-                    var leftPlane = x == 0 ? (occludeLeft ? null : GetNeighborPlane(ref neighborLeft, ref loadedLeft, ref leftFromTL, yzWC, maxY, maxZ, 'X', baseWX - 1, baseWY, baseWZ)) : null;
-                    var rightPlane = x == maxX - 1 ? (occludeRight ? null : GetNeighborPlane(ref neighborRight, ref loadedRight, ref rightFromTL, yzWC, maxY, maxZ, 'X', baseWX + maxX, baseWY, baseWZ)) : null;
+                    var leftPlane = x == 0 ? (occludeLeft ? null : neighborPlaneNegX) : null;
+                    var rightPlane = x == maxX - 1 ? (occludeRight ? null : neighborPlanePosX) : null;
                     for (int w = 0; w < yzWC; w++)
                     {
                         ulong cur = xSlabs[curOff + w]; if (cur == 0) continue;
-                        if (!(x == 0 && occludeLeft)) { ulong neighbor = x == 0 ? (leftPlane != null ? leftPlane[w] : ulong.MaxValue) : xSlabs[prevOff + w]; totalFaces += BitOperations.PopCount(cur & ~neighbor); }
-                        if (!(x == maxX - 1 && occludeRight)) { ulong neighbor = x == maxX - 1 ? (rightPlane != null ? rightPlane[w] : ulong.MaxValue) : xSlabs[nextOff + w]; totalFaces += BitOperations.PopCount(cur & ~neighbor); }
+                        if (!(x == 0 && occludeLeft)) { ulong neighbor = x == 0 ? (leftPlane != null ? leftPlane[w] : 0UL) : xSlabs[prevOff + w]; totalFaces += BitOperations.PopCount(cur & ~neighbor); }
+                        if (!(x == maxX - 1 && occludeRight)) { ulong neighbor = x == maxX - 1 ? (rightPlane != null ? rightPlane[w] : 0UL) : xSlabs[nextOff + w]; totalFaces += BitOperations.PopCount(cur & ~neighbor); }
                     }
                 }
                 for (int y = 0; y < maxY; y++)
                 {
                     if (!ySlabNonEmpty[y]) continue;
                     int curOff = y * xzWC; int prevOff = (y - 1) * xzWC; int nextOff = (y + 1) * xzWC;
-                    var bottomPlane = y == 0 ? (occludeBottom ? null : GetNeighborPlane(ref neighborBottom, ref loadedBottom, ref bottomFromTL, xzWC, maxX, maxZ, 'Y', baseWX, baseWY - 1, baseWZ)) : null;
-                    var topPlane = y == maxY - 1 ? (occludeTop ? null : GetNeighborPlane(ref neighborTop, ref loadedTop, ref topFromTL, xzWC, maxX, maxZ, 'Y', baseWX, baseWY + maxY, baseWZ)) : null;
+                    var bottomPlane = y == 0 ? (occludeBottom ? null : neighborPlaneNegY) : null;
+                    var topPlane = y == maxY - 1 ? (occludeTop ? null : neighborPlanePosY) : null;
                     for (int w = 0; w < xzWC; w++)
                     {
                         ulong cur = ySlabs[curOff + w]; if (cur == 0) continue;
-                        if (!(y == 0 && occludeBottom)) { ulong neighbor = y == 0 ? (bottomPlane != null ? bottomPlane[w] : ulong.MaxValue) : ySlabs[prevOff + w]; totalFaces += BitOperations.PopCount(cur & ~neighbor); }
-                        if (!(y == maxY - 1 && occludeTop)) { ulong neighbor = y == maxY - 1 ? (topPlane != null ? topPlane[w] : ulong.MaxValue) : ySlabs[nextOff + w]; totalFaces += BitOperations.PopCount(cur & ~neighbor); }
+                        if (!(y == 0 && occludeBottom)) { ulong neighbor = y == 0 ? (bottomPlane != null ? bottomPlane[w] : 0UL) : ySlabs[prevOff + w]; totalFaces += BitOperations.PopCount(cur & ~neighbor); }
+                        if (!(y == maxY - 1 && occludeTop)) { ulong neighbor = y == maxY - 1 ? (topPlane != null ? topPlane[w] : 0UL) : ySlabs[nextOff + w]; totalFaces += BitOperations.PopCount(cur & ~neighbor); }
                     }
                 }
                 for (int z = 0; z < maxZ; z++)
                 {
                     if (!zSlabNonEmpty[z]) continue;
                     int curOff = z * xyWC; int prevOff = (z - 1) * xyWC; int nextOff = (z + 1) * xyWC;
-                    var backPlane = z == 0 ? (occludeBack ? null : GetNeighborPlane(ref neighborBack, ref loadedBack, ref backFromTL, xyWC, maxX, maxY, 'Z', baseWX, baseWY, baseWZ - 1)) : null;
-                    var frontPlane = z == maxZ - 1 ? (occludeFront ? null : GetNeighborPlane(ref neighborFront, ref loadedFront, ref frontFromTL, xyWC, maxX, maxY, 'Z', baseWX, baseWY, baseWZ + maxZ)) : null;
+                    var backPlane = z == 0 ? (occludeBack ? null : neighborPlaneNegZ) : null;
+                    var frontPlane = z == maxZ - 1 ? (occludeFront ? null : neighborPlanePosZ) : null;
                     for (int w = 0; w < xyWC; w++)
                     {
                         ulong cur = zSlabs[curOff + w]; if (cur == 0) continue;
-                        if (!(z == 0 && occludeBack)) { ulong neighbor = z == 0 ? (backPlane != null ? backPlane[w] : ulong.MaxValue) : zSlabs[prevOff + w]; totalFaces += BitOperations.PopCount(cur & ~neighbor); }
-                        if (!(z == maxZ - 1 && occludeFront)) { ulong neighbor = z == maxZ - 1 ? (frontPlane != null ? frontPlane[w] : ulong.MaxValue) : zSlabs[nextOff + w]; totalFaces += BitOperations.PopCount(cur & ~neighbor); }
+                        if (!(z == 0 && occludeBack)) { ulong neighbor = z == 0 ? (backPlane != null ? backPlane[w] : 0UL) : zSlabs[prevOff + w]; totalFaces += BitOperations.PopCount(cur & ~neighbor); }
+                        if (!(z == maxZ - 1 && occludeFront)) { ulong neighbor = z == maxZ - 1 ? (frontPlane != null ? frontPlane[w] : 0UL) : zSlabs[nextOff + w]; totalFaces += BitOperations.PopCount(cur & ~neighbor); }
                     }
                 }
 
-                // if no faces after full counting across axes, chunk is fully enclosed (non-uniform) -> early exit
                 if (totalFaces == 0)
                 {
                     return EmptyBuildResult(false);
@@ -325,20 +304,20 @@ namespace MVGE_GFX.Terrain
                 ushort[] indicesUShortBuffer = useUShort ? ArrayPool<ushort>.Shared.Rent(Math.Max(1, totalFaces * 6)) : null;
                 uint[] indicesUIntBuffer = useUShort ? null : ArrayPool<uint>.Shared.Rent(Math.Max(1, totalFaces * 6));
 
-                // Second pass: emit faces (reusing / loading neighbor planes if needed)
+                // Second pass: emit faces
                 int faceIndex = 0;
                 for (int x = 0; x < maxX; x++)
                 {
                     if (!xSlabNonEmpty[x]) continue;
                     int curOff = x * yzWC; int prevOff = (x - 1) * yzWC; int nextOff = (x + 1) * yzWC;
-                    var leftPlane = x == 0 ? (occludeLeft ? null : GetNeighborPlane(ref neighborLeft, ref loadedLeft, ref leftFromTL, yzWC, maxY, maxZ, 'X', baseWX - 1, baseWY, baseWZ)) : null;
-                    var rightPlane = x == maxX - 1 ? (occludeRight ? null : GetNeighborPlane(ref neighborRight, ref loadedRight, ref rightFromTL, yzWC, maxY, maxZ, 'X', baseWX + maxX, baseWY, baseWZ)) : null;
+                    var leftPlane = x == 0 ? (occludeLeft ? null : neighborPlaneNegX) : null;
+                    var rightPlane = x == maxX - 1 ? (occludeRight ? null : neighborPlanePosX) : null;
                     for (int w = 0; w < yzWC; w++)
                     {
                         ulong cur = xSlabs[curOff + w]; if (cur == 0) continue;
                         if (!(x == 0 && occludeLeft))
                         {
-                            ulong neighbor = x == 0 ? (leftPlane != null ? leftPlane[w] : ulong.MaxValue) : xSlabs[prevOff + w];
+                            ulong neighbor = x == 0 ? (leftPlane != null ? leftPlane[w] : 0UL) : xSlabs[prevOff + w];
                             ulong faces = cur & ~neighbor;
                             while (faces != 0)
                             {
@@ -351,7 +330,7 @@ namespace MVGE_GFX.Terrain
                         }
                         if (!(x == maxX - 1 && occludeRight))
                         {
-                            ulong neighbor = x == maxX - 1 ? (rightPlane != null ? rightPlane[w] : ulong.MaxValue) : xSlabs[nextOff + w];
+                            ulong neighbor = x == maxX - 1 ? (rightPlane != null ? rightPlane[w] : 0UL) : xSlabs[nextOff + w];
                             ulong faces = cur & ~neighbor;
                             while (faces != 0)
                             {
@@ -368,14 +347,14 @@ namespace MVGE_GFX.Terrain
                 {
                     if (!ySlabNonEmpty[y]) continue;
                     int curOff = y * xzWC; int prevOff = (y - 1) * xzWC; int nextOff = (y + 1) * xzWC;
-                    var bottomPlane = y == 0 ? (occludeBottom ? null : GetNeighborPlane(ref neighborBottom, ref loadedBottom, ref bottomFromTL, xzWC, maxX, maxZ, 'Y', baseWX, baseWY - 1, baseWZ)) : null;
-                    var topPlane = y == maxY - 1 ? (occludeTop ? null : GetNeighborPlane(ref neighborTop, ref loadedTop, ref topFromTL, xzWC, maxX, maxZ, 'Y', baseWX, baseWY + maxY, baseWZ)) : null;
+                    var bottomPlane = y == 0 ? (occludeBottom ? null : neighborPlaneNegY) : null;
+                    var topPlane = y == maxY - 1 ? (occludeTop ? null : neighborPlanePosY) : null;
                     for (int w = 0; w < xzWC; w++)
                     {
                         ulong cur = ySlabs[curOff + w]; if (cur == 0) continue;
                         if (!(y == 0 && occludeBottom))
                         {
-                            ulong neighbor = y == 0 ? (bottomPlane != null ? bottomPlane[w] : ulong.MaxValue) : ySlabs[prevOff + w];
+                            ulong neighbor = y == 0 ? (bottomPlane != null ? bottomPlane[w] : 0UL) : ySlabs[prevOff + w];
                             ulong faces = cur & ~neighbor;
                             while (faces != 0)
                             {
@@ -388,7 +367,7 @@ namespace MVGE_GFX.Terrain
                         }
                         if (!(y == maxY - 1 && occludeTop))
                         {
-                            ulong neighbor = y == maxY - 1 ? (topPlane != null ? topPlane[w] : ulong.MaxValue) : ySlabs[nextOff + w];
+                            ulong neighbor = y == maxY - 1 ? (topPlane != null ? topPlane[w] : 0UL) : ySlabs[nextOff + w];
                             ulong faces = cur & ~neighbor;
                             while (faces != 0)
                             {
@@ -405,14 +384,14 @@ namespace MVGE_GFX.Terrain
                 {
                     if (!zSlabNonEmpty[z]) continue;
                     int curOff = z * xyWC; int prevOff = (z - 1) * xyWC; int nextOff = (z + 1) * xyWC;
-                    var backPlane = z == 0 ? (occludeBack ? null : GetNeighborPlane(ref neighborBack, ref loadedBack, ref backFromTL, xyWC, maxX, maxY, 'Z', baseWX, baseWY, baseWZ - 1)) : null;
-                    var frontPlane = z == maxZ - 1 ? (occludeFront ? null : GetNeighborPlane(ref neighborFront, ref loadedFront, ref frontFromTL, xyWC, maxX, maxY, 'Z', baseWX, baseWY, baseWZ + maxZ)) : null;
+                    var backPlane = z == 0 ? (occludeBack ? null : neighborPlaneNegZ) : null;
+                    var frontPlane = z == maxZ - 1 ? (occludeFront ? null : neighborPlanePosZ) : null;
                     for (int w = 0; w < xyWC; w++)
                     {
                         ulong cur = zSlabs[curOff + w]; if (cur == 0) continue;
                         if (!(z == 0 && occludeBack))
                         {
-                            ulong neighbor = z == 0 ? (backPlane != null ? backPlane[w] : ulong.MaxValue) : zSlabs[prevOff + w];
+                            ulong neighbor = z == 0 ? (backPlane != null ? backPlane[w] : 0UL) : zSlabs[prevOff + w];
                             ulong faces = cur & ~neighbor;
                             while (faces != 0)
                             {
@@ -425,7 +404,7 @@ namespace MVGE_GFX.Terrain
                         }
                         if (!(z == maxZ - 1 && occludeFront))
                         {
-                            ulong neighbor = z == maxZ - 1 ? (frontPlane != null ? frontPlane[w] : ulong.MaxValue) : zSlabs[nextOff + w];
+                            ulong neighbor = z == maxZ - 1 ? (frontPlane != null ? frontPlane[w] : 0UL) : zSlabs[nextOff + w];
                             ulong faces = cur & ~neighbor;
                             while (faces != 0)
                             {
@@ -460,12 +439,6 @@ namespace MVGE_GFX.Terrain
                 ArrayPool<bool>.Shared.Return(xSlabNonEmpty, false);
                 ArrayPool<bool>.Shared.Return(ySlabNonEmpty, false);
                 ArrayPool<bool>.Shared.Return(zSlabNonEmpty, false);
-                if (neighborLeft != null) { if (leftFromTL) TLPlaneReturn(neighborLeft); else ArrayPool<ulong>.Shared.Return(neighborLeft, false); }
-                if (neighborRight != null) { if (rightFromTL) TLPlaneReturn(neighborRight); else ArrayPool<ulong>.Shared.Return(neighborRight, false); }
-                if (neighborBottom != null) { if (bottomFromTL) TLPlaneReturn(neighborBottom); else ArrayPool<ulong>.Shared.Return(neighborBottom, false); }
-                if (neighborTop != null) { if (topFromTL) TLPlaneReturn(neighborTop); else ArrayPool<ulong>.Shared.Return(neighborTop, false); }
-                if (neighborBack != null) { if (backFromTL) TLPlaneReturn(neighborBack); else ArrayPool<ulong>.Shared.Return(neighborBack, false); }
-                if (neighborFront != null) { if (frontFromTL) TLPlaneReturn(neighborFront); else ArrayPool<ulong>.Shared.Return(neighborFront, false); }
             }
         }
     }

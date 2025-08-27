@@ -37,55 +37,11 @@ namespace MVGE_GFX.Terrain
             return true;
         }
 
-        private void PrefetchNeighborPlane(GetBlockFastDelegate fastGetter, Func<int, int, int, ushort> slowGetter, ulong[] target, int baseWX, int baseWY, int baseWZ, int dimA, int dimB, int wordCount, char plane)
-        {
-            if (plane == 'X')
-            {
-                for (int z = 0; z < dimB; z++)
-                {
-                    for (int y = 0; y < dimA; y++)
-                    {
-                        int yzIndex = z * dimA + y; int w = yzIndex >> 6; int b = yzIndex & 63;
-                        ushort val = 0; bool ok = fastGetter != null && fastGetter(baseWX, baseWY + y, baseWZ + z, out val);
-                        if (!ok) val = slowGetter(baseWX, baseWY + y, baseWZ + z);
-                        if (val != emptyBlock) target[w] |= 1UL << b;
-                    }
-                }
-            }
-            else if (plane == 'Y')
-            {
-                for (int z = 0; z < dimB; z++)
-                {
-                    for (int x = 0; x < dimA; x++)
-                    {
-                        int xzIndex = x * dimB + z; int w = xzIndex >> 6; int b = xzIndex & 63;
-                        ushort val = 0; bool ok = fastGetter != null && fastGetter(baseWX + x, baseWY, baseWZ + z, out val);
-                        if (!ok) val = slowGetter(baseWX + x, baseWY, baseWZ + z);
-                        if (val != emptyBlock) target[w] |= 1UL << b;
-                    }
-                }
-            }
-            else
-            {
-                for (int x = 0; x < dimA; x++)
-                {
-                    for (int y = 0; y < dimB; y++)
-                    {
-                        int xyIndex = x * dimB + y; int w = xyIndex >> 6; int b = xyIndex & 63;
-                        ushort val = 0; bool ok = fastGetter != null && fastGetter(baseWX + x, baseWY + y, baseWZ, out val);
-                        if (!ok) val = slowGetter(baseWX + x, baseWY + y, baseWZ);
-                        if (val != emptyBlock) target[w] |= 1UL << b;
-                    }
-                }
-            }
-        }
-
-        // Fully occluded early exit (all our faces + neighbor opposing faces solid)
+        // Delegates removed: neighbor planes now pre-cached in constructor via ChunkPrerenderData
         private bool IsFullyOccludedByFlags() =>
             faceNegX && facePosX && faceNegY && facePosY && faceNegZ && facePosZ &&
             nNegXPosX && nPosXNegX && nNegYPosY && nPosYNegY && nNegZPosZ && nPosZNegZ;
 
-        // BuildResult factory for empty returns
         private static BuildResult EmptyBuildResult(bool hasSingleOpaque) => new BuildResult
         {
             UseUShort = true,
@@ -99,7 +55,6 @@ namespace MVGE_GFX.Terrain
             IndicesUsed = 0
         };
 
-        // Flag-based full occlusion (all our faces + neighbor opposing faces solid)
         private bool TryFlagBasedFullOcclusionEarlyOut(bool hasSingleOpaque, out BuildResult result)
         {
             if (IsFullyOccludedByFlags())
@@ -116,34 +71,19 @@ namespace MVGE_GFX.Terrain
             for (int i = 0; i < len; i++) arr[i] = 0UL;
         }
 
-        // Simplified fully solid neighbor occlusion test (retained to satisfy existing call sites).
-        // If chunk is entirely solid and all neighbor touching planes are also fully solid, we early out.
+        // Simplified fully solid neighbor occlusion test now uses pre-cached neighbor planes.
         private bool TryFullySolidNeighborOcclusion(long solidCount, int voxelCount,
-                                                     int yzWC, int xzWC, int xyWC,
                                                      int yzPlaneBits, int xzPlaneBits, int xyPlaneBits,
-                                                     int baseWX, int baseWY, int baseWZ,
-                                                     ref ulong[] neighborLeft, ref ulong[] neighborRight,
-                                                     ref ulong[] neighborBottom, ref ulong[] neighborTop,
-                                                     ref ulong[] neighborBack, ref ulong[] neighborFront,
-                                                     ref bool loadedLeft, ref bool loadedRight,
-                                                     ref bool loadedBottom, ref bool loadedTop,
-                                                     ref bool loadedBack, ref bool loadedFront,
                                                      bool hasSingleOpaque,
                                                      out BuildResult result)
         {
             result = default;
-            if (solidCount != voxelCount) return false; // only consider fully solid volume
-
-            neighborLeft = ArrayPool<ulong>.Shared.Rent(yzWC); ClearUlongsStatic(neighborLeft, yzWC); PrefetchNeighborPlane(getWorldBlockFast, getWorldBlock, neighborLeft, baseWX - 1, baseWY, baseWZ, maxY, maxZ, yzWC, plane: 'X'); loadedLeft = true;
-            neighborRight = ArrayPool<ulong>.Shared.Rent(yzWC); ClearUlongsStatic(neighborRight, yzWC); PrefetchNeighborPlane(getWorldBlockFast, getWorldBlock, neighborRight, baseWX + maxX, baseWY, baseWZ, maxY, maxZ, yzWC, plane: 'X'); loadedRight = true;
-            neighborBack = ArrayPool<ulong>.Shared.Rent(xyWC); ClearUlongsStatic(neighborBack, xyWC); PrefetchNeighborPlane(getWorldBlockFast, getWorldBlock, neighborBack, baseWX, baseWY, baseWZ - 1, maxX, maxY, xyWC, plane: 'Z'); loadedBack = true;
-            neighborFront = ArrayPool<ulong>.Shared.Rent(xyWC); ClearUlongsStatic(neighborFront, xyWC); PrefetchNeighborPlane(getWorldBlockFast, getWorldBlock, neighborFront, baseWX, baseWY, baseWZ + maxZ, maxX, maxY, xyWC, plane: 'Z'); loadedFront = true;
-            neighborBottom = ArrayPool<ulong>.Shared.Rent(xzWC); ClearUlongsStatic(neighborBottom, xzWC); PrefetchNeighborPlane(getWorldBlockFast, getWorldBlock, neighborBottom, baseWX, baseWY - 1, baseWZ, maxX, maxZ, xzWC, plane: 'Y'); loadedBottom = true;
-            neighborTop = ArrayPool<ulong>.Shared.Rent(xzWC); ClearUlongsStatic(neighborTop, xzWC); PrefetchNeighborPlane(getWorldBlockFast, getWorldBlock, neighborTop, baseWX, baseWY + maxY, baseWZ, maxX, maxZ, xzWC, plane: 'Y'); loadedTop = true;
-
-            if (AllBitsSet(neighborLeft, yzPlaneBits) && AllBitsSet(neighborRight, yzPlaneBits) &&
-                AllBitsSet(neighborBottom, xzPlaneBits) && AllBitsSet(neighborTop, xzPlaneBits) &&
-                AllBitsSet(neighborBack, xyPlaneBits) && AllBitsSet(neighborFront, xyPlaneBits))
+            if (solidCount != voxelCount) return false;
+            if (neighborPlaneNegX == null || neighborPlanePosX == null || neighborPlaneNegY == null || neighborPlanePosY == null || neighborPlaneNegZ == null || neighborPlanePosZ == null)
+                return false; // cannot evaluate without all planes
+            if (AllBitsSet(neighborPlaneNegX, yzPlaneBits) && AllBitsSet(neighborPlanePosX, yzPlaneBits) &&
+                AllBitsSet(neighborPlaneNegY, xzPlaneBits) && AllBitsSet(neighborPlanePosY, xzPlaneBits) &&
+                AllBitsSet(neighborPlaneNegZ, xyPlaneBits) && AllBitsSet(neighborPlanePosZ, xyPlaneBits))
             {
                 result = EmptyBuildResult(hasSingleOpaque);
                 return true;
@@ -151,7 +91,6 @@ namespace MVGE_GFX.Terrain
             return false;
         }
 
-        // ----- UNIFORM SINGLE-SOLID FAST PATH -----
         private BuildResult BuildUniformSingleSolidFastPath()
         {
             if (IsFullyOccludedByFlags())
