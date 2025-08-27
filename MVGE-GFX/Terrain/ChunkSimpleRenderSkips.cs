@@ -6,62 +6,63 @@ namespace MVGE_GFX.Terrain
 {
     public partial class ChunkRender
     {
+        private static bool AllBitsSetSimple(ulong[] arr, int bitCount)
+        {
+            if (arr == null) return false;
+            int wc = (bitCount + 63) >> 6; int rem = bitCount & 63; ulong lastMask = rem == 0 ? ulong.MaxValue : (1UL << rem) - 1UL;
+            for (int i = 0; i < wc; i++)
+            {
+                ulong expected = (i == wc - 1) ? lastMask : ulong.MaxValue;
+                if ((arr[i] & expected) != expected) return false;
+            }
+            return true;
+        }
+
         private bool CheckFullyOccluded(int maxX, int maxY, int maxZ)
         {
+            // Fast flag test (our faces + neighbor opposing faces)
             if (faceNegX && facePosX && faceNegY && facePosY && faceNegZ && facePosZ &&
                 nNegXPosX && nPosXNegX && nNegYPosY && nPosYNegY && nNegZPosZ && nPosZNegZ)
             {
                 return true;
             }
 
-            int baseWX = (int)chunkWorldPosition.X;
-            int baseWY = (int)chunkWorldPosition.Y;
-            int baseWZ = (int)chunkWorldPosition.Z;
+            // Verify all six of our boundary planes are fully solid
             for (int x = 0; x < maxX; x++)
                 for (int y = 0; y < maxY; y++)
                 {
-                    int z0 = 0; int z1 = maxZ - 1;
-                    if (flatBlocks[FlatIndex(x, y, z0)] == emptyBlock) return false;
-                    if (flatBlocks[FlatIndex(x, y, z1)] == emptyBlock) return false;
+                    if (flatBlocks[FlatIndex(x, y, 0)] == emptyBlock) return false;
+                    if (flatBlocks[FlatIndex(x, y, maxZ - 1)] == emptyBlock) return false;
                 }
             for (int z = 0; z < maxZ; z++)
                 for (int y = 0; y < maxY; y++)
                 {
-                    int x0 = 0; int x1 = maxX - 1;
-                    if (flatBlocks[FlatIndex(x0, y, z)] == emptyBlock) return false;
-                    if (flatBlocks[FlatIndex(x1, y, z)] == emptyBlock) return false;
+                    if (flatBlocks[FlatIndex(0, y, z)] == emptyBlock) return false;
+                    if (flatBlocks[FlatIndex(maxX - 1, y, z)] == emptyBlock) return false;
                 }
             for (int x = 0; x < maxX; x++)
                 for (int z = 0; z < maxZ; z++)
                 {
-                    int y0 = 0; int y1 = maxY - 1;
-                    if (flatBlocks[FlatIndex(x, y0, z)] == emptyBlock) return false;
-                    if (flatBlocks[FlatIndex(x, y1, z)] == emptyBlock) return false;
+                    if (flatBlocks[FlatIndex(x, 0, z)] == emptyBlock) return false;
+                    if (flatBlocks[FlatIndex(x, maxY - 1, z)] == emptyBlock) return false;
                 }
-            for (int y = 0; y < maxY; y++)
-                for (int z = 0; z < maxZ; z++)
-                {
-                    if (getWorldBlock(baseWX - 1, baseWY + y, baseWZ + z) == emptyBlock) return false;
-                    if (getWorldBlock(baseWX + maxX, baseWY + y, baseWZ + z) == emptyBlock) return false;
-                }
-            for (int x = 0; x < maxX; x++)
-                for (int z = 0; z < maxZ; z++)
-                {
-                    if (getWorldBlock(baseWX + x, baseWY - 1, baseWZ + z) == emptyBlock) return false;
-                    if (getWorldBlock(baseWX + x, baseWY + maxY, baseWZ + z) == emptyBlock) return false;
-                }
-            for (int x = 0; x < maxX; x++)
-                for (int y = 0; y < maxY; y++)
-                {
-                    if (getWorldBlock(baseWX + x, baseWY + y, baseWZ - 1) == emptyBlock) return false;
-                    if (getWorldBlock(baseWX + x, baseWY + y, baseWZ + maxZ) == emptyBlock) return false;
-                }
+
+            // Need neighbor plane caches for full occlusion confirmation; if any missing -> cannot confirm
+            int yzBits = maxY * maxZ;
+            int xzBits = maxX * maxZ;
+            int xyBits = maxX * maxY;
+            if (!AllBitsSetSimple(prerenderData.NeighborPlaneNegX, yzBits)) return false;
+            if (!AllBitsSetSimple(prerenderData.NeighborPlanePosX, yzBits)) return false;
+            if (!AllBitsSetSimple(prerenderData.NeighborPlaneNegY, xzBits)) return false;
+            if (!AllBitsSetSimple(prerenderData.NeighborPlanePosY, xzBits)) return false;
+            if (!AllBitsSetSimple(prerenderData.NeighborPlaneNegZ, xyBits)) return false;
+            if (!AllBitsSetSimple(prerenderData.NeighborPlanePosZ, xyBits)) return false;
+
             return true;
         }
 
         private void GenerateUniformFacesList()
         {
-            // Determine which boundary planes are potentially visible (not mutually occluded by neighbor)
             bool emitLeft = !(faceNegX && nNegXPosX);
             bool emitRight = !(facePosX && nPosXNegX);
             bool emitBottom = !(faceNegY && nNegYPosY);
@@ -69,7 +70,6 @@ namespace MVGE_GFX.Terrain
             bool emitBack = !(faceNegZ && nNegZPosZ);
             bool emitFront = !(facePosZ && nPosZNegZ);
 
-            // Early out if nothing visible
             if (!(emitLeft || emitRight || emitBottom || emitTop || emitBack || emitFront))
             {
                 chunkVertsList = new List<byte>(0);
@@ -79,7 +79,6 @@ namespace MVGE_GFX.Terrain
                 return;
             }
 
-            // Count faces (no greedy merging, emit one quad per boundary voxel)
             int faces = 0;
             if (emitLeft) faces += maxY * maxZ;
             if (emitRight) faces += maxY * maxZ;
@@ -105,7 +104,6 @@ namespace MVGE_GFX.Terrain
             if (useUShortIndices) chunkIndicesUShortList = new List<ushort>(faces * 6); else chunkIndicesList = new List<uint>(faces * 6);
 
             int currentVertexBase = 0;
-            // UVs for the uniform block
             var uvPerFaceCache = new System.Collections.Generic.Dictionary<Faces, List<ByteVector2>>(6);
 
             void EmitFace(Faces face, byte x, byte y, byte z)

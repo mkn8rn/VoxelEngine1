@@ -1,10 +1,7 @@
 ﻿using MVGE_GFX.Models;
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Runtime.CompilerServices;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace MVGE_GFX.Terrain
 {
@@ -67,7 +64,6 @@ namespace MVGE_GFX.Terrain
                 masks = new byte[regionVolume];
             }
 
-            // Local mask indexer (chosen once; no delegate allocations)
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             int MaskIndex(int x, int y, int z)
             {
@@ -92,16 +88,13 @@ namespace MVGE_GFX.Terrain
             int xzBits = maxX * maxZ; int xzWC = (xzBits + 63) >> 6;
             int xyBits = maxX * maxY; int xyWC = (xyBits + 63) >> 6;
 
-            int baseWX = (int)chunkWorldPosition.X;
-            int baseWY = (int)chunkWorldPosition.Y;
-            int baseWZ = (int)chunkWorldPosition.Z;
-
-            if (leftVisible && minX == 0) { nLeft = new ulong[yzWC]; PrefetchNeighborPlaneList(nLeft, baseWX - 1, baseWY, baseWZ, maxY, maxZ, 'X'); }
-            if (rightVisible && maxXb == maxX - 1) { nRight = new ulong[yzWC]; PrefetchNeighborPlaneList(nRight, baseWX + maxX, baseWY, baseWZ, maxY, maxZ, 'X'); }
-            if (bottomVisible && minY == 0) { nBottom = new ulong[xzWC]; PrefetchNeighborPlaneList(nBottom, baseWX, baseWY - 1, baseWZ, maxX, maxZ, 'Y'); }
-            if (topVisible && maxYb == maxY - 1) { nTop = new ulong[xzWC]; PrefetchNeighborPlaneList(nTop, baseWX, baseWY + maxY, baseWZ, maxX, maxZ, 'Y'); }
-            if (backVisible && minZ == 0) { nBack = new ulong[xyWC]; PrefetchNeighborPlaneList(nBack, baseWX, baseWY, baseWZ - 1, maxX, maxY, 'Z'); }
-            if (frontVisible && maxZb == maxZ - 1) { nFront = new ulong[xyWC]; PrefetchNeighborPlaneList(nFront, baseWX, baseWY, baseWZ + maxZ, maxX, maxY, 'Z'); }
+            // Use cached neighbor planes only if region touches boundary.
+            if (leftVisible && minX == 0) nLeft = prerenderData.NeighborPlaneNegX;
+            if (rightVisible && maxXb == maxX - 1) nRight = prerenderData.NeighborPlanePosX;
+            if (bottomVisible && minY == 0) nBottom = prerenderData.NeighborPlaneNegY;
+            if (topVisible && maxYb == maxY - 1) nTop = prerenderData.NeighborPlanePosY;
+            if (backVisible && minZ == 0) nBack = prerenderData.NeighborPlaneNegZ;
+            if (frontVisible && maxZb == maxZ - 1) nFront = prerenderData.NeighborPlanePosZ;
 
             int totalFaces = 0;
 
@@ -128,12 +121,12 @@ namespace MVGE_GFX.Terrain
                         bool atMaxY = y == maxY - 1;
                         byte mask = 0;
 
-                        if (leftVisible && (atMinX ? (nLeft == null ? getWorldBlock(baseWX - 1, baseWY + y, baseWZ + z) == emptyBlock : !TestBit(nLeft, yzBaseOffset + y)) : flatBlocks[li - strideX] == emptyBlock)) mask |= FACE_LEFT;
-                        if (rightVisible && (atMaxX ? (nRight == null ? getWorldBlock(baseWX + maxX, baseWY + y, baseWZ + z) == emptyBlock : !TestBit(nRight, yzBaseOffset + y)) : flatBlocks[li + strideX] == emptyBlock)) mask |= FACE_RIGHT;
-                        if (topVisible && (atMaxY ? (nTop == null ? getWorldBlock(baseWX + x, baseWY + maxY, baseWZ + z) == emptyBlock : !TestBit(nTop, xzBaseOffset)) : flatBlocks[li + 1] == emptyBlock)) mask |= FACE_TOP;
-                        if (bottomVisible && (atMinY ? (nBottom == null ? getWorldBlock(baseWX + x, baseWY - 1, baseWZ + z) == emptyBlock : !TestBit(nBottom, xzBaseOffset)) : flatBlocks[li - 1] == emptyBlock)) mask |= FACE_BOTTOM;
-                        if (frontVisible && (atMaxZ ? (nFront == null ? getWorldBlock(baseWX + x, baseWY + y, baseWZ + maxZ) == emptyBlock : !TestBit(nFront, x * maxY + y)) : flatBlocks[li + strideZ] == emptyBlock)) mask |= FACE_FRONT;
-                        if (backVisible && (atMinZ ? (nBack == null ? getWorldBlock(baseWX + x, baseWY + y, baseWZ - 1) == emptyBlock : !TestBit(nBack, x * maxY + y)) : flatBlocks[li - strideZ] == emptyBlock)) mask |= FACE_BACK;
+                        if (leftVisible && (atMinX ? (nLeft == null ? true : (yzBaseOffset + y >= yzBits || ((nLeft[(yzBaseOffset + y) >> 6] & (1UL << ((yzBaseOffset + y) & 63))) == 0UL))) : flatBlocks[li - strideX] == emptyBlock)) mask |= FACE_LEFT;
+                        if (rightVisible && (atMaxX ? (nRight == null ? true : (yzBaseOffset + y >= yzBits || ((nRight[(yzBaseOffset + y) >> 6] & (1UL << ((yzBaseOffset + y) & 63))) == 0UL))) : flatBlocks[li + strideX] == emptyBlock)) mask |= FACE_RIGHT;
+                        if (topVisible && (atMaxY ? (nTop == null ? true : (xzBaseOffset >= xzBits || ((nTop[xzBaseOffset >> 6] & (1UL << (xzBaseOffset & 63))) == 0UL))) : flatBlocks[li + 1] == emptyBlock)) mask |= FACE_TOP;
+                        if (bottomVisible && (atMinY ? (nBottom == null ? true : (xzBaseOffset >= xzBits || ((nBottom[xzBaseOffset >> 6] & (1UL << (xzBaseOffset & 63))) == 0UL))) : flatBlocks[li - 1] == emptyBlock)) mask |= FACE_BOTTOM;
+                        if (frontVisible && (atMaxZ ? (nFront == null ? true : (x * maxY + y >= xyBits || ((nFront[(x * maxY + y) >> 6] & (1UL << ((x * maxY + y) & 63))) == 0UL))) : flatBlocks[li + strideZ] == emptyBlock)) mask |= FACE_FRONT;
+                        if (backVisible && (atMinZ ? (nBack == null ? true : (x * maxY + y >= xyBits || ((nBack[(x * maxY + y) >> 6] & (1UL << ((x * maxY + y) & 63))) == 0UL))) : flatBlocks[li - strideZ] == emptyBlock)) mask |= FACE_BACK;
 
                         if (mask == 0) continue;
                         int mi = MaskIndex(x, y, z);
