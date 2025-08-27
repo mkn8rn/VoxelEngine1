@@ -8,6 +8,7 @@ using System.Runtime.CompilerServices;
 using Vector3 = OpenTK.Mathematics.Vector3;
 using Vector2 = OpenTK.Mathematics.Vector2;
 using MVGE_GFX.Textures;
+using System.Collections.Generic;
 
 namespace MVGE_GFX.Terrain
 {
@@ -118,6 +119,69 @@ namespace MVGE_GFX.Terrain
             this.forceSingleSolid = forceSingleSolid; this.forceSingleSolidBlockId = forceSingleSolidBlockId;
         }
 
+        private static readonly object indexMapLock = new();
+        private static Dictionary<(int,int), (int[] a, int[] b)> yzIndexMaps; // key (maxY,maxZ) -> (z[], y[])
+        private static Dictionary<(int,int), (int[] a, int[] b)> xzIndexMaps; // key (maxX,maxZ) -> (x[], z[])
+        private static Dictionary<(int,int), (int[] a, int[] b)> xyIndexMaps; // key (maxX,maxY) -> (x[], y[])
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void GetYZIndexMaps(int maxY, int maxZ, out int[] zLut, out int[] yLut)
+        {
+            var key = (maxY, maxZ);
+            var dict = yzIndexMaps;
+            if (dict != null && dict.TryGetValue(key, out var tuple)) { zLut = tuple.a; yLut = tuple.b; return; }
+            lock (indexMapLock)
+            {
+                dict = yzIndexMaps ??= new();
+                if (!dict.TryGetValue(key, out tuple))
+                {
+                    int count = maxY * maxZ; int[] zArr = new int[count]; int[] yArr = new int[count];
+                    for (int z = 0, idx = 0; z < maxZ; z++)
+                        for (int y = 0; y < maxY; y++, idx++) { zArr[idx] = z; yArr[idx] = y; }
+                    tuple = (zArr, yArr); dict[key] = tuple;
+                }
+            }
+            zLut = tuple.a; yLut = tuple.b;
+        }
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void GetXZIndexMaps(int maxX, int maxZ, out int[] xLut, out int[] zLut)
+        {
+            var key = (maxX, maxZ);
+            var dict = xzIndexMaps;
+            if (dict != null && dict.TryGetValue(key, out var tuple)) { xLut = tuple.a; zLut = tuple.b; return; }
+            lock (indexMapLock)
+            {
+                dict = xzIndexMaps ??= new();
+                if (!dict.TryGetValue(key, out tuple))
+                {
+                    int count = maxX * maxZ; int[] xArr = new int[count]; int[] zArr = new int[count];
+                    for (int x = 0, idx = 0; x < maxX; x++)
+                        for (int z = 0; z < maxZ; z++, idx++) { xArr[idx] = x; zArr[idx] = z; }
+                    tuple = (xArr, zArr); dict[key] = tuple;
+                }
+            }
+            xLut = tuple.a; zLut = tuple.b;
+        }
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void GetXYIndexMaps(int maxX, int maxY, out int[] xLut, out int[] yLut)
+        {
+            var key = (maxX, maxY);
+            var dict = xyIndexMaps;
+            if (dict != null && dict.TryGetValue(key, out var tuple)) { xLut = tuple.a; yLut = tuple.b; return; }
+            lock (indexMapLock)
+            {
+                dict = xyIndexMaps ??= new();
+                if (!dict.TryGetValue(key, out tuple))
+                {
+                    int count = maxX * maxY; int[] xArr = new int[count]; int[] yArr = new int[count];
+                    for (int x = 0, idx = 0; x < maxX; x++)
+                        for (int y = 0; y < maxY; y++, idx++) { xArr[idx] = x; yArr[idx] = y; }
+                    tuple = (xArr, yArr); dict[key] = tuple;
+                }
+            }
+            xLut = tuple.a; yLut = tuple.b;
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         internal BuildResult Build()
         {
@@ -128,6 +192,11 @@ namespace MVGE_GFX.Terrain
             int xzPlaneBits = maxX * maxZ; int xzWC = (xzPlaneBits + 63) >> 6;
             int xyPlaneBits = maxX * maxY; int xyWC = (xyPlaneBits + 63) >> 6;
             int voxelCount = maxX * maxY * maxZ;
+
+            // Precompute index LUTs (cheap one-time or cached)
+            GetYZIndexMaps(maxY, maxZ, out var yzZLut, out var yzYLut);
+            GetXZIndexMaps(maxX, maxZ, out var xzXLut, out var xzZLut);
+            GetXYIndexMaps(maxX, maxY, out var xyXLut, out var xyYLut);
 
             ushort[] localBlocks = preFlattenedLocalBlocks ?? throw new InvalidOperationException("Dense path requires preFlattenedLocalBlocks");
 
@@ -243,6 +312,12 @@ namespace MVGE_GFX.Terrain
                     }
                 }
 
+                // if no faces after full counting across axes, chunk is fully enclosed (non-uniform) -> early exit
+                if (totalFaces == 0)
+                {
+                    return EmptyBuildResult(false);
+                }
+
                 int totalVerts = totalFaces * 4;
                 bool useUShort = totalVerts <= 65535;
                 byte[] vertBuffer = ArrayPool<byte>.Shared.Rent(Math.Max(1, totalVerts * 3));
@@ -269,7 +344,7 @@ namespace MVGE_GFX.Terrain
                             {
                                 int bit = BitOperations.TrailingZeroCount(faces);
                                 int yzIndex = (w << 6) + bit; if (yzIndex >= yzPlaneBits) break;
-                                int z = yzIndex / maxY; int y = yzIndex % maxY; int li = (x * maxZ + z) * maxY + y;
+                                int z = yzZLut[yzIndex]; int y = yzYLut[yzIndex]; int li = (x * maxZ + z) * maxY + y;
                                 WriteFaceMulti(localBlocks[li], Faces.LEFT, (byte)x, (byte)y, (byte)z, ref faceIndex, emptyBlock, atlas, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
                                 faces &= faces - 1;
                             }
@@ -282,7 +357,7 @@ namespace MVGE_GFX.Terrain
                             {
                                 int bit = BitOperations.TrailingZeroCount(faces);
                                 int yzIndex = (w << 6) + bit; if (yzIndex >= yzPlaneBits) break;
-                                int z = yzIndex / maxY; int y = yzIndex % maxY; int li = (x * maxZ + z) * maxY + y;
+                                int z = yzZLut[yzIndex]; int y = yzYLut[yzIndex]; int li = (x * maxZ + z) * maxY + y;
                                 WriteFaceMulti(localBlocks[li], Faces.RIGHT, (byte)x, (byte)y, (byte)z, ref faceIndex, emptyBlock, atlas, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
                                 faces &= faces - 1;
                             }
@@ -306,7 +381,7 @@ namespace MVGE_GFX.Terrain
                             {
                                 int bit = BitOperations.TrailingZeroCount(faces);
                                 int xzIndex = (w << 6) + bit; if (xzIndex >= xzPlaneBits) break;
-                                int x = xzIndex / maxZ; int z = xzIndex % maxZ; int li = (x * maxZ + z) * maxY + y;
+                                int x = xzXLut[xzIndex]; int z = xzZLut[xzIndex]; int li = (x * maxZ + z) * maxY + y;
                                 WriteFaceMulti(localBlocks[li], Faces.BOTTOM, (byte)x, (byte)y, (byte)z, ref faceIndex, emptyBlock, atlas, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
                                 faces &= faces - 1;
                             }
@@ -319,7 +394,7 @@ namespace MVGE_GFX.Terrain
                             {
                                 int bit = BitOperations.TrailingZeroCount(faces);
                                 int xzIndex = (w << 6) + bit; if (xzIndex >= xzPlaneBits) break;
-                                int x = xzIndex / maxZ; int z = xzIndex % maxZ; int li = (x * maxZ + z) * maxY + y;
+                                int x = xzXLut[xzIndex]; int z = xzZLut[xzIndex]; int li = (x * maxZ + z) * maxY + y;
                                 WriteFaceMulti(localBlocks[li], Faces.TOP, (byte)x, (byte)y, (byte)z, ref faceIndex, emptyBlock, atlas, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
                                 faces &= faces - 1;
                             }
@@ -343,7 +418,7 @@ namespace MVGE_GFX.Terrain
                             {
                                 int bit = BitOperations.TrailingZeroCount(faces);
                                 int xyIndex = (w << 6) + bit; if (xyIndex >= xyPlaneBits) break;
-                                int x = xyIndex / maxY; int y = xyIndex % maxY; int li = (x * maxZ + z) * maxY + y;
+                                int x = xyXLut[xyIndex]; int y = xyYLut[xyIndex]; int li = (x * maxZ + z) * maxY + y;
                                 WriteFaceMulti(localBlocks[li], Faces.BACK, (byte)x, (byte)y, (byte)z, ref faceIndex, emptyBlock, atlas, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
                                 faces &= faces - 1;
                             }
@@ -356,7 +431,7 @@ namespace MVGE_GFX.Terrain
                             {
                                 int bit = BitOperations.TrailingZeroCount(faces);
                                 int xyIndex = (w << 6) + bit; if (xyIndex >= xyPlaneBits) break;
-                                int x = xyIndex / maxY; int y = xyIndex % maxY; int li = (x * maxZ + z) * maxY + y;
+                                int x = xyXLut[xyIndex]; int y = xyYLut[xyIndex]; int li = (x * maxZ + z) * maxY + y;
                                 WriteFaceMulti(localBlocks[li], Faces.FRONT, (byte)x, (byte)y, (byte)z, ref faceIndex, emptyBlock, atlas, vertBuffer, uvBuffer, useUShort, indicesUShortBuffer, indicesUIntBuffer);
                                 faces &= faces - 1;
                             }
