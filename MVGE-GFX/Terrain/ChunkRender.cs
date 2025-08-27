@@ -88,44 +88,6 @@ namespace MVGE_GFX.Terrain
         private readonly int prepassSolidCount;
         private readonly int prepassExposureEstimate;
 
-        public ChunkRender(
-            ChunkData chunkData,
-            Func<int, int, int, ushort> worldBlockGetter,
-            ushort[] flatBlocks,
-            int maxX,
-            int maxY,
-            int maxZ,
-            bool faceNegX,
-            bool facePosX,
-            bool faceNegY,
-            bool facePosY,
-            bool faceNegZ,
-            bool facePosZ,
-            bool nNegXPosX,
-            bool nPosXNegX,
-            bool nNegYPosY,
-            bool nPosYNegY,
-            bool nNegZPosZ,
-            bool nPosZNegZ,
-            bool allOneBlock = false,
-            ushort allOneBlockId = 0,
-            int prepassSolidCount = 0,
-            int prepassExposureEstimate = 0)
-        {
-            // Prepass values MUST be supplied by generation phase.
-            this.prepassSolidCount = prepassSolidCount;
-            this.prepassExposureEstimate = prepassExposureEstimate;
-            chunkMeta = chunkData;
-            getWorldBlock = worldBlockGetter;
-            this.flatBlocks = flatBlocks;
-            this.maxX = maxX; this.maxY = maxY; this.maxZ = maxZ;
-            chunkWorldPosition = new Vector3(chunkData.x, chunkData.y, chunkData.z);
-            this.faceNegX = faceNegX; this.facePosX = facePosX; this.faceNegY = faceNegY; this.facePosY = facePosY; this.faceNegZ = faceNegZ; this.facePosZ = facePosZ;
-            this.nNegXPosX = nNegXPosX; this.nPosXNegX = nPosXNegX; this.nNegYPosY = nNegYPosY; this.nPosYNegY = nPosYNegY; this.nNegZPosZ = nNegZPosZ; this.nPosZNegZ = nPosZNegZ;
-            this.allOneBlock = allOneBlock; this.allOneBlockId = allOneBlockId;
-            GenerateFaces();
-        }
-
         // Preserve full prerender data for downstream dense builder usage
         private readonly ChunkPrerenderData prerenderData;
 
@@ -162,7 +124,6 @@ namespace MVGE_GFX.Terrain
                 return;
             }
 
-            int voxelCount = maxX * maxY * maxZ;
             int solidVoxelCount = prepassSolidCount;
             long exposureEstimate = prepassExposureEstimate;
 
@@ -187,14 +148,8 @@ namespace MVGE_GFX.Terrain
                     maxX, maxY, maxZ,
                     emptyBlock,
                     flatBlocks,
-                    getWorldBlock,
                     terrainTextureAtlas,
-                    faceNegX, facePosX,
-                    faceNegY, facePosY,
-                    faceNegZ, facePosZ,
-                    nNegXPosX, nPosXNegX,
-                    nNegYPosY, nPosYNegY,
-                    nNegZPosZ, nPosZNegZ);
+                    prerenderData);
 
                 var sparseResult = sparseBuilder.Build();
                 usedSparse = true;
@@ -216,7 +171,7 @@ namespace MVGE_GFX.Terrain
                 var pooledBuilder = new DenseChunkRender(
                     chunkWorldPosition, maxX, maxY, maxZ, emptyBlock,
                     terrainTextureAtlas, flatBlocks,
-                    this.prerenderData);
+                    prerenderData);
                 var pooledResult = pooledBuilder.Build();
                 usedPooling = true;
                 useUShort = pooledResult.UseUShort;

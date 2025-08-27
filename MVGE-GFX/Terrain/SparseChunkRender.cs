@@ -4,6 +4,7 @@ using MVGE_GFX.Models;
 using MVGE_INF.Models.Terrain;
 using OpenTK.Mathematics;
 using MVGE_GFX.Textures;
+using MVGE_INF.Models.Generation;
 
 namespace MVGE_GFX.Terrain
 {
@@ -26,35 +27,38 @@ namespace MVGE_GFX.Terrain
         private readonly int maxX, maxY, maxZ;
         private readonly ushort emptyBlock;
         private readonly ushort[] flatBlocks; // x-major, z, y
-        private readonly Func<int,int,int,ushort> getWorldBlock;
         private readonly BlockTextureAtlas atlas;
 
-        // Neighbor face solidity flags (skip world calls when both faces sealed)
+        // Face solidity flags (self + neighbor opposing)
         private readonly bool faceNegX, facePosX, faceNegY, facePosY, faceNegZ, facePosZ;
         private readonly bool nNegXPosX, nPosXNegX, nNegYPosY, nPosYNegY, nNegZPosZ, nPosZNegZ;
+
+        // Neighbor plane caches (null => treat as empty outside so faces will emit, matching previous conservative behavior)
+        private readonly ulong[] nPlaneNegX; // neighbor at -X (+X face of neighbor)
+        private readonly ulong[] nPlanePosX; // neighbor at +X (-X face)
+        private readonly ulong[] nPlaneNegY; // neighbor at -Y (+Y face)
+        private readonly ulong[] nPlanePosY; // neighbor at +Y (-Y face)
+        private readonly ulong[] nPlaneNegZ; // neighbor at -Z (+Z face)
+        private readonly ulong[] nPlanePosZ; // neighbor at +Z (-Z face)
 
         public SparseChunkRender(
             Vector3 chunkWorldPosition,
             int maxX, int maxY, int maxZ,
             ushort emptyBlock,
             ushort[] flatBlocks,
-            Func<int,int,int,ushort> worldGetter,
             BlockTextureAtlas atlas,
-            bool faceNegX, bool facePosX,
-            bool faceNegY, bool facePosY,
-            bool faceNegZ, bool facePosZ,
-            bool nNegXPosX, bool nPosXNegX,
-            bool nNegYPosY, bool nPosYNegY,
-            bool nNegZPosZ, bool nPosZNegZ)
+            ChunkPrerenderData prerender)
         {
             this.chunkWorldPosition = chunkWorldPosition;
             this.maxX = maxX; this.maxY = maxY; this.maxZ = maxZ;
             this.emptyBlock = emptyBlock;
             this.flatBlocks = flatBlocks;
-            getWorldBlock = worldGetter;
             this.atlas = atlas;
-            this.faceNegX = faceNegX; this.facePosX = facePosX; this.faceNegY = faceNegY; this.facePosY = facePosY; this.faceNegZ = faceNegZ; this.facePosZ = facePosZ;
-            this.nNegXPosX = nNegXPosX; this.nPosXNegX = nPosXNegX; this.nNegYPosY = nNegYPosY; this.nPosYNegY = nPosYNegY; this.nNegZPosZ = nNegZPosZ; this.nPosZNegZ = nPosZNegZ;
+            faceNegX = prerender.FaceNegX; facePosX = prerender.FacePosX; faceNegY = prerender.FaceNegY; facePosY = prerender.FacePosY; faceNegZ = prerender.FaceNegZ; facePosZ = prerender.FacePosZ;
+            nNegXPosX = prerender.NeighborNegXPosX; nPosXNegX = prerender.NeighborPosXNegX; nNegYPosY = prerender.NeighborNegYPosY; nPosYNegY = prerender.NeighborPosYNegY; nNegZPosZ = prerender.NeighborNegZPosZ; nPosZNegZ = prerender.NeighborPosZNegZ;
+            nPlaneNegX = prerender.NeighborPlaneNegX; nPlanePosX = prerender.NeighborPlanePosX;
+            nPlaneNegY = prerender.NeighborPlaneNegY; nPlanePosY = prerender.NeighborPlanePosY;
+            nPlaneNegZ = prerender.NeighborPlaneNegZ; nPlanePosZ = prerender.NeighborPlanePosZ;
         }
 
         private static readonly byte FACE_LEFT   = 1 << 0;
@@ -112,7 +116,7 @@ namespace MVGE_GFX.Terrain
             // Allocate arrays sized to total solids (we will compact to visibleCount).
             // Coordinate packing: x | (y<<8) | (z<<16) (assumes dims <= 255). If dims exceed 255 we fall back to linear decode later.
             bool dimsFitByte = maxX <= 255 && maxY <= 255 && maxZ <= 255;
-            uint[] packedCoords = ArrayPool<uint>.Shared.Rent(solidTotal); // reused as linear indices if fallback path
+            uint[] packedCoords = ArrayPool<uint>.Shared.Rent(solidTotal);
             ushort[] blocks = ArrayPool<ushort>.Shared.Rent(solidTotal);
             byte[] masks = ArrayPool<byte>.Shared.Rent(solidTotal);
 
@@ -121,9 +125,14 @@ namespace MVGE_GFX.Terrain
 
             int xStride = maxZ * maxY;
             int zStride = maxY;
-            int baseWX = (int)chunkWorldPosition.X;
-            int baseWY = (int)chunkWorldPosition.Y;
-            int baseWZ = (int)chunkWorldPosition.Z;
+
+            // Visibility gating based on outer/neighbor face solidity flags
+            bool leftVisible = !(faceNegX && nNegXPosX);
+            bool rightVisible = !(facePosX && nPosXNegX);
+            bool bottomVisible = !(faceNegY && nNegYPosY);
+            bool topVisible = !(facePosY && nPosYNegY);
+            bool backVisible = !(faceNegZ && nNegZPosZ);
+            bool frontVisible = !(facePosZ && nPosZNegZ);
 
             for (int x = 0; x < maxX; x++)
             {
@@ -141,10 +150,10 @@ namespace MVGE_GFX.Terrain
                         // LEFT
                         if (x == 0)
                         {
-                            if (!(faceNegX && nNegXPosX))
+                            if (leftVisible)
                             {
-                                if (getWorldBlock(baseWX - 1, baseWY + y, baseWZ + z) == emptyBlock)
-                                    mask |= FACE_LEFT;
+                                int yzIndex = z * maxY + y; bool neighborSolid = nPlaneNegX != null && (yzIndex < maxY * maxZ) && ((nPlaneNegX[yzIndex >> 6] & (1UL << (yzIndex & 63))) != 0UL);
+                                if (!neighborSolid) mask |= FACE_LEFT;
                             }
                         }
                         else if ((occupancy[(li - xStride) >> 6] & (1UL << ((li - xStride) & 63))) == 0UL) mask |= FACE_LEFT;
@@ -152,10 +161,10 @@ namespace MVGE_GFX.Terrain
                         // RIGHT
                         if (x == maxX - 1)
                         {
-                            if (!(facePosX && nPosXNegX))
+                            if (rightVisible)
                             {
-                                if (getWorldBlock(baseWX + maxX, baseWY + y, baseWZ + z) == emptyBlock)
-                                    mask |= FACE_RIGHT;
+                                int yzIndex = z * maxY + y; bool neighborSolid = nPlanePosX != null && (yzIndex < maxY * maxZ) && ((nPlanePosX[yzIndex >> 6] & (1UL << (yzIndex & 63))) != 0UL);
+                                if (!neighborSolid) mask |= FACE_RIGHT;
                             }
                         }
                         else if ((occupancy[(li + xStride) >> 6] & (1UL << ((li + xStride) & 63))) == 0UL) mask |= FACE_RIGHT;
@@ -163,10 +172,10 @@ namespace MVGE_GFX.Terrain
                         // BOTTOM
                         if (y == 0)
                         {
-                            if (!(faceNegY && nNegYPosY))
+                            if (bottomVisible)
                             {
-                                if (getWorldBlock(baseWX + x, baseWY - 1, baseWZ + z) == emptyBlock)
-                                    mask |= FACE_BOTTOM;
+                                int xzIndex = x * maxZ + z; bool neighborSolid = nPlaneNegY != null && (xzIndex < maxX * maxZ) && ((nPlaneNegY[xzIndex >> 6] & (1UL << (xzIndex & 63))) != 0UL);
+                                if (!neighborSolid) mask |= FACE_BOTTOM;
                             }
                         }
                         else if ((occupancy[(li - 1) >> 6] & (1UL << ((li - 1) & 63))) == 0UL) mask |= FACE_BOTTOM;
@@ -174,10 +183,10 @@ namespace MVGE_GFX.Terrain
                         // TOP
                         if (y == maxY - 1)
                         {
-                            if (!(facePosY && nPosYNegY))
+                            if (topVisible)
                             {
-                                if (getWorldBlock(baseWX + x, baseWY + maxY, baseWZ + z) == emptyBlock)
-                                    mask |= FACE_TOP;
+                                int xzIndex = x * maxZ + z; bool neighborSolid = nPlanePosY != null && (xzIndex < maxX * maxZ) && ((nPlanePosY[xzIndex >> 6] & (1UL << (xzIndex & 63))) != 0UL);
+                                if (!neighborSolid) mask |= FACE_TOP;
                             }
                         }
                         else if ((occupancy[(li + 1) >> 6] & (1UL << ((li + 1) & 63))) == 0UL) mask |= FACE_TOP;
@@ -185,10 +194,10 @@ namespace MVGE_GFX.Terrain
                         // BACK (negative Z)
                         if (z == 0)
                         {
-                            if (!(faceNegZ && nNegZPosZ))
+                            if (backVisible)
                             {
-                                if (getWorldBlock(baseWX + x, baseWY + y, baseWZ - 1) == emptyBlock)
-                                    mask |= FACE_BACK;
+                                int xyIndex = x * maxY + y; bool neighborSolid = nPlaneNegZ != null && (xyIndex < maxX * maxY) && ((nPlaneNegZ[xyIndex >> 6] & (1UL << (xyIndex & 63))) != 0UL);
+                                if (!neighborSolid) mask |= FACE_BACK;
                             }
                         }
                         else if ((occupancy[(li - zStride) >> 6] & (1UL << ((li - zStride) & 63))) == 0UL) mask |= FACE_BACK;
@@ -196,25 +205,21 @@ namespace MVGE_GFX.Terrain
                         // FRONT (positive Z)
                         if (z == maxZ - 1)
                         {
-                            if (!(facePosZ && nPosZNegZ))
+                            if (frontVisible)
                             {
-                                if (getWorldBlock(baseWX + x, baseWY + y, baseWZ + maxZ) == emptyBlock)
-                                    mask |= FACE_FRONT;
+                                int xyIndex = x * maxY + y; bool neighborSolid = nPlanePosZ != null && (xyIndex < maxX * maxY) && ((nPlanePosZ[xyIndex >> 6] & (1UL << (xyIndex & 63))) != 0UL);
+                                if (!neighborSolid) mask |= FACE_FRONT;
                             }
                         }
                         else if ((occupancy[(li + zStride) >> 6] & (1UL << ((li + zStride) & 63))) == 0UL) mask |= FACE_FRONT;
 
-                        if (mask == 0) continue; // fully occluded solid
+                        if (mask == 0) continue;
 
                         if (dimsFitByte)
-                        {
                             packedCoords[visibleCount] = (uint)(x | (y << 8) | (z << 16));
-                        }
                         else
-                        {
-                            // store linear index; we'll decode later with divides (rare case)
-                            packedCoords[visibleCount] = (uint)li;
-                        }
+                            packedCoords[visibleCount] = (uint)li; // fallback linear index
+
                         blocks[visibleCount] = block;
                         masks[visibleCount] = mask;
                         totalFaces += FacePopCount[mask];
