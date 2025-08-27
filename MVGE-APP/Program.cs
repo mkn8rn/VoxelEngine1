@@ -4,7 +4,7 @@ using MVGE_INF.Middleware;
 using System;
 using System.Runtime;
 
-namespace GloriousTribesApp
+namespace MVGE
 {
     class Program
     {
