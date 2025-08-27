@@ -12,6 +12,7 @@ using System.Diagnostics;
 using MVGE_INF.Loaders;
 using MVGE_GEN.Terrain;
 using MVGE_INF.Models.Terrain;
+using MVGE_INF.Models.Generation;
 
 namespace MVGE_GEN
 {
@@ -441,12 +442,36 @@ namespace MVGE_GEN
             TryGetChunk((key.cx, key.cy + 1, key.cz), out var up);
             TryGetChunk((key.cx, key.cy, key.cz - 1), out var back);
             TryGetChunk((key.cx, key.cy, key.cz + 1), out var front);
-            if (left != null) ch.NeighborNegXFaceSolidPosX = left.FaceSolidPosX;
-            if (right != null) ch.NeighborPosXFaceSolidNegX = right.FaceSolidNegX;
-            if (down != null) ch.NeighborNegYFaceSolidPosY = down.FaceSolidPosY;
-            if (up != null) ch.NeighborPosYFaceSolidNegY = up.FaceSolidNegY;
-            if (back != null) ch.NeighborNegZFaceSolidPosZ = back.FaceSolidPosZ;
-            if (front != null) ch.NeighborPosZFaceSolidNegZ = front.FaceSolidNegZ;
+            if (left != null)
+            {
+                ch.NeighborNegXFaceSolidPosX = left.FaceSolidPosX;
+                ch.NeighborPlaneNegXFace = left.PlanePosX; // neighbor +X face
+            }
+            if (right != null)
+            {
+                ch.NeighborPosXFaceSolidNegX = right.FaceSolidNegX;
+                ch.NeighborPlanePosXFace = right.PlaneNegX;
+            }
+            if (down != null)
+            {
+                ch.NeighborNegYFaceSolidPosY = down.FaceSolidPosY;
+                ch.NeighborPlaneNegYFace = down.PlanePosY;
+            }
+            if (up != null)
+            {
+                ch.NeighborPosYFaceSolidNegY = up.FaceSolidNegY;
+                ch.NeighborPlanePosYFace = up.PlaneNegY;
+            }
+            if (back != null)
+            {
+                ch.NeighborNegZFaceSolidPosZ = back.FaceSolidPosZ;
+                ch.NeighborPlaneNegZFace = back.PlanePosZ;
+            }
+            if (front != null)
+            {
+                ch.NeighborPosZFaceSolidNegZ = front.FaceSolidNegZ;
+                ch.NeighborPlanePosZFace = front.PlaneNegZ;
+            }
         }
 
         private bool TryGetChunk((int cx,int cy,int cz) key, out Chunk chunk)

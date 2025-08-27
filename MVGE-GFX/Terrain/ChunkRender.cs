@@ -11,6 +11,7 @@ using System.Runtime.CompilerServices;
 using MVGE_INF.Models.Terrain;
 using Vector3 = OpenTK.Mathematics.Vector3;
 using MVGE_GFX.Textures;
+using MVGE_INF.Models.Generation;
 
 namespace MVGE_GFX.Terrain
 {
@@ -122,6 +123,33 @@ namespace MVGE_GFX.Terrain
             this.faceNegX = faceNegX; this.facePosX = facePosX; this.faceNegY = faceNegY; this.facePosY = facePosY; this.faceNegZ = faceNegZ; this.facePosZ = facePosZ;
             this.nNegXPosX = nNegXPosX; this.nPosXNegX = nPosXNegX; this.nNegYPosY = nNegYPosY; this.nPosYNegY = nPosYNegY; this.nNegZPosZ = nNegZPosZ; this.nPosZNegZ = nPosZNegZ;
             this.allOneBlock = allOneBlock; this.allOneBlockId = allOneBlockId;
+            GenerateFaces();
+        }
+
+        // Store passed pre-render data (for future logic migrations). Currently only flags used.
+        private readonly ChunkPrerenderData prerenderData;
+
+        public ChunkRender(
+            ChunkData chunkData,
+            Func<int, int, int, ushort> worldBlockGetter,
+            ushort[] flatBlocks,
+            int maxX,
+            int maxY,
+            int maxZ,
+            ChunkPrerenderData prerenderData)
+        {
+            // map existing parameters from prerenderData to previous fields
+            this.prerenderData = prerenderData;
+            this.prepassSolidCount = prerenderData.PrepassSolidCount;
+            this.prepassExposureEstimate = prerenderData.PrepassExposureEstimate;
+            chunkMeta = chunkData;
+            getWorldBlock = worldBlockGetter;
+            this.flatBlocks = flatBlocks;
+            this.maxX = maxX; this.maxY = maxY; this.maxZ = maxZ;
+            chunkWorldPosition = new Vector3(chunkData.x, chunkData.y, chunkData.z);
+            this.faceNegX = prerenderData.FaceNegX; this.facePosX = prerenderData.FacePosX; this.faceNegY = prerenderData.FaceNegY; this.facePosY = prerenderData.FacePosY; this.faceNegZ = prerenderData.FaceNegZ; this.facePosZ = prerenderData.FacePosZ;
+            this.nNegXPosX = prerenderData.NeighborNegXPosX; this.nPosXNegX = prerenderData.NeighborPosXNegX; this.nNegYPosY = prerenderData.NeighborNegYPosY; this.nPosYNegY = prerenderData.NeighborPosYNegY; this.nNegZPosZ = prerenderData.NeighborNegZPosZ; this.nPosZNegZ = prerenderData.NeighborPosZNegZ;
+            this.allOneBlock = prerenderData.AllOneBlock; this.allOneBlockId = prerenderData.AllOneBlockId;
             GenerateFaces();
         }
 

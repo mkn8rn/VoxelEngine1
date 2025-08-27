@@ -693,6 +693,9 @@ namespace MVGE_GEN.Terrain
 
             // Release heightmap reference now that generation for this chunk is complete.
             precomputedHeightmap = null;
+
+            // Build initial boundary plane caches after generation & replacements
+            BuildAllBoundaryPlanesInitial();
         }
     }
 }

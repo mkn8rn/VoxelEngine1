@@ -16,6 +16,120 @@ namespace MVGE_GEN.Terrain
 {
     public partial class Chunk
     {
+        // ----- Added plane caches for pre-render handoff -----
+        // Layouts:
+        //  Neg/Pos X: YZ plane (index = z * dimY + y)
+        //  Neg/Pos Y: XZ plane (index = x * dimZ + z)
+        //  Neg/Pos Z: XY plane (index = x * dimY + y)
+        internal ulong[] PlaneNegX; // this chunk's -X face
+        internal ulong[] PlanePosX; // +X face
+        internal ulong[] PlaneNegY; // -Y face
+        internal ulong[] PlanePosY; // +Y face
+        internal ulong[] PlaneNegZ; // -Z face
+        internal ulong[] PlanePosZ; // +Z face
+
+        // Neighbor plane caches (populated by WorldResources just before BuildRender)
+        internal ulong[] NeighborPlaneNegXFace; // neighbor at -X (+X face of neighbor)
+        internal ulong[] NeighborPlanePosXFace; // neighbor at +X (-X face of neighbor)
+        internal ulong[] NeighborPlaneNegYFace; // neighbor at -Y (+Y face)
+        internal ulong[] NeighborPlanePosYFace; // neighbor at +Y (-Y face)
+        internal ulong[] NeighborPlaneNegZFace; // neighbor at -Z (+Z face)
+        internal ulong[] NeighborPlanePosZFace; // neighbor at +Z (-Z face)
+
+        private void EnsurePlaneArrays()
+        {
+            // allocate only once; lengths fixed by dimensions
+            int yzBits = dimY * dimZ; int yzWC = (yzBits + 63) >> 6;
+            int xzBits = dimX * dimZ; int xzWC = (xzBits + 63) >> 6;
+            int xyBits = dimX * dimY; int xyWC = (xyBits + 63) >> 6;
+            PlaneNegX ??= new ulong[yzWC];
+            PlanePosX ??= new ulong[yzWC];
+            PlaneNegY ??= new ulong[xzWC];
+            PlanePosY ??= new ulong[xzWC];
+            PlaneNegZ ??= new ulong[xyWC];
+            PlanePosZ ??= new ulong[xyWC];
+        }
+
+        private void BuildAllBoundaryPlanesInitial()
+        {
+            EnsurePlaneArrays();
+            Array.Clear(PlaneNegX); Array.Clear(PlanePosX);
+            Array.Clear(PlaneNegY); Array.Clear(PlanePosY);
+            Array.Clear(PlaneNegZ); Array.Clear(PlanePosZ);
+            ushort EMPTY = (ushort)BaseBlockType.Empty;
+
+            // -X / +X (YZ planes)
+            for (int z = 0; z < dimZ; z++)
+            {
+                for (int y = 0; y < dimY; y++)
+                {
+                    int yzIndex = z * dimY + y; int w = yzIndex >> 6; int b = yzIndex & 63;
+                    if (GetBlockLocal(0, y, z) != EMPTY) PlaneNegX[w] |= 1UL << b;
+                    if (GetBlockLocal(dimX - 1, y, z) != EMPTY) PlanePosX[w] |= 1UL << b;
+                }
+            }
+            // -Y / +Y (XZ planes)
+            for (int x = 0; x < dimX; x++)
+            {
+                for (int z = 0; z < dimZ; z++)
+                {
+                    int xzIndex = x * dimZ + z; int w = xzIndex >> 6; int b = xzIndex & 63;
+                    if (GetBlockLocal(x, 0, z) != EMPTY) PlaneNegY[w] |= 1UL << b;
+                    if (GetBlockLocal(x, dimY - 1, z) != EMPTY) PlanePosY[w] |= 1UL << b;
+                }
+            }
+            // -Z / +Z (XY planes)
+            for (int x = 0; x < dimX; x++)
+            {
+                for (int y = 0; y < dimY; y++)
+                {
+                    int xyIndex = x * dimY + y; int w = xyIndex >> 6; int b = xyIndex & 63;
+                    if (GetBlockLocal(x, y, 0) != EMPTY) PlaneNegZ[w] |= 1UL << b;
+                    if (GetBlockLocal(x, y, dimZ - 1) != EMPTY) PlanePosZ[w] |= 1UL << b;
+                }
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void UpdateBoundaryPlaneBit(int lx, int ly, int lz, ushort blockId)
+        {
+            ushort EMPTY = (ushort)BaseBlockType.Empty;
+            bool solid = blockId != EMPTY;
+            // allocate if not present yet (late creation path after generation)
+            EnsurePlaneArrays();
+            if (lx == 0)
+            {
+                int yzIndex = lz * dimY + ly; int w = yzIndex >> 6; int b = yzIndex & 63;
+                ulong mask = 1UL << b;
+                if (solid) PlaneNegX[w] |= mask; else PlaneNegX[w] &= ~mask;
+            }
+            if (lx == dimX - 1)
+            {
+                int yzIndex = lz * dimY + ly; int w = yzIndex >> 6; int b = yzIndex & 63; ulong mask = 1UL << b;
+                if (solid) PlanePosX[w] |= mask; else PlanePosX[w] &= ~mask;
+            }
+            if (ly == 0)
+            {
+                int xzIndex = lx * dimZ + lz; int w = xzIndex >> 6; int b = xzIndex & 63; ulong mask = 1UL << b;
+                if (solid) PlaneNegY[w] |= mask; else PlaneNegY[w] &= ~mask;
+            }
+            if (ly == dimY - 1)
+            {
+                int xzIndex = lx * dimZ + lz; int w = xzIndex >> 6; int b = xzIndex & 63; ulong mask = 1UL << b;
+                if (solid) PlanePosY[w] |= mask; else PlanePosY[w] &= ~mask;
+            }
+            if (lz == 0)
+            {
+                int xyIndex = lx * dimY + ly; int w = xyIndex >> 6; int b = xyIndex & 63; ulong mask = 1UL << b;
+                if (solid) PlaneNegZ[w] |= mask; else PlaneNegZ[w] &= ~mask;
+            }
+            if (lz == dimZ - 1)
+            {
+                int xyIndex = lx * dimY + ly; int w = xyIndex >> 6; int b = xyIndex & 63; ulong mask = 1UL << b;
+                if (solid) PlanePosZ[w] |= mask; else PlanePosZ[w] &= ~mask;
+            }
+        }
+
         // Mesh prepass stats generated during flattening to avoid extra scans in ChunkRender
         internal struct ChunkMeshPrepassStats
         {
@@ -190,6 +304,8 @@ namespace MVGE_GEN.Terrain
             {
                 SetFullyBuried();
             }
+
+            BuildAllBoundaryPlanesInitial();
         }
 
         public void InitializeSectionGrid()
@@ -308,6 +424,11 @@ namespace MVGE_GEN.Terrain
             if (lz == dimZ - 1) FaceSolidPosZ = ScanFaceSolidPosZ();
             if (ly == 0) FaceSolidNegY = ScanFaceSolidNegY();
             if (ly == dimY - 1) FaceSolidPosY = ScanFaceSolidPosY();
+
+            if (lx == 0 || lx == dimX - 1 || ly == 0 || ly == dimY - 1 || lz == 0 || lz == dimZ - 1)
+            {
+                UpdateBoundaryPlaneBit(lx, ly, lz, blockId);
+            }
         }
 
         private int FlattenSections(ushort[] dest)
@@ -557,6 +678,7 @@ namespace MVGE_GEN.Terrain
                 // Fill with uniform block id
                 uniformFlat.AsSpan(0, voxelCountUniform).Fill(AllOneBlockBlockId);
 
+                var prerender = BuildPrerenderData();
                 chunkRender = new ChunkRender(
                     chunkData,
                     worldBlockGetter,
@@ -564,10 +686,7 @@ namespace MVGE_GEN.Terrain
                     dimX,
                     dimY,
                     dimZ,
-                    FaceSolidNegX, FaceSolidPosX, FaceSolidNegY, FaceSolidPosY, FaceSolidNegZ, FaceSolidPosZ,
-                    NeighborNegXFaceSolidPosX, NeighborPosXFaceSolidNegX, NeighborNegYFaceSolidPosY, NeighborPosYFaceSolidNegY, NeighborNegZFaceSolidPosZ, NeighborPosZFaceSolidNegZ,
-                    AllOneBlockChunk, AllOneBlockBlockId,
-                    MeshPrepassStats.SolidCount, MeshPrepassStats.ExposureEstimate);
+                    prerender);
                 return;
             }
 
@@ -582,6 +701,7 @@ namespace MVGE_GEN.Terrain
                 return; // chunkRender stays null; Render() will no-op
             }
 
+            var prerenderData = BuildPrerenderData();
             chunkRender = new ChunkRender(
                 chunkData,
                 worldBlockGetter,
@@ -589,14 +709,7 @@ namespace MVGE_GEN.Terrain
                 dimX,
                 dimY,
                 dimZ,
-                // our own 6 face flags
-                FaceSolidNegX, FaceSolidPosX, FaceSolidNegY, FaceSolidPosY, FaceSolidNegZ, FaceSolidPosZ,
-                // neighbor opposing faces (any missing neighbor left as false)
-                NeighborNegXFaceSolidPosX, NeighborPosXFaceSolidNegX, NeighborNegYFaceSolidPosY, NeighborPosYFaceSolidNegY, NeighborNegZFaceSolidPosZ, NeighborPosZFaceSolidNegZ,
-                // uniform single-block fast path flags
-                AllOneBlockChunk, AllOneBlockBlockId,
-                // prepass metrics
-                MeshPrepassStats.SolidCount, MeshPrepassStats.ExposureEstimate);
+                prerenderData);
         }
 
         // Per-face solidity helpers
@@ -654,6 +767,41 @@ namespace MVGE_GEN.Terrain
                 for (int y = 0; y < dimY; y++)
                     if (GetBlockLocal(x, y, z) == EMPTY) return false;
             return true;
+        }
+
+        internal ChunkPrerenderData BuildPrerenderData()
+        {
+            return new ChunkPrerenderData
+            {
+                FaceNegX = FaceSolidNegX,
+                FacePosX = FaceSolidPosX,
+                FaceNegY = FaceSolidNegY,
+                FacePosY = FaceSolidPosY,
+                FaceNegZ = FaceSolidNegZ,
+                FacePosZ = FaceSolidPosZ,
+                NeighborNegXPosX = NeighborNegXFaceSolidPosX,
+                NeighborPosXNegX = NeighborPosXFaceSolidNegX,
+                NeighborNegYPosY = NeighborNegYFaceSolidPosY,
+                NeighborPosYNegY = NeighborPosYFaceSolidNegY,
+                NeighborNegZPosZ = NeighborNegZFaceSolidPosZ,
+                NeighborPosZNegZ = NeighborPosZFaceSolidNegZ,
+                AllOneBlock = AllOneBlockChunk,
+                AllOneBlockId = AllOneBlockBlockId,
+                PrepassSolidCount = MeshPrepassStats.SolidCount,
+                PrepassExposureEstimate = MeshPrepassStats.ExposureEstimate,
+                SelfPlaneNegX = PlaneNegX,
+                SelfPlanePosX = PlanePosX,
+                SelfPlaneNegY = PlaneNegY,
+                SelfPlanePosY = PlanePosY,
+                SelfPlaneNegZ = PlaneNegZ,
+                SelfPlanePosZ = PlanePosZ,
+                NeighborPlaneNegX = NeighborPlaneNegXFace,
+                NeighborPlanePosX = NeighborPlanePosXFace,
+                NeighborPlaneNegY = NeighborPlaneNegYFace,
+                NeighborPlanePosY = NeighborPlanePosYFace,
+                NeighborPlaneNegZ = NeighborPlaneNegZFace,
+                NeighborPlanePosZ = NeighborPlanePosZFace
+            };
         }
     }
 }
