@@ -188,6 +188,33 @@ namespace MVGE_GEN.Terrain
             };
         }
 
+        private bool[,,] PrecomputeOccludedFullSections()
+        {
+            // A section is occluded full if it and all 6 orthogonal neighbors exist and are CompletelyFull.
+            bool[,,] occluded = new bool[sectionsX, sectionsY, sectionsZ];
+            for (int sx = 0; sx < sectionsX; sx++)
+            {
+                for (int sy = 0; sy < sectionsY; sy++)
+                {
+                    for (int sz = 0; sz < sectionsZ; sz++)
+                    {
+                        var sec = sections[sx, sy, sz];
+                        if (sec == null || !sec.CompletelyFull) continue;
+                        // Require in-bounds neighbors (internal only)
+                        if (sx == 0 || sx == sectionsX - 1 || sy == 0 || sy == sectionsY - 1 || sz == 0 || sz == sectionsZ - 1) continue;
+                        if (sections[sx - 1, sy, sz]?.CompletelyFull != true) continue;
+                        if (sections[sx + 1, sy, sz]?.CompletelyFull != true) continue;
+                        if (sections[sx, sy - 1, sz]?.CompletelyFull != true) continue;
+                        if (sections[sx, sy + 1, sz]?.CompletelyFull != true) continue;
+                        if (sections[sx, sy, sz - 1]?.CompletelyFull != true) continue;
+                        if (sections[sx, sy, sz + 1]?.CompletelyFull != true) continue;
+                        occluded[sx, sy, sz] = true;
+                    }
+                }
+            }
+            return occluded;
+        }
+
         private int FlattenSections(ushort[] dest)
         {
             int strideX = dimZ * dimY; // (x * dimZ + z) * dimY + y
@@ -210,6 +237,9 @@ namespace MVGE_GEN.Terrain
             int totalVoxels = dimX * dimY * dimZ;
             dest.AsSpan(0, totalVoxels).Clear();
 
+            // Precompute occluded interior full sections
+            var occludedFull = PrecomputeOccludedFullSections();
+
             // Iterate sections (X,Z,Y) – keeps inner loops tight & predictable
             for (int sx = 0; sx < sectionsX; sx++)
             {
@@ -227,10 +257,29 @@ namespace MVGE_GEN.Terrain
                         int maxLocalY = Math.Min(sectionSize, dimY - baseY);
 
                         var sec = sections[sx, sy, sz];
-                        // Completely empty / all air – EARLY OUT: no per-column clears needed (already zeroed globally)
                         if (sec == null || sec.IsAllAir || sec.NonAirCount == 0 || sec.Kind == ChunkSection.RepresentationKind.Empty)
                         {
                             continue;
+                        }
+
+                        bool isOccludedFull = occludedFull[sx, sy, sz] && sec.CompletelyFull;
+                        if (isOccludedFull)
+                        {
+                            // Fully internal solid volume: write a uniform filler (STONE) so neighbors see solidity,
+                            // but skip bounds / exposure / slice stats to save work. Exposure contribution is zero (fully hidden).
+                            ushort solid = (ushort)BaseBlockType.Stone; // canonical solid placeholder for hidden volumes
+                            int voxels = maxLocalX * maxLocalZ * maxLocalY;
+                            nonAirTotal += voxels;
+                            for (int lx = 0; lx < maxLocalX; lx++)
+                            {
+                                int gx = baseX + lx; int destXBase = gx * strideX;
+                                for (int lz = 0; lz < maxLocalZ; lz++)
+                                {
+                                    int gz = baseZ + lz;
+                                    dest.AsSpan(destXBase + gz * strideZ + baseY, maxLocalY).Fill(solid);
+                                }
+                            }
+                            continue; // skip further processing
                         }
 
                         switch (sec.Kind)
@@ -240,7 +289,6 @@ namespace MVGE_GEN.Terrain
                                 ushort solid = sec.UniformBlockId;
                                 int voxels = maxLocalX * maxLocalZ * maxLocalY;
                                 nonAirTotal += voxels;
-                                // Bounds
                                 int minGX = baseX; int maxGX = baseX + maxLocalX - 1;
                                 int minGY = baseY; int maxGY = baseY + maxLocalY - 1;
                                 int minGZ = baseZ; int maxGZ = baseZ + maxLocalZ - 1;
@@ -342,11 +390,14 @@ namespace MVGE_GEN.Terrain
                         {
                             int gx = baseX + lx; int destXBase = gx * strideX;
                             bool boundaryX = (gx == 0) || (gx == dimX - 1);
+                            int neighborSectionXNeg = (gx - 1) >> SECTION_SHIFT;
+                            int neighborSectionZNeg = -1; // placeholder use when computing -Z
 
                             for (int lz = 0; lz < maxLocalZ; lz++)
                             {
                                 int gz = baseZ + lz; int destZBase = destXBase + gz * strideZ;
                                 bool boundaryXZ = boundaryX || gz == 0 || gz == dimZ - 1;
+                                int neighborSectionZNegLocal = (gz - 1) >> SECTION_SHIFT;
 
                                 int baseXZ = lz * sectionSize + lx;
                                 long baseBitPos = (long)baseXZ * bitsPer;
@@ -380,6 +431,7 @@ namespace MVGE_GEN.Terrain
                                         if (gz < localStats.MinZ) localStats.MinZ = gz; else if (gz > localStats.MaxZ) localStats.MaxZ = gz;
                                     }
                                     MarkSlices(ref localStats, gx, gy, gz);
+
                                     exposureEstimate += 6;
                                     if (gx > 0 && dest[(gx - 1) * strideX + gz * strideZ + gy] != ChunkSection.AIR) exposureEstimate -= 2;
                                     if (gz > 0 && dest[gx * strideX + (gz - 1) * strideZ + gy] != ChunkSection.AIR) exposureEstimate -= 2;
