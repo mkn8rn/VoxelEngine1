@@ -465,7 +465,8 @@ namespace MVGE_GEN.Terrain
                             BitsPerIndex = bitsPerIndex,
                             VoxelCount = voxelsPerSection,
                             NonAirCount = voxelsPerSection,
-                            BitData = System.Buffers.ArrayPool<uint>.Shared.Rent(uintCount)
+                            BitData = System.Buffers.ArrayPool<uint>.Shared.Rent(uintCount),
+                            Kind = ChunkSection.RepresentationKind.Packed // will later classify to Uniform
                         };
                         // Fill all bits to 1 for palette index 1 (since BitsPerIndex==1). Need to set only required uintCount entries.
                         for (int i = 0; i < uintCount; i++) sec.BitData[i] = 0xFFFFFFFFu;
@@ -688,6 +689,22 @@ namespace MVGE_GEN.Terrain
                 {
                     AllOneBlockChunk = true;
                     AllOneBlockBlockId = uniformId;
+                }
+            }
+
+            // ----- CLASSIFY SECTIONS INTO MULTI-FORM STORAGE -----
+            for (int sx = 0; sx < sectionsX; sx++)
+            {
+                for (int sy = 0; sy < sectionsY; sy++)
+                {
+                    for (int sz = 0; sz < sectionsZ; sz++)
+                    {
+                        var sec = sections[sx, sy, sz];
+                        if (sec == null) continue;
+                        // Populate VoxelCount if not set
+                        if (sec.VoxelCount == 0) sec.VoxelCount = ChunkSection.SECTION_SIZE * ChunkSection.SECTION_SIZE * ChunkSection.SECTION_SIZE;
+                        SectionUtils.ClassifyRepresentation(sec);
+                    }
                 }
             }
 

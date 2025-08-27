@@ -203,6 +203,13 @@ namespace MVGE_GEN.Terrain
 
             EnsureSliceStampArrays();
 
+            // --- GLOBAL CLEAR ONCE ---
+            // Instead of clearing per-section (which caused large redundant memory writes),
+            // clear the entire destination buffer once. This allows early-outs for empty sections
+            // without touching their memory region again.
+            int totalVoxels = dimX * dimY * dimZ;
+            dest.AsSpan(0, totalVoxels).Clear();
+
             // Iterate sections (X,Z,Y) – keeps inner loops tight & predictable
             for (int sx = 0; sx < sectionsX; sx++)
             {
@@ -220,23 +227,62 @@ namespace MVGE_GEN.Terrain
                         int maxLocalY = Math.Min(sectionSize, dimY - baseY);
 
                         var sec = sections[sx, sy, sz];
-                        // Completely empty / all air
-                        if (sec == null || sec.IsAllAir || sec.NonAirCount == 0)
+                        // Completely empty / all air – EARLY OUT: no per-column clears needed (already zeroed globally)
+                        if (sec == null || sec.IsAllAir || sec.NonAirCount == 0 || sec.Kind == ChunkSection.RepresentationKind.Empty)
                         {
-                            // Lazy clear only the exact region (avoid full-array clear)
-                            for (int lx = 0; lx < maxLocalX; lx++)
-                            {
-                                int gx = baseX + lx; int destXBase = gx * strideX;
-                                for (int lz = 0; lz < maxLocalZ; lz++)
-                                {
-                                    int gz = baseZ + lz;
-                                    dest.AsSpan(destXBase + gz * strideZ + baseY, maxLocalY).Clear();
-                                }
-                            }
                             continue;
                         }
 
-                        // Uniform non-air (all voxels same solid) fast path – now analytic (no per-voxel loop)
+                        switch (sec.Kind)
+                        {
+                            case ChunkSection.RepresentationKind.Uniform:
+                            {
+                                ushort solid = sec.UniformBlockId;
+                                int voxels = maxLocalX * maxLocalZ * maxLocalY;
+                                nonAirTotal += voxels;
+                                // Bounds
+                                int minGX = baseX; int maxGX = baseX + maxLocalX - 1;
+                                int minGY = baseY; int maxGY = baseY + maxLocalY - 1;
+                                int minGZ = baseZ; int maxGZ = baseZ + maxLocalZ - 1;
+                                if (!localStats.HasStats)
+                                {
+                                    localStats.MinX = minGX; localStats.MaxX = maxGX;
+                                    localStats.MinY = minGY; localStats.MaxY = maxGY;
+                                    localStats.MinZ = minGZ; localStats.MaxZ = maxGZ;
+                                    localStats.HasStats = true;
+                                }
+                                else
+                                {
+                                    if (minGX < localStats.MinX) localStats.MinX = minGX;
+                                    if (maxGX > localStats.MaxX) localStats.MaxX = maxGX;
+                                    if (minGY < localStats.MinY) localStats.MinY = minGY;
+                                    if (maxGY > localStats.MaxY) localStats.MaxY = maxGY;
+                                    if (minGZ < localStats.MinZ) localStats.MinZ = minGZ;
+                                    if (maxGZ > localStats.MaxZ) localStats.MaxZ = maxGZ;
+                                }
+                                for (int gx = minGX; gx <= maxGX; gx++) if (xSliceStamp[gx] != sliceStampVersion) { xSliceStamp[gx] = sliceStampVersion; localStats.XNonEmpty++; }
+                                for (int gy = minGY; gy <= maxGY; gy++) if (ySliceStamp[gy] != sliceStampVersion) { ySliceStamp[gy] = sliceStampVersion; localStats.YNonEmpty++; }
+                                for (int gz = minGZ; gz <= maxGZ; gz++) if (zSliceStamp[gz] != sliceStampVersion) { zSliceStamp[gz] = sliceStampVersion; localStats.ZNonEmpty++; }
+                                long lenX = maxLocalX; long lenY = maxLocalY; long lenZ = maxLocalZ;
+                                long N = lenX * lenY * lenZ;
+                                long internalAdj = (lenX - 1) * lenY * lenZ + lenX * (lenZ - 1) * lenY + lenX * lenZ * (lenY - 1);
+                                exposureEstimate += 6 * N - 2 * internalAdj;
+                                if (!HasAnyBoundarySolid && (minGX == 0 || minGY == 0 || minGZ == 0 || maxGX == dimX - 1 || maxGY == dimY - 1 || maxGZ == dimZ - 1)) HasAnyBoundarySolid = true;
+                                for (int lx = 0; lx < maxLocalX; lx++)
+                                {
+                                    int gx = baseX + lx; int destXBase = gx * strideX;
+                                    for (int lz = 0; lz < maxLocalZ; lz++)
+                                    {
+                                        int gz = baseZ + lz;
+                                        dest.AsSpan(destXBase + gz * strideZ + baseY, maxLocalY).Fill(solid);
+                                    }
+                                }
+                                continue;
+                            }
+                        }
+
+                        // Legacy packed path (with global clear optimization)
+                        // Uniform re-check retained for safety on Packed uniform sections
                         if (sec.Palette != null &&
                             sec.Palette.Count == 2 &&
                             sec.Palette[0] == ChunkSection.AIR &&
@@ -246,16 +292,9 @@ namespace MVGE_GEN.Terrain
                             ushort solid = sec.Palette[1];
                             int voxels = maxLocalX * maxLocalZ * maxLocalY;
                             nonAirTotal += voxels;
-
-                            // Bounds
-                            int minGX = baseX;
-                            int maxGX = baseX + maxLocalX - 1;
-                            int minGY = baseY;
-                            int maxGY = baseY + maxLocalY - 1;
-                            int minGZ = baseZ;
-                            int maxGZ = baseZ + maxLocalZ - 1;
-
-                            // Set / extend bounds once
+                            int minGX = baseX; int maxGX = baseX + maxLocalX - 1;
+                            int minGY = baseY; int maxGY = baseY + maxLocalY - 1;
+                            int minGZ = baseZ; int maxGZ = baseZ + maxLocalZ - 1;
                             if (!localStats.HasStats)
                             {
                                 localStats.MinX = minGX; localStats.MaxX = maxGX;
@@ -272,29 +311,13 @@ namespace MVGE_GEN.Terrain
                                 if (minGZ < localStats.MinZ) localStats.MinZ = minGZ;
                                 if (maxGZ > localStats.MaxZ) localStats.MaxZ = maxGZ;
                             }
-
-                            // Slice marking (once per occupied slice)
-                            for (int gx = minGX; gx <= maxGX; gx++)
-                                if (xSliceStamp[gx] != sliceStampVersion) { xSliceStamp[gx] = sliceStampVersion; localStats.XNonEmpty++; }
-                            for (int gy = minGY; gy <= maxGY; gy++)
-                                if (ySliceStamp[gy] != sliceStampVersion) { ySliceStamp[gy] = sliceStampVersion; localStats.YNonEmpty++; }
-                            for (int gz = minGZ; gz <= maxGZ; gz++)
-                                if (zSliceStamp[gz] != sliceStampVersion) { zSliceStamp[gz] = sliceStampVersion; localStats.ZNonEmpty++; }
-
-                            // Analytic exposure for solid rectangular prism (exact external faces)
-                            long lenX = maxLocalX;
-                            long lenY = maxLocalY;
-                            long lenZ = maxLocalZ;
-                            long N = lenX * lenY * lenZ;
+                            for (int gx = minGX; gx <= maxGX; gx++) if (xSliceStamp[gx] != sliceStampVersion) { xSliceStamp[gx] = sliceStampVersion; localStats.XNonEmpty++; }
+                            for (int gy = minGY; gy <= maxGY; gy++) if (ySliceStamp[gy] != sliceStampVersion) { ySliceStamp[gy] = sliceStampVersion; localStats.YNonEmpty++; }
+                            for (int gz = minGZ; gz <= maxGZ; gz++) if (zSliceStamp[gz] != sliceStampVersion) { zSliceStamp[gz] = sliceStampVersion; localStats.ZNonEmpty++; }
+                            long lenX = maxLocalX; long lenY = maxLocalY; long lenZ = maxLocalZ; long N = lenX * lenY * lenZ;
                             long internalAdj = (lenX - 1) * lenY * lenZ + lenX * (lenZ - 1) * lenY + lenX * lenZ * (lenY - 1);
                             exposureEstimate += 6 * N - 2 * internalAdj;
-
-                            // Boundary-solid flag
-                            if (!HasAnyBoundarySolid &&
-                                (minGX == 0 || minGY == 0 || minGZ == 0 || maxGX == dimX - 1 || maxGY == dimY - 1 || maxGZ == dimZ - 1))
-                                HasAnyBoundarySolid = true;
-
-                            // Bulk fill into dest
+                            if (!HasAnyBoundarySolid && (minGX == 0 || minGY == 0 || minGZ == 0 || maxGX == dimX - 1 || maxGY == dimY - 1 || maxGZ == dimZ - 1)) HasAnyBoundarySolid = true;
                             for (int lx = 0; lx < maxLocalX; lx++)
                             {
                                 int gx = baseX + lx; int destXBase = gx * strideX;
@@ -307,24 +330,11 @@ namespace MVGE_GEN.Terrain
                             continue;
                         }
 
-                        // General path:
-                        // Region zero (only once) – contiguous vertical lines
-                        for (int lx = 0; lx < maxLocalX; lx++)
-                        {
-                            int gx = baseX + lx; int destXBase = gx * strideX;
-                            for (int lz = 0; lz < maxLocalZ; lz++)
-                            {
-                                int gz = baseZ + lz;
-                                dest.AsSpan(destXBase + gz * strideZ + baseY, maxLocalY).Clear();
-                            }
-                        }
-
                         int bitsPer = sec.BitsPerIndex;
                         uint[] bitData = sec.BitData;
                         var palette = sec.Palette;
                         if (bitsPer == 0 || bitData == null || palette == null) continue;
                         int mask = (1 << bitsPer) - 1;
-
                         int strideBitsY = sectionPlane * bitsPer;
 
                         // Decode per (x,z) column
@@ -340,33 +350,22 @@ namespace MVGE_GEN.Terrain
 
                                 int baseXZ = lz * sectionSize + lx;
                                 long baseBitPos = (long)baseXZ * bitsPer;
-
                                 long bitPos = baseBitPos;
                                 for (int ly = 0; ly < maxLocalY; ly++, bitPos += strideBitsY)
                                 {
                                     int gy = baseY + ly;
-
-                                    // Extract palette index
                                     int dataIndex = (int)(bitPos >> 5);
                                     int bitOffset = (int)(bitPos & 31);
                                     uint word = bitData[dataIndex];
                                     uint value = word >> bitOffset;
                                     int used = 32 - bitOffset;
-                                    if (used < bitsPer)
-                                        value |= bitData[dataIndex + 1] << used;
-
+                                    if (used < bitsPer) value |= bitData[dataIndex + 1] << used;
                                     ushort id = palette[(int)(value & (uint)mask)];
                                     if (id == ChunkSection.AIR) continue;
 
-                                    // Write voxel
                                     dest[destZBase + gy] = id;
                                     nonAirTotal++;
-
-                                    // Boundary-solid detection (first time enough)
-                                    if (!HasAnyBoundarySolid && (boundaryXZ || gy == 0 || gy == dimY - 1))
-                                        HasAnyBoundarySolid = true;
-
-                                    // Stats (bounds + slice marking)
+                                    if (!HasAnyBoundarySolid && (boundaryXZ || gy == 0 || gy == dimY - 1)) HasAnyBoundarySolid = true;
                                     if (!localStats.HasStats)
                                     {
                                         localStats.MinX = localStats.MaxX = gx;
@@ -381,8 +380,6 @@ namespace MVGE_GEN.Terrain
                                         if (gz < localStats.MinZ) localStats.MinZ = gz; else if (gz > localStats.MaxZ) localStats.MaxZ = gz;
                                     }
                                     MarkSlices(ref localStats, gx, gy, gz);
-
-                                    // Exposure (6 - 2 per prior neighbor in -X,-Z,-Y)
                                     exposureEstimate += 6;
                                     if (gx > 0 && dest[(gx - 1) * strideX + gz * strideZ + gy] != ChunkSection.AIR) exposureEstimate -= 2;
                                     if (gz > 0 && dest[gx * strideX + (gz - 1) * strideZ + gy] != ChunkSection.AIR) exposureEstimate -= 2;

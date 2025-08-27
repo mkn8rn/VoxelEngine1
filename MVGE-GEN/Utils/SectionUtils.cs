@@ -13,18 +13,37 @@ namespace MVGE_GEN.Utils
         private static uint[] RentBitData(int uintCount) => ArrayPool<uint>.Shared.Rent(uintCount);
         private static void ReturnBitData(uint[] data) { if (data != null) ArrayPool<uint>.Shared.Return(data, clearArray: false); }
 
+        public const int SPARSE_THRESHOLD = 512; // currently unused in classification (optimization gate only)
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static ushort GetBlock(ChunkSection sec, int x, int y, int z)
         {
-            if (sec == null || sec.IsAllAir) return ChunkSection.AIR;
+            if (sec == null || sec.IsAllAir || sec.Kind == ChunkSection.RepresentationKind.Empty) return ChunkSection.AIR;
             int linear = LinearIndex(x, y, z);
-            int paletteIndex = ReadBits(sec, linear);
-            return sec.Palette[paletteIndex];
+            switch (sec.Kind)
+            {
+                case ChunkSection.RepresentationKind.Uniform:
+                    return sec.UniformBlockId;
+                case ChunkSection.RepresentationKind.Sparse:
+                case ChunkSection.RepresentationKind.DenseExpanded:
+                case ChunkSection.RepresentationKind.Packed:
+                default:
+                    int paletteIndex = ReadBits(sec, linear); return sec.Palette[paletteIndex];
+            }
         }
 
         public static void SetBlock(ChunkSection sec, int x, int y, int z, ushort blockId)
         {
             if (sec == null) return;
+            // Only Packed / Uniform / Empty expected now; if Uniform and a different block is written, re-pack.
+            if (sec.Kind == ChunkSection.RepresentationKind.Uniform && blockId != sec.UniformBlockId)
+            {
+                EnsurePacked(sec); // convert uniform to packed to allow mutation
+            }
+            if (sec.Kind != ChunkSection.RepresentationKind.Packed && sec.Kind != ChunkSection.RepresentationKind.Empty)
+            {
+                EnsurePacked(sec);
+            }
 
             int linear = LinearIndex(x, y, z);
 
@@ -35,9 +54,11 @@ namespace MVGE_GEN.Utils
                 if (oldIdx == 0) return; // already air
                 WriteBits(sec, linear, 0);
                 sec.NonAirCount--;
+                sec.CompletelyFull = false; // no longer full
                 if (sec.NonAirCount == 0)
                 {
                     Collapse(sec);
+                    sec.Kind = ChunkSection.RepresentationKind.Empty;
                 }
                 return;
             }
@@ -45,6 +66,7 @@ namespace MVGE_GEN.Utils
             if (sec.IsAllAir)
             {
                 Initialize(sec);
+                sec.Kind = ChunkSection.RepresentationKind.Packed;
             }
 
             int existingPaletteIndex = ReadBits(sec, linear);
@@ -60,6 +82,10 @@ namespace MVGE_GEN.Utils
 
             if (existingBlock == ChunkSection.AIR) sec.NonAirCount++;
             WriteBits(sec, linear, newPaletteIndex);
+            if (sec.NonAirCount == sec.VoxelCount && sec.VoxelCount != 0)
+            {
+                sec.CompletelyFull = true;
+            }
         }
 
         // FAST BULK FILL (generation only!!!)
@@ -74,6 +100,7 @@ namespace MVGE_GEN.Utils
             if (blockId == ChunkSection.AIR) return; // nothing to do
 
             if (sec.IsAllAir) Initialize(sec); // lazily allocate structures
+            sec.Kind = ChunkSection.RepresentationKind.Packed; // still packed until classification pass
 
             // Acquire / add palette index once
             if (!sec.PaletteLookup.TryGetValue(blockId, out int paletteIndex))
@@ -91,6 +118,10 @@ namespace MVGE_GEN.Utils
 
             int count = yEnd - yStart + 1;
             sec.NonAirCount += count; // all were air by assumption
+            if (sec.VoxelCount != 0 && sec.NonAirCount == sec.VoxelCount)
+            {
+                sec.CompletelyFull = true;
+            }
 
             int plane = ChunkSection.SECTION_SIZE * ChunkSection.SECTION_SIZE; // 256
             int baseXZ = localZ * ChunkSection.SECTION_SIZE + localX; // (z*16)+x
@@ -132,6 +163,62 @@ namespace MVGE_GEN.Utils
                     sec.BitData[dataIndex + 1] |= pval >> remaining;
                 }
             }
+        }
+
+        public static void ClassifyRepresentation(ChunkSection sec)
+        {
+            if (sec == null) return;
+            if (sec.NonAirCount == 0 || sec.IsAllAir)
+            {
+                sec.Kind = ChunkSection.RepresentationKind.Empty;
+                return;
+            }
+            int total = sec.VoxelCount;
+            if (total == 0) total = ChunkSection.SECTION_SIZE * ChunkSection.SECTION_SIZE * ChunkSection.SECTION_SIZE;
+            if (sec.CompletelyFull && sec.Palette != null && sec.Palette.Count == 2 && sec.Palette[0] == ChunkSection.AIR)
+            {
+                sec.Kind = ChunkSection.RepresentationKind.Uniform;
+                sec.UniformBlockId = sec.Palette[1];
+                return;
+            }
+            if (sec.Palette != null && sec.Palette.Count == 2 && sec.Palette[0] == ChunkSection.AIR && sec.NonAirCount == total)
+            {
+                sec.CompletelyFull = true;
+                sec.Kind = ChunkSection.RepresentationKind.Uniform;
+                sec.UniformBlockId = sec.Palette[1];
+                return;
+            }
+            // No sparse/dense expansion: remain packed
+            sec.Kind = ChunkSection.RepresentationKind.Packed;
+        }
+
+        private static void EnsurePacked(ChunkSection sec)
+        {
+            if (sec.Kind == ChunkSection.RepresentationKind.Packed) return;
+            if (sec.Kind == ChunkSection.RepresentationKind.Empty)
+            {
+                sec.IsAllAir = true; sec.Palette = null; sec.PaletteLookup = null; sec.BitData = null; sec.BitsPerIndex = 0; sec.NonAirCount = 0; sec.CompletelyFull = false; return;
+            }
+            if (sec.Kind == ChunkSection.RepresentationKind.Uniform)
+            {
+                // Recreate packed data for a uniform block
+                ushort blockId = sec.UniformBlockId;
+                sec.IsAllAir = false;
+                sec.VoxelCount = ChunkSection.SECTION_SIZE * ChunkSection.SECTION_SIZE * ChunkSection.SECTION_SIZE;
+                sec.Palette = new List<ushort> { ChunkSection.AIR, blockId };
+                sec.PaletteLookup = new Dictionary<ushort, int> { { ChunkSection.AIR, 0 }, { blockId, 1 } };
+                sec.BitsPerIndex = 1;
+                long totalBits = (long)sec.VoxelCount * sec.BitsPerIndex;
+                int uintCount = (int)((totalBits + 31) / 32);
+                sec.BitData = RentBitData(uintCount);
+                for (int i = 0; i < uintCount; i++) sec.BitData[i] = 0xFFFFFFFFu;
+                sec.NonAirCount = sec.VoxelCount;
+                sec.CompletelyFull = true;
+                sec.Kind = ChunkSection.RepresentationKind.Packed;
+                return;
+            }
+            // Other kinds (Sparse/DenseExpanded) currently not produced; fallback: mark empty.
+            sec.Kind = ChunkSection.RepresentationKind.Packed;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -218,6 +305,7 @@ namespace MVGE_GEN.Utils
             sec.BitData = null;
             sec.BitsPerIndex = 0;
             sec.NonAirCount = 0;
+            sec.CompletelyFull = false;
         }
 
         private static int GetOrAddPaletteIndex(ChunkSection sec, ushort blockId)
@@ -239,6 +327,7 @@ namespace MVGE_GEN.Utils
             sec.BitsPerIndex = 1;
             AllocateBitData(sec);
             sec.NonAirCount = 0;
+            sec.CompletelyFull = false;
         }
     }
 }
