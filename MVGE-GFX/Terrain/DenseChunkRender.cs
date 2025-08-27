@@ -119,6 +119,7 @@ namespace MVGE_GFX.Terrain
             this.forceSingleSolid = forceSingleSolid; this.forceSingleSolidBlockId = forceSingleSolidBlockId;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         internal BuildResult Build()
         {
             // Ensure UV LUT ready
@@ -164,40 +165,66 @@ namespace MVGE_GFX.Terrain
             try
             {
                 // Pass 1: occupancy slabs only (no block id storage when not supplied)
-                for (int x = 0; x < maxX; x++)
+                if (suppliedLocalBlocks)
                 {
-                    int xSlabOffset = x * yzWC;
-                    ulong slabAccumX = 0UL;
-                    for (int z = 0; z < maxZ; z++)
+                    // Fast path with direct array access (no delegate call, no per-voxel branch)
+                    for (int x = 0; x < maxX; x++)
                     {
-                        int baseYZIndexZ = z * maxY;
-                        int liBase = (x * maxZ + z) * maxY;
-                        int li = liBase;
-                        for (int y = 0; y < maxY; y++, li++)
+                        int xSlabOffset = x * yzWC;
+                        ulong slabAccumX = 0UL;
+                        for (int z = 0; z < maxZ; z++)
                         {
-                            int yzIndex = baseYZIndexZ + y; int wyz = yzIndex >> 6; int byz = yzIndex & 63;
-                            ushort bId;
-                            if (suppliedLocalBlocks)
+                            int baseYZIndexZ = z * maxY;
+                            int liBase = (x * maxZ + z) * maxY;
+                            int xzIndex2 = x * maxZ + z; // invariant for y loop
+                            int wxz2 = xzIndex2 >> 6;
+                            ulong bxzMask = 1UL << (xzIndex2 & 63);
+                            for (int y = 0; y < maxY; y++)
                             {
-                                bId = localBlocks[li];
-                            }
-                            else
-                            {
-                                bId = getLocalBlock(x, y, z); // on-demand, not stored
-                            }
-                            if (bId != emptyBlock)
-                            {
+                                int li = liBase + y;
+                                ushort bId = localBlocks[li];
+                                if (bId == emptyBlock) continue;
                                 solidCount++;
+                                int yzIndex = baseYZIndexZ + y; int wyz = yzIndex >> 6; int byz = yzIndex & 63;
                                 ulong bit = 1UL << byz;
                                 xSlabs[xSlabOffset + wyz] |= bit; slabAccumX |= bit;
-                                int xzIndex2 = x * maxZ + z; int wxz2 = xzIndex2 >> 6; int bxz2 = xzIndex2 & 63; ySlabs[y * xzWC + wxz2] |= 1UL << bxz2;
+                                // y slab (XZ plane): index (x,z) constant per y iteration
+                                ySlabs[y * xzWC + wxz2] |= bxzMask;
+                                // z slab (XY plane)
                                 int xyIndex2 = x * maxY + y; int wxy2 = xyIndex2 >> 6; int bxy2 = xyIndex2 & 63; zSlabs[z * xyWC + wxy2] |= 1UL << bxy2;
                                 if (!ySlabNonEmpty[y]) { ySlabNonEmpty[y] = true; yNonEmptyCount++; }
                                 if (!zSlabNonEmpty[z]) { zSlabNonEmpty[z] = true; zNonEmptyCount++; }
                             }
                         }
+                        if (slabAccumX != 0) { xSlabNonEmpty[x] = true; xNonEmptyCount++; }
                     }
-                    if (slabAccumX != 0) { xSlabNonEmpty[x] = true; xNonEmptyCount++; }
+                }
+                else
+                {
+                    // Fallback path using delegate fetch per voxel
+                    for (int x = 0; x < maxX; x++)
+                    {
+                        int xSlabOffset = x * yzWC;
+                        ulong slabAccumX = 0UL;
+                        for (int z = 0; z < maxZ; z++)
+                        {
+                            int baseYZIndexZ = z * maxY;
+                            int xzIndex2 = x * maxZ + z; int wxz2 = xzIndex2 >> 6; ulong bxzMask = 1UL << (xzIndex2 & 63);
+                            for (int y = 0; y < maxY; y++)
+                            {
+                                ushort bId = getLocalBlock(x, y, z);
+                                if (bId == emptyBlock) continue;
+                                solidCount++;
+                                int yzIndex = baseYZIndexZ + y; int wyz = yzIndex >> 6; int byz = yzIndex & 63; ulong bit = 1UL << byz;
+                                xSlabs[xSlabOffset + wyz] |= bit; slabAccumX |= bit;
+                                ySlabs[y * xzWC + wxz2] |= bxzMask;
+                                int xyIndex2 = x * maxY + y; int wxy2 = xyIndex2 >> 6; int bxy2 = xyIndex2 & 63; zSlabs[z * xyWC + wxy2] |= 1UL << bxy2;
+                                if (!ySlabNonEmpty[y]) { ySlabNonEmpty[y] = true; yNonEmptyCount++; }
+                                if (!zSlabNonEmpty[z]) { zSlabNonEmpty[z] = true; zNonEmptyCount++; }
+                            }
+                        }
+                        if (slabAccumX != 0) { xSlabNonEmpty[x] = true; xNonEmptyCount++; }
+                    }
                 }
 
                 // Early empty
@@ -233,7 +260,6 @@ namespace MVGE_GFX.Terrain
                 Array.Clear(backFaceWords, 0, backFaceWords.Length);
                 Array.Clear(frontFaceWords, 0, frontFaceWords.Length);
 
-                ulong Popcnt(ulong v) => (ulong)BitOperations.PopCount(v);
                 int totalFaces = 0;
 
                 // Helpers to lazily fetch neighbor plane
@@ -264,13 +290,13 @@ namespace MVGE_GFX.Terrain
                         if (!(x == 0 && occludeLeft))
                         {
                             ulong neighbor = x == 0 ? (leftPlane != null ? leftPlane[w] : ulong.MaxValue) : xSlabs[prevOff + w];
-                            ulong faces = cur & ~neighbor; leftFaceWords[curOff + w] = faces; if (faces != 0) totalFaces += BitOperations.PopCount(faces);
+                            ulong faces = cur & ~neighbor; if (faces != 0) { leftFaceWords[curOff + w] = faces; totalFaces += BitOperations.PopCount(faces); }
                         }
                         // RIGHT
                         if (!(x == maxX - 1 && occludeRight))
                         {
                             ulong neighbor = x == maxX - 1 ? (rightPlane != null ? rightPlane[w] : ulong.MaxValue) : xSlabs[nextOff + w];
-                            ulong faces = cur & ~neighbor; rightFaceWords[curOff + w] = faces; if (faces != 0) totalFaces += BitOperations.PopCount(faces);
+                            ulong faces = cur & ~neighbor; if (faces != 0) { rightFaceWords[curOff + w] = faces; totalFaces += BitOperations.PopCount(faces); }
                         }
                     }
                 }
@@ -287,12 +313,12 @@ namespace MVGE_GFX.Terrain
                         if (!(y == 0 && occludeBottom))
                         {
                             ulong neighbor = y == 0 ? (bottomPlane != null ? bottomPlane[w] : ulong.MaxValue) : ySlabs[prevOff + w];
-                            ulong faces = cur & ~neighbor; bottomFaceWords[curOff + w] = faces; if (faces != 0) totalFaces += BitOperations.PopCount(faces);
+                            ulong faces = cur & ~neighbor; if (faces != 0) { bottomFaceWords[curOff + w] = faces; totalFaces += BitOperations.PopCount(faces); }
                         }
                         if (!(y == maxY - 1 && occludeTop))
                         {
                             ulong neighbor = y == maxY - 1 ? (topPlane != null ? topPlane[w] : ulong.MaxValue) : ySlabs[nextOff + w];
-                            ulong faces = cur & ~neighbor; topFaceWords[curOff + w] = faces; if (faces != 0) totalFaces += BitOperations.PopCount(faces);
+                            ulong faces = cur & ~neighbor; if (faces != 0) { topFaceWords[curOff + w] = faces; totalFaces += BitOperations.PopCount(faces); }
                         }
                     }
                 }
@@ -309,12 +335,12 @@ namespace MVGE_GFX.Terrain
                         if (!(z == 0 && occludeBack))
                         {
                             ulong neighbor = z == 0 ? (backPlane != null ? backPlane[w] : ulong.MaxValue) : zSlabs[prevOff + w];
-                            ulong faces = cur & ~neighbor; backFaceWords[curOff + w] = faces; if (faces != 0) totalFaces += BitOperations.PopCount(faces);
+                            ulong faces = cur & ~neighbor; if (faces != 0) { backFaceWords[curOff + w] = faces; totalFaces += BitOperations.PopCount(faces); }
                         }
                         if (!(z == maxZ - 1 && occludeFront))
                         {
                             ulong neighbor = z == maxZ - 1 ? (frontPlane != null ? frontPlane[w] : ulong.MaxValue) : zSlabs[nextOff + w];
-                            ulong faces = cur & ~neighbor; frontFaceWords[curOff + w] = faces; if (faces != 0) totalFaces += BitOperations.PopCount(faces);
+                            ulong faces = cur & ~neighbor; if (faces != 0) { frontFaceWords[curOff + w] = faces; totalFaces += BitOperations.PopCount(faces); }
                         }
                     }
                 }
