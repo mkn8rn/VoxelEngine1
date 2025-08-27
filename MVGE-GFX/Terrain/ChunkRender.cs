@@ -47,7 +47,6 @@ namespace MVGE_GFX.Terrain
         private static readonly List<ByteVector2> EmptyUVList = new(4); // reusable empty list
 
         private readonly ChunkData chunkMeta;
-        private readonly Func<int, int, int, ushort> getWorldBlock;
         private readonly ushort emptyBlock = (ushort)BaseBlockType.Empty;
 
         // Flattened ephemeral blocks (x-major, then z, then y). Returned to pool after GenerateFaces
@@ -88,12 +87,13 @@ namespace MVGE_GFX.Terrain
         private readonly int prepassSolidCount;
         private readonly int prepassExposureEstimate;
 
-        // Preserve full prerender data for downstream dense builder usage
+        // Preserve full prerender data for downstream dense/sparse builders
         private readonly ChunkPrerenderData prerenderData;
+
+        // NOTE: world block delegate removed; neighbor data now comes via prerenderData planes/flags
 
         public ChunkRender(
             ChunkData chunkData,
-            Func<int, int, int, ushort> worldBlockGetter,
             ushort[] flatBlocks,
             int maxX,
             int maxY,
@@ -104,7 +104,6 @@ namespace MVGE_GFX.Terrain
             this.prepassSolidCount = prerenderData.PrepassSolidCount;
             this.prepassExposureEstimate = prerenderData.PrepassExposureEstimate;
             chunkMeta = chunkData;
-            getWorldBlock = worldBlockGetter;
             this.flatBlocks = flatBlocks;
             this.maxX = maxX; this.maxY = maxY; this.maxZ = maxZ;
             chunkWorldPosition = new Vector3(chunkData.x, chunkData.y, chunkData.z);
@@ -168,10 +167,33 @@ namespace MVGE_GFX.Terrain
             bool choosePooled = solidVoxelCount >= pooledVoxelThreshold;
             if (choosePooled && pooledFeatureEnabled)
             {
+                var densePrerender = new ChunkPrerenderData
+                {
+                    FaceNegX = faceNegX,
+                    FacePosX = facePosX,
+                    FaceNegY = faceNegY,
+                    FacePosY = facePosY,
+                    FaceNegZ = faceNegZ,
+                    FacePosZ = facePosZ,
+                    NeighborNegXPosX = nNegXPosX,
+                    NeighborPosXNegX = nPosXNegX,
+                    NeighborNegYPosY = nNegYPosY,
+                    NeighborPosYNegY = nPosYNegY,
+                    NeighborNegZPosZ = nNegZPosZ,
+                    NeighborPosZNegZ = nPosZNegZ,
+                    AllOneBlock = allOneBlock,
+                    AllOneBlockId = allOneBlockId,
+                    NeighborPlaneNegX = prerenderData.NeighborPlaneNegX,
+                    NeighborPlanePosX = prerenderData.NeighborPlanePosX,
+                    NeighborPlaneNegY = prerenderData.NeighborPlaneNegY,
+                    NeighborPlanePosY = prerenderData.NeighborPlanePosY,
+                    NeighborPlaneNegZ = prerenderData.NeighborPlaneNegZ,
+                    NeighborPlanePosZ = prerenderData.NeighborPlanePosZ
+                };
                 var pooledBuilder = new DenseChunkRender(
                     chunkWorldPosition, maxX, maxY, maxZ, emptyBlock,
                     terrainTextureAtlas, flatBlocks,
-                    prerenderData);
+                    densePrerender);
                 var pooledResult = pooledBuilder.Build();
                 usedPooling = true;
                 useUShort = pooledResult.UseUShort;

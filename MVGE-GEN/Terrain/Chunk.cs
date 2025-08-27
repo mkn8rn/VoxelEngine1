@@ -681,7 +681,6 @@ namespace MVGE_GEN.Terrain
                 var prerender = BuildPrerenderData();
                 chunkRender = new ChunkRender(
                     chunkData,
-                    worldBlockGetter,
                     uniformFlat,
                     dimX,
                     dimY,
@@ -704,7 +703,6 @@ namespace MVGE_GEN.Terrain
             var prerenderData = BuildPrerenderData();
             chunkRender = new ChunkRender(
                 chunkData,
-                worldBlockGetter,
                 flat,
                 dimX,
                 dimY,
