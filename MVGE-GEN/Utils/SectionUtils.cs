@@ -10,6 +10,116 @@ namespace MVGE_GEN.Utils
 {
     public static partial class SectionUtils
     {
+        // Fast finalization converting incremental hints into a representation + metadata.
+        public static void FastFinalizeSection(ChunkSection sec)
+        {
+            if (sec == null || sec.MetadataBuilt) return;
+            if (sec.NonAirCount == 0 || sec.IsAllAir)
+            {
+                sec.Kind = ChunkSection.RepresentationKind.Empty;
+                sec.MetadataBuilt = true; return;
+            }
+            int total = sec.VoxelCount == 0 ? VOXELS_PER_SECTION : sec.VoxelCount;
+
+            // Uniform fast path (incremental detected)
+            if (sec.CompletelyFull && sec.PreclassUniformCandidate && !sec.PreclassMultipleBlocks)
+            {
+                sec.Kind = ChunkSection.RepresentationKind.Uniform;
+                sec.UniformBlockId = sec.PreclassFirstBlock;
+                BuildMetadataUniform(sec);
+                return;
+            }
+
+            // Sparse path using collected lists
+            if (sec.TempSparseIndices != null && sec.TempSparseBlocks != null && sec.NonAirCount <= 128 && sec.TempSparseIndices.Count == sec.NonAirCount)
+            {
+                sec.Kind = ChunkSection.RepresentationKind.Sparse;
+                sec.SparseIndices = sec.TempSparseIndices.ToArray();
+                sec.SparseBlocks = sec.TempSparseBlocks.ToArray();
+                // We already have occupancy & face masks incrementally (OccupancyBits may be partial but includes all set bits)
+                if (sec.OccupancyBits == null)
+                {
+                    sec.OccupancyBits = new ulong[64];
+                    for (int i = 0; i < sec.SparseIndices.Length; i++)
+                    {
+                        int li = sec.SparseIndices[i];
+                        sec.OccupancyBits[li >> 6] |= 1UL << (li & 63);
+                    }
+                }
+                // Internal exposure from incremental adjacency counters
+                long internalAdj = (long)sec.AdjPairsX + sec.AdjPairsY + sec.AdjPairsZ;
+                sec.InternalExposure = (int)(6L * sec.NonAirCount - 2L * internalAdj);
+                if (!sec.HasBounds && sec.SparseIndices.Length > 0)
+                {
+                    byte minx = 255, miny = 255, minz = 255, maxx = 0, maxy = 0, maxz = 0;
+                    foreach (var li in sec.SparseIndices)
+                    {
+                        DecodeLinear(li, out int x, out int y, out int z);
+                        if (x < minx) minx = (byte)x; if (x > maxx) maxx = (byte)x;
+                        if (y < miny) miny = (byte)y; if (y > maxy) maxy = (byte)y;
+                        if (z < minz) minz = (byte)z; if (z > maxz) maxz = (byte)z;
+                    }
+                    sec.HasBounds = true; sec.MinLX = minx; sec.MinLY = miny; sec.MinLZ = minz; sec.MaxLX = maxx; sec.MaxLY = maxy; sec.MaxLZ = maxz;
+                }
+                // Ensure face masks exist (if missing, build minimal)
+                if (sec.FaceNegXBits == null && sec.FacePosXBits == null && sec.FaceNegYBits == null && sec.FacePosYBits == null && sec.FaceNegZBits == null && sec.FacePosZBits == null)
+                {
+                    BuildFaceMasks(sec, sec.OccupancyBits);
+                }
+                sec.MetadataBuilt = true;
+                sec.TempSparseBlocks = null; sec.TempSparseIndices = null;
+                return;
+            }
+
+            // If occupancy bits and adjacency counters exist we can build Packed metadata without scanning every voxel again.
+            if (sec.OccupancyBits != null)
+            {
+                // Decide Dense vs Packed quickly by fill ratio (skip dense expansion for now: cost vs. benefit)
+                float fill = (float)sec.NonAirCount / total;
+                if (fill >= 0.60f)
+                {
+                    // For now leave as Packed; optional: build DenseExpanded lazily if needed elsewhere.
+                    sec.Kind = ChunkSection.RepresentationKind.Packed;
+                }
+                else
+                {
+                    sec.Kind = ChunkSection.RepresentationKind.Packed;
+                }
+
+                // Internal exposure via adjacency counters
+                long internalAdj2 = (long)sec.AdjPairsX + sec.AdjPairsY + sec.AdjPairsZ;
+                sec.InternalExposure = (int)(6L * sec.NonAirCount - 2L * internalAdj2);
+
+                // Bounds: ensure present (if only vertical lines touched maybe already set)
+                if (!sec.HasBounds)
+                {
+                    byte minx = 255, miny = 255, minz = 255, maxx = 0, maxy = 0, maxz = 0;
+                    for (int li = 0; li < VOXELS_PER_SECTION; li++)
+                    {
+                        if ((sec.OccupancyBits[li >> 6] & (1UL << (li & 63))) == 0) continue;
+                        DecodeLinear(li, out int x, out int y, out int z);
+                        if (x < minx) minx = (byte)x; if (x > maxx) maxx = (byte)x;
+                        if (y < miny) miny = (byte)y; if (y > maxy) maxy = (byte)y;
+                        if (z < minz) minz = (byte)z; if (z > maxz) maxz = (byte)z;
+                    }
+                    if (minx != 255)
+                    {
+                        sec.HasBounds = true; sec.MinLX = minx; sec.MinLY = miny; sec.MinLZ = minz; sec.MaxLX = maxx; sec.MaxLY = maxy; sec.MaxLZ = maxz;
+                    }
+                }
+                // Ensure face masks exist; if partially built (some faces null) build missing ones cheaply.
+                if (sec.FaceNegXBits == null || sec.FacePosXBits == null || sec.FaceNegYBits == null || sec.FacePosYBits == null || sec.FaceNegZBits == null || sec.FacePosZBits == null)
+                {
+                    BuildFaceMasks(sec, sec.OccupancyBits);
+                }
+                sec.MetadataBuilt = true;
+                return;
+            }
+
+            // Fallback legacy path
+            ClassifyRepresentation(sec);
+        }
+
         private static uint[] RentBitData(int uintCount) => ArrayPool<uint>.Shared.Rent(uintCount);
         private static void ReturnBitData(uint[] data) { if (data != null) ArrayPool<uint>.Shared.Return(data, clearArray: false); }
 

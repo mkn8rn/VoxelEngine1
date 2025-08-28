@@ -703,7 +703,10 @@ namespace MVGE_GEN.Terrain
                         if (sec == null) continue;
                         // Populate VoxelCount if not set
                         if (sec.VoxelCount == 0) sec.VoxelCount = ChunkSection.SECTION_SIZE * ChunkSection.SECTION_SIZE * ChunkSection.SECTION_SIZE;
-                        SectionUtils.ClassifyRepresentation(sec);
+                        if (SectionUtils.EnableFastSectionClassification)
+                            SectionUtils.FastFinalizeSection(sec);
+                        else
+                            SectionUtils.ClassifyRepresentation(sec);
                     }
                 }
             }

@@ -58,5 +58,18 @@ namespace MVGE_GEN.Terrain
         public byte MinLX, MinLY, MinLZ, MaxLX, MaxLY, MaxLZ;
         // Flag indicating metadata built
         public bool MetadataBuilt;
+
+        // ---- Incremental fast-classification helpers (optional; safe to ignore if not using fast path) ----
+        public bool PreclassUniformCandidate = true; // remains true while only one non-air block id seen
+        public ushort PreclassFirstBlock;            // first non-air block encountered
+        public bool PreclassMultipleBlocks;          // set true once a different block encountered
+        public int DistinctNonAirBlocks;             // may be used later for heuristic decisions
+        public List<int> TempSparseIndices;          // collected linear indices while still under sparse threshold
+        public List<ushort> TempSparseBlocks;        // parallel block ids
+        public bool BoundsInitialized;               // internal flag for incremental bounds capture
+        // (Future: adjacency counters / occupancy bits could be added if deeper incremental exposure needed)
+
+        // Incremental adjacency counters (negative-side neighbour counting)
+        public int AdjPairsX, AdjPairsY, AdjPairsZ;
     }
 }
