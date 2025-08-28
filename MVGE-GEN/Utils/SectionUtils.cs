@@ -100,15 +100,7 @@ namespace MVGE_GEN.Utils
             {
                 // Decide Dense vs Packed quickly by fill ratio (skip dense expansion for now: cost vs. benefit)
                 float fill = (float)sec.NonAirCount / total;
-                if (fill >= 0.60f)
-                {
-                    // For now leave as Packed; optional: build DenseExpanded lazily if needed elsewhere.
-                    sec.Kind = ChunkSection.RepresentationKind.Packed;
-                }
-                else
-                {
-                    sec.Kind = ChunkSection.RepresentationKind.Packed;
-                }
+                sec.Kind = ChunkSection.RepresentationKind.Packed;
 
                 // Internal exposure via adjacency counters
                 long internalAdj2 = (long)sec.AdjPairsX + sec.AdjPairsY + sec.AdjPairsZ;
@@ -288,11 +280,11 @@ namespace MVGE_GEN.Utils
             var idx = new int[count];
             var blocks = new ushort[count];
             int write = 0;
-            for (int y = 0; y < SECTION_SIZE; y++)
+            for (int z = 0; z < SECTION_SIZE; z++)
             {
-                for (int z = 0; z < SECTION_SIZE; z++)
+                for (int x = 0; x < SECTION_SIZE; x++)
                 {
-                    for (int x = 0; x < SECTION_SIZE; x++)
+                    for (int y = 0; y < SECTION_SIZE; y++)
                     {
                         int li = LinearIndex(x, y, z);
                         int pi = ReadBits(sec, li);
@@ -312,11 +304,14 @@ namespace MVGE_GEN.Utils
         {
             if (sec.Kind == ChunkSection.RepresentationKind.DenseExpanded) return;
             var arr = new ushort[VOXELS_PER_SECTION];
-            for (int i = 0; i < VOXELS_PER_SECTION; i++)
-            {
-                int pi = ReadBits(sec, i);
-                if (pi != 0) arr[i] = sec.Palette[pi];
-            }
+            for (int z = 0; z < SECTION_SIZE; z++)
+                for (int x = 0; x < SECTION_SIZE; x++)
+                    for (int y = 0; y < SECTION_SIZE; y++)
+                    {
+                        int li = LinearIndex(x, y, z);
+                        int pi = ReadBits(sec, li);
+                        if (pi != 0) arr[li] = sec.Palette[pi];
+                    }
             sec.ExpandedDense = arr;
             sec.Kind = ChunkSection.RepresentationKind.DenseExpanded;
         }
@@ -408,30 +403,33 @@ namespace MVGE_GEN.Utils
 
         private static void ComputeInternalExposure(ulong[] bits, out int exposure)
         {
-            // adjacency along x: shift by 1 in x dimension (x increments fastest in our mapping?)
-            // Current LinearIndex: (y * 16 + z) * 16 + x  => x stride = 1, z stride = 16, y stride = 256
             long adjX = 0, adjZ = 0, adjY = 0;
-            // Iterate all voxels, but use bit tricks: for each row where x varies contiguous (stride 1)
-            // We can approximate by shifting each 64-bit word by 1,16,256 but need cross-word merges; simpler loop.
             for (int li = 0; li < VOXELS_PER_SECTION; li++)
             {
-                int word = li >> 6; int bit = li & 63;
-                ulong mask = bits[word] & (1UL << bit);
-                if (mask == 0) continue;
-                int x = li % 16;
-                int y = li / 256;
-                int rem = li - y * 256; int z = rem / 16;
-                // neighbor checks
-                if (x + 1 < 16 && ((bits[(li + 1) >> 6] & (1UL << ((li + 1) & 63))) != 0)) adjX++;
-                if (z + 1 < 16)
+                if ((bits[li >> 6] & (1UL << (li & 63))) == 0) continue;
+                // decode cheaply without full DecodeLinear where possible
+                int y = li & 15;               // low 4 bits
+                int columnIndex = li >> 4;     // 0..255
+                int x = columnIndex & 15;
+                int z = columnIndex >> 4;
+                // neighbors
+                // vertical y+1 contiguous +1
+                if (y < 15)
                 {
-                    int li2 = li + 16;
-                    if ((bits[li2 >> 6] & (1UL << (li2 & 63))) != 0) adjZ++;
+                    int liY = li + 1;
+                    if ((bits[liY >> 6] & (1UL << (liY & 63))) != 0) adjY++;
                 }
-                if (y + 1 < 16)
+                // x+1 => next column (columnIndex+1) if x<15
+                if (x < 15)
                 {
-                    int li3 = li + 256;
-                    if ((bits[li3 >> 6] & (1UL << (li3 & 63))) != 0) adjY++;
+                    int liX = li + 16; // add 16 (one column * 16 y entries)
+                    if ((bits[liX >> 6] & (1UL << (liX & 63))) != 0) adjX++;
+                }
+                // z+1 => columnIndex +16 => +256 linear indices
+                if (z < 15)
+                {
+                    int liZ = li + 256; // 16 columns per z *16 y
+                    if ((bits[liZ >> 6] & (1UL << (liZ & 63))) != 0) adjZ++;
                 }
             }
             int N = 0;
@@ -500,14 +498,15 @@ namespace MVGE_GEN.Utils
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static int LinearIndex(int x, int y, int z)
-            => (y * SECTION_SIZE + z) * SECTION_SIZE + x;
+        public static int LinearIndex(int x, int y, int z)
+            => ((z * SECTION_SIZE) + x) * SECTION_SIZE + y; // column-major: columnIndex*16 + y
 
-        private static void DecodeLinear(int li, out int x, out int y, out int z)
+        public static void DecodeLinear(int li, out int x, out int y, out int z)
         {
-            x = li % 16;
-            y = li / 256;
-            int rem = li - y * 256; z = rem / 16;
+            y = li & 15; // low 4 bits
+            int columnIndex = li >> 4; // 0..255
+            x = columnIndex & 15;
+            z = columnIndex >> 4;
         }
 
         private static int ReadBits(ChunkSection sec, int voxelIndex)

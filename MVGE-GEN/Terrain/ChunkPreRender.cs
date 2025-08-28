@@ -361,17 +361,17 @@ namespace MVGE_GEN.Terrain
                             case ChunkSection.RepresentationKind.DenseExpanded:
                                 {
                                     var arr = sec.ExpandedDense;
-                                    int strideYLocal = sectionSize * sectionSize; // 256
                                     for (int lx = 0; lx < maxLocalX; lx++)
                                     {
                                         int gx = baseX + lx; int destXBase = gx * strideX;
                                         for (int lz = 0; lz < maxLocalZ; lz++)
                                         {
                                             int gz = baseZ + lz; int destBase = destXBase + gz * strideZ + baseY;
-                                            int localIndex = lz * sectionSize + lx; // ly = 0 starting index
-                                            for (int ly = 0; ly < maxLocalY; ly++, localIndex += strideYLocal)
+                                            int columnIndex = lz * sectionSize + lx; // z*S + x
+                                            int li = columnIndex << 4; // y=0
+                                            for (int ly = 0; ly < maxLocalY; ly++, li++)
                                             {
-                                                ushort id = arr[localIndex];
+                                                ushort id = arr[li];
                                                 if (id != ChunkSection.AIR) dest[destBase + ly] = id;
                                             }
                                         }
@@ -384,9 +384,8 @@ namespace MVGE_GEN.Terrain
                                     for (int i = 0; i < idx.Length; i++)
                                     {
                                         int li = idx[i];
-                                        int x = li % sectionSize;
-                                        int y = li / 256; int rem = li - y * 256; int z = rem / sectionSize;
-                                        if (x >= maxLocalX || y >= maxLocalY || z >= maxLocalZ) continue; // clip at chunk edge
+                                        int y = li & 15; int columnIndex = li >> 4; int x = columnIndex & 15; int z = columnIndex >> 4;
+                                        if (x >= maxLocalX || y >= maxLocalY || z >= maxLocalZ) continue;
                                         int gx = baseX + x; int gy = baseY + y; int gz = baseZ + z;
                                         dest[gx * strideX + gz * strideZ + gy] = blocks[i];
                                     }
@@ -399,10 +398,7 @@ namespace MVGE_GEN.Terrain
                                     {
                                         goto case ChunkSection.RepresentationKind.Uniform;
                                     }
-                                    int bpi = sec.BitsPerIndex;
-                                    var bitData = sec.BitData;
-                                    var palette = sec.Palette;
-                                    int maskLocal = (1 << bpi) - 1;
+                                    int bpi = sec.BitsPerIndex; var bitData = sec.BitData; var palette = sec.Palette; int maskLocal = (1 << bpi) - 1;
                                     for (int word = 0; word < occ.Length; word++)
                                     {
                                         ulong w = occ[word];
@@ -410,8 +406,7 @@ namespace MVGE_GEN.Terrain
                                         {
                                             int bit = System.Numerics.BitOperations.TrailingZeroCount(w);
                                             int li = (word << 6) + bit;
-                                            int x = li % sectionSize;
-                                            int y = li / 256; int rem = li - y * 256; int z = rem / sectionSize;
+                                            int y = li & 15; int columnIndex = li >> 4; int x = columnIndex & 15; int z = columnIndex >> 4;
                                             if (x >= maxLocalX || y >= maxLocalY || z >= maxLocalZ) { w &= w - 1; continue; }
                                             // Inline packed palette index decode
                                             long bitPos = (long)li * bpi;
@@ -419,8 +414,7 @@ namespace MVGE_GEN.Terrain
                                             int bitOffset = (int)(bitPos & 31);
                                             uint value = bitData[dataIndex] >> bitOffset;
                                             int remaining = 32 - bitOffset;
-                                            if (remaining < bpi)
-                                                value |= bitData[dataIndex + 1] << remaining;
+                                            if (remaining < bpi) value |= bitData[dataIndex + 1] << remaining;
                                             int paletteIndex = (int)(value & (uint)maskLocal);
                                             ushort blockId = palette[paletteIndex];
                                             int gx = baseX + x; int gy = baseY + y; int gz = baseZ + z;
