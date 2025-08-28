@@ -74,7 +74,6 @@ namespace MVGE_GEN.Terrain
         {
             var rules = biome.simpleReplacements;
             if (rules == null || rules.Count == 0) return;
-            // Assume already sorted & unique (BiomeManager ensured). We skip duplicate checks for perf.
 
             // Early fast-path skip for uniform chunks (AllStoneChunk / AllSoilChunk) if no rule targets the single block id or base type across any overlapping Y.
             if (AllStoneChunk || AllSoilChunk)
@@ -84,11 +83,11 @@ namespace MVGE_GEN.Terrain
                 bool anyAffects = false;
                 foreach (var r in rules)
                 {
-                    if (r.microbiomeId.HasValue) continue; // microbiome gating not active
+                    if (r.microbiomeId.HasValue) continue;
                     if (SectionOutside(chunkBaseY, topOfChunk, r.absoluteMinYlevel, r.absoluteMaxYlevel)) continue;
                     if (RuleTargetsBlock(r, uniformId, baseType)) { anyAffects = true; break; }
                 }
-                if (!anyAffects) return; // nothing to do
+                if (!anyAffects) return;
             }
 
             int S = ChunkSection.SECTION_SIZE;
@@ -104,7 +103,9 @@ namespace MVGE_GEN.Terrain
                         var sec = sections[sx, sy, sz];
                         if (sec == null || sec.IsAllAir || sec.Palette == null || sec.Palette.Count == 0) continue;
 
-                        // Uniform non-air section optimization (AIR + single block full)
+                        bool paletteMutated = false;
+                        bool voxelLevelMutated = false;
+
                         bool uniformNonAir = sec.Palette.Count == 2 && sec.Palette[0] == ChunkSection.AIR && sec.NonAirCount == sec.VoxelCount && sec.VoxelCount != 0;
                         if (uniformNonAir)
                         {
@@ -116,9 +117,8 @@ namespace MVGE_GEN.Terrain
                             {
                                 if (r.microbiomeId.HasValue) continue;
                                 if (SectionOutside(sectionY0, sectionY1, r.absoluteMinYlevel, r.absoluteMaxYlevel)) continue;
-                                // If rule only partially overlaps vertically, we must fall back to per-voxel for overlap subset later.
                                 bool fullCover = SectionFullyInside(sectionY0, sectionY1, r.absoluteMinYlevel, r.absoluteMaxYlevel);
-                                if (!fullCover) continue; // skip here; partial handled below generic path if needed
+                                if (!fullCover) continue;
                                 if (RuleTargetsBlock(r, currentId, baseType))
                                 {
                                     currentId = r.block_type.ID;
@@ -128,14 +128,13 @@ namespace MVGE_GEN.Terrain
                             }
                             if (changed)
                             {
-                                // Replace palette entry (preserve palette index 1 semantics)
+                                paletteMutated = true;
                                 sec.Palette[1] = currentId;
                                 sec.PaletteLookup[currentId] = 1;
-                                // Remove stale lookup for old id if different
                                 if (currentId != blockId && sec.PaletteLookup.ContainsKey(blockId) && blockId != ChunkSection.AIR)
                                     sec.PaletteLookup.Remove(blockId);
                             }
-                            // Now handle partial-cover rules (rare); we treat as general below.
+
                             bool needsPartial = false;
                             foreach (var r in rules)
                             {
@@ -144,19 +143,17 @@ namespace MVGE_GEN.Terrain
                                 bool fullCover = SectionFullyInside(sectionY0, sectionY1, r.absoluteMinYlevel, r.absoluteMaxYlevel);
                                 if (!fullCover && RuleTargetsBlock(r, currentId, GetBaseTypeFast(currentId))) { needsPartial = true; break; }
                             }
-                            if (!needsPartial) continue; // uniform fully handled
-                            // Fall through to partial voxel updates (general path)
+                            if (!needsPartial)
+                            {
+                                if (paletteMutated) SectionUtils.InvalidateIncrementalClassification(sec, preserveUniformIfStillValid: true);
+                                continue;
+                            }
                         }
 
-                        // General / partial path: apply rules with two tiers
-                        // First: palette-level transforms for rules fully covering the section vertically.
-                        // Build map paletteIndex -> (possibly replaced id)
                         var palette = sec.Palette;
                         var paletteBaseTypes = new BaseBlockType[palette.Count];
-                        for (int pi = 0; pi < palette.Count; pi++)
-                            paletteBaseTypes[pi] = GetBaseTypeFast(palette[pi]);
+                        for (int pi = 0; pi < palette.Count; pi++) paletteBaseTypes[pi] = GetBaseTypeFast(palette[pi]);
 
-                        // Track which palette entries changed so we can update palette / lookup once.
                         bool anyPaletteFullChange = false;
                         for (int ri = 0; ri < rules.Count; ri++)
                         {
@@ -164,32 +161,26 @@ namespace MVGE_GEN.Terrain
                             if (r.microbiomeId.HasValue) continue;
                             if (SectionOutside(sectionY0, sectionY1, r.absoluteMinYlevel, r.absoluteMaxYlevel)) continue;
                             bool fullCover = SectionFullyInside(sectionY0, sectionY1, r.absoluteMinYlevel, r.absoluteMaxYlevel);
-                            if (!fullCover) continue; // skip partial here
+                            if (!fullCover) continue;
                             ushort replacement = r.block_type.ID;
-                            for (int pi = 1; pi < palette.Count; pi++) // skip AIR at 0
+                            for (int pi = 1; pi < palette.Count; pi++)
                             {
                                 ushort id = palette[pi];
-                                if (RuleTargetsBlock(r, id, paletteBaseTypes[pi]))
+                                if (RuleTargetsBlock(r, id, paletteBaseTypes[pi]) && id != replacement)
                                 {
-                                    if (id != replacement)
-                                    {
-                                        palette[pi] = replacement;
-                                        paletteBaseTypes[pi] = GetBaseTypeFast(replacement);
-                                        anyPaletteFullChange = true;
-                                    }
+                                    palette[pi] = replacement;
+                                    paletteBaseTypes[pi] = GetBaseTypeFast(replacement);
+                                    anyPaletteFullChange = true;
                                 }
                             }
                         }
                         if (anyPaletteFullChange)
                         {
-                            // Rebuild PaletteLookup quickly
+                            paletteMutated = true;
                             sec.PaletteLookup.Clear();
-                            for (int pi = 0; pi < palette.Count; pi++)
-                                sec.PaletteLookup[palette[pi]] = pi;
+                            for (int pi = 0; pi < palette.Count; pi++) sec.PaletteLookup[palette[pi]] = pi;
                         }
 
-                        // Second: handle partial Y rules (where rule covers only part of section vertically)
-                        // Only necessary if section vertical span intersects at least one partial rule
                         bool hasPartialRule = false;
                         foreach (var r in rules)
                         {
@@ -198,68 +189,54 @@ namespace MVGE_GEN.Terrain
                             bool fullCover = SectionFullyInside(sectionY0, sectionY1, r.absoluteMinYlevel, r.absoluteMaxYlevel);
                             if (!fullCover) { hasPartialRule = true; break; }
                         }
-                        if (!hasPartialRule) continue;
+                        if (!hasPartialRule)
+                        {
+                            if (paletteMutated) SectionUtils.InvalidateIncrementalClassification(sec, preserveUniformIfStillValid: true);
+                            continue;
+                        }
 
-                        // Prepare for voxel edits only for Y ranges intersecting partial rules.
-                        int plane = S * S; // 256
+                        int plane = S * S;
                         int bpi2 = sec.BitsPerIndex;
-                        if (bpi2 == 0 || sec.BitData == null) continue;
+                        if (bpi2 == 0 || sec.BitData == null) { if (paletteMutated) SectionUtils.InvalidateIncrementalClassification(sec, true); continue; }
                         uint[] data = sec.BitData;
-                        int sectionYLocal0 = 0; // within section
-                        int sectionYLocal1 = S - 1;
 
-                        // For each partial rule, determine local y range & targeted palette indices; then scan only those layers.
                         foreach (var r in rules)
                         {
                             if (r.microbiomeId.HasValue) continue;
                             if (SectionOutside(sectionY0, sectionY1, r.absoluteMinYlevel, r.absoluteMaxYlevel)) continue;
                             bool fullCover = SectionFullyInside(sectionY0, sectionY1, r.absoluteMinYlevel, r.absoluteMaxYlevel);
-                            if (fullCover) continue; // already applied at palette level
+                            if (fullCover) continue;
 
-                            // Local y interval intersection
                             int yMin = r.absoluteMinYlevel.HasValue ? Math.Max(sectionY0, r.absoluteMinYlevel.Value) : sectionY0;
                             int yMax = r.absoluteMaxYlevel.HasValue ? Math.Min(sectionY1, r.absoluteMaxYlevel.Value) : sectionY1;
                             if (yMax < yMin) continue;
                             int lyStart = yMin - sectionY0;
                             int lyEnd = yMax - sectionY0;
 
-                            // Build targeted palette indices (skip AIR)
                             List<int> targetPalette = new();
-                            for (int pi = 1; pi < palette.Count; pi++)
-                            {
-                                if (RuleTargetsBlock(r, palette[pi], paletteBaseTypes[pi]))
-                                {
-                                    targetPalette.Add(pi);
-                                }
-                            }
+                            for (int pi = 1; pi < palette.Count; pi++) if (RuleTargetsBlock(r, palette[pi], paletteBaseTypes[pi])) targetPalette.Add(pi);
                             if (targetPalette.Count == 0) continue;
 
-                            // Ensure replacement palette index exists
                             if (!sec.PaletteLookup.TryGetValue(r.block_type.ID, out int replIndex))
                             {
                                 replIndex = palette.Count;
                                 palette.Add(r.block_type.ID);
-                                paletteBaseTypes = new BaseBlockType[palette.Count]; // rebuild base types array cheaply
+                                paletteBaseTypes = new BaseBlockType[palette.Count];
                                 for (int pi = 0; pi < palette.Count; pi++) paletteBaseTypes[pi] = GetBaseTypeFast(palette[pi]);
                                 sec.PaletteLookup[r.block_type.ID] = replIndex;
-                                // Grow bits if needed
                                 if (replIndex >= (1 << bpi2))
                                 {
-                                    // grow similar to SectionUtils.GrowBits
                                     int oldBits = bpi2;
                                     int paletteCountMinusOne = palette.Count - 1;
                                     int needed = paletteCountMinusOne <= 0 ? 1 : (int)Math.Log2(paletteCountMinusOne) + 1;
                                     if (needed > bpi2)
                                     {
                                         bpi2 = needed;
-                                        // allocate new bit data
                                         long totalBits = (long)sec.VoxelCount * bpi2;
                                         int uintCount = (int)((totalBits + 31) / 32);
                                         uint[] newData = new uint[uintCount];
-                                        // re-pack existing
                                         for (int vi = 0; vi < sec.VoxelCount; vi++)
                                         {
-                                            // read old
                                             long oldBitPos = (long)vi * oldBits;
                                             int oldDataIdx = (int)(oldBitPos >> 5);
                                             int oldOffset = (int)(oldBitPos & 31);
@@ -268,7 +245,6 @@ namespace MVGE_GEN.Terrain
                                             int oldMask = (1 << oldBits) - 1;
                                             if (oldRemain < oldBits) val |= data[oldDataIdx + 1] << oldRemain;
                                             int palIdx = (int)(val & (uint)oldMask);
-                                            // write new
                                             long newBitPos = (long)vi * bpi2;
                                             int newDataIdx = (int)(newBitPos >> 5);
                                             int newOffset = (int)(newBitPos & 31);
@@ -289,33 +265,28 @@ namespace MVGE_GEN.Terrain
                                         sec.BitsPerIndex = bpi2;
                                     }
                                 }
-                                data = sec.BitData; // refresh
+                                data = sec.BitData;
                             }
 
-                            // For targeted palette indices build a hash set for quick test
                             var targetSet = new HashSet<int>(targetPalette);
                             int mask = (1 << bpi2) - 1;
-                            // Iterate limited Y range
                             for (int ly = lyStart; ly <= lyEnd; ly++)
                             {
-                                int yBase = ly * plane; // starting voxel index for this y layer
+                                int yBase = ly * plane;
                                 for (int lz = 0; lz < S; lz++)
                                 {
                                     int zBase = yBase + lz * S;
                                     for (int lx = 0; lx < S; lx++)
                                     {
-                                        int linear = zBase + lx; // voxel index within section
+                                        int linear = zBase + lx;
                                         long bitPos = (long)linear * bpi2;
                                         int dataIndex = (int)(bitPos >> 5);
                                         int bitOffset = (int)(bitPos & 31);
                                         uint value = data[dataIndex] >> bitOffset;
                                         int remaining = 32 - bitOffset;
-                                        if (remaining < bpi2)
-                                            value |= data[dataIndex + 1] << remaining;
+                                        if (remaining < bpi2) value |= data[dataIndex + 1] << remaining;
                                         int palIdx = (int)(value & (uint)mask);
-                                        if (!targetSet.Contains(palIdx)) continue;
-                                        if (palIdx == replIndex) continue; // already replaced
-                                        // write new palette index
+                                        if (!targetSet.Contains(palIdx) || palIdx == replIndex) continue;
                                         data[dataIndex] &= (uint)~(mask << bitOffset);
                                         data[dataIndex] |= (uint)replIndex << bitOffset;
                                         if (remaining < bpi2)
@@ -325,9 +296,15 @@ namespace MVGE_GEN.Terrain
                                             data[dataIndex + 1] &= ~nextMask;
                                             data[dataIndex + 1] |= (uint)replIndex >> remaining;
                                         }
+                                        voxelLevelMutated = true;
                                     }
                                 }
                             }
+                        }
+
+                        if (paletteMutated || voxelLevelMutated)
+                        {
+                            SectionUtils.InvalidateIncrementalClassification(sec, preserveUniformIfStillValid: paletteMutated && !voxelLevelMutated);
                         }
                     }
                 }
@@ -569,7 +546,7 @@ namespace MVGE_GEN.Terrain
                         if (available <= 0) continue;
                         int soilMinReserve = Math.Clamp(biome.soilMinDepth, 0, available); // guaranteed soil reservation
                         int stoneMinDepth = biome.stoneMinDepth;
-                        int stoneMaxDepth = biome.stoneMaxDepth;
+                        int stoneMaxDepth = biome.stoneMaxDepth; // restored variable
                         int rawStoneDepth = available - soilMinReserve;              // tentative stone depth before clamping
                         int stoneDepth = Math.Min(stoneMaxDepth, Math.Max(stoneMinDepth, rawStoneDepth));
                         if (stoneDepth > available) stoneDepth = available;          // final safety clamp

@@ -10,6 +10,29 @@ namespace MVGE_GEN.Utils
 {
     public static partial class SectionUtils
     {
+        // Invalidate incremental fast-path state (used after biome replacement mutations)
+        public static void InvalidateIncrementalClassification(ChunkSection sec, bool preserveUniformIfStillValid = true)
+        {
+            if (sec == null) return;
+            // Drop sparse capture (block ids may now be stale)
+            sec.TempSparseBlocks = null;
+            sec.TempSparseIndices = null;
+            // If caller wants to preserve uniform detection only keep if palette still perfect uniform pattern
+            if (preserveUniformIfStillValid &&
+                sec.Palette != null && sec.Palette.Count == 2 && sec.Palette[0] == ChunkSection.AIR && sec.NonAirCount == sec.VoxelCount && sec.VoxelCount != 0)
+            {
+                // Refresh first block id
+                sec.PreclassFirstBlock = sec.Palette[1];
+                sec.PreclassUniformCandidate = true;
+                sec.PreclassMultipleBlocks = false;
+            }
+            else
+            {
+                sec.PreclassUniformCandidate = false;
+                sec.PreclassMultipleBlocks = true; // force slow decisions
+            }
+        }
+
         // Fast finalization converting incremental hints into a representation + metadata.
         public static void FastFinalizeSection(ChunkSection sec)
         {
@@ -21,11 +44,12 @@ namespace MVGE_GEN.Utils
             }
             int total = sec.VoxelCount == 0 ? VOXELS_PER_SECTION : sec.VoxelCount;
 
-            // Uniform fast path (incremental detected)
-            if (sec.CompletelyFull && sec.PreclassUniformCandidate && !sec.PreclassMultipleBlocks)
+            // Uniform fast path only if palette matches uniform pattern (AIR + single) and full.
+            if (sec.CompletelyFull && sec.PreclassUniformCandidate && !sec.PreclassMultipleBlocks &&
+                sec.Palette != null && sec.Palette.Count == 2 && sec.Palette[0] == ChunkSection.AIR && sec.NonAirCount == total)
             {
                 sec.Kind = ChunkSection.RepresentationKind.Uniform;
-                sec.UniformBlockId = sec.PreclassFirstBlock;
+                sec.UniformBlockId = sec.Palette[1];
                 BuildMetadataUniform(sec);
                 return;
             }
