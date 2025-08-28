@@ -79,7 +79,7 @@ namespace MVGE_GEN.Utils
                 return;
             }
 
-            // ---- Fast classification enabled: fused single pass ----
+            // ---- Fast classification enabled: fused pass with run-level adjacency ----
 
             // Uniform candidate tracking (section-level, not per voxel)
             if (sec.PreclassUniformCandidate)
@@ -143,60 +143,37 @@ namespace MVGE_GEN.Utils
 
             // Precompute incremental indices
             int linearIter = yStart * plane + baseXZ;
-            int yzIndex = localZ * SECTION_SIZE + yStart; // for X faces
-            int xyIndex = localX * SECTION_SIZE + yStart; // for Z faces
+            int yzIndexStart = localZ * SECTION_SIZE + yStart; // for X faces
+            int xyIndexStart = localX * SECTION_SIZE + yStart; // for Z faces
             int xzIndexConst = localX * SECTION_SIZE + localZ; // for Y faces
+            int runLen = added;
 
+            // Bit / occupancy writes (no per-voxel adjacency counting now)
             if (bpi == 1)
             {
-                for (int y = yStart; y <= yEnd; y++, linearIter += plane, yzIndex++, xyIndex++)
+                int li = linearIter;
+                int yzIndex = yzIndexStart;
+                int xyIndex = xyIndexStart;
+                for (int y = yStart; y <= yEnd; y++, li += plane, yzIndex++, xyIndex++)
                 {
-                    // Bit write
-                    int dataIndex = linearIter >> 5;
-                    int bitOffset = linearIter & 31;
+                    int dataIndex = li >> 5;
+                    int bitOffset = li & 31;
                     bitData[dataIndex] |= (pval << bitOffset);
 
-                    // Sparse capture
                     if (captureSparse)
                     {
-                        sec.TempSparseIndices.Add(linearIter);
+                        sec.TempSparseIndices.Add(li);
                         sec.TempSparseBlocks.Add(blockId);
                     }
 
-                    // Occupancy + adjacency
-                    int word = linearIter >> 6;
-                    int bit = linearIter & 63;
-                    ulong prev = occ[word];
-                    ulong newVal = prev | (1UL << bit);
-                    occ[word] = newVal;
-                    if (prev != newVal)
-                    {
-                        // negative-side neighbor checks
-                        if (localX > 0)
-                        {
-                            int li2 = linearIter - 1;
-                            if ((occ[li2 >> 6] & (1UL << (li2 & 63))) != 0) sec.AdjPairsX++;
-                        }
-                        if (y > 0)
-                        {
-                            int li2 = linearIter - plane;
-                            if ((occ[li2 >> 6] & (1UL << (li2 & 63))) != 0) sec.AdjPairsY++;
-                        }
-                        if (localZ > 0)
-                        {
-                            int li2 = linearIter - SECTION_SIZE;
-                            if ((occ[li2 >> 6] & (1UL << (li2 & 63))) != 0) sec.AdjPairsZ++;
-                        }
-                    }
+                    int word = li >> 6;
+                    int bit = li & 63;
+                    occ[word] |= 1UL << bit; // voxel newly occupied (initial generation guarantees no prior occupancy)
 
-                    // Face masks
-                    int yzWord = yzIndex >> 6;
-                    int yzBit = yzIndex & 63;
-                    int xyWord = xyIndex >> 6;
-                    int xyBit = xyIndex & 63;
-                    int xzWord = xzIndexConst >> 6;
-                    int xzBit = xzIndexConst & 63;
-
+                    // Face masks (still per-y for simplicity; could batch later)
+                    int yzWord = yzIndex >> 6; int yzBit = yzIndex & 63;
+                    int xyWord = xyIndex >> 6; int xyBit = xyIndex & 63;
+                    int xzWord = xzIndexConst >> 6; int xzBit = xzIndexConst & 63;
                     if (touchNegX) faceNegX[yzWord] |= 1UL << yzBit;
                     if (touchPosX) facePosX[yzWord] |= 1UL << yzBit;
                     if (touchNegZ) faceNegZ[xyWord] |= 1UL << xyBit;
@@ -207,9 +184,12 @@ namespace MVGE_GEN.Utils
             }
             else
             {
-                for (int y = yStart; y <= yEnd; y++, linearIter += plane, yzIndex++, xyIndex++)
+                int li = linearIter;
+                int yzIndex = yzIndexStart;
+                int xyIndex = xyIndexStart;
+                for (int y = yStart; y <= yEnd; y++, li += plane, yzIndex++, xyIndex++)
                 {
-                    int bitPos = linearIter * bpi;
+                    int bitPos = li * bpi;
                     int dataIndex = bitPos >> 5;
                     int bitOffset = bitPos & 31;
                     bitData[dataIndex] &= ~(mask << bitOffset);
@@ -225,49 +205,53 @@ namespace MVGE_GEN.Utils
 
                     if (captureSparse)
                     {
-                        sec.TempSparseIndices.Add(linearIter);
+                        sec.TempSparseIndices.Add(li);
                         sec.TempSparseBlocks.Add(blockId);
                     }
 
-                    // Occupancy + adjacency
-                    int word = linearIter >> 6;
-                    int bit = linearIter & 63;
-                    ulong prev = occ[word];
-                    ulong newVal = prev | (1UL << bit);
-                    occ[word] = newVal;
-                    if (prev != newVal)
-                    {
-                        if (localX > 0)
-                        {
-                            int li2 = linearIter - 1;
-                            if ((occ[li2 >> 6] & (1UL << (li2 & 63))) != 0) sec.AdjPairsX++;
-                        }
-                        if (y > 0)
-                        {
-                            int li2 = linearIter - plane;
-                            if ((occ[li2 >> 6] & (1UL << (li2 & 63))) != 0) sec.AdjPairsY++;
-                        }
-                        if (localZ > 0)
-                        {
-                            int li2 = linearIter - SECTION_SIZE;
-                            if ((occ[li2 >> 6] & (1UL << (li2 & 63))) != 0) sec.AdjPairsZ++;
-                        }
-                    }
+                    int word = li >> 6;
+                    int bit = li & 63;
+                    occ[word] |= 1UL << bit;
 
-                    // Face masks
-                    int yzWord = yzIndex >> 6;
-                    int yzBit = yzIndex & 63;
-                    int xyWord = xyIndex >> 6;
-                    int xyBit = xyIndex & 63;
-                    int xzWord = xzIndexConst >> 6;
-                    int xzBit = xzIndexConst & 63;
-
+                    int yzWord = yzIndex >> 6; int yzBit = yzIndex & 63;
+                    int xyWord = xyIndex >> 6; int xyBit = xyIndex & 63;
+                    int xzWord = xzIndexConst >> 6; int xzBit = xzIndexConst & 63;
                     if (touchNegX) faceNegX[yzWord] |= 1UL << yzBit;
                     if (touchPosX) facePosX[yzWord] |= 1UL << yzBit;
                     if (touchNegZ) faceNegZ[xyWord] |= 1UL << xyBit;
                     if (touchPosZ) facePosZ[xyWord] |= 1UL << xyBit;
                     if (touchesBottom && y == 0) faceNegY[xzWord] |= 1UL << xzBit;
                     if (touchesTop && y == SECTION_SIZE - 1) facePosY[xzWord] |= 1UL << xzBit;
+                }
+            }
+
+            // ---- Run-level adjacency accumulation ----
+            // Y internal adjacency between consecutive voxels in the run
+            if (runLen > 1) sec.AdjPairsY += runLen - 1;
+            // Bottom cross-run Y adjacency (negative side) if voxel below exists
+            if (yStart > 0)
+            {
+                int belowLinear = (yStart - 1) * plane + baseXZ;
+                if ((occ[belowLinear >> 6] & (1UL << (belowLinear & 63))) != 0) sec.AdjPairsY++;
+            }
+            // X negative side adjacency (scan once)
+            if (localX > 0)
+            {
+                int li = yStart * plane + baseXZ;
+                for (int y = yStart; y <= yEnd; y++, li += plane)
+                {
+                    int nei = li - 1;
+                    if ((occ[nei >> 6] & (1UL << (nei & 63))) != 0) sec.AdjPairsX++;
+                }
+            }
+            // Z negative side adjacency (scan once)
+            if (localZ > 0)
+            {
+                int li = yStart * plane + baseXZ;
+                for (int y = yStart; y <= yEnd; y++, li += plane)
+                {
+                    int nei = li - SECTION_SIZE; // subtract one Z step
+                    if ((occ[nei >> 6] & (1UL << (nei & 63))) != 0) sec.AdjPairsZ++;
                 }
             }
 
