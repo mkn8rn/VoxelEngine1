@@ -17,6 +17,24 @@ namespace MVGE_GEN.Utils
         private const int AIR = ChunkSection.AIR;
         private const int COLUMN_COUNT = S * S; // 256
 
+        // --- Precomputed column bit placement tables ---
+        // For index idx = z*S + x (0..255): word offset inside a given y-slice (0..3) and bit mask.
+        // A full occupancy array has 16 slices * 4 words = 64 words.
+        private static readonly int[] ColSliceWord = new int[COLUMN_COUNT];
+        private static readonly ulong[] ColBitMask = new ulong[COLUMN_COUNT];
+        static SectionUtils()
+        {
+            for (int z = 0; z < S; z++)
+            for (int x = 0; x < S; x++)
+            {
+                int idx = z * S + x;
+                int sliceWord = idx >> 6;              // 0..3 inside a 256-bit slice (64-bit groups)
+                int bit = idx & 63;                    // bit inside that 64-bit word
+                ColSliceWord[idx] = sliceWord;
+                ColBitMask[idx] = 1UL << bit;
+            }
+        }
+
         // ---------------- Scratch pooling ----------------
         private static readonly ConcurrentBag<SectionBuildScratch> _scratchPool = new();
         private static SectionBuildScratch RentScratch()
@@ -250,6 +268,15 @@ namespace MVGE_GEN.Utils
             return total;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static int OverlapLen(int a0, int a1, int b0, int b1)
+        {
+            int s = a0 > b0 ? a0 : b0;
+            int e = a1 < b1 ? a1 : b1;
+            int len = e - s + 1;
+            return len > 0 ? len : 0;
+        }
+
         // Finalize after generation + replacements
         public static void FinalizeSection(ChunkSection sec)
         {
@@ -264,9 +291,201 @@ namespace MVGE_GEN.Utils
                 if (scratch != null) { sec.BuildScratch = null; ReturnScratch(scratch); }
                 return;
             }
+
+            // --- Fast path: no escalated columns (RunCount only 0/1/2) ---
+            if (!scratch.AnyEscalated)
+            {
+                // Rebuild distinct if dirty via runs only (no per-voxel scan)
+                if (scratch.DistinctDirty)
+                {
+                    Span<ushort> tmp = stackalloc ushort[8]; int count = 0;
+                    for (int ci = 0; ci < COLUMN_COUNT; ci++)
+                    {
+                        ref var col = ref scratch.Columns[ci];
+                        byte rc = col.RunCount; if (rc == 0) continue;
+                        if (rc >= 1 && col.Id0 != AIR)
+                        {
+                            bool f = false; for (int i = 0; i < count; i++) if (tmp[i] == col.Id0) { f = true; break; }
+                            if (!f && count < 8) tmp[count++] = col.Id0;
+                        }
+                        if (rc == 2 && col.Id1 != AIR)
+                        {
+                            bool f = false; for (int i = 0; i < count; i++) if (tmp[i] == col.Id1) { f = true; break; }
+                            if (!f && count < 8) tmp[count++] = col.Id1;
+                        }
+                    }
+                    scratch.DistinctCount = count;
+                    for (int i = 0; i < count; i++) scratch.Distinct[i] = tmp[i];
+                    scratch.DistinctDirty = false;
+                }
+
+                sec.VoxelCount = S * S * S;
+                // Build occupancy using precomputed word/mask tables (optimization 3.1)
+                ulong[] occ = sec.OccupancyBits = new ulong[64];
+                int nonAir = 0; int adjY = 0; int adjX = 0; int adjZ = 0;
+                bool boundsInit = false;
+                byte minX = 0, maxX = 0, minY = 0, maxY = 0, minZ = 0, maxZ = 0;
+
+                // First pass: fill occupancy & vertical adjacency & bounds & nonAir
+                for (int z = 0; z < S; z++)
+                {
+                    int zBase = z * S;
+                    for (int x = 0; x < S; x++)
+                    {
+                        ref var col = ref scratch.Columns[zBase + x];
+                        byte rc = col.RunCount; if (rc == 0) continue;
+
+                        if (rc >= 1)
+                        {
+                            int len0 = col.Y0End - col.Y0Start + 1;
+                            nonAir += len0;
+                            adjY += len0 - 1; // internal vertical adjacency within first run
+                            for (int y = col.Y0Start; y <= col.Y0End; y++)
+                            {
+                                int idx = z * S + x; // 0..255
+                                int word = (y << 2) + ColSliceWord[idx];
+                                occ[word] |= ColBitMask[idx];
+                                if (!boundsInit)
+                                { minX = maxX = (byte)x; minZ = maxZ = (byte)z; minY = maxY = (byte)y; boundsInit = true; }
+                                else
+                                {
+                                    if (x < minX) minX = (byte)x; if (x > maxX) maxX = (byte)x;
+                                    if (z < minZ) minZ = (byte)z; if (z > maxZ) maxZ = (byte)z;
+                                    if (y < minY) minY = (byte)y; if (y > maxY) maxY = (byte)y;
+                                }
+                            }
+                        }
+                        if (rc == 2)
+                        {
+                            int len1 = col.Y1End - col.Y1Start + 1;
+                            nonAir += len1;
+                            adjY += len1 - 1;
+                            for (int y = col.Y1Start; y <= col.Y1End; y++)
+                            {
+                                int idx = z * S + x;
+                                int word = (y << 2) + ColSliceWord[idx];
+                                occ[word] |= ColBitMask[idx];
+                                if (!boundsInit)
+                                { minX = maxX = (byte)x; minZ = maxZ = (byte)z; minY = maxY = (byte)y; boundsInit = true; }
+                                else
+                                {
+                                    if (x < minX) minX = (byte)x; if (x > maxX) maxX = (byte)x;
+                                    if (z < minZ) minZ = (byte)z; if (z > maxZ) maxZ = (byte)z;
+                                    if (y < minY) minY = (byte)y; if (y > maxY) maxY = (byte)y;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                sec.NonAirCount = nonAir;
+                if (!boundsInit)
+                {
+                    sec.Kind = ChunkSection.RepresentationKind.Empty; sec.IsAllAir = true; sec.MetadataBuilt = true; ReturnScratch(scratch); sec.BuildScratch = null; return;
+                }
+                sec.HasBounds = true; sec.MinLX = minX; sec.MaxLX = maxX; sec.MinLY = minY; sec.MaxLY = maxY; sec.MinLZ = minZ; sec.MaxLZ = maxZ;
+
+                // Horizontal adjacency via run overlap (optimization 3.2)
+                for (int z = 0; z < S; z++)
+                {
+                    int zBase = z * S;
+                    for (int x = 0; x < S - 1; x++)
+                    {
+                        ref var a = ref scratch.Columns[zBase + x];
+                        ref var b = ref scratch.Columns[zBase + x + 1];
+                        if (a.RunCount == 0 || b.RunCount == 0) continue;
+                        if (a.RunCount == 255 || b.RunCount == 255) { goto FALLBACK_FULL; } // safety: escalated unexpected
+                        // Compare runs (up to 2 each)
+                        // a run0 vs b run0
+                        if (a.RunCount >= 1 && b.RunCount >= 1) adjX += OverlapLen(a.Y0Start, a.Y0End, b.Y0Start, b.Y0End);
+                        if (a.RunCount >= 1 && b.RunCount == 2) adjX += OverlapLen(a.Y0Start, a.Y0End, b.Y1Start, b.Y1End);
+                        if (a.RunCount == 2 && b.RunCount >= 1) adjX += OverlapLen(a.Y1Start, a.Y1End, b.Y0Start, b.Y0End);
+                        if (a.RunCount == 2 && b.RunCount == 2) adjX += OverlapLen(a.Y1Start, a.Y1End, b.Y1Start, b.Y1End);
+                    }
+                }
+                for (int z = 0; z < S - 1; z++)
+                {
+                    int zBase = z * S;
+                    int zBaseNext = (z + 1) * S;
+                    for (int x = 0; x < S; x++)
+                    {
+                        ref var a = ref scratch.Columns[zBase + x];
+                        ref var b = ref scratch.Columns[zBaseNext + x];
+                        if (a.RunCount == 0 || b.RunCount == 0) continue;
+                        if (a.RunCount == 255 || b.RunCount == 255) { goto FALLBACK_FULL; }
+                        if (a.RunCount >= 1 && b.RunCount >= 1) adjZ += OverlapLen(a.Y0Start, a.Y0End, b.Y0Start, b.Y0End);
+                        if (a.RunCount >= 1 && b.RunCount == 2) adjZ += OverlapLen(a.Y0Start, a.Y0End, b.Y1Start, b.Y1End);
+                        if (a.RunCount == 2 && b.RunCount >= 1) adjZ += OverlapLen(a.Y1Start, a.Y1End, b.Y0Start, b.Y0End);
+                        if (a.RunCount == 2 && b.RunCount == 2) adjZ += OverlapLen(a.Y1Start, a.Y1End, b.Y1Start, b.Y1End);
+                    }
+                }
+
+                int exposure = 6 * nonAir - 2 * (adjX + adjY + adjZ);
+                sec.InternalExposure = exposure;
+
+                // Representation decision (reuse original logic but skip popcount path)
+                if (nonAir == S * S * S && scratch.DistinctCount == 1)
+                {
+                    sec.Kind = ChunkSection.RepresentationKind.Uniform;
+                    sec.UniformBlockId = scratch.Distinct[0];
+                    sec.IsAllAir = false; sec.CompletelyFull = true;
+                }
+                else if (nonAir <= 128)
+                {
+                    int[] idx = new int[nonAir]; ushort[] blocks = new ushort[nonAir];
+                    int p = 0; ushort singleId = scratch.DistinctCount == 1 ? scratch.Distinct[0] : (ushort)0;
+                    // Enumerate bits via occupancy words (already built)
+                    for (int word = 0; word < occ.Length; word++)
+                    {
+                        ulong w = occ[word];
+                        while (w != 0)
+                        {
+                            int bit = BitOperations.TrailingZeroCount(w); int li = (word << 6) + bit; idx[p] = li; blocks[p] = singleId != 0 ? singleId : ResolveBlockId(ref scratch.Columns[(li & 255)], li); p++; w &= w - 1;
+                        }
+                    }
+                    sec.Kind = ChunkSection.RepresentationKind.Sparse;
+                    sec.SparseIndices = idx; sec.SparseBlocks = blocks; sec.IsAllAir = false;
+                }
+                else
+                {
+                    if (scratch.DistinctCount == 1)
+                    {
+                        sec.Kind = ChunkSection.RepresentationKind.Packed;
+                        sec.Palette = new List<ushort> { AIR, scratch.Distinct[0] };
+                        sec.PaletteLookup = new Dictionary<ushort, int> { { AIR, 0 }, { scratch.Distinct[0], 1 } };
+                        sec.BitsPerIndex = 1; sec.BitData = new uint[(4096 + 31) / 32];
+                        for (int word = 0; word < occ.Length; word++)
+                        {
+                            ulong w = occ[word];
+                            while (w != 0) { int bit = BitOperations.TrailingZeroCount(w); int li = (word << 6) + bit; int bw = li >> 5; int bo = li & 31; sec.BitData[bw] |= 1u << bo; w &= w - 1; }
+                        }
+                        sec.IsAllAir = false;
+                    }
+                    else
+                    {
+                        sec.Kind = ChunkSection.RepresentationKind.DenseExpanded;
+                        var dense = sec.ExpandedDense = new ushort[4096];
+                        for (int z = 0; z < S; z++)
+                        for (int x = 0; x < S; x++)
+                        {
+                            ref var col = ref scratch.Columns[z * S + x];
+                            byte rc = col.RunCount; if (rc == 0) continue;
+                            if (rc >= 1) for (int y = col.Y0Start; y <= col.Y0End; y++) dense[(y * 256) + (z * S) + x] = col.Id0;
+                            if (rc == 2) for (int y = col.Y1Start; y <= col.Y1End; y++) dense[(y * 256) + (z * S) + x] = col.Id1;
+                        }
+                        sec.IsAllAir = false;
+                    }
+                }
+                sec.MetadataBuilt = true;
+                sec.BuildScratch = null; ReturnScratch(scratch); // release back to pool
+                return;
+            }
+
+        FALLBACK_FULL:
+            // --- Original path (with escalated columns or fallback) ---
             if (scratch.DistinctDirty)
             {
-                Span<ushort> tmp = stackalloc ushort[8]; int count = 0;
+                Span<ushort> tmp2 = stackalloc ushort[8]; int count2 = 0;
                 for (int z = 0; z < S; z++)
                 for (int x = 0; x < S; x++)
                 {
@@ -277,24 +496,24 @@ namespace MVGE_GEN.Utils
                         var arr = col.Escalated;
                         for (int y = 0; y < S; y++)
                         {
-                            ushort id = arr[y]; if (id == AIR) continue; bool found=false; for (int i=0;i<count;i++) if (tmp[i]==id){found=true;break;} if (!found && count<8) tmp[count++]=id;
+                            ushort id = arr[y]; if (id == AIR) continue; bool found = false; for (int i = 0; i < count2; i++) if (tmp2[i] == id) { found = true; break; } if (!found && count2 < 8) tmp2[count2++] = id;
                         }
                         continue;
                     }
-                    if (rc >=1 && col.Id0 != AIR)
-                    { bool f=false; for(int i=0;i<count;i++) if (tmp[i]==col.Id0){f=true;break;} if(!f && count<8) tmp[count++]=col.Id0; }
-                    if (rc==2 && col.Id1 != AIR)
-                    { bool f=false; for(int i=0;i<count;i++) if (tmp[i]==col.Id1){f=true;break;} if(!f && count<8) tmp[count++]=col.Id1; }
+                    if (rc >= 1 && col.Id0 != AIR)
+                    { bool f = false; for (int i = 0; i < count2; i++) if (tmp2[i] == col.Id0) { f = true; break; } if (!f && count2 < 8) tmp2[count2++] = col.Id0; }
+                    if (rc == 2 && col.Id1 != AIR)
+                    { bool f = false; for (int i = 0; i < count2; i++) if (tmp2[i] == col.Id1) { f = true; break; } if (!f && count2 < 8) tmp2[count2++] = col.Id1; }
                 }
-                scratch.DistinctCount = count;
-                for (int i=0;i<count;i++) scratch.Distinct[i] = tmp[i];
+                scratch.DistinctCount = count2;
+                for (int i = 0; i < count2; i++) scratch.Distinct[i] = tmp2[i];
                 scratch.DistinctDirty = false;
             }
             sec.VoxelCount = S * S * S;
-            ulong[] occ = sec.OccupancyBits = new ulong[64]; // 4096 bits
-            bool boundsInit = false;
-            byte minX=0, maxX=0, minY=0, maxY=0, minZ=0, maxZ=0;
-            int adjX=0, adjY=0, adjZ=0;
+            ulong[] occFull = sec.OccupancyBits = new ulong[64]; // 4096 bits
+            bool boundsInitFull = false;
+            byte minXf = 0, maxXf = 0, minYf = 0, maxYf = 0, minZf = 0, maxZf = 0;
+            int adjXf = 0, adjYf = 0, adjZf = 0;
 
             // Build occupancy bits; compute vertical adjacency (adjY) using run lengths; avoid per-voxel nonAir increments (will popcount later)
             for (int z = 0; z < S; z++)
@@ -311,9 +530,9 @@ namespace MVGE_GEN.Utils
                         for (int y = 0; y < S; y++)
                         {
                             ushort id = arr[y]; if (id == AIR) { prev = 0; continue; }
-                            int li = y * 256 + z * S + x; occ[li >> 6] |= 1UL << (li & 63);
-                            if (!boundsInit){minX=maxX=(byte)x;minY=maxY=(byte)y;minZ=maxZ=(byte)z;boundsInit=true;} else { if (x<minX)minX=(byte)x; if (x>maxX)maxX=(byte)x; if (y<minY)minY=(byte)y; if (y>maxY)maxY=(byte)y; if (z<minZ)minZ=(byte)z; if (z>maxZ)maxZ=(byte)z; }
-                            if (prev!=0) adjY++; prev = id;
+                            int li = y * 256 + z * S + x; occFull[li >> 6] |= 1UL << (li & 63);
+                            if (!boundsInitFull) { minXf = maxXf = (byte)x; minYf = maxYf = (byte)y; minZf = maxZf = (byte)z; boundsInitFull = true; } else { if (x < minXf) minXf = (byte)x; if (x > maxXf) maxXf = (byte)x; if (y < minYf) minYf = (byte)y; if (y > maxYf) maxYf = (byte)y; if (z < minZf) minZf = (byte)z; if (z > maxZf) maxZf = (byte)z; }
+                            if (prev != 0) adjYf++; prev = id;
                         }
                         continue;
                     }
@@ -322,31 +541,31 @@ namespace MVGE_GEN.Utils
                         int y0s = col.Y0Start; int y0e = col.Y0End; int len0 = y0e - y0s + 1;
                         for (int y = y0s; y <= y0e; y++)
                         {
-                            int li = y * 256 + z * S + x; occ[li >> 6] |= 1UL << (li & 63);
-                            if (!boundsInit){minX=maxX=(byte)x;minY=maxY=(byte)y;minZ=maxZ=(byte)z;boundsInit=true;} else { if (x<minX)minX=(byte)x; if (x>maxX)maxX=(byte)x; if (y<minY)minY=(byte)y; if (y>maxY)maxY=(byte)y; if (z<minZ)minZ=(byte)z; if (z>maxZ)maxZ=(byte)z; }
+                            int li = y * 256 + z * S + x; occFull[li >> 6] |= 1UL << (li & 63);
+                            if (!boundsInitFull) { minXf = maxXf = (byte)x; minYf = maxYf = (byte)y; minZf = maxZf = (byte)z; boundsInitFull = true; } else { if (x < minXf) minXf = (byte)x; if (x > maxXf) maxXf = (byte)x; if (y < minYf) minYf = (byte)y; if (y > maxYf) maxYf = (byte)y; if (z < minZf) minZf = (byte)z; if (z > maxZf) maxZf = (byte)z; }
                         }
-                        adjY += len0 - 1;
+                        adjYf += len0 - 1;
                     }
                     if (rc == 2)
                     {
                         int y1s = col.Y1Start; int y1e = col.Y1End; int len1 = y1e - y1s + 1;
                         for (int y = col.Y1Start; y <= col.Y1End; y++)
                         {
-                            int li = y * 256 + z * S + x; occ[li >> 6] |= 1UL << (li & 63);
-                            if (!boundsInit){minX=maxX=(byte)x;minY=maxY=(byte)y;minZ=maxZ=(byte)z;boundsInit=true;} else { if (x<minX)minX=(byte)x; if (x>maxX)maxX=(byte)x; if (y<minY)minY=(byte)y; if (y>maxY)maxY=(byte)y; if (z<minZ)minZ=(byte)z; if (z>maxZ)maxZ=(byte)z; }
+                            int li = y * 256 + z * S + x; occFull[li >> 6] |= 1UL << (li & 63);
+                            if (!boundsInitFull) { minXf = maxXf = (byte)x; minYf = maxYf = (byte)y; minZf = maxZf = (byte)z; boundsInitFull = true; } else { if (x < minXf) minXf = (byte)x; if (x > maxXf) maxXf = (byte)x; if (y < minYf) minYf = (byte)y; if (y > maxYf) maxYf = (byte)y; if (z < minZf) minZf = (byte)z; if (z > maxZf) maxZf = (byte)z; }
                         }
-                        adjY += len1 - 1;
+                        adjYf += len1 - 1;
                     }
                 }
             }
 
-            int nonAir = PopCountBatch(occ); // HW accelerated
-            sec.NonAirCount = nonAir;
-            if (!boundsInit)
+            int nonAirFull = PopCountBatch(occFull); // HW accelerated
+            sec.NonAirCount = nonAirFull;
+            if (!boundsInitFull)
             {
                 sec.Kind = ChunkSection.RepresentationKind.Empty; sec.IsAllAir = true; sec.MetadataBuilt = true; ReturnScratch(scratch); sec.BuildScratch = null; return;
             }
-            sec.HasBounds = true; sec.MinLX=minX; sec.MaxLX=maxX; sec.MinLY=minY; sec.MaxLY=maxY; sec.MinLZ=minZ; sec.MaxLZ=maxZ;
+            sec.HasBounds = true; sec.MinLX = minXf; sec.MaxLX = maxXf; sec.MinLY = minYf; sec.MaxLY = maxYf; sec.MinLZ = minZf; sec.MaxLZ = maxZf;
 
             // X and Z adjacency via occupancy scan of neighbors (bitwise)
             for (int y = 0; y < S; y++)
@@ -355,89 +574,87 @@ namespace MVGE_GEN.Utils
                 for (int z = 0; z < S; z++)
                 {
                     int rowBase = yBase + z * S;
-                    // process row bits in 16-size chunk
                     int liRowStart = rowBase;
-                    // Bits for this row may span across ulong boundaries but 16 bits small; fallback simple loop (cheap).
                     bool prev = false;
                     for (int x = 0; x < S; x++)
                     {
-                        int li = liRowStart + x; bool filled = (occ[li >> 6] & (1UL << (li & 63))) != 0; if (filled && prev) adjX++; prev = filled;
-                        if (z>0 && filled)
+                        int li = liRowStart + x; bool filled = (occFull[li >> 6] & (1UL << (li & 63))) != 0; if (filled && prev) adjXf++; prev = filled;
+                        if (z > 0 && filled)
                         {
-                            int backLi = li - S; if ((occ[backLi >> 6] & (1UL << (backLi & 63))) != 0) adjZ++; // Z adjacency
+                            int backLi = li - S; if ((occFull[backLi >> 6] & (1UL << (backLi & 63))) != 0) adjZf++; // Z adjacency
                         }
                     }
                 }
             }
 
-            int exposure = 6 * nonAir - 2 * (adjX + adjY + adjZ);
-            sec.InternalExposure = exposure;
+            int exposureFull = 6 * nonAirFull - 2 * (adjXf + adjYf + adjZf);
+            sec.InternalExposure = exposureFull;
 
-            // Decide representation
-            if (nonAir == S*S*S && scratch.DistinctCount == 1)
+            // Decide representation (original logic)
+            if (nonAirFull == S * S * S && scratch.DistinctCount == 1)
             {
                 sec.Kind = ChunkSection.RepresentationKind.Uniform;
                 sec.UniformBlockId = scratch.Distinct[0];
                 sec.IsAllAir = false; sec.CompletelyFull = true;
             }
-            else if (nonAir <= 128)
+            else if (nonAirFull <= 128)
             {
-                int[] idx = new int[nonAir]; ushort[] blocks = new ushort[nonAir];
-                int p = 0; ushort singleId = scratch.DistinctCount==1 ? scratch.Distinct[0] : (ushort)0;
-                for (int word = 0; word < occ.Length; word++)
+                int[] idx = new int[nonAirFull]; ushort[] blocks = new ushort[nonAirFull];
+                int p = 0; ushort singleId = scratch.DistinctCount == 1 ? scratch.Distinct[0] : (ushort)0;
+                for (int word = 0; word < occFull.Length; word++)
                 {
-                    ulong w = occ[word];
-                    while (w!=0){int bit = BitOperations.TrailingZeroCount(w); int li = (word<<6)+bit; idx[p]=li; blocks[p]= singleId!=0? singleId : ResolveBlockId(ref scratch.Columns[(li & 255)], li); p++; w&=w-1;}
+                    ulong w = occFull[word];
+                    while (w != 0) { int bit = BitOperations.TrailingZeroCount(w); int li = (word << 6) + bit; idx[p] = li; blocks[p] = singleId != 0 ? singleId : ResolveBlockId(ref scratch.Columns[(li & 255)], li); p++; w &= w - 1; }
                 }
                 sec.Kind = ChunkSection.RepresentationKind.Sparse;
-                sec.SparseIndices = idx; sec.SparseBlocks = blocks; sec.IsAllAir=false;
+                sec.SparseIndices = idx; sec.SparseBlocks = blocks; sec.IsAllAir = false;
             }
             else
             {
                 if (scratch.DistinctCount == 1)
                 {
                     sec.Kind = ChunkSection.RepresentationKind.Packed;
-                    sec.Palette = new List<ushort>{AIR, scratch.Distinct[0]};
-                    sec.PaletteLookup = new Dictionary<ushort,int>{{AIR,0},{scratch.Distinct[0],1}};
-                    sec.BitsPerIndex = 1; sec.BitData = new uint[ (4096 +31)/32 ];
-                    for (int word=0; word<occ.Length; word++)
+                    sec.Palette = new List<ushort> { AIR, scratch.Distinct[0] };
+                    sec.PaletteLookup = new Dictionary<ushort, int> { { AIR, 0 }, { scratch.Distinct[0], 1 } };
+                    sec.BitsPerIndex = 1; sec.BitData = new uint[(4096 + 31) / 32];
+                    for (int word = 0; word < occFull.Length; word++)
                     {
-                        ulong w = occ[word];
-                        while (w!=0){int bit = BitOperations.TrailingZeroCount(w); int li=(word<<6)+bit; int bw = li>>5; int bo = li &31; sec.BitData[bw] |= 1u<<bo; w&=w-1;}
+                        ulong w = occFull[word];
+                        while (w != 0) { int bit = BitOperations.TrailingZeroCount(w); int li = (word << 6) + bit; int bw = li >> 5; int bo = li & 31; sec.BitData[bw] |= 1u << bo; w &= w - 1; }
                     }
-                    sec.IsAllAir=false;
+                    sec.IsAllAir = false;
                 }
                 else
                 {
                     sec.Kind = ChunkSection.RepresentationKind.DenseExpanded;
                     var dense = sec.ExpandedDense = new ushort[4096];
-                    for (int z=0; z<S; z++)
-                    for (int x=0; x<S; x++)
+                    for (int z = 0; z < S; z++)
+                    for (int x = 0; x < S; x++)
                     {
-                        ref var col = ref scratch.Columns[z*S + x];
-                        byte rc = col.RunCount; if (rc==0) continue;
-                        if (rc==255){var arr=col.Escalated; for (int y=0;y<S;y++){ushort id=arr[y]; if (id!=AIR) dense[(y*256)+(z*S)+x]=id;}}
+                        ref var col = ref scratch.Columns[z * S + x];
+                        byte rc = col.RunCount; if (rc == 0) continue;
+                        if (rc == 255) { var arr = col.Escalated; for (int y = 0; y < S; y++) { ushort id = arr[y]; if (id != AIR) dense[(y * 256) + (z * S) + x] = id; } }
                         else
                         {
-                            for (int y=col.Y0Start; y<=col.Y0End; y++) dense[(y*256)+(z*S)+x]=col.Id0;
-                            if (rc==2) for (int y=col.Y1Start; y<=col.Y1End; y++) dense[(y*256)+(z*S)+x]=col.Id1;
+                            for (int y = col.Y0Start; y <= col.Y0End; y++) dense[(y * 256) + (z * S) + x] = col.Id0;
+                            if (rc == 2) for (int y = col.Y1Start; y <= col.Y1End; y++) dense[(y * 256) + (z * S) + x] = col.Id1;
                         }
                     }
-                    sec.IsAllAir=false;
+                    sec.IsAllAir = false;
                 }
             }
             sec.MetadataBuilt = true;
-            sec.BuildScratch = null; ReturnScratch(scratch); // release back to pool
+            sec.BuildScratch = null; ReturnScratch(scratch);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static ushort ResolveBlockId(ref ColumnData col, int li)
         {
             int y = li / 256; // since li = y*256 + baseXZ
-            if (col.RunCount==255){ return col.Escalated[y]; }
-            if (col.RunCount==0) return AIR;
-            if (col.RunCount>=1 && y>=col.Y0Start && y<=col.Y0End) return col.Id0;
-            if (col.RunCount==2 && y>=col.Y1Start && y<=col.Y1End) return col.Id1;
+            if (col.RunCount == 255) { return col.Escalated[y]; }
+            if (col.RunCount == 0) return AIR;
+            if (col.RunCount >= 1 && y >= col.Y0Start && y <= col.Y0End) return col.Id0;
+            if (col.RunCount == 2 && y >= col.Y1Start && y <= col.Y1End) return col.Id1;
             return AIR;
         }
     }
