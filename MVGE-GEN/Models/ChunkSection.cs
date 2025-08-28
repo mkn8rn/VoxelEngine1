@@ -1,4 +1,6 @@
+using MVGE_GEN.Utils; // for SectionUtils
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 
 namespace MVGE_GEN.Models
 {
@@ -42,24 +44,19 @@ namespace MVGE_GEN.Models
         public ushort[] ExpandedDense; // valid when Kind==DenseExpanded
 
         // ---- metadata for fast flatten / exposure aggregation ----
-        // Occupancy bitset (4096 bits => 64 ulongs) in section-local linear index order (y,z,x mapping defined in SectionUtils.LinearIndex)
         public ulong[] OccupancyBits; // null if not built
-        // Face masks (each 256 bits => 4 ulongs) for quickly computing cross-section adjacency
         public ulong[] FaceNegXBits; // YZ plane (index = z*16 + y)
         public ulong[] FacePosXBits; // YZ plane
         public ulong[] FaceNegYBits; // XZ plane (index = x*16 + z)
         public ulong[] FacePosYBits; // XZ plane
         public ulong[] FaceNegZBits; // XY plane (index = x*16 + y)
         public ulong[] FacePosZBits; // XY plane
-        // Precomputed internal exposure (6*N - 2*(adjX+adjY+adjZ)) ignoring cross-section overlaps
         public int InternalExposure;
-        // Local voxel bounds of solids inside section (inclusive)
         public bool HasBounds;
         public byte MinLX, MinLY, MinLZ, MaxLX, MaxLY, MaxLZ;
-        // Flag indicating metadata built
         public bool MetadataBuilt;
 
-        // ---- Incremental fast-classification helpers (optional; safe to ignore if not using fast path) ----
+        // ---- Incremental fast-classification helpers (legacy, unused in new builder but retained for compatibility) ----
         public bool PreclassUniformCandidate = true; // remains true while only one non-air block id seen
         public ushort PreclassFirstBlock;            // first non-air block encountered
         public bool PreclassMultipleBlocks;          // set true once a different block encountered
@@ -67,9 +64,37 @@ namespace MVGE_GEN.Models
         public List<int> TempSparseIndices;          // collected linear indices while still under sparse threshold
         public List<ushort> TempSparseBlocks;        // parallel block ids
         public bool BoundsInitialized;               // internal flag for incremental bounds capture
-        // (Future: adjacency counters / occupancy bits could be added if deeper incremental exposure needed)
+        public int AdjPairsX, AdjPairsY, AdjPairsZ;   // incremental adjacency counters (unused after refactor)
 
-        // Incremental adjacency counters (negative-side neighbour counting)
-        public int AdjPairsX, AdjPairsY, AdjPairsZ;
+        // Strongly-typed two-phase build scratch (internal use by SectionUtils)
+        internal SectionBuildScratch BuildScratch;
+
+        private const int COLUMN_COUNT = SECTION_SIZE * SECTION_SIZE; // 256 columns of 16 voxels each
+
+        // Scratch structures for two-phase build
+        public sealed class SectionBuildScratch
+        {
+            public ColumnData[] Columns = new ColumnData[COLUMN_COUNT];
+            public ushort[] Distinct = new ushort[8]; // up to 8 distinct ids before we give up and escalate densely
+            public int DistinctCount;
+            public bool AnyEscalated;
+            public bool AnyNonAir;
+            public bool DistinctDirty; // when true rebuild distinct list at finalize
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public void Reset()
+            {
+                if (DistinctCount > 0)
+                    System.Array.Clear(Distinct, 0, DistinctCount);
+                DistinctCount = 0; AnyEscalated = false; AnyNonAir = false; DistinctDirty = false;
+                for (int i = 0; i < COLUMN_COUNT; i++) Columns[i].RunCount = 0;
+            }
+        }
+        public struct ColumnData
+        {
+            public byte RunCount; // 0,1,2 or 255 for escalated
+            public ushort Id0, Id1;
+            public byte Y0Start, Y0End, Y1Start, Y1End; // second run only if RunCount==2
+            public ushort[] Escalated; // length 16 when escalated (RunCount==255)
+        }
     }
 }
