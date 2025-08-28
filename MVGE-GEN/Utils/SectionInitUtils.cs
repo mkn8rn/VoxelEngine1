@@ -1,92 +1,121 @@
-﻿using MVGE_GEN.Models;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
+using MVGE_GEN.Models;
 
 namespace MVGE_GEN.Utils
 {
     public static partial class SectionUtils
     {
-        public static bool EnableFastSectionClassification = true;
-        private static readonly int[] FacePlaneSizes = { 4, 4, 4 }; // each face bitset length in ulongs (256 bits)
+        // Restored flag referenced by generation/classification pipeline
+        public static bool EnableFastSectionClassification = true; // controls FastFinalizeSection vs full classify
+        private static readonly int[] FacePlaneSizes = { 4, 4, 4 }; // retained for compatibility (face bitset ulong counts)
+
+        // Precomputed LUTs for linear index decomposition (4096 entries)
+        // linear = y*256 + baseXZ  (baseXZ in [0,255], y in [0,15])
+        private static readonly int[] BitWordIndexLUT = new int[4096];
+        private static readonly uint[] BitSingleBitMaskLUT = new uint[4096]; // only valid for bpi==1 (bit within its 32-bit word)
+        private static readonly int[] BitOffsetLUT = new int[4096];          // (bit position mod 32) for general bpi
+        private static readonly int[] OccWordIndexLUT = new int[4096];
+        private static readonly ulong[] OccBitMaskLUT = new ulong[4096];
+
+        static SectionUtils()
+        {
+            for (int y = 0; y < ChunkSection.SECTION_SIZE; y++)
+            {
+                int yBase = y * 256;
+                for (int baseXZ = 0; baseXZ < 256; baseXZ++)
+                {
+                    int li = yBase + baseXZ;
+                    BitWordIndexLUT[li] = li >> 5;               // /32
+                    BitOffsetLUT[li] = li & 31;
+                    BitSingleBitMaskLUT[li] = 1u << (li & 31);
+                    OccWordIndexLUT[li] = li >> 6;               // /64
+                    OccBitMaskLUT[li] = 1UL << (li & 63);
+                }
+            }
+        }
+
+        // Optional: cache last palette block per section to avoid dictionary lookup churn
+        private sealed class SectionPaletteFastCache
+        {
+            public ushort LastBlockId;
+            public int LastPaletteIndex;
+            public bool Valid;
+        }
+        private static readonly ConditionalWeakTable<ChunkSection, SectionPaletteFastCache> paletteCache = new();
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static int EnsurePaletteIndex(ChunkSection sec, ushort blockId)
+        {
+            if (sec.PaletteLookup == null)
+            {
+                sec.Palette = new List<ushort> { ChunkSection.AIR };
+                sec.PaletteLookup = new Dictionary<ushort, int> { { ChunkSection.AIR, 0 } };
+                sec.BitsPerIndex = 1;
+            }
+
+            var cache = paletteCache.GetValue(sec, _ => new SectionPaletteFastCache());
+            if (cache.Valid && cache.LastBlockId == blockId)
+                return cache.LastPaletteIndex;
+
+            if (!sec.PaletteLookup.TryGetValue(blockId, out int idx))
+            {
+                idx = sec.Palette.Count;
+                sec.Palette.Add(blockId);
+                sec.PaletteLookup[blockId] = idx;
+                if (idx >= (1 << sec.BitsPerIndex))
+                {
+                    GrowBits(sec);
+                    idx = sec.PaletteLookup[blockId]; // refresh in case GrowBits changed width
+                }
+            }
+            cache.LastBlockId = blockId;
+            cache.LastPaletteIndex = idx;
+            cache.Valid = true;
+            return idx;
+        }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void FillColumnRangeInitial(ChunkSection sec, int localX, int localZ, int yStart, int yEnd, ushort blockId)
         {
-            if (sec == null || yEnd < yStart || blockId == ChunkSection.AIR) return;
+            if (sec == null || blockId == ChunkSection.AIR || yEnd < yStart) return;
 
-            if (sec.IsAllAir) Initialize(sec);
+            if (sec.IsAllAir) Initialize(sec); // alloc BitData / palette containers (cheap once)
             sec.Kind = ChunkSection.RepresentationKind.Packed;
             sec.MetadataBuilt = false;
-
-            if (!sec.PaletteLookup.TryGetValue(blockId, out int paletteIndex))
-            {
-                paletteIndex = sec.Palette.Count;
-                sec.Palette.Add(blockId);
-                sec.PaletteLookup[blockId] = paletteIndex;
-                if (paletteIndex >= (1 << sec.BitsPerIndex))
-                {
-                    GrowBits(sec);
-                    paletteIndex = sec.PaletteLookup[blockId];
-                }
-            }
 
             int added = yEnd - yStart + 1;
             sec.NonAirCount += added;
             if (sec.VoxelCount != 0 && sec.NonAirCount == sec.VoxelCount) sec.CompletelyFull = true;
 
-            int plane = SECTION_SIZE * SECTION_SIZE; // 256
-            int baseXZ = localZ * SECTION_SIZE + localX;
+            int baseXZ = localZ * ChunkSection.SECTION_SIZE + localX;
+            int plane = ChunkSection.SECTION_SIZE * ChunkSection.SECTION_SIZE; // 256
+
+            // Palette index (fast cached)
+            int paletteIndex = EnsurePaletteIndex(sec, blockId);
             int bpi = sec.BitsPerIndex;
             uint mask = (uint)((1 << bpi) - 1);
             uint pval = (uint)paletteIndex & mask;
 
-            // Early exit: just write bits if fast classification disabled
-            if (!EnableFastSectionClassification)
+            bool captureSparse = sec.NonAirCount <= 128;
+            if (captureSparse)
             {
-                if (bpi == 1)
-                {
-                    // Single-bit fast path
-                    int linear = yStart * plane + baseXZ;
-                    for (int y = yStart; y <= yEnd; y++, linear += plane)
-                    {
-                        int dataIndex = linear >> 5;
-                        int bitOffset = linear & 31;
-                        sec.BitData[dataIndex] |= (pval << bitOffset);
-                    }
-                }
-                else
-                {
-                    int linear = yStart * plane + baseXZ;
-                    for (int y = yStart; y <= yEnd; y++, linear += plane)
-                    {
-                        int bitPos = linear * bpi;
-                        int dataIndex = bitPos >> 5;
-                        int bitOffset = bitPos & 31;
-                        uint[] data = sec.BitData;
-                        data[dataIndex] &= ~(mask << bitOffset);
-                        data[dataIndex] |= pval << bitOffset;
-                        int remaining = 32 - bitOffset;
-                        if (remaining < bpi)
-                        {
-                            int bitsInNext = bpi - remaining;
-                            uint nextMask = (uint)((1 << bitsInNext) - 1);
-                            data[dataIndex + 1] &= ~nextMask;
-                            data[dataIndex + 1] |= pval >> remaining;
-                        }
-                    }
-                }
-                return;
+                sec.TempSparseIndices ??= new List<int>(128);
+                sec.TempSparseBlocks ??= new List<ushort>(128);
+            }
+            else if (sec.TempSparseIndices != null)
+            {
+                sec.TempSparseIndices = null;
+                sec.TempSparseBlocks = null;
             }
 
-            // ---- Fast classification enabled: fused pass with run-level adjacency ----
-
-            // Uniform candidate tracking (section-level, not per voxel)
+            // --- Uniform candidate bookkeeping (unchanged logic) ---
             if (sec.PreclassUniformCandidate)
             {
                 if (sec.NonAirCount == added)
                 {
-                    sec.PreclassFirstBlock = blockId; // first batch
+                    sec.PreclassFirstBlock = blockId;
                 }
                 else if (blockId != sec.PreclassFirstBlock)
                 {
@@ -101,38 +130,31 @@ namespace MVGE_GEN.Utils
                 sec.DistinctNonAirBlocks = Math.Max(2, sec.DistinctNonAirBlocks);
             }
 
-            bool captureSparse = sec.NonAirCount <= 128;
-            if (captureSparse)
-            {
-                sec.TempSparseIndices ??= new List<int>(128);
-                sec.TempSparseBlocks ??= new List<ushort>(128);
-            }
-            else if (sec.TempSparseIndices != null)
-            {
-                // Threshold crossed; discard to skip later conversion cost
-                sec.TempSparseIndices = null;
-                sec.TempSparseBlocks = null;
-            }
-
-            // Occupancy allocation (once)
-            sec.OccupancyBits ??= new ulong[64];
-            ulong[] occ = sec.OccupancyBits;
+            // --- Fast early exit if we only need packed data (adjacency disabled externally) ---
+            // (We still build occupancy for later phases; if you adopt a two-pass design you can gate this harder.)
+            ulong[] occ = sec.OccupancyBits ??= new ulong[64];
             uint[] bitData = sec.BitData;
 
-            // Face bitset allocation (only allocate planes we will touch)
+            // Boundary / face involvement flags
             bool touchNegX = localX == 0;
-            bool touchPosX = localX == SECTION_SIZE - 1;
+            bool touchPosX = localX == ChunkSection.SECTION_SIZE - 1;
             bool touchNegZ = localZ == 0;
-            bool touchPosZ = localZ == SECTION_SIZE - 1;
+            bool touchPosZ = localZ == ChunkSection.SECTION_SIZE - 1;
             bool touchesBottom = yStart == 0;
-            bool touchesTop = yEnd == SECTION_SIZE - 1;
+            bool touchesTop = yEnd == ChunkSection.SECTION_SIZE - 1;
 
-            if (touchNegX) sec.FaceNegXBits ??= new ulong[4];
-            if (touchPosX) sec.FacePosXBits ??= new ulong[4];
-            if (touchNegZ) sec.FaceNegZBits ??= new ulong[4];
-            if (touchPosZ) sec.FacePosZBits ??= new ulong[4];
-            if (touchesBottom) sec.FaceNegYBits ??= new ulong[4];
-            if (touchesTop) sec.FacePosYBits ??= new ulong[4];
+            bool hasAnyFace = touchNegX || touchPosX || touchNegZ || touchPosZ || touchesBottom || touchesTop;
+
+            // Allocate face arrays only if needed
+            if (hasAnyFace)
+            {
+                if (touchNegX) sec.FaceNegXBits ??= new ulong[4];
+                if (touchPosX) sec.FacePosXBits ??= new ulong[4];
+                if (touchNegZ) sec.FaceNegZBits ??= new ulong[4];
+                if (touchPosZ) sec.FacePosZBits ??= new ulong[4];
+                if (touchesBottom) sec.FaceNegYBits ??= new ulong[4];
+                if (touchesTop) sec.FacePosYBits ??= new ulong[4];
+            }
 
             ulong[] faceNegX = sec.FaceNegXBits;
             ulong[] facePosX = sec.FacePosXBits;
@@ -141,66 +163,79 @@ namespace MVGE_GEN.Utils
             ulong[] faceNegY = sec.FaceNegYBits;
             ulong[] facePosY = sec.FacePosYBits;
 
-            // Precompute incremental indices
-            int linearIter = yStart * plane + baseXZ;
-            int yzIndexStart = localZ * SECTION_SIZE + yStart; // for X faces
-            int xyIndexStart = localX * SECTION_SIZE + yStart; // for Z faces
-            int xzIndexConst = localX * SECTION_SIZE + localZ; // for Y faces
-            int runLen = added;
+            // Precompute plane indices for faces (incremental)
+            int yzIndexBase = localZ * ChunkSection.SECTION_SIZE + yStart; // for X faces
+            int xyIndexBase = localX * ChunkSection.SECTION_SIZE + yStart; // for Z faces
+            int xzIndexConst = localX * ChunkSection.SECTION_SIZE + localZ; // for Y faces (single index)
 
-            // Bit / occupancy writes (no per-voxel adjacency counting now)
+            // ----------- FAST PATH: bpi == 1 -----------
             if (bpi == 1)
             {
-                int li = linearIter;
-                int yzIndex = yzIndexStart;
-                int xyIndex = xyIndexStart;
-                for (int y = yStart; y <= yEnd; y++, li += plane, yzIndex++, xyIndex++)
+                // Unroll short run (<=16) – vertical run is max 16 anyway.
+                for (int y = yStart, liBase = yStart * plane + baseXZ, yzIdx = yzIndexBase, xyIdx = xyIndexBase;
+                     y <= yEnd;
+                     y++, liBase += plane, yzIdx++, xyIdx++)
                 {
-                    int dataIndex = li >> 5;
-                    int bitOffset = li & 31;
-                    bitData[dataIndex] |= (pval << bitOffset);
+                    int li = liBase;
 
+                    // Packed bit (just OR mask; never need to clear because initial fill writes air->solid)
+                    int bw = BitWordIndexLUT[li];
+                    bitData[bw] |= BitSingleBitMaskLUT[li];
+
+                    // Sparse capture (optional)
                     if (captureSparse)
                     {
                         sec.TempSparseIndices.Add(li);
                         sec.TempSparseBlocks.Add(blockId);
                     }
 
-                    int word = li >> 6;
-                    int bit = li & 63;
-                    occ[word] |= 1UL << bit; // voxel newly occupied (initial generation guarantees no prior occupancy)
+                    // Occupancy
+                    int ow = OccWordIndexLUT[li];
+                    occ[ow] |= OccBitMaskLUT[li];
 
-                    // Face masks (still per-y for simplicity; could batch later)
-                    int yzWord = yzIndex >> 6; int yzBit = yzIndex & 63;
-                    int xyWord = xyIndex >> 6; int xyBit = xyIndex & 63;
-                    int xzWord = xzIndexConst >> 6; int xzBit = xzIndexConst & 63;
-                    if (touchNegX) faceNegX[yzWord] |= 1UL << yzBit;
-                    if (touchPosX) facePosX[yzWord] |= 1UL << yzBit;
-                    if (touchNegZ) faceNegZ[xyWord] |= 1UL << xyBit;
-                    if (touchPosZ) facePosZ[xyWord] |= 1UL << xyBit;
-                    if (touchesBottom && y == 0) faceNegY[xzWord] |= 1UL << xzBit;
-                    if (touchesTop && y == SECTION_SIZE - 1) facePosY[xzWord] |= 1UL << xzBit;
+                    if (hasAnyFace)
+                    {
+                        // Side faces (per y)
+                        if (touchNegX) { int w = yzIdx >> 6; faceNegX[w] |= 1UL << (yzIdx & 63); }
+                        if (touchPosX) { int w = yzIdx >> 6; facePosX[w] |= 1UL << (yzIdx & 63); }
+                        if (touchNegZ) { int w = xyIdx >> 6; faceNegZ[w] |= 1UL << (xyIdx & 63); }
+                        if (touchPosZ) { int w = xyIdx >> 6; facePosZ[w] |= 1UL << (xyIdx & 63); }
+                    }
+                }
+
+                // Bottom/top faces only need to set once (not per y)
+                if (touchesBottom)
+                {
+                    int w = xzIndexConst >> 6;
+                    faceNegY[w] |= 1UL << (xzIndexConst & 63);
+                }
+                if (touchesTop)
+                {
+                    int w = xzIndexConst >> 6;
+                    facePosY[w] |= 1UL << (xzIndexConst & 63);
                 }
             }
             else
             {
-                int li = linearIter;
-                int yzIndex = yzIndexStart;
-                int xyIndex = xyIndexStart;
-                for (int y = yStart; y <= yEnd; y++, li += plane, yzIndex++, xyIndex++)
+                // ----------- GENERAL PATH: bpi > 1 -----------
+                for (int y = yStart, liBase = yStart * plane + baseXZ, yzIdx = yzIndexBase, xyIdx = xyIndexBase;
+                     y <= yEnd;
+                     y++, liBase += plane, yzIdx++, xyIdx++)
                 {
-                    int bitPos = li * bpi;
-                    int dataIndex = bitPos >> 5;
-                    int bitOffset = bitPos & 31;
-                    bitData[dataIndex] &= ~(mask << bitOffset);
-                    bitData[dataIndex] |= pval << bitOffset;
+                    int li = liBase;
+                    long bitPos = (long)li * bpi;
+                    int dataIndex = (int)(bitPos >> 5);
+                    int bitOffset = (int)(bitPos & 31);
+
+                    uint clearMask = mask << bitOffset;
+                    bitData[dataIndex] = (bitData[dataIndex] & ~clearMask) | (pval << bitOffset);
+
                     int remaining = 32 - bitOffset;
                     if (remaining < bpi)
                     {
                         int bitsInNext = bpi - remaining;
                         uint nextMask = (uint)((1 << bitsInNext) - 1);
-                        bitData[dataIndex + 1] &= ~nextMask;
-                        bitData[dataIndex + 1] |= pval >> remaining;
+                        bitData[dataIndex + 1] = (bitData[dataIndex + 1] & ~nextMask) | (pval >> remaining);
                     }
 
                     if (captureSparse)
@@ -209,53 +244,64 @@ namespace MVGE_GEN.Utils
                         sec.TempSparseBlocks.Add(blockId);
                     }
 
-                    int word = li >> 6;
-                    int bit = li & 63;
-                    occ[word] |= 1UL << bit;
+                    int ow = OccWordIndexLUT[li];
+                    occ[ow] |= OccBitMaskLUT[li];
 
-                    int yzWord = yzIndex >> 6; int yzBit = yzIndex & 63;
-                    int xyWord = xyIndex >> 6; int xyBit = xyIndex & 63;
-                    int xzWord = xzIndexConst >> 6; int xzBit = xzIndexConst & 63;
-                    if (touchNegX) faceNegX[yzWord] |= 1UL << yzBit;
-                    if (touchPosX) facePosX[yzWord] |= 1UL << yzBit;
-                    if (touchNegZ) faceNegZ[xyWord] |= 1UL << xyBit;
-                    if (touchPosZ) facePosZ[xyWord] |= 1UL << xyBit;
-                    if (touchesBottom && y == 0) faceNegY[xzWord] |= 1UL << xzBit;
-                    if (touchesTop && y == SECTION_SIZE - 1) facePosY[xzWord] |= 1UL << xzBit;
+                    if (hasAnyFace)
+                    {
+                        if (touchNegX) { int w = yzIdx >> 6; faceNegX[w] |= 1UL << (yzIdx & 63); }
+                        if (touchPosX) { int w = yzIdx >> 6; facePosX[w] |= 1UL << (yzIdx & 63); }
+                        if (touchNegZ) { int w = xyIdx >> 6; faceNegZ[w] |= 1UL << (xyIdx & 63); }
+                        if (touchPosZ) { int w = xyIdx >> 6; facePosZ[w] |= 1UL << (xyIdx & 63); }
+                    }
+                }
+
+                if (touchesBottom)
+                {
+                    int w = xzIndexConst >> 6;
+                    faceNegY[w] |= 1UL << (xzIndexConst & 63);
+                }
+                if (touchesTop)
+                {
+                    int w = xzIndexConst >> 6;
+                    facePosY[w] |= 1UL << (xzIndexConst & 63);
                 }
             }
 
-            // ---- Run-level adjacency accumulation ----
-            // Y internal adjacency between consecutive voxels in the run
+            // ---- Run-level adjacency accumulation (unchanged logic) ----
+            int runLen = added;
             if (runLen > 1) sec.AdjPairsY += runLen - 1;
-            // Bottom cross-run Y adjacency (negative side) if voxel below exists
+
+            // Below voxel adjacency (single check)
             if (yStart > 0)
             {
                 int belowLinear = (yStart - 1) * plane + baseXZ;
-                if ((occ[belowLinear >> 6] & (1UL << (belowLinear & 63))) != 0) sec.AdjPairsY++;
+                if ((occ[OccWordIndexLUT[belowLinear]] & OccBitMaskLUT[belowLinear]) != 0)
+                    sec.AdjPairsY++;
             }
-            // X negative side adjacency (scan once)
+
+            // Negative X adjacency (scan once if column not at x==0)
             if (localX > 0)
             {
                 int li = yStart * plane + baseXZ;
                 for (int y = yStart; y <= yEnd; y++, li += plane)
                 {
                     int nei = li - 1;
-                    if ((occ[nei >> 6] & (1UL << (nei & 63))) != 0) sec.AdjPairsX++;
+                    if ((occ[OccWordIndexLUT[nei]] & OccBitMaskLUT[nei]) != 0) sec.AdjPairsX++;
                 }
             }
-            // Z negative side adjacency (scan once)
+            // Negative Z adjacency
             if (localZ > 0)
             {
                 int li = yStart * plane + baseXZ;
                 for (int y = yStart; y <= yEnd; y++, li += plane)
                 {
-                    int nei = li - SECTION_SIZE; // subtract one Z step
-                    if ((occ[nei >> 6] & (1UL << (nei & 63))) != 0) sec.AdjPairsZ++;
+                    int nei = li - ChunkSection.SECTION_SIZE;
+                    if ((occ[OccWordIndexLUT[nei]] & OccBitMaskLUT[nei]) != 0) sec.AdjPairsZ++;
                 }
             }
 
-            // Bounds (section-level)
+            // Bounds
             if (!sec.BoundsInitialized)
             {
                 sec.BoundsInitialized = true; sec.HasBounds = true;
@@ -267,7 +313,8 @@ namespace MVGE_GEN.Utils
             {
                 if (localX < sec.MinLX) sec.MinLX = (byte)localX; else if (localX > sec.MaxLX) sec.MaxLX = (byte)localX;
                 if (localZ < sec.MinLZ) sec.MinLZ = (byte)localZ; else if (localZ > sec.MaxLZ) sec.MaxLZ = (byte)localZ;
-                if (yStart < sec.MinLY) sec.MinLY = (byte)yStart; if (yEnd > sec.MaxLY) sec.MaxLY = (byte)yEnd;
+                if (yStart < sec.MinLY) sec.MinLY = (byte)yStart;
+                if (yEnd > sec.MaxLY) sec.MaxLY = (byte)yEnd;
             }
         }
     }
