@@ -236,6 +236,9 @@ namespace MVGE_GEN.Terrain
             // Track shared face adjacency counts
             long sharedAdjX = 0, sharedAdjY = 0, sharedAdjZ = 0;
 
+            // Accurate unique slice counting setup
+            EnsureSliceStampArrays();
+
             for (int sx = 0; sx < sectionsX; sx++)
             {
                 int baseX = sx * sectionSize; if (baseX >= dimX) break;
@@ -255,7 +258,8 @@ namespace MVGE_GEN.Terrain
                         bool isOccludedFull = occludedFull[sx, sy, sz] && sec.CompletelyFull;
                         if (isOccludedFull)
                         {
-                            ushort solid = (ushort)BaseBlockType.Stone;
+                            // Preserve actual uniform block if available.
+                            ushort solid = sec.Kind == ChunkSection.RepresentationKind.Uniform ? sec.UniformBlockId : (ushort)BaseBlockType.Stone;
                             int voxels = maxLocalX * maxLocalZ * maxLocalY;
                             nonAirTotal += voxels;
                             for (int lx = 0; lx < maxLocalX; lx++)
@@ -267,6 +271,24 @@ namespace MVGE_GEN.Terrain
                                     dest.AsSpan(destXBase + gz * strideZ + baseY, maxLocalY).Fill(solid);
                                 }
                             }
+                            // Uniform full section => bounds are whole local range
+                            if (!stats.HasStats)
+                            {
+                                stats.MinX = baseX; stats.MaxX = baseX + maxLocalX - 1;
+                                stats.MinY = baseY; stats.MaxY = baseY + maxLocalY - 1;
+                                stats.MinZ = baseZ; stats.MaxZ = baseZ + maxLocalZ - 1;
+                                stats.HasStats = true;
+                            }
+                            else
+                            {
+                                if (baseX < stats.MinX) stats.MinX = baseX; if (baseX + maxLocalX - 1 > stats.MaxX) stats.MaxX = baseX + maxLocalX - 1;
+                                if (baseY < stats.MinY) stats.MinY = baseY; if (baseY + maxLocalY - 1 > stats.MaxY) stats.MaxY = baseY + maxLocalY - 1;
+                                if (baseZ < stats.MinZ) stats.MinZ = baseZ; if (baseZ + maxLocalZ - 1 > stats.MaxZ) stats.MaxZ = baseZ + maxLocalZ - 1;
+                            }
+                            // Slice stamping (accurate unique counts)
+                            for (int gx = baseX; gx < baseX + maxLocalX; gx++) if (xSliceStamp[gx] != sliceStampVersion) { xSliceStamp[gx] = sliceStampVersion; stats.XNonEmpty++; }
+                            for (int gy = baseY; gy < baseY + maxLocalY; gy++) if (ySliceStamp[gy] != sliceStampVersion) { ySliceStamp[gy] = sliceStampVersion; stats.YNonEmpty++; }
+                            for (int gz = baseZ; gz < baseZ + maxLocalZ; gz++) if (zSliceStamp[gz] != sliceStampVersion) { zSliceStamp[gz] = sliceStampVersion; stats.ZNonEmpty++; }
                             continue;
                         }
 
@@ -301,6 +323,10 @@ namespace MVGE_GEN.Terrain
                                 if (gMinY < stats.MinY) stats.MinY = gMinY; if (gMaxY > stats.MaxY) stats.MaxY = gMaxY;
                                 if (gMinZ < stats.MinZ) stats.MinZ = gMinZ; if (gMaxZ > stats.MaxZ) stats.MaxZ = gMaxZ;
                             }
+                            // Accurate slice stamping per axis using real bounds (no overestimation)
+                            for (int gx = gMinX; gx <= gMaxX; gx++) if (xSliceStamp[gx] != sliceStampVersion) { xSliceStamp[gx] = sliceStampVersion; stats.XNonEmpty++; }
+                            for (int gy = gMinY; gy <= gMaxY; gy++) if (ySliceStamp[gy] != sliceStampVersion) { ySliceStamp[gy] = sliceStampVersion; stats.YNonEmpty++; }
+                            for (int gz = gMinZ; gz <= gMaxZ; gz++) if (zSliceStamp[gz] != sliceStampVersion) { zSliceStamp[gz] = sliceStampVersion; stats.ZNonEmpty++; }
                         }
 
                         // Boundary solidity flag (cheap) – if section touches chunk boundary and has any voxel on that face
@@ -334,16 +360,16 @@ namespace MVGE_GEN.Terrain
                             case ChunkSection.RepresentationKind.DenseExpanded:
                                 {
                                     var arr = sec.ExpandedDense;
+                                    int strideYLocal = sectionSize * sectionSize; // 256
                                     for (int lx = 0; lx < maxLocalX; lx++)
                                     {
                                         int gx = baseX + lx; int destXBase = gx * strideX;
                                         for (int lz = 0; lz < maxLocalZ; lz++)
                                         {
                                             int gz = baseZ + lz; int destBase = destXBase + gz * strideZ + baseY;
-                                            int localBase = (sec.MinLY == 0 ? 0 : 0); // just clarity
-                                            for (int ly = 0; ly < maxLocalY; ly++)
+                                            int localIndex = lz * sectionSize + lx; // ly = 0 starting index
+                                            for (int ly = 0; ly < maxLocalY; ly++, localIndex += strideYLocal)
                                             {
-                                                int localIndex = ((ly) * sectionSize + lz) * sectionSize + lx; // y-major mapping used in metadata builder
                                                 ushort id = arr[localIndex];
                                                 if (id != ChunkSection.AIR) dest[destBase + ly] = id;
                                             }
@@ -358,8 +384,8 @@ namespace MVGE_GEN.Terrain
                                     {
                                         int li = idx[i];
                                         int x = li % sectionSize;
-                                        int y = li / 256; // 16*16
-                                        int rem = li - y * 256; int z = rem / sectionSize;
+                                        int y = li / 256; int rem = li - y * 256; int z = rem / sectionSize;
+                                        if (x >= maxLocalX || y >= maxLocalY || z >= maxLocalZ) continue; // clip at chunk edge
                                         int gx = baseX + x; int gy = baseY + y; int gz = baseZ + z;
                                         dest[gx * strideX + gz * strideZ + gy] = blocks[i];
                                     }
@@ -367,13 +393,15 @@ namespace MVGE_GEN.Terrain
                                 }
                             case ChunkSection.RepresentationKind.Packed:
                                 {
-                                    // Use occupancy bits + palette only when needed (rare mid-density). Decode only non-air bits
                                     var occ = sec.OccupancyBits;
                                     if (occ == null)
                                     {
-                                        // fallback: skip (should not happen if metadata built)
                                         goto case ChunkSection.RepresentationKind.Uniform;
                                     }
+                                    int bpi = sec.BitsPerIndex;
+                                    var bitData = sec.BitData;
+                                    var palette = sec.Palette;
+                                    int maskLocal = (1 << bpi) - 1;
                                     for (int word = 0; word < occ.Length; word++)
                                     {
                                         ulong w = occ[word];
@@ -384,10 +412,18 @@ namespace MVGE_GEN.Terrain
                                             int x = li % sectionSize;
                                             int y = li / 256; int rem = li - y * 256; int z = rem / sectionSize;
                                             if (x >= maxLocalX || y >= maxLocalY || z >= maxLocalZ) { w &= w - 1; continue; }
+                                            // Inline packed palette index decode
+                                            long bitPos = (long)li * bpi;
+                                            int dataIndex = (int)(bitPos >> 5);
+                                            int bitOffset = (int)(bitPos & 31);
+                                            uint value = bitData[dataIndex] >> bitOffset;
+                                            int remaining = 32 - bitOffset;
+                                            if (remaining < bpi)
+                                                value |= bitData[dataIndex + 1] << remaining;
+                                            int paletteIndex = (int)(value & (uint)maskLocal);
+                                            ushort blockId = palette[paletteIndex];
                                             int gx = baseX + x; int gy = baseY + y; int gz = baseZ + z;
-                                            // Need block id: if we kept palette index we must read bits
-                                            int pi = MVGE_GEN.Utils.SectionUtils.GetBlock(sec, x, y, z); // uses optimized path per kind
-                                            dest[gx * strideX + gz * strideZ + gy] = (ushort)pi;
+                                            dest[gx * strideX + gz * strideZ + gy] = blockId;
                                             w &= w - 1;
                                         }
                                     }
@@ -415,8 +451,6 @@ namespace MVGE_GEN.Terrain
                     {
                         var a = sections[sx, sy, sz]; var b = sections[sx + 1, sy, sz];
                         if (a == null || b == null || a.NonAirCount == 0 || b.NonAirCount == 0) continue;
-                        if (!a.MetadataBuilt) MVGE_GEN.Utils.SectionUtils.ClassifyRepresentation(a);
-                        if (!b.MetadataBuilt) MVGE_GEN.Utils.SectionUtils.ClassifyRepresentation(b);
                         var fa = a.FacePosXBits; var fb = b.FaceNegXBits;
                         if (fa != null && fb != null)
                         {
@@ -437,8 +471,6 @@ namespace MVGE_GEN.Terrain
                     {
                         var a = sections[sx, sy, sz]; var b = sections[sx, sy + 1, sz];
                         if (a == null || b == null || a.NonAirCount == 0 || b.NonAirCount == 0) continue;
-                        if (!a.MetadataBuilt) MVGE_GEN.Utils.SectionUtils.ClassifyRepresentation(a);
-                        if (!b.MetadataBuilt) MVGE_GEN.Utils.SectionUtils.ClassifyRepresentation(b);
                         var fa = a.FacePosYBits; var fb = b.FaceNegYBits;
                         if (fa != null && fb != null)
                         {
@@ -459,8 +491,6 @@ namespace MVGE_GEN.Terrain
                     {
                         var a = sections[sx, sy, sz]; var b = sections[sx, sy, sz + 1];
                         if (a == null || b == null || a.NonAirCount == 0 || b.NonAirCount == 0) continue;
-                        if (!a.MetadataBuilt) MVGE_GEN.Utils.SectionUtils.ClassifyRepresentation(a);
-                        if (!b.MetadataBuilt) MVGE_GEN.Utils.SectionUtils.ClassifyRepresentation(b);
                         var fa = a.FacePosZBits; var fb = b.FaceNegZBits;
                         if (fa != null && fb != null)
                         {
