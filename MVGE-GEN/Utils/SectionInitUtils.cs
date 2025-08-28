@@ -4,7 +4,7 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using MVGE_GEN.Models;
 using MVGE_INF.Models.Terrain;
-using static MVGE_GEN.Models.ChunkSection; // added for BaseBlockType
+using static MVGE_GEN.Models.ChunkSection;
 
 namespace MVGE_GEN.Utils
 {
