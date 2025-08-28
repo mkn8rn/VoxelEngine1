@@ -220,152 +220,44 @@ namespace MVGE_GEN.Terrain
             int strideX = dimZ * dimY; // (x * dimZ + z) * dimY + y
             int strideZ = dimY;
             int sectionSize = ChunkSection.SECTION_SIZE;
-            int sectionPlane = sectionSize * sectionSize; // 256
 
             int nonAirTotal = 0;
             HasAnyBoundarySolid = false;
 
-            ChunkMeshPrepassStats localStats = default;
-            long exposureEstimate = 0; // keep as long while accumulating to avoid overflow, cast later
+            // Stats aggregated from section metadata (bounds + slice occupancy derived later if needed)
+            ChunkMeshPrepassStats stats = default;
+            long exposureInternalSum = 0; // sum of per-section internal exposure
 
-            EnsureSliceStampArrays();
-
-            // --- GLOBAL CLEAR ONCE ---
-            // Instead of clearing per-section (which caused large redundant memory writes),
-            // clear the entire destination buffer once. This allows early-outs for empty sections
-            // without touching their memory region again.
             int totalVoxels = dimX * dimY * dimZ;
             dest.AsSpan(0, totalVoxels).Clear();
 
-            // Precompute occluded interior full sections
             var occludedFull = PrecomputeOccludedFullSections();
 
-            // Iterate sections (X,Z,Y) – keeps inner loops tight & predictable
+            // Track shared face adjacency counts
+            long sharedAdjX = 0, sharedAdjY = 0, sharedAdjZ = 0;
+
             for (int sx = 0; sx < sectionsX; sx++)
             {
                 int baseX = sx * sectionSize; if (baseX >= dimX) break;
                 int maxLocalX = Math.Min(sectionSize, dimX - baseX);
-
                 for (int sz = 0; sz < sectionsZ; sz++)
                 {
                     int baseZ = sz * sectionSize; if (baseZ >= dimZ) break;
                     int maxLocalZ = Math.Min(sectionSize, dimZ - baseZ);
-
                     for (int sy = 0; sy < sectionsY; sy++)
                     {
                         int baseY = sy * sectionSize; if (baseY >= dimY) break;
                         int maxLocalY = Math.Min(sectionSize, dimY - baseY);
 
                         var sec = sections[sx, sy, sz];
-                        if (sec == null || sec.IsAllAir || sec.NonAirCount == 0 || sec.Kind == ChunkSection.RepresentationKind.Empty)
-                        {
-                            continue;
-                        }
+                        if (sec == null || sec.NonAirCount == 0 || sec.Kind == ChunkSection.RepresentationKind.Empty) continue;
 
                         bool isOccludedFull = occludedFull[sx, sy, sz] && sec.CompletelyFull;
                         if (isOccludedFull)
                         {
-                            // Fully internal solid volume: write a uniform filler (STONE) so neighbors see solidity,
-                            // but skip bounds / exposure / slice stats to save work. Exposure contribution is zero (fully hidden).
-                            ushort solid = (ushort)BaseBlockType.Stone; // canonical solid placeholder for hidden volumes
+                            ushort solid = (ushort)BaseBlockType.Stone;
                             int voxels = maxLocalX * maxLocalZ * maxLocalY;
                             nonAirTotal += voxels;
-                            for (int lx = 0; lx < maxLocalX; lx++)
-                            {
-                                int gx = baseX + lx; int destXBase = gx * strideX;
-                                for (int lz = 0; lz < maxLocalZ; lz++)
-                                {
-                                    int gz = baseZ + lz;
-                                    dest.AsSpan(destXBase + gz * strideZ + baseY, maxLocalY).Fill(solid);
-                                }
-                            }
-                            continue; // skip further processing
-                        }
-
-                        switch (sec.Kind)
-                        {
-                            case ChunkSection.RepresentationKind.Uniform:
-                            {
-                                ushort solid = sec.UniformBlockId;
-                                int voxels = maxLocalX * maxLocalZ * maxLocalY;
-                                nonAirTotal += voxels;
-                                int minGX = baseX; int maxGX = baseX + maxLocalX - 1;
-                                int minGY = baseY; int maxGY = baseY + maxLocalY - 1;
-                                int minGZ = baseZ; int maxGZ = baseZ + maxLocalZ - 1;
-                                if (!localStats.HasStats)
-                                {
-                                    localStats.MinX = minGX; localStats.MaxX = maxGX;
-                                    localStats.MinY = minGY; localStats.MaxY = maxGY;
-                                    localStats.MinZ = minGZ; localStats.MaxZ = maxGZ;
-                                    localStats.HasStats = true;
-                                }
-                                else
-                                {
-                                    if (minGX < localStats.MinX) localStats.MinX = minGX;
-                                    if (maxGX > localStats.MaxX) localStats.MaxX = maxGX;
-                                    if (minGY < localStats.MinY) localStats.MinY = minGY;
-                                    if (maxGY > localStats.MaxY) localStats.MaxY = maxGY;
-                                    if (minGZ < localStats.MinZ) localStats.MinZ = minGZ;
-                                    if (maxGZ > localStats.MaxZ) localStats.MaxZ = maxGZ;
-                                }
-                                for (int gx = minGX; gx <= maxGX; gx++) if (xSliceStamp[gx] != sliceStampVersion) { xSliceStamp[gx] = sliceStampVersion; localStats.XNonEmpty++; }
-                                for (int gy = minGY; gy <= maxGY; gy++) if (ySliceStamp[gy] != sliceStampVersion) { ySliceStamp[gy] = sliceStampVersion; localStats.YNonEmpty++; }
-                                for (int gz = minGZ; gz <= maxGZ; gz++) if (zSliceStamp[gz] != sliceStampVersion) { zSliceStamp[gz] = sliceStampVersion; localStats.ZNonEmpty++; }
-                                long lenX = maxLocalX; long lenY = maxLocalY; long lenZ = maxLocalZ;
-                                long N = lenX * lenY * lenZ;
-                                long internalAdj = (lenX - 1) * lenY * lenZ + lenX * (lenZ - 1) * lenY + lenX * lenZ * (lenY - 1);
-                                exposureEstimate += 6 * N - 2 * internalAdj;
-                                if (!HasAnyBoundarySolid && (minGX == 0 || minGY == 0 || minGZ == 0 || maxGX == dimX - 1 || maxGY == dimY - 1 || maxGZ == dimZ - 1)) HasAnyBoundarySolid = true;
-                                for (int lx = 0; lx < maxLocalX; lx++)
-                                {
-                                    int gx = baseX + lx; int destXBase = gx * strideX;
-                                    for (int lz = 0; lz < maxLocalZ; lz++)
-                                    {
-                                        int gz = baseZ + lz;
-                                        dest.AsSpan(destXBase + gz * strideZ + baseY, maxLocalY).Fill(solid);
-                                    }
-                                }
-                                continue;
-                            }
-                        }
-
-                        // Legacy packed path (with global clear optimization)
-                        // Uniform re-check retained for safety on Packed uniform sections
-                        if (sec.Palette != null &&
-                            sec.Palette.Count == 2 &&
-                            sec.Palette[0] == ChunkSection.AIR &&
-                            sec.NonAirCount == sec.VoxelCount &&
-                            sec.VoxelCount != 0)
-                        {
-                            ushort solid = sec.Palette[1];
-                            int voxels = maxLocalX * maxLocalZ * maxLocalY;
-                            nonAirTotal += voxels;
-                            int minGX = baseX; int maxGX = baseX + maxLocalX - 1;
-                            int minGY = baseY; int maxGY = baseY + maxLocalY - 1;
-                            int minGZ = baseZ; int maxGZ = baseZ + maxLocalZ - 1;
-                            if (!localStats.HasStats)
-                            {
-                                localStats.MinX = minGX; localStats.MaxX = maxGX;
-                                localStats.MinY = minGY; localStats.MaxY = maxGY;
-                                localStats.MinZ = minGZ; localStats.MaxZ = maxGZ;
-                                localStats.HasStats = true;
-                            }
-                            else
-                            {
-                                if (minGX < localStats.MinX) localStats.MinX = minGX;
-                                if (maxGX > localStats.MaxX) localStats.MaxX = maxGX;
-                                if (minGY < localStats.MinY) localStats.MinY = minGY;
-                                if (maxGY > localStats.MaxY) localStats.MaxY = maxGY;
-                                if (minGZ < localStats.MinZ) localStats.MinZ = minGZ;
-                                if (maxGZ > localStats.MaxZ) localStats.MaxZ = maxGZ;
-                            }
-                            for (int gx = minGX; gx <= maxGX; gx++) if (xSliceStamp[gx] != sliceStampVersion) { xSliceStamp[gx] = sliceStampVersion; localStats.XNonEmpty++; }
-                            for (int gy = minGY; gy <= maxGY; gy++) if (ySliceStamp[gy] != sliceStampVersion) { ySliceStamp[gy] = sliceStampVersion; localStats.YNonEmpty++; }
-                            for (int gz = minGZ; gz <= maxGZ; gz++) if (zSliceStamp[gz] != sliceStampVersion) { zSliceStamp[gz] = sliceStampVersion; localStats.ZNonEmpty++; }
-                            long lenX = maxLocalX; long lenY = maxLocalY; long lenZ = maxLocalZ; long N = lenX * lenY * lenZ;
-                            long internalAdj = (lenX - 1) * lenY * lenZ + lenX * (lenZ - 1) * lenY + lenX * lenZ * (lenY - 1);
-                            exposureEstimate += 6 * N - 2 * internalAdj;
-                            if (!HasAnyBoundarySolid && (minGX == 0 || minGY == 0 || minGZ == 0 || maxGX == dimX - 1 || maxGY == dimY - 1 || maxGZ == dimZ - 1)) HasAnyBoundarySolid = true;
                             for (int lx = 0; lx < maxLocalX; lx++)
                             {
                                 int gx = baseX + lx; int destXBase = gx * strideX;
@@ -378,76 +270,215 @@ namespace MVGE_GEN.Terrain
                             continue;
                         }
 
-                        int bitsPer = sec.BitsPerIndex;
-                        uint[] bitData = sec.BitData;
-                        var palette = sec.Palette;
-                        if (bitsPer == 0 || bitData == null || palette == null) continue;
-                        int mask = (1 << bitsPer) - 1;
-                        int strideBitsY = sectionPlane * bitsPer;
-
-                        // Decode per (x,z) column
-                        for (int lx = 0; lx < maxLocalX; lx++)
+                        // Ensure metadata built (in case of on-demand classification earlier not executed)
+                        if (!sec.MetadataBuilt)
                         {
-                            int gx = baseX + lx; int destXBase = gx * strideX;
-                            bool boundaryX = (gx == 0) || (gx == dimX - 1);
-                            int neighborSectionXNeg = (gx - 1) >> SECTION_SHIFT;
-                            int neighborSectionZNeg = -1; // placeholder use when computing -Z
+                            MVGE_GEN.Utils.SectionUtils.ClassifyRepresentation(sec);
+                        }
 
-                            for (int lz = 0; lz < maxLocalZ; lz++)
+                        nonAirTotal += sec.NonAirCount;
+                        exposureInternalSum += sec.InternalExposure;
+
+                        // Update global bounds from section-local bounds
+                        if (sec.HasBounds)
+                        {
+                            int gMinX = baseX + sec.MinLX;
+                            int gMaxX = baseX + sec.MaxLX;
+                            int gMinY = baseY + sec.MinLY;
+                            int gMaxY = baseY + sec.MaxLY;
+                            int gMinZ = baseZ + sec.MinLZ;
+                            int gMaxZ = baseZ + sec.MaxLZ;
+                            if (!stats.HasStats)
                             {
-                                int gz = baseZ + lz; int destZBase = destXBase + gz * strideZ;
-                                bool boundaryXZ = boundaryX || gz == 0 || gz == dimZ - 1;
-                                int neighborSectionZNegLocal = (gz - 1) >> SECTION_SHIFT;
-
-                                int baseXZ = lz * sectionSize + lx;
-                                long baseBitPos = (long)baseXZ * bitsPer;
-                                long bitPos = baseBitPos;
-                                for (int ly = 0; ly < maxLocalY; ly++, bitPos += strideBitsY)
-                                {
-                                    int gy = baseY + ly;
-                                    int dataIndex = (int)(bitPos >> 5);
-                                    int bitOffset = (int)(bitPos & 31);
-                                    uint word = bitData[dataIndex];
-                                    uint value = word >> bitOffset;
-                                    int used = 32 - bitOffset;
-                                    if (used < bitsPer) value |= bitData[dataIndex + 1] << used;
-                                    ushort id = palette[(int)(value & (uint)mask)];
-                                    if (id == ChunkSection.AIR) continue;
-
-                                    dest[destZBase + gy] = id;
-                                    nonAirTotal++;
-                                    if (!HasAnyBoundarySolid && (boundaryXZ || gy == 0 || gy == dimY - 1)) HasAnyBoundarySolid = true;
-                                    if (!localStats.HasStats)
-                                    {
-                                        localStats.MinX = localStats.MaxX = gx;
-                                        localStats.MinY = localStats.MaxY = gy;
-                                        localStats.MinZ = localStats.MaxZ = gz;
-                                        localStats.HasStats = true;
-                                    }
-                                    else
-                                    {
-                                        if (gx < localStats.MinX) localStats.MinX = gx; else if (gx > localStats.MaxX) localStats.MaxX = gx;
-                                        if (gy < localStats.MinY) localStats.MinY = gy; else if (gy > localStats.MaxY) localStats.MaxY = gy;
-                                        if (gz < localStats.MinZ) localStats.MinZ = gz; else if (gz > localStats.MaxZ) localStats.MaxZ = gz;
-                                    }
-                                    MarkSlices(ref localStats, gx, gy, gz);
-
-                                    exposureEstimate += 6;
-                                    if (gx > 0 && dest[(gx - 1) * strideX + gz * strideZ + gy] != ChunkSection.AIR) exposureEstimate -= 2;
-                                    if (gz > 0 && dest[gx * strideX + (gz - 1) * strideZ + gy] != ChunkSection.AIR) exposureEstimate -= 2;
-                                    if (gy > 0 && dest[gx * strideX + gz * strideZ + (gy - 1)] != ChunkSection.AIR) exposureEstimate -= 2;
-                                }
+                                stats.MinX = gMinX; stats.MaxX = gMaxX;
+                                stats.MinY = gMinY; stats.MaxY = gMaxY;
+                                stats.MinZ = gMinZ; stats.MaxZ = gMaxZ;
+                                stats.HasStats = true;
                             }
+                            else
+                            {
+                                if (gMinX < stats.MinX) stats.MinX = gMinX; if (gMaxX > stats.MaxX) stats.MaxX = gMaxX;
+                                if (gMinY < stats.MinY) stats.MinY = gMinY; if (gMaxY > stats.MaxY) stats.MaxY = gMaxY;
+                                if (gMinZ < stats.MinZ) stats.MinZ = gMinZ; if (gMaxZ > stats.MaxZ) stats.MaxZ = gMaxZ;
+                            }
+                        }
+
+                        // Boundary solidity flag (cheap) – if section touches chunk boundary and has any voxel on that face
+                        if (!HasAnyBoundarySolid)
+                        {
+                            if ((baseX == 0 && sec.MinLX == 0) || (baseX + maxLocalX == dimX && sec.MaxLX == sectionSize - 1) ||
+                                (baseY == 0 && sec.MinLY == 0) || (baseY + maxLocalY == dimY && sec.MaxLY == sectionSize - 1) ||
+                                (baseZ == 0 && sec.MinLZ == 0) || (baseZ + maxLocalZ == dimZ && sec.MaxLZ == sectionSize - 1))
+                            {
+                                HasAnyBoundarySolid = true;
+                            }
+                        }
+
+                        // Write voxel data fast based on representation
+                        switch (sec.Kind)
+                        {
+                            case ChunkSection.RepresentationKind.Uniform:
+                                {
+                                    ushort solid = sec.UniformBlockId;
+                                    for (int lx = 0; lx < maxLocalX; lx++)
+                                    {
+                                        int gx = baseX + lx; int destXBase = gx * strideX;
+                                        for (int lz = 0; lz < maxLocalZ; lz++)
+                                        {
+                                            int gz = baseZ + lz;
+                                            dest.AsSpan(destXBase + gz * strideZ + baseY, maxLocalY).Fill(solid);
+                                        }
+                                    }
+                                    break;
+                                }
+                            case ChunkSection.RepresentationKind.DenseExpanded:
+                                {
+                                    var arr = sec.ExpandedDense;
+                                    for (int lx = 0; lx < maxLocalX; lx++)
+                                    {
+                                        int gx = baseX + lx; int destXBase = gx * strideX;
+                                        for (int lz = 0; lz < maxLocalZ; lz++)
+                                        {
+                                            int gz = baseZ + lz; int destBase = destXBase + gz * strideZ + baseY;
+                                            int localBase = (sec.MinLY == 0 ? 0 : 0); // just clarity
+                                            for (int ly = 0; ly < maxLocalY; ly++)
+                                            {
+                                                int localIndex = ((ly) * sectionSize + lz) * sectionSize + lx; // y-major mapping used in metadata builder
+                                                ushort id = arr[localIndex];
+                                                if (id != ChunkSection.AIR) dest[destBase + ly] = id;
+                                            }
+                                        }
+                                    }
+                                    break;
+                                }
+                            case ChunkSection.RepresentationKind.Sparse:
+                                {
+                                    var idx = sec.SparseIndices; var blocks = sec.SparseBlocks;
+                                    for (int i = 0; i < idx.Length; i++)
+                                    {
+                                        int li = idx[i];
+                                        int x = li % sectionSize;
+                                        int y = li / 256; // 16*16
+                                        int rem = li - y * 256; int z = rem / sectionSize;
+                                        int gx = baseX + x; int gy = baseY + y; int gz = baseZ + z;
+                                        dest[gx * strideX + gz * strideZ + gy] = blocks[i];
+                                    }
+                                    break;
+                                }
+                            case ChunkSection.RepresentationKind.Packed:
+                                {
+                                    // Use occupancy bits + palette only when needed (rare mid-density). Decode only non-air bits
+                                    var occ = sec.OccupancyBits;
+                                    if (occ == null)
+                                    {
+                                        // fallback: skip (should not happen if metadata built)
+                                        goto case ChunkSection.RepresentationKind.Uniform;
+                                    }
+                                    for (int word = 0; word < occ.Length; word++)
+                                    {
+                                        ulong w = occ[word];
+                                        while (w != 0)
+                                        {
+                                            int bit = System.Numerics.BitOperations.TrailingZeroCount(w);
+                                            int li = (word << 6) + bit;
+                                            int x = li % sectionSize;
+                                            int y = li / 256; int rem = li - y * 256; int z = rem / sectionSize;
+                                            if (x >= maxLocalX || y >= maxLocalY || z >= maxLocalZ) { w &= w - 1; continue; }
+                                            int gx = baseX + x; int gy = baseY + y; int gz = baseZ + z;
+                                            // Need block id: if we kept palette index we must read bits
+                                            int pi = MVGE_GEN.Utils.SectionUtils.GetBlock(sec, x, y, z); // uses optimized path per kind
+                                            dest[gx * strideX + gz * strideZ + gy] = (ushort)pi;
+                                            w &= w - 1;
+                                        }
+                                    }
+                                    break;
+                                }
+                        }
+
+                        // Accumulate slice counts approximately (use section bounds). This is cheaper than per-voxel stamps.
+                        if (sec.HasBounds)
+                        {
+                            stats.XNonEmpty += (sec.MaxLX - sec.MinLX + 1);
+                            stats.YNonEmpty += (sec.MaxLY - sec.MinLY + 1);
+                            stats.ZNonEmpty += (sec.MaxLZ - sec.MinLZ + 1);
                         }
                     }
                 }
             }
 
-            IsEmpty = nonAirTotal == 0;
-            localStats.SolidCount = nonAirTotal;
-            localStats.ExposureEstimate = (int)Math.Min(int.MaxValue, exposureEstimate);
-            MeshPrepassStats = localStats;
+            // Cross-section shared face adjustment (subtract 2 per shared solid pair) using face masks
+            for (int sx = 0; sx < sectionsX - 1; sx++)
+            {
+                for (int sy = 0; sy < sectionsY; sy++)
+                {
+                    for (int sz = 0; sz < sectionsZ; sz++)
+                    {
+                        var a = sections[sx, sy, sz]; var b = sections[sx + 1, sy, sz];
+                        if (a == null || b == null || a.NonAirCount == 0 || b.NonAirCount == 0) continue;
+                        if (!a.MetadataBuilt) MVGE_GEN.Utils.SectionUtils.ClassifyRepresentation(a);
+                        if (!b.MetadataBuilt) MVGE_GEN.Utils.SectionUtils.ClassifyRepresentation(b);
+                        var fa = a.FacePosXBits; var fb = b.FaceNegXBits;
+                        if (fa != null && fb != null)
+                        {
+                            for (int w = 0; w < fa.Length; w++) sharedAdjX += System.Numerics.BitOperations.PopCount(fa[w] & fb[w]);
+                        }
+                        else if (a.Kind == ChunkSection.RepresentationKind.Uniform && b.Kind == ChunkSection.RepresentationKind.Uniform)
+                        {
+                            sharedAdjX += 16 * 16; // full face
+                        }
+                    }
+                }
+            }
+            for (int sy = 0; sy < sectionsY - 1; sy++)
+            {
+                for (int sx = 0; sx < sectionsX; sx++)
+                {
+                    for (int sz = 0; sz < sectionsZ; sz++)
+                    {
+                        var a = sections[sx, sy, sz]; var b = sections[sx, sy + 1, sz];
+                        if (a == null || b == null || a.NonAirCount == 0 || b.NonAirCount == 0) continue;
+                        if (!a.MetadataBuilt) MVGE_GEN.Utils.SectionUtils.ClassifyRepresentation(a);
+                        if (!b.MetadataBuilt) MVGE_GEN.Utils.SectionUtils.ClassifyRepresentation(b);
+                        var fa = a.FacePosYBits; var fb = b.FaceNegYBits;
+                        if (fa != null && fb != null)
+                        {
+                            for (int w = 0; w < fa.Length; w++) sharedAdjY += System.Numerics.BitOperations.PopCount(fa[w] & fb[w]);
+                        }
+                        else if (a.Kind == ChunkSection.RepresentationKind.Uniform && b.Kind == ChunkSection.RepresentationKind.Uniform)
+                        {
+                            sharedAdjY += 16 * 16;
+                        }
+                    }
+                }
+            }
+            for (int sz = 0; sz < sectionsZ - 1; sz++)
+            {
+                for (int sx = 0; sx < sectionsX; sx++)
+                {
+                    for (int sy = 0; sy < sectionsY; sy++)
+                    {
+                        var a = sections[sx, sy, sz]; var b = sections[sx, sy, sz + 1];
+                        if (a == null || b == null || a.NonAirCount == 0 || b.NonAirCount == 0) continue;
+                        if (!a.MetadataBuilt) MVGE_GEN.Utils.SectionUtils.ClassifyRepresentation(a);
+                        if (!b.MetadataBuilt) MVGE_GEN.Utils.SectionUtils.ClassifyRepresentation(b);
+                        var fa = a.FacePosZBits; var fb = b.FaceNegZBits;
+                        if (fa != null && fb != null)
+                        {
+                            for (int w = 0; w < fa.Length; w++) sharedAdjZ += System.Numerics.BitOperations.PopCount(fa[w] & fb[w]);
+                        }
+                        else if (a.Kind == ChunkSection.RepresentationKind.Uniform && b.Kind == ChunkSection.RepresentationKind.Uniform)
+                        {
+                            sharedAdjZ += 16 * 16;
+                        }
+                    }
+                }
+            }
 
+            long exposure = exposureInternalSum - 2L * (sharedAdjX + sharedAdjY + sharedAdjZ);
+            stats.SolidCount = nonAirTotal;
+            stats.ExposureEstimate = (int)Math.Min(int.MaxValue, exposure);
+            MeshPrepassStats = stats;
+            IsEmpty = nonAirTotal == 0;
             return nonAirTotal;
         }
 

@@ -40,5 +40,23 @@ namespace MVGE_GEN.Terrain
 
         // Dense expanded representation: direct block ids per voxel (length == VoxelCount)
         public ushort[] ExpandedDense; // valid when Kind==DenseExpanded
+
+        // ---- metadata for fast flatten / exposure aggregation ----
+        // Occupancy bitset (4096 bits => 64 ulongs) in section-local linear index order (y,z,x mapping defined in SectionUtils.LinearIndex)
+        public ulong[] OccupancyBits; // null if not built
+        // Face masks (each 256 bits => 4 ulongs) for quickly computing cross-section adjacency
+        public ulong[] FaceNegXBits; // YZ plane (index = z*16 + y)
+        public ulong[] FacePosXBits; // YZ plane
+        public ulong[] FaceNegYBits; // XZ plane (index = x*16 + z)
+        public ulong[] FacePosYBits; // XZ plane
+        public ulong[] FaceNegZBits; // XY plane (index = x*16 + y)
+        public ulong[] FacePosZBits; // XY plane
+        // Precomputed internal exposure (6*N - 2*(adjX+adjY+adjZ)) ignoring cross-section overlaps
+        public int InternalExposure;
+        // Local voxel bounds of solids inside section (inclusive)
+        public bool HasBounds;
+        public byte MinLX, MinLY, MinLZ, MaxLX, MaxLY, MaxLZ;
+        // Flag indicating metadata built
+        public bool MetadataBuilt;
     }
 }

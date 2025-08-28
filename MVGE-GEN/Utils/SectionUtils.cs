@@ -14,6 +14,8 @@ namespace MVGE_GEN.Utils
         private static void ReturnBitData(uint[] data) { if (data != null) ArrayPool<uint>.Shared.Return(data, clearArray: false); }
 
         public const int SPARSE_THRESHOLD = 512; // currently unused in classification (optimization gate only)
+        private const int SECTION_SIZE = ChunkSection.SECTION_SIZE;
+        private const int VOXELS_PER_SECTION = SECTION_SIZE * SECTION_SIZE * SECTION_SIZE; // 4096
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static ushort GetBlock(ChunkSection sec, int x, int y, int z)
@@ -24,8 +26,16 @@ namespace MVGE_GEN.Utils
             {
                 case ChunkSection.RepresentationKind.Uniform:
                     return sec.UniformBlockId;
-                case ChunkSection.RepresentationKind.Sparse:
                 case ChunkSection.RepresentationKind.DenseExpanded:
+                    return sec.ExpandedDense[linear];
+                case ChunkSection.RepresentationKind.Sparse:
+                    // simple linear search (sparse rarely queried per-voxel outside flatten). Could optimize with dictionary if needed.
+                    var idxArr = sec.SparseIndices;
+                    if (idxArr != null)
+                    {
+                        for (int i = 0; i < idxArr.Length; i++) if (idxArr[i] == linear) return sec.SparseBlocks[i];
+                    }
+                    return ChunkSection.AIR;
                 case ChunkSection.RepresentationKind.Packed:
                 default:
                     int paletteIndex = ReadBits(sec, linear); return sec.Palette[paletteIndex];
@@ -35,7 +45,9 @@ namespace MVGE_GEN.Utils
         public static void SetBlock(ChunkSection sec, int x, int y, int z, ushort blockId)
         {
             if (sec == null) return;
-            // Only Packed / Uniform / Empty expected now; if Uniform and a different block is written, re-pack.
+            // Any mutation invalidates metadata
+            sec.MetadataBuilt = false;
+
             if (sec.Kind == ChunkSection.RepresentationKind.Uniform && blockId != sec.UniformBlockId)
             {
                 EnsurePacked(sec); // convert uniform to packed to allow mutation
@@ -89,8 +101,6 @@ namespace MVGE_GEN.Utils
         }
 
         // FAST BULK FILL (generation only!!!)
-        // Assumes every targeted voxel is currently AIR (never previously written) and performs no reads.
-        // Handles single column inside section for y in [yStart,yEnd].
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void FillColumnRangeInitial(ChunkSection sec, int localX, int localZ, int yStart, int yEnd, ushort blockId)
         {
@@ -101,8 +111,8 @@ namespace MVGE_GEN.Utils
 
             if (sec.IsAllAir) Initialize(sec); // lazily allocate structures
             sec.Kind = ChunkSection.RepresentationKind.Packed; // still packed until classification pass
+            sec.MetadataBuilt = false;
 
-            // Acquire / add palette index once
             if (!sec.PaletteLookup.TryGetValue(blockId, out int paletteIndex))
             {
                 paletteIndex = sec.Palette.Count;
@@ -111,7 +121,6 @@ namespace MVGE_GEN.Utils
                 if (paletteIndex >= (1 << sec.BitsPerIndex))
                 {
                     GrowBits(sec);
-                    // Re-evaluate palette index after grow (dictionary still valid)
                     paletteIndex = sec.PaletteLookup[blockId];
                 }
             }
@@ -123,13 +132,12 @@ namespace MVGE_GEN.Utils
                 sec.CompletelyFull = true;
             }
 
-            int plane = ChunkSection.SECTION_SIZE * ChunkSection.SECTION_SIZE; // 256
-            int baseXZ = localZ * ChunkSection.SECTION_SIZE + localX; // (z*16)+x
+            int plane = SECTION_SIZE * SECTION_SIZE; // 256
+            int baseXZ = localZ * SECTION_SIZE + localX; // (z*16)+x
             int bpi = sec.BitsPerIndex;
             uint mask = (uint)((1 << bpi) - 1);
             uint pval = (uint)paletteIndex & mask;
 
-            // Specialized tight loop; unrolled for common bpi==1
             if (bpi == 1)
             {
                 for (int y = yStart; y <= yEnd; y++)
@@ -150,7 +158,6 @@ namespace MVGE_GEN.Utils
                 int dataIndex = (int)(bitPos >> 5);
                 int bitOffset = (int)(bitPos & 31);
 
-                // Clear & set bits in primary uint
                 sec.BitData[dataIndex] &= ~(mask << bitOffset);
                 sec.BitData[dataIndex] |= pval << bitOffset;
 
@@ -171,14 +178,17 @@ namespace MVGE_GEN.Utils
             if (sec.NonAirCount == 0 || sec.IsAllAir)
             {
                 sec.Kind = ChunkSection.RepresentationKind.Empty;
+                sec.MetadataBuilt = true; // trivial
                 return;
             }
             int total = sec.VoxelCount;
-            if (total == 0) total = ChunkSection.SECTION_SIZE * ChunkSection.SECTION_SIZE * ChunkSection.SECTION_SIZE;
+            if (total == 0) total = VOXELS_PER_SECTION;
+
             if (sec.CompletelyFull && sec.Palette != null && sec.Palette.Count == 2 && sec.Palette[0] == ChunkSection.AIR)
             {
                 sec.Kind = ChunkSection.RepresentationKind.Uniform;
                 sec.UniformBlockId = sec.Palette[1];
+                BuildMetadataUniform(sec);
                 return;
             }
             if (sec.Palette != null && sec.Palette.Count == 2 && sec.Palette[0] == ChunkSection.AIR && sec.NonAirCount == total)
@@ -186,44 +196,257 @@ namespace MVGE_GEN.Utils
                 sec.CompletelyFull = true;
                 sec.Kind = ChunkSection.RepresentationKind.Uniform;
                 sec.UniformBlockId = sec.Palette[1];
+                BuildMetadataUniform(sec);
                 return;
             }
-            // No sparse/dense expansion: remain packed
+
+            // Decide Sparse / DenseExpanded / Packed based on fill ratio
+            float fill = (float)sec.NonAirCount / total;
+            if (sec.NonAirCount <= 128) // sparse threshold heuristic
+            {
+                ExpandToSparse(sec);
+                BuildMetadataSparse(sec);
+                return;
+            }
+            if (fill >= 0.60f)
+            {
+                ExpandToDense(sec);
+                BuildMetadataDense(sec);
+                return;
+            }
+            // Keep packed, but build occupancy & faces from packed bits
             sec.Kind = ChunkSection.RepresentationKind.Packed;
+            BuildMetadataPacked(sec);
         }
 
-        private static void EnsurePacked(ChunkSection sec)
+        private static void ExpandToSparse(ChunkSection sec)
         {
-            if (sec.Kind == ChunkSection.RepresentationKind.Packed) return;
-            if (sec.Kind == ChunkSection.RepresentationKind.Empty)
+            if (sec.Kind == ChunkSection.RepresentationKind.Sparse) return;
+            int count = sec.NonAirCount;
+            var idx = new int[count];
+            var blocks = new ushort[count];
+            int write = 0;
+            for (int y = 0; y < SECTION_SIZE; y++)
             {
-                sec.IsAllAir = true; sec.Palette = null; sec.PaletteLookup = null; sec.BitData = null; sec.BitsPerIndex = 0; sec.NonAirCount = 0; sec.CompletelyFull = false; return;
+                for (int z = 0; z < SECTION_SIZE; z++)
+                {
+                    for (int x = 0; x < SECTION_SIZE; x++)
+                    {
+                        int li = LinearIndex(x, y, z);
+                        int pi = ReadBits(sec, li);
+                        if (pi == 0) continue;
+                        idx[write] = li;
+                        blocks[write] = sec.Palette[pi];
+                        write++;
+                    }
+                }
             }
-            if (sec.Kind == ChunkSection.RepresentationKind.Uniform)
+            sec.SparseIndices = idx;
+            sec.SparseBlocks = blocks;
+            sec.Kind = ChunkSection.RepresentationKind.Sparse;
+        }
+
+        private static void ExpandToDense(ChunkSection sec)
+        {
+            if (sec.Kind == ChunkSection.RepresentationKind.DenseExpanded) return;
+            var arr = new ushort[VOXELS_PER_SECTION];
+            for (int i = 0; i < VOXELS_PER_SECTION; i++)
             {
-                // Recreate packed data for a uniform block
-                ushort blockId = sec.UniformBlockId;
-                sec.IsAllAir = false;
-                sec.VoxelCount = ChunkSection.SECTION_SIZE * ChunkSection.SECTION_SIZE * ChunkSection.SECTION_SIZE;
-                sec.Palette = new List<ushort> { ChunkSection.AIR, blockId };
-                sec.PaletteLookup = new Dictionary<ushort, int> { { ChunkSection.AIR, 0 }, { blockId, 1 } };
-                sec.BitsPerIndex = 1;
-                long totalBits = (long)sec.VoxelCount * sec.BitsPerIndex;
-                int uintCount = (int)((totalBits + 31) / 32);
-                sec.BitData = RentBitData(uintCount);
-                for (int i = 0; i < uintCount; i++) sec.BitData[i] = 0xFFFFFFFFu;
-                sec.NonAirCount = sec.VoxelCount;
-                sec.CompletelyFull = true;
-                sec.Kind = ChunkSection.RepresentationKind.Packed;
-                return;
+                int pi = ReadBits(sec, i);
+                if (pi != 0) arr[i] = sec.Palette[pi];
             }
-            // Other kinds (Sparse/DenseExpanded) currently not produced; fallback: mark empty.
-            sec.Kind = ChunkSection.RepresentationKind.Packed;
+            sec.ExpandedDense = arr;
+            sec.Kind = ChunkSection.RepresentationKind.DenseExpanded;
+        }
+
+        private static void BuildMetadataUniform(ChunkSection sec)
+        {
+            sec.OccupancyBits = null; // not needed
+            sec.FaceNegXBits = sec.FacePosXBits = sec.FaceNegYBits = sec.FacePosYBits = sec.FaceNegZBits = sec.FacePosZBits = null; // implicit full
+            int N = VOXELS_PER_SECTION;
+            // Internal adjacency for full 16^3 block
+            int len = SECTION_SIZE;
+            long lenL = len;
+            long internalAdj = (lenL - 1) * lenL * lenL + lenL * (lenL - 1) * lenL + lenL * lenL * (lenL - 1);
+            sec.InternalExposure = (int)(6L * N - 2L * internalAdj);
+            sec.HasBounds = true; sec.MinLX = sec.MinLY = sec.MinLZ = 0; sec.MaxLX = sec.MaxLY = sec.MaxLZ = (byte)(SECTION_SIZE - 1);
+            sec.MetadataBuilt = true;
+        }
+
+        private static void BuildMetadataSparse(ChunkSection sec)
+        {
+            // Build bounds + internal exposure from scratch using sparse indices.
+            var idx = sec.SparseIndices; var blocks = sec.SparseBlocks; int count = idx.Length;
+            if (count == 0) { sec.InternalExposure = 0; sec.MetadataBuilt = true; return; }
+            byte minx = 255, miny = 255, minz = 255, maxx = 0, maxy = 0, maxz = 0;
+            // Build a temporary occupancy bitset to compute adjacency cheaply
+            ulong[] bits = new ulong[64];
+            for (int i = 0; i < count; i++)
+            {
+                int li = idx[i];
+                bits[li >> 6] |= 1UL << (li & 63);
+                DecodeLinear(li, out int x, out int y, out int z);
+                if (x < minx) minx = (byte)x; if (x > maxx) maxx = (byte)x;
+                if (y < miny) miny = (byte)y; if (y > maxy) maxy = (byte)y;
+                if (z < minz) minz = (byte)z; if (z > maxz) maxz = (byte)z;
+            }
+            ComputeInternalExposure(bits, out int exposure);
+            sec.InternalExposure = exposure;
+            sec.OccupancyBits = bits; // we can retain for cross-section faces
+            BuildFaceMasks(sec, bits);
+            sec.HasBounds = true; sec.MinLX = minx; sec.MinLY = miny; sec.MinLZ = minz; sec.MaxLX = maxx; sec.MaxLY = maxy; sec.MaxLZ = maxz; sec.MetadataBuilt = true;
+        }
+
+        private static void BuildMetadataDense(ChunkSection sec)
+        {
+            ulong[] bits = new ulong[64];
+            byte minx = 255, miny = 255, minz = 255, maxx = 0, maxy = 0, maxz = 0;
+            var arr = sec.ExpandedDense;
+            for (int li = 0; li < VOXELS_PER_SECTION; li++)
+            {
+                if (arr[li] == ChunkSection.AIR) continue;
+                bits[li >> 6] |= 1UL << (li & 63);
+                DecodeLinear(li, out int x, out int y, out int z);
+                if (x < minx) minx = (byte)x; if (x > maxx) maxx = (byte)x;
+                if (y < miny) miny = (byte)y; if (y > maxy) maxy = (byte)y;
+                if (z < minz) minz = (byte)z; if (z > maxz) maxz = (byte)z;
+            }
+            ComputeInternalExposure(bits, out int exposure);
+            sec.InternalExposure = exposure;
+            sec.OccupancyBits = bits;
+            BuildFaceMasks(sec, bits);
+            sec.HasBounds = true; sec.MinLX = minx; sec.MinLY = miny; sec.MinLZ = minz; sec.MaxLX = maxx; sec.MaxLY = maxy; sec.MaxLZ = maxz; sec.MetadataBuilt = true;
+        }
+
+        private static void BuildMetadataPacked(ChunkSection sec)
+        {
+            ulong[] bits = new ulong[64];
+            byte minx = 255, miny = 255, minz = 255, maxx = 0, maxy = 0, maxz = 0;
+            for (int li = 0; li < VOXELS_PER_SECTION; li++)
+            {
+                int pi = ReadBits(sec, li);
+                if (pi == 0) continue;
+                bits[li >> 6] |= 1UL << (li & 63);
+                DecodeLinear(li, out int x, out int y, out int z);
+                if (x < minx) minx = (byte)x; if (x > maxx) maxx = (byte)x;
+                if (y < miny) miny = (byte)y; if (y > maxy) maxy = (byte)y;
+                if (z < minz) minz = (byte)z; if (z > maxz) maxz = (byte)z;
+            }
+            ComputeInternalExposure(bits, out int exposure);
+            sec.InternalExposure = exposure;
+            sec.OccupancyBits = bits;
+            BuildFaceMasks(sec, bits);
+            sec.HasBounds = minx != 255; // if any solid
+            if (sec.HasBounds)
+            {
+                sec.MinLX = minx; sec.MinLY = miny; sec.MinLZ = minz; sec.MaxLX = maxx; sec.MaxLY = maxy; sec.MaxLZ = maxz;
+            }
+            sec.MetadataBuilt = true;
+        }
+
+        private static void ComputeInternalExposure(ulong[] bits, out int exposure)
+        {
+            // adjacency along x: shift by 1 in x dimension (x increments fastest in our mapping?)
+            // Current LinearIndex: (y * 16 + z) * 16 + x  => x stride = 1, z stride = 16, y stride = 256
+            long adjX = 0, adjZ = 0, adjY = 0;
+            // Iterate all voxels, but use bit tricks: for each row where x varies contiguous (stride 1)
+            // We can approximate by shifting each 64-bit word by 1,16,256 but need cross-word merges; simpler loop.
+            for (int li = 0; li < VOXELS_PER_SECTION; li++)
+            {
+                int word = li >> 6; int bit = li & 63;
+                ulong mask = bits[word] & (1UL << bit);
+                if (mask == 0) continue;
+                int x = li % 16;
+                int y = li / 256;
+                int rem = li - y * 256; int z = rem / 16;
+                // neighbor checks
+                if (x + 1 < 16 && ((bits[(li + 1) >> 6] & (1UL << ((li + 1) & 63))) != 0)) adjX++;
+                if (z + 1 < 16)
+                {
+                    int li2 = li + 16;
+                    if ((bits[li2 >> 6] & (1UL << (li2 & 63))) != 0) adjZ++;
+                }
+                if (y + 1 < 16)
+                {
+                    int li3 = li + 256;
+                    if ((bits[li3 >> 6] & (1UL << (li3 & 63))) != 0) adjY++;
+                }
+            }
+            int N = 0;
+            for (int i = 0; i < 64; i++) N += BitOperations.PopCount(bits[i]);
+            long internalAdj = adjX + adjZ + adjY;
+            exposure = (int)(6L * N - 2L * internalAdj);
+        }
+
+        private static void BuildFaceMasks(ChunkSection sec, ulong[] bits)
+        {
+            // Allocate mask arrays (4 ulongs per 256-bit plane)
+            sec.FaceNegXBits = new ulong[4];
+            sec.FacePosXBits = new ulong[4];
+            sec.FaceNegYBits = new ulong[4];
+            sec.FacePosYBits = new ulong[4];
+            sec.FaceNegZBits = new ulong[4];
+            sec.FacePosZBits = new ulong[4];
+            for (int y = 0; y < 16; y++)
+            {
+                for (int z = 0; z < 16; z++)
+                {
+                    int liNegX = LinearIndex(0, y, z);
+                    if ((bits[liNegX >> 6] & (1UL << (liNegX & 63))) != 0)
+                    {
+                        int yzIndex = z * 16 + y; sec.FaceNegXBits[yzIndex >> 6] |= 1UL << (yzIndex & 63);
+                    }
+                    int liPosX = LinearIndex(15, y, z);
+                    if ((bits[liPosX >> 6] & (1UL << (liPosX & 63))) != 0)
+                    {
+                        int yzIndex = z * 16 + y; sec.FacePosXBits[yzIndex >> 6] |= 1UL << (yzIndex & 63);
+                    }
+                }
+            }
+            for (int x = 0; x < 16; x++)
+            {
+                for (int z = 0; z < 16; z++)
+                {
+                    int liNegY = LinearIndex(x, 0, z);
+                    if ((bits[liNegY >> 6] & (1UL << (liNegY & 63))) != 0)
+                    {
+                        int xzIndex = x * 16 + z; sec.FaceNegYBits[xzIndex >> 6] |= 1UL << (xzIndex & 63);
+                    }
+                    int liPosY = LinearIndex(x, 15, z);
+                    if ((bits[liPosY >> 6] & (1UL << (liPosY & 63))) != 0)
+                    {
+                        int xzIndex = x * 16 + z; sec.FacePosYBits[xzIndex >> 6] |= 1UL << (xzIndex & 63);
+                    }
+                }
+            }
+            for (int x = 0; x < 16; x++)
+            {
+                for (int y = 0; y < 16; y++)
+                {
+                    int liNegZ = LinearIndex(x, y, 0);
+                    if ((bits[liNegZ >> 6] & (1UL << (liNegZ & 63))) != 0)
+                    {
+                        int xyIndex = x * 16 + y; sec.FaceNegZBits[xyIndex >> 6] |= 1UL << (xyIndex & 63);
+                    }
+                    int liPosZ = LinearIndex(x, y, 15);
+                    if ((bits[liPosZ >> 6] & (1UL << (liPosZ & 63))) != 0)
+                    {
+                        int xyIndex = x * 16 + y; sec.FacePosZBits[xyIndex >> 6] |= 1UL << (xyIndex & 63);
+                    }
+                }
+            }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static int LinearIndex(int x, int y, int z)
-            => (y * ChunkSection.SECTION_SIZE + z) * ChunkSection.SECTION_SIZE + x;
+            => (y * SECTION_SIZE + z) * SECTION_SIZE + x;
+
+        private static void DecodeLinear(int li, out int x, out int y, out int z)
+        {
+            x = li % 16;
+            y = li / 256;
+            int rem = li - y * 256; z = rem / 16;
+        }
 
         private static int ReadBits(ChunkSection sec, int voxelIndex)
             => ReadBits(sec.BitData, sec.BitsPerIndex, voxelIndex);
@@ -256,7 +479,6 @@ namespace MVGE_GEN.Utils
             long totalBits = (long)sec.VoxelCount * sec.BitsPerIndex;
             int uintCount = (int)((totalBits + 31) / 32);
             sec.BitData = RentBitData(uintCount);
-            // Ensure clean state (fill with zeros) because pool may give dirty memory
             Array.Clear(sec.BitData, 0, uintCount);
         }
 
@@ -321,13 +543,95 @@ namespace MVGE_GEN.Utils
         private static void Initialize(ChunkSection sec)
         {
             sec.IsAllAir = false;
-            sec.VoxelCount = ChunkSection.SECTION_SIZE * ChunkSection.SECTION_SIZE * ChunkSection.SECTION_SIZE;
+            sec.VoxelCount = VOXELS_PER_SECTION;
             sec.Palette = new List<ushort>(8) { ChunkSection.AIR };
             sec.PaletteLookup = new Dictionary<ushort, int> { { ChunkSection.AIR, 0 } };
             sec.BitsPerIndex = 1;
             AllocateBitData(sec);
             sec.NonAirCount = 0;
             sec.CompletelyFull = false;
+            sec.MetadataBuilt = false;
+        }
+
+        private static void EnsurePacked(ChunkSection sec)
+        {
+            if (sec.Kind == ChunkSection.RepresentationKind.Packed) return;
+            if (sec.Kind == ChunkSection.RepresentationKind.Empty)
+            {
+                sec.IsAllAir = true; sec.Palette = null; sec.PaletteLookup = null; sec.BitData = null; sec.BitsPerIndex = 0; sec.NonAirCount = 0; sec.CompletelyFull = false; return;
+            }
+            if (sec.Kind == ChunkSection.RepresentationKind.Uniform)
+            {
+                ushort blockId = sec.UniformBlockId;
+                sec.IsAllAir = false;
+                sec.VoxelCount = ChunkSection.SECTION_SIZE * ChunkSection.SECTION_SIZE * ChunkSection.SECTION_SIZE;
+                sec.Palette = new List<ushort> { ChunkSection.AIR, blockId };
+                sec.PaletteLookup = new Dictionary<ushort, int> { { ChunkSection.AIR, 0 }, { blockId, 1 } };
+                sec.BitsPerIndex = 1;
+                long totalBits = (long)sec.VoxelCount * sec.BitsPerIndex;
+                int uintCount = (int)((totalBits + 31) / 32);
+                sec.BitData = ArrayPool<uint>.Shared.Rent(uintCount);
+                for (int i = 0; i < uintCount; i++) sec.BitData[i] = 0xFFFFFFFFu;
+                sec.NonAirCount = sec.VoxelCount;
+                sec.CompletelyFull = true;
+                sec.Kind = ChunkSection.RepresentationKind.Packed;
+                sec.MetadataBuilt = false;
+                return;
+            }
+            // For Sparse / DenseExpanded fallback: rebuild packed from existing data
+            if (sec.Kind == ChunkSection.RepresentationKind.DenseExpanded)
+            {
+                // Repack dense expanded
+                ushort[] dense = sec.ExpandedDense;
+                // Build palette anew
+                var palette = new List<ushort> { ChunkSection.AIR };
+                var lookup = new Dictionary<ushort, int> { { ChunkSection.AIR, 0 } };
+                for (int i = 0; i < dense.Length; i++)
+                {
+                    ushort id = dense[i]; if (id == ChunkSection.AIR) continue;
+                    if (!lookup.ContainsKey(id)) { lookup[id] = palette.Count; palette.Add(id); }
+                }
+                sec.Palette = palette; sec.PaletteLookup = lookup;
+                int paletteCountMinusOne = palette.Count - 1;
+                int bpi = paletteCountMinusOne <= 0 ? 1 : (int)BitOperations.Log2((uint)paletteCountMinusOne) + 1;
+                sec.BitsPerIndex = bpi;
+                long totalBits2 = (long)sec.VoxelCount * bpi;
+                int uintCount2 = (int)((totalBits2 + 31) / 32);
+                sec.BitData = ArrayPool<uint>.Shared.Rent(uintCount2); Array.Clear(sec.BitData, 0, uintCount2);
+                for (int i = 0; i < dense.Length; i++)
+                {
+                    ushort id = dense[i];
+                    if (id == ChunkSection.AIR) continue;
+                    int pi = lookup[id];
+                    WriteBits(sec, i, pi);
+                }
+                sec.Kind = ChunkSection.RepresentationKind.Packed; sec.MetadataBuilt = false;
+                return;
+            }
+            if (sec.Kind == ChunkSection.RepresentationKind.Sparse)
+            {
+                // Repack sparse
+                var palette = new List<ushort> { ChunkSection.AIR };
+                var lookup = new Dictionary<ushort, int> { { ChunkSection.AIR, 0 } };
+                var idx = sec.SparseIndices; var blocks = sec.SparseBlocks;
+                for (int i = 0; i < blocks.Length; i++)
+                {
+                    ushort id = blocks[i]; if (id == ChunkSection.AIR) continue;
+                    if (!lookup.ContainsKey(id)) { lookup[id] = palette.Count; palette.Add(id); }
+                }
+                sec.Palette = palette; sec.PaletteLookup = lookup;
+                int paletteCountMinusOne = palette.Count - 1;
+                int bpi = paletteCountMinusOne <= 0 ? 1 : (int)BitOperations.Log2((uint)paletteCountMinusOne) + 1;
+                sec.BitsPerIndex = bpi;
+                long totalBits2 = (long)sec.VoxelCount * bpi;
+                int uintCount2 = (int)((totalBits2 + 31) / 32);
+                sec.BitData = ArrayPool<uint>.Shared.Rent(uintCount2); Array.Clear(sec.BitData, 0, uintCount2);
+                for (int i = 0; i < idx.Length; i++)
+                {
+                    int li = idx[i]; ushort id = blocks[i]; int pi = lookup[id]; WriteBits(sec, li, pi);
+                }
+                sec.Kind = ChunkSection.RepresentationKind.Packed; sec.MetadataBuilt = false;
+            }
         }
     }
 }

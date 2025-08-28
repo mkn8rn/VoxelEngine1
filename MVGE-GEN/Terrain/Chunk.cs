@@ -250,6 +250,8 @@ namespace MVGE_GEN.Terrain
             LocalToSection(lx, ly, lz, out int sx, out int sy, out int sz, out int ox, out int oy, out int oz);
             var sec = GetOrCreateSection(sx, sy, sz);
             SectionUtils.SetBlock(sec, ox, oy, oz, blockId);
+            // Eager metadata rebuild so downstream flatten has up-to-date representation without on-demand classify cost
+            SectionUtils.ClassifyRepresentation(sec);
 
             // Update face solidity if we touched a boundary cell (cheap plane scan only for affected faces)
             if (lx == 0) FaceSolidNegX = ScanFaceSolidNegX();
