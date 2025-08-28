@@ -4,7 +4,9 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using MVGE_GEN.Models;
 using MVGE_INF.Models.Terrain;
-using static MVGE_GEN.Models.ChunkSection;
+using static MVGE_GEN.Models.ChunkSection; // added for BaseBlockType
+using System.Numerics;
+using System.Runtime.Intrinsics.X86;
 
 namespace MVGE_GEN.Utils
 {
@@ -123,8 +125,6 @@ namespace MVGE_GEN.Utils
             int distinctCount = scratch.DistinctCount;
             if (distinctCount == 0) return;
 
-            // Precompute targeted distinct ids ONCE (avoid repeated baseTypeGetter + predicate calls per voxel).
-            // DistinctCount <= 8 => use stackalloc for zero GC.
             Span<ushort> ids = stackalloc ushort[distinctCount];
             Span<bool> targeted = stackalloc bool[distinctCount];
             bool anyTarget = false;
@@ -138,7 +138,7 @@ namespace MVGE_GEN.Utils
                 targeted[i] = t;
                 if (t) anyTarget = true;
             }
-            if (!anyTarget) return; // nothing to do
+            if (!anyTarget) return;
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             static bool IdMatches(ushort id, Span<ushort> idsLocal, Span<bool> targetedLocal)
@@ -151,8 +151,6 @@ namespace MVGE_GEN.Utils
             }
 
             bool anyChange = false;
-
-            // Fast full-cover path: no need to escalate, we replace whole runs directly.
             if (fullCover)
             {
                 for (int z = 0; z < S; z++)
@@ -162,7 +160,7 @@ namespace MVGE_GEN.Utils
                     byte rc = col.RunCount; if (rc == 0) continue;
                     if (rc == 255)
                     {
-                        var arr = col.Escalated; // length 16
+                        var arr = col.Escalated;
                         for (int y = 0; y < S; y++)
                         {
                             ushort id = arr[y]; if (id == AIR || id == replacementId) continue;
@@ -173,11 +171,9 @@ namespace MVGE_GEN.Utils
                     if (rc >= 1 && col.Id0 != replacementId && IdMatches(col.Id0, ids, targeted)) { col.Id0 = replacementId; anyChange = true; }
                     if (rc == 2 && col.Id1 != replacementId && IdMatches(col.Id1, ids, targeted)) { col.Id1 = replacementId; anyChange = true; }
                 }
-                if (anyChange) scratch.DistinctDirty = true;
-                return;
+                if (anyChange) scratch.DistinctDirty = true; return;
             }
 
-            // Partial-cover path
             for (int z = 0; z < S; z++)
             for (int x = 0; x < S; x++)
             {
@@ -193,7 +189,6 @@ namespace MVGE_GEN.Utils
                     }
                     continue;
                 }
-                // First run
                 if (rc >= 1 && RangesOverlap(col.Y0Start, col.Y0End, lyStart, lyEnd) && col.Id0 != replacementId && IdMatches(col.Id0, ids, targeted))
                 {
                     bool runContained = lyStart <= col.Y0Start && lyEnd >= col.Y0End;
@@ -203,8 +198,7 @@ namespace MVGE_GEN.Utils
                     }
                     else
                     {
-                        // Need escalation since only part of the run is replaced
-                        scratch.AnyEscalated = true; var arr = col.Escalated ?? new ushort[S];
+                        var arr = col.Escalated ?? new ushort[S];
                         if (col.Escalated == null)
                         {
                             for (int y = col.Y0Start; y <= col.Y0End; y++) arr[y] = col.Id0;
@@ -212,10 +206,9 @@ namespace MVGE_GEN.Utils
                         }
                         int ys = Math.Max(col.Y0Start, lyStart); int ye = Math.Min(col.Y0End, lyEnd);
                         for (int y = ys; y <= ye; y++) arr[y] = replacementId;
-                        col.Escalated = arr; col.RunCount = 255; anyChange = true; continue; // skip second run (copied already if existed)
+                        col.Escalated = arr; col.RunCount = 255; anyChange = true; continue;
                     }
                 }
-                // Second run
                 if (rc == 2 && RangesOverlap(col.Y1Start, col.Y1End, lyStart, lyEnd) && col.Id1 != replacementId && IdMatches(col.Id1, ids, targeted))
                 {
                     bool runContained = lyStart <= col.Y1Start && lyEnd >= col.Y1End;
@@ -225,7 +218,7 @@ namespace MVGE_GEN.Utils
                     }
                     else
                     {
-                        scratch.AnyEscalated = true; var arr = col.Escalated ?? new ushort[S];
+                        var arr = col.Escalated ?? new ushort[S];
                         if (col.Escalated == null)
                         {
                             for (int y = col.Y0Start; y <= col.Y0End; y++) arr[y] = col.Id0;
@@ -243,6 +236,20 @@ namespace MVGE_GEN.Utils
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool RangesOverlap(int a0, int a1, int b0, int b1) => a0 <= b1 && b0 <= a1;
 
+        // SIMD / HW popcount batch (falls back to BitOperations) over 4096-bit occupancy array
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static int PopCountBatch(ulong[] occ)
+        {
+            int total = 0;
+            if (Popcnt.X64.IsSupported)
+            {
+                for (int i = 0; i < occ.Length; i++) total += (int)Popcnt.X64.PopCount(occ[i]);
+                return total;
+            }
+            for (int i = 0; i < occ.Length; i++) total += BitOperations.PopCount(occ[i]);
+            return total;
+        }
+
         // Finalize after generation + replacements
         public static void FinalizeSection(ChunkSection sec)
         {
@@ -259,7 +266,6 @@ namespace MVGE_GEN.Utils
             }
             if (scratch.DistinctDirty)
             {
-                // Rebuild distinct list (cheap: at most 8 kept)
                 Span<ushort> tmp = stackalloc ushort[8]; int count = 0;
                 for (int z = 0; z < S; z++)
                 for (int x = 0; x < S; x++)
@@ -285,13 +291,12 @@ namespace MVGE_GEN.Utils
                 scratch.DistinctDirty = false;
             }
             sec.VoxelCount = S * S * S;
-            // First pass build occupancy + count + bounds
             ulong[] occ = sec.OccupancyBits = new ulong[64]; // 4096 bits
-            int nonAir = 0;
             bool boundsInit = false;
             byte minX=0, maxX=0, minY=0, maxY=0, minZ=0, maxZ=0;
             int adjX=0, adjY=0, adjZ=0;
 
+            // Build occupancy bits; compute vertical adjacency (adjY) using run lengths; avoid per-voxel nonAir increments (will popcount later)
             for (int z = 0; z < S; z++)
             {
                 int zOffset = z * S;
@@ -302,38 +307,40 @@ namespace MVGE_GEN.Utils
                     if (rc == 255)
                     {
                         var arr = col.Escalated;
-                        int lastY = -1;
+                        ushort prev = 0;
                         for (int y = 0; y < S; y++)
                         {
-                            ushort id = arr[y]; if (id == AIR) continue;
-                            int li = y * 256 + z * S + x; occ[li >> 6] |= 1UL << (li & 63); nonAir++;
+                            ushort id = arr[y]; if (id == AIR) { prev = 0; continue; }
+                            int li = y * 256 + z * S + x; occ[li >> 6] |= 1UL << (li & 63);
                             if (!boundsInit){minX=maxX=(byte)x;minY=maxY=(byte)y;minZ=maxZ=(byte)z;boundsInit=true;} else { if (x<minX)minX=(byte)x; if (x>maxX)maxX=(byte)x; if (y<minY)minY=(byte)y; if (y>maxY)maxY=(byte)y; if (z<minZ)minZ=(byte)z; if (z>maxZ)maxZ=(byte)z; }
-                            if (lastY>=0 && y==lastY+1) adjY++; lastY=y;
+                            if (prev!=0) adjY++; prev = id;
                         }
                         continue;
                     }
-                    // run0
                     if (rc >= 1)
                     {
-                        for (int y = col.Y0Start; y <= col.Y0End; y++)
+                        int y0s = col.Y0Start; int y0e = col.Y0End; int len0 = y0e - y0s + 1;
+                        for (int y = y0s; y <= y0e; y++)
                         {
-                            int li = y * 256 + z * S + x; occ[li >> 6] |= 1UL << (li & 63); nonAir++;
+                            int li = y * 256 + z * S + x; occ[li >> 6] |= 1UL << (li & 63);
                             if (!boundsInit){minX=maxX=(byte)x;minY=maxY=(byte)y;minZ=maxZ=(byte)z;boundsInit=true;} else { if (x<minX)minX=(byte)x; if (x>maxX)maxX=(byte)x; if (y<minY)minY=(byte)y; if (y>maxY)maxY=(byte)y; if (z<minZ)minZ=(byte)z; if (z>maxZ)maxZ=(byte)z; }
-                            if (y>col.Y0Start) adjY++;
                         }
+                        adjY += len0 - 1;
                     }
                     if (rc == 2)
                     {
+                        int y1s = col.Y1Start; int y1e = col.Y1End; int len1 = y1e - y1s + 1;
                         for (int y = col.Y1Start; y <= col.Y1End; y++)
                         {
-                            int li = y * 256 + z * S + x; occ[li >> 6] |= 1UL << (li & 63); nonAir++;
+                            int li = y * 256 + z * S + x; occ[li >> 6] |= 1UL << (li & 63);
                             if (!boundsInit){minX=maxX=(byte)x;minY=maxY=(byte)y;minZ=maxZ=(byte)z;boundsInit=true;} else { if (x<minX)minX=(byte)x; if (x>maxX)maxX=(byte)x; if (y<minY)minY=(byte)y; if (y>maxY)maxY=(byte)y; if (z<minZ)minZ=(byte)z; if (z>maxZ)maxZ=(byte)z; }
-                            if (y>col.Y1Start) adjY++;
                         }
+                        adjY += len1 - 1;
                     }
                 }
             }
 
+            int nonAir = PopCountBatch(occ); // HW accelerated
             sec.NonAirCount = nonAir;
             if (!boundsInit)
             {
@@ -341,25 +348,23 @@ namespace MVGE_GEN.Utils
             }
             sec.HasBounds = true; sec.MinLX=minX; sec.MaxLX=maxX; sec.MinLY=minY; sec.MaxLY=maxY; sec.MinLZ=minZ; sec.MaxLZ=maxZ;
 
-            // X and Z adjacency via occupancy scan of neighbors
+            // X and Z adjacency via occupancy scan of neighbors (bitwise)
             for (int y = 0; y < S; y++)
             {
                 int yBase = y * 256;
                 for (int z = 0; z < S; z++)
                 {
                     int rowBase = yBase + z * S;
+                    // process row bits in 16-size chunk
+                    int liRowStart = rowBase;
+                    // Bits for this row may span across ulong boundaries but 16 bits small; fallback simple loop (cheap).
+                    bool prev = false;
                     for (int x = 0; x < S; x++)
                     {
-                        int li = rowBase + x;
-                        bool filled = (occ[li >> 6] & (1UL << (li & 63))) != 0;
-                        if (!filled) continue;
-                        if (x>0)
+                        int li = liRowStart + x; bool filled = (occ[li >> 6] & (1UL << (li & 63))) != 0; if (filled && prev) adjX++; prev = filled;
+                        if (z>0 && filled)
                         {
-                            int leftLi = li - 1; if ((occ[leftLi >> 6] & (1UL << (leftLi & 63))) != 0) adjX++;
-                        }
-                        if (z>0)
-                        {
-                            int backLi = li - S; if ((occ[backLi >> 6] & (1UL << (backLi & 63))) != 0) adjZ++;
+                            int backLi = li - S; if ((occ[backLi >> 6] & (1UL << (backLi & 63))) != 0) adjZ++; // Z adjacency
                         }
                     }
                 }
@@ -382,7 +387,7 @@ namespace MVGE_GEN.Utils
                 for (int word = 0; word < occ.Length; word++)
                 {
                     ulong w = occ[word];
-                    while (w!=0){int bit = System.Numerics.BitOperations.TrailingZeroCount(w); int li = (word<<6)+bit; idx[p]=li; blocks[p]= singleId!=0? singleId : ResolveBlockId(ref scratch.Columns[(li & 255)], li); p++; w&=w-1;}
+                    while (w!=0){int bit = BitOperations.TrailingZeroCount(w); int li = (word<<6)+bit; idx[p]=li; blocks[p]= singleId!=0? singleId : ResolveBlockId(ref scratch.Columns[(li & 255)], li); p++; w&=w-1;}
                 }
                 sec.Kind = ChunkSection.RepresentationKind.Sparse;
                 sec.SparseIndices = idx; sec.SparseBlocks = blocks; sec.IsAllAir=false;
@@ -398,7 +403,7 @@ namespace MVGE_GEN.Utils
                     for (int word=0; word<occ.Length; word++)
                     {
                         ulong w = occ[word];
-                        while (w!=0){int bit = System.Numerics.BitOperations.TrailingZeroCount(w); int li=(word<<6)+bit; int bw = li>>5; int bo = li &31; sec.BitData[bw] |= 1u<<bo; w&=w-1;}
+                        while (w!=0){int bit = BitOperations.TrailingZeroCount(w); int li=(word<<6)+bit; int bw = li>>5; int bo = li &31; sec.BitData[bw] |= 1u<<bo; w&=w-1;}
                     }
                     sec.IsAllAir=false;
                 }
