@@ -1,4 +1,4 @@
-﻿using MVGE_GEN.Terrain;
+﻿using MVGE_GEN.Models;
 using MVGE_INF.Models.Terrain;
 using System;
 using System.Buffers;

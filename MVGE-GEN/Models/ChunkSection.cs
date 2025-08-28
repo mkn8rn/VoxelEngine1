@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-namespace MVGE_GEN.Terrain
+namespace MVGE_GEN.Models
 {
     public sealed class ChunkSection
     {
