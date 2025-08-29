@@ -8,5 +8,6 @@ namespace MVGE_GFX.Terrain.Sections
 {
     internal partial class SectionRender
     {
+        private void EmitEmptySection() { /* nothing to emit */ }
     }
 }
