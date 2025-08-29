@@ -31,9 +31,16 @@ namespace MVGE_GFX.Terrain.Sections
 
             var vertList = new List<byte>(1024);
             var uvList = new List<byte>(1024);
-            var idxListU32 = new List<uint>(2048); // start with UInt; we will down-convert later if fits
-
+            var idxListU32 = new List<uint>(2048);
             uint vertBase = 0;
+
+            // Neighbor planes (may be null)
+            var nNegX = data.NeighborPlaneNegX; // yz plane (z * Y + y)
+            var nPosX = data.NeighborPlanePosX;
+            var nNegY = data.NeighborPlaneNegY; // xz plane (x * Z + z)
+            var nPosY = data.NeighborPlanePosY;
+            var nNegZ = data.NeighborPlaneNegZ; // xy plane (x * Y + y)
+            var nPosZ = data.NeighborPlanePosZ;
 
             for (int x = 0; x < maxX; x++)
             {
@@ -43,20 +50,73 @@ namespace MVGE_GFX.Terrain.Sections
                     {
                         ushort block = GetBlock(x, y, z);
                         if (block == EMPTY) continue;
-                        // For each of 6 directions, emit face if neighbor empty / OOB
-                        TryEmit(block, Faces.LEFT,  x, y, z, x - 1 < 0 || GetBlock(x - 1, y, z) == EMPTY, ref vertBase, vertList, uvList, idxListU32);
-                        TryEmit(block, Faces.RIGHT, x, y, z, x + 1 >= maxX || GetBlock(x + 1, y, z) == EMPTY, ref vertBase, vertList, uvList, idxListU32);
-                        TryEmit(block, Faces.BOTTOM,x, y, z, y - 1 < 0 || GetBlock(x, y - 1, z) == EMPTY, ref vertBase, vertList, uvList, idxListU32);
-                        TryEmit(block, Faces.TOP,   x, y, z, y + 1 >= maxY || GetBlock(x, y + 1, z) == EMPTY, ref vertBase, vertList, uvList, idxListU32);
-                        TryEmit(block, Faces.BACK,  x, y, z, z - 1 < 0 || GetBlock(x, y, z - 1) == EMPTY, ref vertBase, vertList, uvList, idxListU32);
-                        TryEmit(block, Faces.FRONT, x, y, z, z + 1 >= maxZ || GetBlock(x, y, z + 1) == EMPTY, ref vertBase, vertList, uvList, idxListU32);
+
+                        // LEFT (-X)
+                        if (x == 0)
+                        {
+                            bool neighborSolid = PlaneBit(nNegX, z * maxY + y);
+                            if (!neighborSolid) TryEmit(block, Faces.LEFT, x, y, z, ref vertBase, vertList, uvList, idxListU32);
+                        }
+                        else if (GetBlock(x - 1, y, z) == EMPTY)
+                        {
+                            TryEmit(block, Faces.LEFT, x, y, z, ref vertBase, vertList, uvList, idxListU32);
+                        }
+                        // RIGHT (+X)
+                        if (x == maxX - 1)
+                        {
+                            bool neighborSolid = PlaneBit(nPosX, z * maxY + y);
+                            if (!neighborSolid) TryEmit(block, Faces.RIGHT, x, y, z, ref vertBase, vertList, uvList, idxListU32);
+                        }
+                        else if (GetBlock(x + 1, y, z) == EMPTY)
+                        {
+                            TryEmit(block, Faces.RIGHT, x, y, z, ref vertBase, vertList, uvList, idxListU32);
+                        }
+                        // BOTTOM (-Y)
+                        if (y == 0)
+                        {
+                            bool neighborSolid = PlaneBit(nNegY, x * maxZ + z);
+                            if (!neighborSolid) TryEmit(block, Faces.BOTTOM, x, y, z, ref vertBase, vertList, uvList, idxListU32);
+                        }
+                        else if (GetBlock(x, y - 1, z) == EMPTY)
+                        {
+                            TryEmit(block, Faces.BOTTOM, x, y, z, ref vertBase, vertList, uvList, idxListU32);
+                        }
+                        // TOP (+Y)
+                        if (y == maxY - 1)
+                        {
+                            bool neighborSolid = PlaneBit(nPosY, x * maxZ + z);
+                            if (!neighborSolid) TryEmit(block, Faces.TOP, x, y, z, ref vertBase, vertList, uvList, idxListU32);
+                        }
+                        else if (GetBlock(x, y + 1, z) == EMPTY)
+                        {
+                            TryEmit(block, Faces.TOP, x, y, z, ref vertBase, vertList, uvList, idxListU32);
+                        }
+                        // BACK (-Z)
+                        if (z == 0)
+                        {
+                            bool neighborSolid = PlaneBit(nNegZ, x * maxY + y);
+                            if (!neighborSolid) TryEmit(block, Faces.BACK, x, y, z, ref vertBase, vertList, uvList, idxListU32);
+                        }
+                        else if (GetBlock(x, y, z - 1) == EMPTY)
+                        {
+                            TryEmit(block, Faces.BACK, x, y, z, ref vertBase, vertList, uvList, idxListU32);
+                        }
+                        // FRONT (+Z)
+                        if (z == maxZ - 1)
+                        {
+                            bool neighborSolid = PlaneBit(nPosZ, x * maxY + y);
+                            if (!neighborSolid) TryEmit(block, Faces.FRONT, x, y, z, ref vertBase, vertList, uvList, idxListU32);
+                        }
+                        else if (GetBlock(x, y, z + 1) == EMPTY)
+                        {
+                            TryEmit(block, Faces.FRONT, x, y, z, ref vertBase, vertList, uvList, idxListU32);
+                        }
                     }
                 }
             }
 
-            int totalVerts = (int)(vertBase);
+            int totalVerts = (int)vertBase;
             useUShort = totalVerts <= 65535;
-
             if (useUShort)
             {
                 idxU16 = new ushort[idxListU32.Count];
@@ -68,17 +128,24 @@ namespace MVGE_GFX.Terrain.Sections
                 idxU32 = idxListU32.ToArray();
                 idxU16 = Array.Empty<ushort>();
             }
-
             verts = vertList.ToArray();
             uvs = uvList.ToArray();
-            vertBytes = verts.Length; uvBytes = uvs.Length; indices = idxListU32.Count; // both formats share same count
+            vertBytes = verts.Length; uvBytes = uvs.Length; indices = idxListU32.Count;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void TryEmit(ushort block, Faces face, int x, int y, int z, bool visible,
+        private static bool PlaneBit(ulong[] plane, int index)
+        {
+            if (plane == null) return false; // treat as empty outside
+            int w = index >> 6; int b = index & 63;
+            if (w >= plane.Length) return false;
+            return (plane[w] & (1UL << b)) != 0UL;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void TryEmit(ushort block, Faces face, int x, int y, int z,
                              ref uint vertBase, List<byte> vertList, List<byte> uvList, List<uint> idxListU32)
         {
-            if (!visible) return;
             var faceVerts = RawFaceData.rawVertexData[face];
             for (int i = 0; i < 4; i++)
             {
@@ -91,7 +158,6 @@ namespace MVGE_GFX.Terrain.Sections
             {
                 uvList.Add(uvFace[i].x); uvList.Add(uvFace[i].y);
             }
-            // indices (two triangles) CCW
             idxListU32.Add(vertBase + 0);
             idxListU32.Add(vertBase + 1);
             idxListU32.Add(vertBase + 2);
@@ -112,13 +178,11 @@ namespace MVGE_GFX.Terrain.Sections
             ref var desc = ref data.SectionDescs[index];
             switch (desc.Kind)
             {
-                case 0: // Empty
-                    return 0;
-                case 1: // Uniform
-                    return desc.UniformBlockId;
+                case 0: return 0; // Empty
+                case 1: return desc.UniformBlockId; // Uniform
                 case 2: // Sparse
                     if (desc.SparseIndices == null) return 0;
-                    int lid = ((localZ << 4) + localX) << 4 | localY; // (z*S + x)*16 + y
+                    int lid = ((localZ << 4) + localX) << 4 | localY;
                     var idxArr = desc.SparseIndices; var blkArr = desc.SparseBlocks;
                     for (int i = 0; i < idxArr.Length; i++) if (idxArr[i] == lid) return blkArr[i];
                     return 0;
@@ -128,8 +192,7 @@ namespace MVGE_GFX.Terrain.Sections
                 case 4: // Packed
                     if (desc.PackedBitData == null || desc.Palette == null) return 0;
                     return DecodePacked(ref desc, localX, localY, localZ);
-                default:
-                    return 0;
+                default: return 0;
             }
         }
 
