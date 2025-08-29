@@ -47,7 +47,7 @@ namespace MVGE_GFX.Terrain.Sections
                         switch (desc.Kind)
                         {
                             case 0: // Empty
-                                // nothing
+                                EmitEmptySection(); // no-op, just a placeholder for possible future use
                                 continue;
                             case 1: // Uniform
                                 EmitUniformSection(ref desc, sx, sy, sz, vertList, uvList, idxListU32, ref vertBase);
