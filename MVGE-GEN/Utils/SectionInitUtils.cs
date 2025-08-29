@@ -11,7 +11,7 @@ using System.Buffers;
 
 namespace MVGE_GEN.Utils
 {
-    public static partial class SectionUtils
+    internal static partial class SectionUtils
     {
         public static bool EnableFastSectionClassification = true;
         private const int S = ChunkSection.SECTION_SIZE;

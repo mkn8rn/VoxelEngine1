@@ -8,7 +8,7 @@ using System.Runtime.CompilerServices;
 
 namespace MVGE_GEN.Utils
 {
-    public static partial class SectionUtils
+    internal static partial class SectionUtils
     {
         // Invalidate incremental fast-path state (used after biome replacement mutations)
         public static void InvalidateIncrementalClassification(ChunkSection sec, bool preserveUniformIfStillValid = true)

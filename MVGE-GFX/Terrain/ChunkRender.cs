@@ -92,21 +92,15 @@ namespace MVGE_GFX.Terrain
 
         // NOTE: world block delegate removed; neighbor data now comes via prerenderData planes/flags
 
-        public ChunkRender(
-            ChunkData chunkData,
-            ushort[] flatBlocks,
-            int maxX,
-            int maxY,
-            int maxZ,
-            ChunkPrerenderData prerenderData)
+        public ChunkRender(ChunkPrerenderData prerenderData)
         {
             this.prerenderData = prerenderData; // store original
             this.prepassSolidCount = prerenderData.PrepassSolidCount;
             this.prepassExposureEstimate = prerenderData.PrepassExposureEstimate;
-            chunkMeta = chunkData;
+            this.chunkMeta = prerenderData.chunkData;
             this.flatBlocks = flatBlocks;
             this.maxX = maxX; this.maxY = maxY; this.maxZ = maxZ;
-            chunkWorldPosition = new Vector3(chunkData.x, chunkData.y, chunkData.z);
+            chunkWorldPosition = new Vector3(prerenderData.chunkData.x, prerenderData.chunkData.y, prerenderData.chunkData.z);
             this.faceNegX = prerenderData.FaceNegX; this.facePosX = prerenderData.FacePosX; this.faceNegY = prerenderData.FaceNegY; this.facePosY = prerenderData.FacePosY; this.faceNegZ = prerenderData.FaceNegZ; this.facePosZ = prerenderData.FacePosZ;
             this.nNegXPosX = prerenderData.NeighborNegXPosX; this.nPosXNegX = prerenderData.NeighborPosXNegX; this.nNegYPosY = prerenderData.NeighborNegYPosY; this.nPosYNegY = prerenderData.NeighborPosYNegY; this.nNegZPosZ = prerenderData.NeighborNegZPosZ; this.nPosZNegZ = prerenderData.NeighborPosZNegZ;
             this.allOneBlock = prerenderData.AllOneBlock; this.allOneBlockId = prerenderData.AllOneBlockId;

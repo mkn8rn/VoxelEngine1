@@ -154,7 +154,7 @@ namespace MVGE_GEN.Terrain
             }
         }
 
-        internal ChunkPrerenderData BuildPrerenderData()
+        internal ChunkPrerenderData BuildPrerenderData(ushort[] blocks)
         {
             return new ChunkPrerenderData
             {
@@ -185,7 +185,13 @@ namespace MVGE_GEN.Terrain
                 NeighborPlaneNegY = NeighborPlaneNegYFace,
                 NeighborPlanePosY = NeighborPlanePosYFace,
                 NeighborPlaneNegZ = NeighborPlaneNegZFace,
-                NeighborPlanePosZ = NeighborPlanePosZFace
+                NeighborPlanePosZ = NeighborPlanePosZFace,
+
+                chunkData = chunkData,
+                flatBlocks = blocks,
+                maxX = dimX,
+                maxY = dimY,
+                maxZ = dimZ
             };
         }
 
@@ -546,14 +552,8 @@ namespace MVGE_GEN.Terrain
                 // Fill with uniform block id
                 uniformFlat.AsSpan(0, voxelCountUniform).Fill(AllOneBlockBlockId);
 
-                var prerender = BuildPrerenderData();
-                chunkRender = new ChunkRender(
-                    chunkData,
-                    uniformFlat,
-                    dimX,
-                    dimY,
-                    dimZ,
-                    prerender);
+                var prerender = BuildPrerenderData(uniformFlat);
+                chunkRender = new ChunkRender(prerender);
                 return;
             }
 
@@ -568,14 +568,8 @@ namespace MVGE_GEN.Terrain
                 return; // chunkRender stays null; Render() will no-op
             }
 
-            var prerenderData = BuildPrerenderData();
-            chunkRender = new ChunkRender(
-                chunkData,
-                flat,
-                dimX,
-                dimY,
-                dimZ,
-                prerenderData);
+            var prerenderData = BuildPrerenderData(flat);
+            chunkRender = new ChunkRender(prerenderData);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

@@ -1,4 +1,5 @@
-﻿using System;
+﻿using MVGE_INF.Models.Terrain;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -53,5 +54,11 @@ namespace MVGE_INF.Models.Generation
         public ulong[] SelfPlanePosY;
         public ulong[] SelfPlaneNegZ;
         public ulong[] SelfPlanePosZ;
+
+        public ChunkData chunkData;
+        public ushort[] flatBlocks;
+        public int maxX;
+        public int maxY;
+        public int maxZ;
     }
 }
