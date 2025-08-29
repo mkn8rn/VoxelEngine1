@@ -52,6 +52,12 @@ namespace MVGE_GFX.Terrain.Sections
                             case 1: // Uniform
                                 EmitUniformSection(ref desc, sx, sy, sz, vertList, uvList, idxListU32, ref vertBase);
                                 continue;
+                            case 3: // DenseExpanded
+                                EmitDenseExpandedSection(ref desc, sx, sy, sz, vertList, uvList, idxListU32, ref vertBase);
+                                continue;
+                            case 4: // Packed
+                                EmitPackedSection(ref desc, sx, sy, sz, vertList, uvList, idxListU32, ref vertBase);
+                                continue;
                             default:
                                 FallbackSectionScan(ref desc, sx, sy, sz, S, maxX, maxY, maxZ, vertList, uvList, idxListU32, ref vertBase);
                                 break;
