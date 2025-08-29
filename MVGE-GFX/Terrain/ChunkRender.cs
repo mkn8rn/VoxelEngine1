@@ -135,7 +135,7 @@ namespace MVGE_GFX.Terrain
             }
 
             // --- Sparse path ---
-            bool sparseFeatureEnabled = true;
+            bool sparseFeatureEnabled = false; // always false since we'll replace it soon
             float avgExposurePerSolid = solidVoxelCount == 0 ? 0f : (float)exposureEstimate / solidVoxelCount;
             const float SparseMinAvgExposure = 0.5f;     // average exposed faces per solid to justify sparse path
             bool chooseSparse = avgExposurePerSolid >= SparseMinAvgExposure;
@@ -162,7 +162,7 @@ namespace MVGE_GFX.Terrain
             }
 
             // --- Dense path (formerly: pooled) ---
-            bool pooledFeatureEnabled = FlagManager.flags.useFacePooling.GetValueOrDefault();
+            bool pooledFeatureEnabled = false; // always false since we'll replace it soon
             int pooledVoxelThreshold = pooledFeatureEnabled ? FlagManager.flags.faceAmountToPool.GetValueOrDefault(int.MaxValue) : int.MaxValue;
             bool choosePooled = solidVoxelCount >= pooledVoxelThreshold;
             if (choosePooled && pooledFeatureEnabled)
