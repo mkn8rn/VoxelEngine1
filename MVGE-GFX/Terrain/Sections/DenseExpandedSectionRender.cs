@@ -135,54 +135,54 @@ namespace MVGE_GFX.Terrain.Sections
             // ----------------------------------------------------------------------------------
             // 2. Build internal face masks (excludes boundary layer bits)
             // ----------------------------------------------------------------------------------
-            // -X faces
-            ShiftRight(nonAirBits, strideX, shiftA);
-            ShiftRight(opaqueBits, strideX, shiftB);
+            // -X faces (neighbor at x-1) -> shift left by strideX
+            ShiftLeft(nonAirBits, strideX, shiftA);
+            ShiftLeft(opaqueBits, strideX, shiftB);
             for (int i = 0; i < 64; i++)
             {
                 ulong selfV = nonAirBits[i] & ~_maskX0[i];
                 ulong hidden = selfV & shiftA[i] & opaqueBits[i] & shiftB[i];
                 faceNX[i] = selfV & ~hidden;
             }
-            // +X faces
-            ShiftLeft(nonAirBits, strideX, shiftA);
-            ShiftLeft(opaqueBits, strideX, shiftB);
+            // +X faces (neighbor at x+1) -> shift right by strideX
+            ShiftRight(nonAirBits, strideX, shiftA);
+            ShiftRight(opaqueBits, strideX, shiftB);
             for (int i = 0; i < 64; i++)
             {
                 ulong selfV = nonAirBits[i] & ~_maskX15[i];
                 ulong hidden = selfV & shiftA[i] & opaqueBits[i] & shiftB[i];
                 facePX[i] = selfV & ~hidden;
             }
-            // -Y faces
-            ShiftRight(nonAirBits, strideY, shiftA);
-            ShiftRight(opaqueBits, strideY, shiftB);
+            // -Y faces (neighbor at y-1) -> shift left by strideY
+            ShiftLeft(nonAirBits, strideY, shiftA);
+            ShiftLeft(opaqueBits, strideY, shiftB);
             for (int i = 0; i < 64; i++)
             {
                 ulong selfV = nonAirBits[i] & ~_maskY0[i];
                 ulong hidden = selfV & shiftA[i] & opaqueBits[i] & shiftB[i];
                 faceNY[i] = selfV & ~hidden;
             }
-            // +Y faces
-            ShiftLeft(nonAirBits, strideY, shiftA);
-            ShiftLeft(opaqueBits, strideY, shiftB);
+            // +Y faces (neighbor at y+1) -> shift right by strideY
+            ShiftRight(nonAirBits, strideY, shiftA);
+            ShiftRight(opaqueBits, strideY, shiftB);
             for (int i = 0; i < 64; i++)
             {
                 ulong selfV = nonAirBits[i] & ~_maskY15[i];
                 ulong hidden = selfV & shiftA[i] & opaqueBits[i] & shiftB[i];
                 facePY[i] = selfV & ~hidden;
             }
-            // -Z faces
-            ShiftRight(nonAirBits, strideZ, shiftA);
-            ShiftRight(opaqueBits, strideZ, shiftB);
+            // -Z faces (neighbor at z-1) -> shift left by strideZ
+            ShiftLeft(nonAirBits, strideZ, shiftA);
+            ShiftLeft(opaqueBits, strideZ, shiftB);
             for (int i = 0; i < 64; i++)
             {
                 ulong selfV = nonAirBits[i] & ~_maskZ0[i];
                 ulong hidden = selfV & shiftA[i] & opaqueBits[i] & shiftB[i];
                 faceNZ[i] = selfV & ~hidden;
             }
-            // +Z faces
-            ShiftLeft(nonAirBits, strideZ, shiftA);
-            ShiftLeft(opaqueBits, strideZ, shiftB);
+            // +Z faces (neighbor at z+1) -> shift right by strideZ
+            ShiftRight(nonAirBits, strideZ, shiftA);
+            ShiftRight(opaqueBits, strideZ, shiftB);
             for (int i = 0; i < 64; i++)
             {
                 ulong selfV = nonAirBits[i] & ~_maskZ15[i];
@@ -244,7 +244,7 @@ namespace MVGE_GFX.Terrain.Sections
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             static int SecIndex(int sxL, int syL, int szL, int syC, int szC) => ((sxL * syC) + syL) * szC + szL;
 
-            // Boundary processing function: iterates bits of a boundary mask, determines visibility and sets face bit in provided target mask span.
+            // Boundary processing function
             void ProcessBoundary(ReadOnlySpan<ulong> boundaryMask, Span<ulong> targetMask, Faces face, ReadOnlySpan<ulong> nonAirBitsLocal, ReadOnlySpan<ulong> opaqueBitsLocal)
             {
                 for (int wi = 0; wi < 64; wi++)
