@@ -8,7 +8,7 @@ namespace MVGE_GFX.Terrain.Sections
 {
     internal partial class SectionRender
     {
-        // Specialized emission for DenseExpanded (Kind=3)
+        // Specialized emission for DenseExpanded
         private void EmitDenseExpandedSection(
             ref SectionPrerenderDesc desc,
             int sx, int sy, int sz,
