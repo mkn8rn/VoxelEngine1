@@ -238,6 +238,7 @@ namespace MVGE_GEN.Utils
             int total = sec.VoxelCount;
             if (total == 0) total = VOXELS_PER_SECTION;
 
+            // Uniform (full volume single id)
             if (sec.CompletelyFull && sec.Palette != null && sec.Palette.Count == 2 && sec.Palette[0] == ChunkSection.AIR)
             {
                 sec.Kind = ChunkSection.RepresentationKind.Uniform;
@@ -254,21 +255,25 @@ namespace MVGE_GEN.Utils
                 return;
             }
 
-            // Decide Sparse / DenseExpanded / Packed based on fill ratio
-            float fill = (float)sec.NonAirCount / total;
-            if (sec.NonAirCount <= 128) // sparse threshold heuristic
+            // Sparse threshold (kept)
+            if (sec.NonAirCount <= 128)
             {
                 ExpandToSparse(sec);
                 BuildMetadataSparse(sec);
                 return;
             }
-            if (fill >= 0.60f)
+
+            // Multi-id (more than one distinct non-air id)
+            // Palette layout: [AIR, id1, id2, ...]; so >2 means at least 2 distinct non-air ids.
+            int distinctNonAir = (sec.Palette?.Count ?? 0) - 1; // exclude air
+            if (distinctNonAir > 1)
             {
                 ExpandToDense(sec);
                 BuildMetadataDense(sec);
                 return;
             }
-            // Keep packed, but build occupancy & faces from packed bits
+
+            // Single non-air id but partial occupancy
             sec.Kind = ChunkSection.RepresentationKind.Packed;
             BuildMetadataPacked(sec);
         }
