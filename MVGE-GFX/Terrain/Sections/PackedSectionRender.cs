@@ -361,50 +361,94 @@ namespace MVGE_GFX.Terrain.Sections
                 idxList.Add(vb + 0); idxList.Add(vb + 1); idxList.Add(vb + 2); idxList.Add(vb + 2); idxList.Add(vb + 3); idxList.Add(vb + 0); vb += 4;
             }
 
-            // Helpers for big bitset shifts (4096 bits)
-            Span<ulong> tmpShift = stackalloc ulong[64];
+            // Neighbor edge caching (per-direction 16x16 plane bits) for internal section boundaries
+            ulong[] edgePosXFromNegX = null, edgeNegXFromPosX = null; // yz planes from neighbor sections
+            ulong[] edgePosYFromNegY = null, edgeNegYFromPosY = null; // xz planes
+            ulong[] edgePosZFromNegZ = null, edgeNegZFromPosZ = null; // xy planes
+            bool edgePosXOpaque = false, edgeNegXOpaque = false, edgePosYOpaque = false, edgeNegYOpaque = false, edgePosZOpaque = false, edgeNegZOpaque = false;
+
+            SectionPrerenderDesc[] allSecs = data.SectionDescs;
+            int sxCount = data.sectionsX, syCount = data.sectionsY, szCount = data.sectionsZ;
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            static void ShiftLeft(ulong[] src, int shiftBits, Span<ulong> dst)
+            static int SecIndex(int sxL, int syL, int szL, int syC, int szC) => ((sxL * syC) + syL) * szC + szL;
+
+            void BuildNeighborFace(ref ulong[] target, ref bool opaqueFlag, int nsx, int nsy, int nsz, bool positiveFace, char axis)
             {
-                int wordShift = shiftBits >> 6; int bitShift = shiftBits & 63; int len = 64;
-                for (int i = len - 1; i >= 0; i--)
+                if ((uint)nsx >= (uint)sxCount || (uint)nsy >= (uint)syCount || (uint)nsz >= (uint)szCount) return;
+                ref var nd = ref allSecs[SecIndex(nsx, nsy, nsz, syCount, szCount)];
+                if (nd.NonAirCount == 0) return;
+                ushort nUniform = nd.UniformBlockId;
+                bool nUniformValid = nd.Kind == 1 && nUniform != 0 && BlockProperties.IsOpaque(nUniform);
+                bool nPackedSingle = nd.Kind == 4 && nd.BitsPerIndex == 1 && nd.Palette != null && nd.Palette.Count == 2 && nd.OccupancyBits != null && BlockProperties.IsOpaque(nd.Palette[1]);
+                if (!nUniformValid && !nPackedSingle) return; // not an occluding neighbor we can quickly test
+                target = new ulong[4]; // 256 bits plane
+                opaqueFlag = true; // only filled when opaque
+                if (nUniformValid)
                 {
-                    ulong val = 0;
-                    int si = i - wordShift;
-                    if (si >= 0)
-                    {
-                        val = src[si];
-                        if (bitShift != 0 && si - 1 >= 0)
-                            val = (val << bitShift) | (src[si - 1] >> (64 - bitShift));
-                        else if (bitShift != 0)
-                            val <<= bitShift;
-                    }
-                    dst[i] = val;
+                    // All bits set (every voxel solid & opaque)
+                    target[0] = target[1] = target[2] = target[3] = ulong.MaxValue;
+                    return;
                 }
-            }
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            static void ShiftRight(ulong[] src, int shiftBits, Span<ulong> dst)
-            {
-                int wordShift = shiftBits >> 6; int bitShift = shiftBits & 63; int len = 64;
-                for (int i = 0; i < len; i++)
+                // Extract edge from occupancy
+                var nOcc = nd.OccupancyBits;
+                if (axis == 'X')
                 {
-                    ulong val = 0;
-                    int si = i + wordShift;
-                    if (si < len)
+                    int nx = positiveFace ? 15 : 0;
+                    for (int nz = 0; nz < 16; nz++)
                     {
-                        val = src[si];
-                        if (bitShift != 0 && si + 1 < len)
-                            val = (val >> bitShift) | (src[si + 1] << (64 - bitShift));
-                        else if (bitShift != 0)
-                            val >>= bitShift;
+                        for (int ny = 0; ny < 16; ny++)
+                        {
+                            int nli = ((nz * 16 + nx) * 16) + ny;
+                            if ((nOcc[nli >> 6] & (1UL << (nli & 63))) == 0) continue;
+                            int yz = nz * 16 + ny; target[yz >> 6] |= 1UL << (yz & 63);
+                        }
                     }
-                    dst[i] = val;
+                }
+                else if (axis == 'Y')
+                {
+                    int ny = positiveFace ? 15 : 0;
+                    for (int nx = 0; nx < 16; nx++)
+                    {
+                        for (int nz = 0; nz < 16; nz++)
+                        {
+                            int nli = ((nz * 16 + nx) * 16) + ny;
+                            if ((nOcc[nli >> 6] & (1UL << (nli & 63))) == 0) continue;
+                            int xz = nx * 16 + nz; target[xz >> 6] |= 1UL << (xz & 63);
+                        }
+                    }
+                }
+                else // Z
+                {
+                    int nz = positiveFace ? 15 : 0;
+                    for (int nx = 0; nx < 16; nx++)
+                    {
+                        for (int ny = 0; ny < 16; ny++)
+                        {
+                            int nli = ((nz * 16 + nx) * 16) + ny;
+                            if ((nOcc[nli >> 6] & (1UL << (nli & 63))) == 0) continue;
+                            int xy = nx * 16 + ny; target[xy >> 6] |= 1UL << (xy & 63);
+                        }
+                    }
                 }
             }
 
-            // Build internal face masks (exclude boundary layers)
-            // Candidate masks respecting bounds: we will AND with bounds later when emitting.
-            const int strideX = 16; const int strideY = 1; const int strideZ = 256;
+            // Build needed neighbor faces (only if internal section boundaries exist)
+            if (sx > 0)
+                BuildNeighborFace(ref edgePosXFromNegX, ref edgePosXOpaque, sx - 1, sy, sz, true, 'X');
+            if (sx + 1 < sxCount)
+                BuildNeighborFace(ref edgeNegXFromPosX, ref edgeNegXOpaque, sx + 1, sy, sz, false, 'X');
+
+            if (sy > 0)
+                BuildNeighborFace(ref edgePosYFromNegY, ref edgePosYOpaque, sx, sy - 1, sz, true, 'Y');
+            if (sy + 1 < syCount)
+                BuildNeighborFace(ref edgeNegYFromPosY, ref edgeNegYOpaque, sx, sy + 1, sz, false, 'Y');
+
+            if (sz > 0)
+                BuildNeighborFace(ref edgePosZFromNegZ, ref edgePosZOpaque, sx, sy, sz - 1, true, 'Z');
+            if (sz + 1 < szCount)
+                BuildNeighborFace(ref edgeNegZFromPosZ, ref edgeNegZOpaque, sx, sy, sz + 1, false, 'Z');
+
+            // Working buffers
             Span<ulong> shiftPos = stackalloc ulong[64];
             Span<ulong> faceNegX = stackalloc ulong[64];
             Span<ulong> facePosX = stackalloc ulong[64];
@@ -413,42 +457,92 @@ namespace MVGE_GFX.Terrain.Sections
             Span<ulong> faceNegZ = stackalloc ulong[64];
             Span<ulong> facePosZ = stackalloc ulong[64];
 
-            // X-
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            static void ShiftLeft(ulong[] src, int shiftBits, Span<ulong> dst)
+            {
+                int wordShift = shiftBits >> 6;
+                int bitShift = shiftBits & 63;
+
+                for (int i = 63; i >= 0; i--)
+                {
+                    ulong val = 0;
+                    int si = i - wordShift;
+
+                    if (si >= 0)
+                    {
+                        val = src[si];
+                        if (bitShift != 0 && si - 1 >= 0)
+                            val = (val << bitShift) | (src[si - 1] >> (64 - bitShift));
+                        else if (bitShift != 0)
+                            val <<= bitShift;
+                    }
+
+                    dst[i] = val;
+                }
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            static void ShiftRight(ulong[] src, int shiftBits, Span<ulong> dst)
+            {
+                int wordShift = shiftBits >> 6;
+                int bitShift = shiftBits & 63;
+
+                for (int i = 0; i < 64; i++)
+                {
+                    ulong val = 0;
+                    int si = i + wordShift;
+
+                    if (si < 64)
+                    {
+                        val = src[si];
+                        if (bitShift != 0 && si + 1 < 64)
+                            val = (val >> bitShift) | (src[si + 1] << (64 - bitShift));
+                        else if (bitShift != 0)
+                            val >>= bitShift;
+                    }
+
+                    dst[i] = val;
+                }
+            }
+
+            const int strideX = 16, strideY = 1, strideZ = 256;
+
+            // Compute face masks
             ShiftLeft(occ, strideX, shiftPos);
             for (int i = 0; i < 64; i++)
             {
                 ulong cand = occ[i] & ~_maskX0[i];
                 faceNegX[i] = cand & ~shiftPos[i];
             }
-            // X+
+
             ShiftRight(occ, strideX, shiftPos);
             for (int i = 0; i < 64; i++)
             {
                 ulong cand = occ[i] & ~_maskX15[i];
                 facePosX[i] = cand & ~shiftPos[i];
             }
-            // Y-
+
             ShiftLeft(occ, strideY, shiftPos);
             for (int i = 0; i < 64; i++)
             {
                 ulong cand = occ[i] & ~_maskY0[i];
                 faceNegY[i] = cand & ~shiftPos[i];
             }
-            // Y+
+
             ShiftRight(occ, strideY, shiftPos);
             for (int i = 0; i < 64; i++)
             {
                 ulong cand = occ[i] & ~_maskY15[i];
                 facePosY[i] = cand & ~shiftPos[i];
             }
-            // Z-
+
             ShiftLeft(occ, strideZ, shiftPos);
             for (int i = 0; i < 64; i++)
             {
                 ulong cand = occ[i] & ~_maskZ0[i];
                 faceNegZ[i] = cand & ~shiftPos[i];
             }
-            // Z+
+
             ShiftRight(occ, strideZ, shiftPos);
             for (int i = 0; i < 64; i++)
             {
@@ -456,23 +550,30 @@ namespace MVGE_GFX.Terrain.Sections
                 facePosZ[i] = cand & ~shiftPos[i];
             }
 
-            // Emit internal faces (respect bounds)
+            // Emit visible faces
             void EmitMask(Span<ulong> mask, Faces face)
             {
                 for (int wi = 0; wi < 64; wi++)
                 {
                     ulong word = mask[wi];
                     if (word == 0) continue;
+
                     while (word != 0)
                     {
                         int bit = BitOperations.TrailingZeroCount(word);
                         int li = (wi << 6) + bit;
                         word &= word - 1;
+
                         int ly = li & 15;
                         int t = li >> 4;
                         int lx = t & 15;
                         int lz = t >> 4;
-                        if (lx < lxMin || lx > lxMax || ly < lyMin || ly > lyMax || lz < lzMin || lz > lzMax) continue;
+
+                        if (lx < lxMin || lx > lxMax ||
+                            ly < lyMin || ly > lyMax ||
+                            lz < lzMin || lz > lzMax)
+                            continue;
+
                         Emit(baseX + lx, baseY + ly, baseZ + lz, face);
                     }
                 }
@@ -485,12 +586,29 @@ namespace MVGE_GFX.Terrain.Sections
             EmitMask(faceNegZ, Faces.BACK);
             EmitMask(facePosZ, Faces.FRONT);
 
-            // Boundary faces (six sides) - need cross-section or chunk neighbor tests.
-            // Helper to iterate boundary occupancy bits with mask M.
+            // ---- Word classification for boundary processing (readable form) ----
+            Span<int> boundaryWordTmp = stackalloc int[64];
+            int boundaryCount = 0;
+            for (int wi = 0; wi < 64; wi++)
+            {
+                ulong boundaryBitsInWord = (_maskX0[wi] | _maskX15[wi] | _maskY0[wi] | _maskY15[wi] | _maskZ0[wi] | _maskZ15[wi]) & occ[wi];
+                if (boundaryBitsInWord != 0)
+                    boundaryWordTmp[boundaryCount++] = wi;
+            }
+            int[] boundaryIdxArr = null;
+            if (boundaryCount > 0)
+            {
+                boundaryIdxArr = System.Buffers.ArrayPool<int>.Shared.Rent(boundaryCount);
+                for (int i = 0; i < boundaryCount; i++) boundaryIdxArr[i] = boundaryWordTmp[i];
+            }
+
             void EmitBoundary(ulong[] boundaryMask, Faces face, Action<int,int,int> testAndEmit)
             {
-                for (int wi = 0; wi < 64; wi++)
+                if (boundaryCount == 0) return;
+                var idxArr = boundaryIdxArr;
+                for (int bi = 0; bi < boundaryCount; bi++)
                 {
+                    int wi = idxArr[bi];
                     ulong word = occ[wi] & boundaryMask[wi];
                     if (word == 0) continue;
                     while (word != 0)
@@ -505,12 +623,7 @@ namespace MVGE_GFX.Terrain.Sections
                 }
             }
 
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            bool NeighborOpaqueWorld(int wx, int wy, int wz)
-            {
-                ushort nb = GetBlock(wx, wy, wz);
-                return opaque && BlockProperties.IsOpaque(nb);
-            }
+            [MethodImpl(MethodImplOptions.AggressiveInlining)] bool EdgeBit(ulong[] plane, int idx) => plane != null && (plane[idx >> 6] & (1UL << (idx & 63))) != 0UL;
 
             // LEFT boundary (x==0)
             EmitBoundary(_maskX0, Faces.LEFT, (lx, ly, lz) =>
@@ -518,13 +631,16 @@ namespace MVGE_GFX.Terrain.Sections
                 int wx = baseX + lx; int wy = baseY + ly; int wz = baseZ + lz;
                 if (wx == 0)
                 {
-                    int planeIdx = wz * maxY + wy;
-                    bool covered = planeNegX != null && planeIdx >= 0 && ((planeNegX[planeIdx >> 6] & (1UL << (planeIdx & 63))) != 0UL);
+                    int planeIdx = wz * maxY + wy; bool covered = EdgeBit(planeNegX, planeIdx);
                     if (!(covered && opaque)) Emit(wx, wy, wz, Faces.LEFT);
+                }
+                else if (edgePosXFromNegX != null && edgePosXOpaque)
+                {
+                    int yz = lz * 16 + ly; if (!(opaque && (edgePosXFromNegX[yz >> 6] & (1UL << (yz & 63))) != 0UL)) Emit(wx, wy, wz, Faces.LEFT);
                 }
                 else
                 {
-                    if (!NeighborOpaqueWorld(wx - 1, wy, wz)) Emit(wx, wy, wz, Faces.LEFT);
+                    ushort nb = GetBlock(wx - 1, wy, wz); if (!(opaque && BlockProperties.IsOpaque(nb))) Emit(wx, wy, wz, Faces.LEFT);
                 }
             });
             // RIGHT boundary (x==15)
@@ -533,13 +649,16 @@ namespace MVGE_GFX.Terrain.Sections
                 int wx = baseX + lx; int wy = baseY + ly; int wz = baseZ + lz;
                 if (wx == maxX - 1)
                 {
-                    int planeIdx = wz * maxY + wy;
-                    bool covered = planePosX != null && ((planePosX[planeIdx >> 6] & (1UL << (planeIdx & 63))) != 0UL);
+                    int planeIdx = wz * maxY + wy; bool covered = EdgeBit(planePosX, planeIdx);
                     if (!(covered && opaque)) Emit(wx, wy, wz, Faces.RIGHT);
+                }
+                else if (edgeNegXFromPosX != null && edgeNegXOpaque)
+                {
+                    int yz = lz * 16 + ly; if (!(opaque && (edgeNegXFromPosX[yz >> 6] & (1UL << (yz & 63))) != 0UL)) Emit(wx, wy, wz, Faces.RIGHT);
                 }
                 else
                 {
-                    if (!NeighborOpaqueWorld(wx + 1, wy, wz)) Emit(wx, wy, wz, Faces.RIGHT);
+                    ushort nb = GetBlock(wx + 1, wy, wz); if (!(opaque && BlockProperties.IsOpaque(nb))) Emit(wx, wy, wz, Faces.RIGHT);
                 }
             });
             // BOTTOM boundary (y==0)
@@ -548,13 +667,16 @@ namespace MVGE_GFX.Terrain.Sections
                 int wx = baseX + lx; int wy = baseY + ly; int wz = baseZ + lz;
                 if (wy == 0)
                 {
-                    int planeIdx = wx * maxZ + wz;
-                    bool covered = planeNegY != null && ((planeNegY[planeIdx >> 6] & (1UL << (planeIdx & 63))) != 0UL);
+                    int planeIdx = wx * maxZ + wz; bool covered = EdgeBit(planeNegY, planeIdx);
                     if (!(covered && opaque)) Emit(wx, wy, wz, Faces.BOTTOM);
+                }
+                else if (edgePosYFromNegY != null && edgePosYOpaque)
+                {
+                    int xz = lx * 16 + lz; if (!(opaque && (edgePosYFromNegY[xz >> 6] & (1UL << (xz & 63))) != 0UL)) Emit(wx, wy, wz, Faces.BOTTOM);
                 }
                 else
                 {
-                    if (!NeighborOpaqueWorld(wx, wy - 1, wz)) Emit(wx, wy, wz, Faces.BOTTOM);
+                    ushort nb = GetBlock(wx, wy - 1, wz); if (!(opaque && BlockProperties.IsOpaque(nb))) Emit(wx, wy, wz, Faces.BOTTOM);
                 }
             });
             // TOP boundary (y==15)
@@ -563,13 +685,16 @@ namespace MVGE_GFX.Terrain.Sections
                 int wx = baseX + lx; int wy = baseY + ly; int wz = baseZ + lz;
                 if (wy == maxY - 1)
                 {
-                    int planeIdx = wx * maxZ + wz;
-                    bool covered = planePosY != null && ((planePosY[planeIdx >> 6] & (1UL << (planeIdx & 63))) != 0UL);
+                    int planeIdx = wx * maxZ + wz; bool covered = EdgeBit(planePosY, planeIdx);
                     if (!(covered && opaque)) Emit(wx, wy, wz, Faces.TOP);
+                }
+                else if (edgeNegYFromPosY != null && edgeNegYOpaque)
+                {
+                    int xz = lx * 16 + lz; if (!(opaque && (edgeNegYFromPosY[xz >> 6] & (1UL << (xz & 63))) != 0UL)) Emit(wx, wy, wz, Faces.TOP);
                 }
                 else
                 {
-                    if (!NeighborOpaqueWorld(wx, wy + 1, wz)) Emit(wx, wy, wz, Faces.TOP);
+                    ushort nb = GetBlock(wx, wy + 1, wz); if (!(opaque && BlockProperties.IsOpaque(nb))) Emit(wx, wy, wz, Faces.TOP);
                 }
             });
             // BACK boundary (z==0)
@@ -578,13 +703,16 @@ namespace MVGE_GFX.Terrain.Sections
                 int wx = baseX + lx; int wy = baseY + ly; int wz = baseZ + lz;
                 if (wz == 0)
                 {
-                    int planeIdx = wx * maxY + wy;
-                    bool covered = planeNegZ != null && ((planeNegZ[planeIdx >> 6] & (1UL << (planeIdx & 63))) != 0UL);
+                    int planeIdx = wx * maxY + wy; bool covered = EdgeBit(planeNegZ, planeIdx);
                     if (!(covered && opaque)) Emit(wx, wy, wz, Faces.BACK);
+                }
+                else if (edgePosZFromNegZ != null && edgePosZOpaque)
+                {
+                    int xy = lx * 16 + ly; if (!(opaque && (edgePosZFromNegZ[xy >> 6] & (1UL << (xy & 63))) != 0UL)) Emit(wx, wy, wz, Faces.BACK);
                 }
                 else
                 {
-                    if (!NeighborOpaqueWorld(wx, wy, wz - 1)) Emit(wx, wy, wz, Faces.BACK);
+                    ushort nb = GetBlock(wx, wy, wz - 1); if (!(opaque && BlockProperties.IsOpaque(nb))) Emit(wx, wy, wz, Faces.BACK);
                 }
             });
             // FRONT boundary (z==15)
@@ -593,16 +721,20 @@ namespace MVGE_GFX.Terrain.Sections
                 int wx = baseX + lx; int wy = baseY + ly; int wz = baseZ + lz;
                 if (wz == maxZ - 1)
                 {
-                    int planeIdx = wx * maxY + wy;
-                    bool covered = planePosZ != null && ((planePosZ[planeIdx >> 6] & (1UL << (planeIdx & 63))) != 0UL);
+                    int planeIdx = wx * maxY + wy; bool covered = EdgeBit(planePosZ, planeIdx);
                     if (!(covered && opaque)) Emit(wx, wy, wz, Faces.FRONT);
+                }
+                else if (edgeNegZFromPosZ != null && edgeNegZOpaque)
+                {
+                    int xy = lx * 16 + ly; if (!(opaque && (edgeNegZFromPosZ[xy >> 6] & (1UL << (xy & 63))) != 0UL)) Emit(wx, wy, wz, Faces.FRONT);
                 }
                 else
                 {
-                    if (!NeighborOpaqueWorld(wx, wy, wz + 1)) Emit(wx, wy, wz, Faces.FRONT);
+                    ushort nb = GetBlock(wx, wy, wz + 1); if (!(opaque && BlockProperties.IsOpaque(nb))) Emit(wx, wy, wz, Faces.FRONT);
                 }
             });
 
+            if (boundaryIdxArr != null) System.Buffers.ArrayPool<int>.Shared.Return(boundaryIdxArr, clearArray: false);
             vertBase = vb;
         }
     }
