@@ -12,21 +12,16 @@ using MVGE_INF.Models.Terrain;
 using Vector3 = OpenTK.Mathematics.Vector3;
 using MVGE_GFX.Textures;
 using MVGE_INF.Models.Generation;
+using MVGE_GFX.Terrain.Sections;
 
 namespace MVGE_GFX.Terrain
 {
     public partial class ChunkRender
     {
+        private static readonly ConcurrentQueue<ChunkRender> pendingDeletion = new();
+
         private bool isBuilt = false;
         private Vector3 chunkWorldPosition;
-
-        // Small-chunk fallback lists 
-        private List<byte> chunkVertsList;
-        private List<byte> chunkUVsList;
-        private List<uint> chunkIndicesList;
-        private List<ushort> chunkIndicesUShortList;
-
-        // Pooled / sparse buffers (shared handling path)
         private byte[] vertBuffer;
         private byte[] uvBuffer;
         private uint[] indicesUIntBuffer;
@@ -35,8 +30,6 @@ namespace MVGE_GFX.Terrain
         private int uvBytesUsed;
         private int indicesUsed;
         private bool useUShort;
-        private bool usedPooling;   // true when PooledFacesRender chosen
-        private bool usedSparse;    // true when SparseChunkRender chosen
 
         private VAO chunkVAO;
         private VBO chunkVertexVBO;
@@ -44,235 +37,66 @@ namespace MVGE_GFX.Terrain
         private IBO chunkIBO;
 
         public static BlockTextureAtlas terrainTextureAtlas { get; set; }
-        private static readonly List<ByteVector2> EmptyUVList = new(4); // reusable empty list
 
         private readonly ChunkData chunkMeta;
         private readonly ushort emptyBlock = (ushort)BaseBlockType.Empty;
-
-        // Flattened ephemeral blocks (x-major, then z, then y). Returned to pool after GenerateFaces
-        private readonly ushort[] flatBlocks;
-        private readonly int maxX;
-        private readonly int maxY;
-        private readonly int maxZ;
-
-        // Incoming solidity flags (current chunk faces)
+        private readonly int maxX; private readonly int maxY; private readonly int maxZ;
         private readonly bool faceNegX, facePosX, faceNegY, facePosY, faceNegZ, facePosZ;
-        // Neighbor opposing face solidity flags
         private readonly bool nNegXPosX, nPosXNegX, nNegYPosY, nPosYNegY, nNegZPosZ, nPosZNegZ;
-
-        // Uniform single-block fast path (post-replacement) flags
-        private readonly bool allOneBlock;
-        private readonly ushort allOneBlockId;
-
-        private enum IndexFormat : byte { UShort, UInt }
-        private IndexFormat indexFormat;
-
-        private static readonly ConcurrentQueue<ChunkRender> pendingDeletion = new();
-
-        // Fast-path flag when chunk fully enclosed (no visible faces)
+        private readonly bool allOneBlock; private readonly ushort allOneBlockId;
+        private readonly int prepassSolidCount; private readonly int prepassExposureEstimate;
+        private readonly ChunkPrerenderData prerenderData;
         private bool fullyOccluded;
 
-        // Popcount LUT for 6-bit mask (bits: L,R,T,B,F,Bk)
-        private static readonly byte[] FacePopCount = InitPopCount();
-
-        // Bit flags for mask
-        private const byte FACE_LEFT = 1 << 0;
-        private const byte FACE_RIGHT = 1 << 1;
-        private const byte FACE_TOP = 1 << 2;
-        private const byte FACE_BOTTOM = 1 << 3;
-        private const byte FACE_FRONT = 1 << 4;
-        private const byte FACE_BACK = 1 << 5;
-
-        // Prepass data (ALWAYS supplied by generation; no legacy scan fallback)
-        private readonly int prepassSolidCount;
-        private readonly int prepassExposureEstimate;
-
-        // Preserve full prerender data for downstream dense/sparse builders
-        private readonly ChunkPrerenderData prerenderData;
-
-        // NOTE: world block delegate removed; neighbor data now comes via prerenderData planes/flags
+        private SectionRender sectionRender; // new renderer abstraction
 
         public ChunkRender(ChunkPrerenderData prerenderData)
         {
-            this.prerenderData = prerenderData; // store original
+            this.prerenderData = prerenderData;
             this.prepassSolidCount = prerenderData.PrepassSolidCount;
             this.prepassExposureEstimate = prerenderData.PrepassExposureEstimate;
             this.chunkMeta = prerenderData.chunkData;
-            this.flatBlocks = flatBlocks;
-            this.maxX = maxX; this.maxY = maxY; this.maxZ = maxZ;
+            this.maxX = prerenderData.maxX; this.maxY = prerenderData.maxY; this.maxZ = prerenderData.maxZ;
             chunkWorldPosition = new Vector3(prerenderData.chunkData.x, prerenderData.chunkData.y, prerenderData.chunkData.z);
-            this.faceNegX = prerenderData.FaceNegX; this.facePosX = prerenderData.FacePosX; this.faceNegY = prerenderData.FaceNegY; this.facePosY = prerenderData.FacePosY; this.faceNegZ = prerenderData.FaceNegZ; this.facePosZ = prerenderData.FacePosZ;
-            this.nNegXPosX = prerenderData.NeighborNegXPosX; this.nPosXNegX = prerenderData.NeighborPosXNegX; this.nNegYPosY = prerenderData.NeighborNegYPosY; this.nPosYNegY = prerenderData.NeighborPosYNegY; this.nNegZPosZ = prerenderData.NeighborNegZPosZ; this.nPosZNegZ = prerenderData.NeighborPosZNegZ;
-            this.allOneBlock = prerenderData.AllOneBlock; this.allOneBlockId = prerenderData.AllOneBlockId;
+            faceNegX = prerenderData.FaceNegX; facePosX = prerenderData.FacePosX; faceNegY = prerenderData.FaceNegY; facePosY = prerenderData.FacePosY; faceNegZ = prerenderData.FaceNegZ; facePosZ = prerenderData.FacePosZ;
+            nNegXPosX = prerenderData.NeighborNegXPosX; nPosXNegX = prerenderData.NeighborPosXNegX; nNegYPosY = prerenderData.NeighborNegYPosY; nPosYNegY = prerenderData.NeighborPosYNegY; nNegZPosZ = prerenderData.NeighborNegZPosZ; nPosZNegZ = prerenderData.NeighborPosZNegZ;
+            allOneBlock = prerenderData.AllOneBlock; allOneBlockId = prerenderData.AllOneBlockId;
             GenerateFaces();
         }
 
         private void GenerateFaces()
         {
-            // Full enclosure early exit (cheap flags + boundary scans inside helper)
-            if (CheckFullyOccluded(maxX, maxY, maxZ))
+            // Full enclosure early exit using face flags + neighbor flags (simple conservative check)
+            if (prepassSolidCount > 0 && faceNegX && facePosX && faceNegY && facePosY && faceNegZ && facePosZ &&
+                nNegXPosX && nPosXNegX && nNegYPosY && nPosYNegY && nNegZPosZ && nPosZNegZ)
             {
-                fullyOccluded = true;
-                ReturnFlat();
-                return;
+                fullyOccluded = true; return;
             }
 
-            int solidVoxelCount = prepassSolidCount;
-            long exposureEstimate = prepassExposureEstimate;
-
-            // --- Uniform single-block shortcut (fastest path) ---
-            if (allOneBlock)
-            {
-                GenerateUniformFacesList();
-                ReturnFlat();
-                return;
-            }
-
-            // --- Sparse path ---
-            bool sparseFeatureEnabled = false; // always false since we'll replace it soon
-            float avgExposurePerSolid = solidVoxelCount == 0 ? 0f : (float)exposureEstimate / solidVoxelCount;
-            const float SparseMinAvgExposure = 0.5f;     // average exposed faces per solid to justify sparse path
-            bool chooseSparse = avgExposurePerSolid >= SparseMinAvgExposure;
-
-            if (chooseSparse && sparseFeatureEnabled)
-            {
-                var sparseBuilder = new SparseChunkRender(
-                    chunkWorldPosition,
-                    maxX, maxY, maxZ,
-                    emptyBlock,
-                    flatBlocks,
-                    terrainTextureAtlas,
-                    prerenderData);
-
-                var sparseResult = sparseBuilder.Build();
-                usedSparse = true;
-                useUShort = sparseResult.UseUShort;
-                vertBuffer = sparseResult.VertBuffer; uvBuffer = sparseResult.UVBuffer;
-                indicesUIntBuffer = sparseResult.IndicesUIntBuffer; indicesUShortBuffer = sparseResult.IndicesUShortBuffer;
-                vertBytesUsed = sparseResult.VertBytesUsed; uvBytesUsed = sparseResult.UVBytesUsed; indicesUsed = sparseResult.IndicesUsed;
-                indexFormat = useUShort ? IndexFormat.UShort : IndexFormat.UInt;
-                ReturnFlat();
-                return;
-            }
-
-            // --- Dense path (formerly: pooled) ---
-            bool pooledFeatureEnabled = false; // always false since we'll replace it soon
-            int pooledVoxelThreshold = pooledFeatureEnabled ? FlagManager.flags.faceAmountToPool.GetValueOrDefault(int.MaxValue) : int.MaxValue;
-            bool choosePooled = solidVoxelCount >= pooledVoxelThreshold;
-            if (choosePooled && pooledFeatureEnabled)
-            {
-                var densePrerender = new ChunkPrerenderData
-                {
-                    FaceNegX = faceNegX,
-                    FacePosX = facePosX,
-                    FaceNegY = faceNegY,
-                    FacePosY = facePosY,
-                    FaceNegZ = faceNegZ,
-                    FacePosZ = facePosZ,
-                    NeighborNegXPosX = nNegXPosX,
-                    NeighborPosXNegX = nPosXNegX,
-                    NeighborNegYPosY = nNegYPosY,
-                    NeighborPosYNegY = nPosYNegY,
-                    NeighborNegZPosZ = nNegZPosZ,
-                    NeighborPosZNegZ = nPosZNegZ,
-                    AllOneBlock = allOneBlock,
-                    AllOneBlockId = allOneBlockId,
-                    NeighborPlaneNegX = prerenderData.NeighborPlaneNegX,
-                    NeighborPlanePosX = prerenderData.NeighborPlanePosX,
-                    NeighborPlaneNegY = prerenderData.NeighborPlaneNegY,
-                    NeighborPlanePosY = prerenderData.NeighborPlanePosY,
-                    NeighborPlaneNegZ = prerenderData.NeighborPlaneNegZ,
-                    NeighborPlanePosZ = prerenderData.NeighborPlanePosZ
-                };
-                var pooledBuilder = new DenseChunkRender(
-                    chunkWorldPosition, maxX, maxY, maxZ, emptyBlock,
-                    terrainTextureAtlas, flatBlocks,
-                    densePrerender);
-                var pooledResult = pooledBuilder.Build();
-                usedPooling = true;
-                useUShort = pooledResult.UseUShort;
-                vertBuffer = pooledResult.VertBuffer; uvBuffer = pooledResult.UVBuffer;
-                indicesUIntBuffer = pooledResult.IndicesUIntBuffer; indicesUShortBuffer = pooledResult.IndicesUShortBuffer;
-                vertBytesUsed = pooledResult.VertBytesUsed; uvBytesUsed = pooledResult.UVBytesUsed; indicesUsed = pooledResult.IndicesUsed;
-                indexFormat = useUShort ? IndexFormat.UShort : IndexFormat.UInt;
-                ReturnFlat();
-                return;
-            }
-
-            // Fallback: legacy masked two-pass list builder (handles mid-density irregular cases)
-            GenerateFacesListMaskedTwoPass();
-            ReturnFlat();
+            // Build section-level renderer abstraction (no legacy flattened array path)
+            sectionRender = new SectionRender(prerenderData, terrainTextureAtlas);
+            sectionRender.Build(out vertBuffer, out uvBuffer, out indicesUShortBuffer, out indicesUIntBuffer, out useUShort, out vertBytesUsed, out uvBytesUsed, out indicesUsed);
         }
+
         public void Build()
         {
             if (isBuilt) return;
-
             if (fullyOccluded)
             {
-                chunkVAO = new VAO();
-                chunkVAO.Bind();
-                chunkVertexVBO = new VBO(Array.Empty<byte>(), 0);
-                chunkVertexVBO.Bind();
+                chunkVAO = new VAO(); chunkVAO.Bind();
+                chunkVertexVBO = new VBO(Array.Empty<byte>(), 0); chunkVertexVBO.Bind();
                 chunkVAO.LinkToVAO(0, 3, VertexAttribPointerType.UnsignedByte, false, chunkVertexVBO);
-                chunkUVVBO = new VBO(Array.Empty<byte>(), 0);
-                chunkUVVBO.Bind();
+                chunkUVVBO = new VBO(Array.Empty<byte>(), 0); chunkUVVBO.Bind();
                 chunkVAO.LinkToVAO(1, 2, VertexAttribPointerType.UnsignedByte, false, chunkUVVBO);
-                chunkIBO = new IBO(Array.Empty<uint>(), 0);
-                isBuilt = true; return;
+                chunkIBO = new IBO(Array.Empty<uint>(), 0); isBuilt = true; return;
             }
 
-            chunkVAO = new VAO();
-            chunkVAO.Bind();
-
-            if (usedPooling || usedSparse)
-            {
-                // Shared upload path for pooled & sparse builders
-                chunkVertexVBO = new VBO(vertBuffer, vertBytesUsed);
-                chunkVertexVBO.Bind();
-                chunkVAO.LinkToVAO(0, 3, VertexAttribPointerType.UnsignedByte, false, chunkVertexVBO);
-
-                chunkUVVBO = new VBO(uvBuffer, uvBytesUsed);
-                chunkUVVBO.Bind();
-                chunkVAO.LinkToVAO(1, 2, VertexAttribPointerType.UnsignedByte, false, chunkUVVBO);
-
-                chunkIBO = useUShort
-                    ? new IBO(indicesUShortBuffer, indicesUsed)
-                    : new IBO(indicesUIntBuffer, indicesUsed);
-
-                // Null checks before returning to pool to avoid ArgumentNullException if state inconsistent
-                if (vertBuffer != null) ArrayPool<byte>.Shared.Return(vertBuffer, false);
-                if (uvBuffer != null) ArrayPool<byte>.Shared.Return(uvBuffer, false);
-                if (useUShort)
-                {
-                    if (indicesUShortBuffer != null) ArrayPool<ushort>.Shared.Return(indicesUShortBuffer, false);
-                }
-                else
-                {
-                    if (indicesUIntBuffer != null) ArrayPool<uint>.Shared.Return(indicesUIntBuffer, false);
-                }
-                vertBuffer = uvBuffer = null; indicesUIntBuffer = null; indicesUShortBuffer = null;
-            }
-            else
-            {
-                // indexFormat already decided during generation (two-pass)
-                chunkVertexVBO = new VBO(chunkVertsList);
-                chunkVertexVBO.Bind();
-                chunkVAO.LinkToVAO(0, 3, VertexAttribPointerType.UnsignedByte, false, chunkVertexVBO);
-
-                chunkUVVBO = new VBO(chunkUVsList);
-                chunkUVVBO.Bind();
-                chunkVAO.LinkToVAO(1, 2, VertexAttribPointerType.UnsignedByte, false, chunkUVVBO);
-
-                chunkIBO = indexFormat == IndexFormat.UShort
-                    ? new IBO(chunkIndicesUShortList)
-                    : new IBO(chunkIndicesList);
-
-                chunkVertsList.Clear(); chunkVertsList.TrimExcess();
-                chunkUVsList.Clear(); chunkUVsList.TrimExcess();
-                if (chunkIndicesList != null) { chunkIndicesList.Clear(); chunkIndicesList.TrimExcess(); }
-                if (chunkIndicesUShortList != null) { chunkIndicesUShortList.Clear(); chunkIndicesUShortList.TrimExcess(); }
-            }
-
+            chunkVAO = new VAO(); chunkVAO.Bind();
+            chunkVertexVBO = new VBO(vertBuffer ?? Array.Empty<byte>(), vertBytesUsed); chunkVertexVBO.Bind();
+            chunkVAO.LinkToVAO(0, 3, VertexAttribPointerType.UnsignedByte, false, chunkVertexVBO);
+            chunkUVVBO = new VBO(uvBuffer ?? Array.Empty<byte>(), uvBytesUsed); chunkUVVBO.Bind();
+            chunkVAO.LinkToVAO(1, 2, VertexAttribPointerType.UnsignedByte, false, chunkUVVBO);
+            chunkIBO = useUShort ? new IBO(indicesUShortBuffer ?? Array.Empty<ushort>(), indicesUsed) : new IBO(indicesUIntBuffer ?? Array.Empty<uint>(), indicesUsed);
             isBuilt = true;
         }
 
@@ -281,25 +105,17 @@ namespace MVGE_GFX.Terrain
             ProcessPendingDeletes();
             if (!isBuilt) Build();
             if (fullyOccluded) return;
-
             Vector3 adjustedChunkPosition = chunkWorldPosition + new Vector3(1f, 1f, 1f);
             program.Bind();
             program.SetUniform("chunkPosition", adjustedChunkPosition);
             program.SetUniform("tilesX", terrainTextureAtlas.tilesX);
             program.SetUniform("tilesY", terrainTextureAtlas.tilesY);
-
             chunkVAO.Bind();
             chunkIBO.Bind();
-            int count = chunkIBO.Count;
-            if (count <= 0) return;
-            GL.DrawElements(
-                PrimitiveType.Triangles,
-                count,
-                (usedPooling || usedSparse) && useUShort || (!usedPooling && !usedSparse && indexFormat == IndexFormat.UShort)
-                    ? DrawElementsType.UnsignedShort
-                    : DrawElementsType.UnsignedInt,
-                0);
+            int count = chunkIBO.Count; if (count <= 0) return;
+            GL.DrawElements(PrimitiveType.Triangles, count, useUShort ? DrawElementsType.UnsignedShort : DrawElementsType.UnsignedInt, 0);
         }
+
         public static void ProcessPendingDeletes()
         {
             while (pendingDeletion.TryDequeue(out var cr)) cr.DeleteGL();
@@ -309,6 +125,16 @@ namespace MVGE_GFX.Terrain
         {
             if (!isBuilt) return;
             pendingDeletion.Enqueue(this);
+        }
+
+        private void DeleteGL()
+        {
+            if (!isBuilt) return;
+            chunkVAO.Delete();
+            chunkVertexVBO.Delete();
+            chunkUVVBO.Delete();
+            chunkIBO.Delete();
+            isBuilt = false;
         }
     }
 }

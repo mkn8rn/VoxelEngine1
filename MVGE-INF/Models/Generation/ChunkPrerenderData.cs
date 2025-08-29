@@ -7,6 +7,29 @@ using System.Threading.Tasks;
 
 namespace MVGE_INF.Models.Generation
 {
+    public struct SectionPrerenderDesc
+    {
+        public byte Kind; // mirrors ChunkSection.RepresentationKind
+        public ushort UniformBlockId;
+        public int NonAirCount;
+        public int[] SparseIndices;
+        public ushort[] SparseBlocks;
+        public ushort[] ExpandedDense;
+        public uint[] PackedBitData;
+        public List<ushort> Palette;
+        public int BitsPerIndex;
+        public ulong[] OccupancyBits;
+        public ulong[] FaceNegXBits;
+        public ulong[] FacePosXBits;
+        public ulong[] FaceNegYBits;
+        public ulong[] FacePosYBits;
+        public ulong[] FaceNegZBits;
+        public ulong[] FacePosZBits;
+        public bool HasBounds;
+        public byte MinLX, MinLY, MinLZ, MaxLX, MaxLY, MaxLZ;
+        public int SectionBaseX, SectionBaseY, SectionBaseZ; // world-local base
+    }
+
     // Container for all pre-render flags and cached plane data passed from Chunk -> ChunkRender.
     // NOTE: Pure data transfer object; no logic here. Rendering logic remains unchanged.
     public struct ChunkPrerenderData
@@ -56,7 +79,14 @@ namespace MVGE_INF.Models.Generation
         public ulong[] SelfPlanePosZ;
 
         public ChunkData chunkData;
-        public ushort[] flatBlocks;
+
+        // Replaces legacy flattened block array; holds a section-based renderer description.
+        // Stored as object to avoid tight coupling between INF models and GFX assembly at compile time.
+        public object SectionRender; // MVGE_GFX.Terrain.Sections.SectionRender instance
+
+        public SectionPrerenderDesc[] SectionDescs;
+        public int sectionsX, sectionsY, sectionsZ, sectionSize;
+
         public int maxX;
         public int maxY;
         public int maxZ;

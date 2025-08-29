@@ -154,7 +154,7 @@ namespace MVGE_GEN.Terrain
             }
         }
 
-        internal ChunkPrerenderData BuildPrerenderData(ushort[] blocks)
+        internal ChunkPrerenderData BuildPrerenderData(SectionPrerenderDesc[] sectionDescs)
         {
             return new ChunkPrerenderData
             {
@@ -186,415 +186,149 @@ namespace MVGE_GEN.Terrain
                 NeighborPlanePosY = NeighborPlanePosYFace,
                 NeighborPlaneNegZ = NeighborPlaneNegZFace,
                 NeighborPlanePosZ = NeighborPlanePosZFace,
-
                 chunkData = chunkData,
-                flatBlocks = blocks,
+                SectionDescs = sectionDescs,
+                sectionsX = sectionsX,
+                sectionsY = sectionsY,
+                sectionsZ = sectionsZ,
+                sectionSize = ChunkSection.SECTION_SIZE,
                 maxX = dimX,
                 maxY = dimY,
                 maxZ = dimZ
             };
         }
 
-        private bool[,,] PrecomputeOccludedFullSections()
+        private SectionPrerenderDesc[] BuildSectionDescriptors()
         {
-            // A section is occluded full if it and all 6 orthogonal neighbors exist and are CompletelyFull.
-            bool[,,] occluded = new bool[sectionsX, sectionsY, sectionsZ];
+            int total = sectionsX * sectionsY * sectionsZ;
+            var arr = new SectionPrerenderDesc[total];
+            int idx = 0;
+            int S = ChunkSection.SECTION_SIZE;
             for (int sx = 0; sx < sectionsX; sx++)
             {
                 for (int sy = 0; sy < sectionsY; sy++)
                 {
-                    for (int sz = 0; sz < sectionsZ; sz++)
+                    for (int sz = 0; sz < sectionsZ; sz++, idx++)
                     {
                         var sec = sections[sx, sy, sz];
-                        if (sec == null || !sec.CompletelyFull) continue;
-                        // Require in-bounds neighbors (internal only)
-                        if (sx == 0 || sx == sectionsX - 1 || sy == 0 || sy == sectionsY - 1 || sz == 0 || sz == sectionsZ - 1) continue;
-                        if (sections[sx - 1, sy, sz]?.CompletelyFull != true) continue;
-                        if (sections[sx + 1, sy, sz]?.CompletelyFull != true) continue;
-                        if (sections[sx, sy - 1, sz]?.CompletelyFull != true) continue;
-                        if (sections[sx, sy + 1, sz]?.CompletelyFull != true) continue;
-                        if (sections[sx, sy, sz - 1]?.CompletelyFull != true) continue;
-                        if (sections[sx, sy, sz + 1]?.CompletelyFull != true) continue;
-                        occluded[sx, sy, sz] = true;
-                    }
-                }
-            }
-            return occluded;
-        }
-
-        private int FlattenSections(ushort[] dest)
-        {
-            int strideX = dimZ * dimY; // (x * dimZ + z) * dimY + y
-            int strideZ = dimY;
-            int sectionSize = ChunkSection.SECTION_SIZE;
-
-            int nonAirTotal = 0;
-            HasAnyBoundarySolid = false;
-
-            // Stats aggregated from section metadata (bounds + slice occupancy derived later if needed)
-            ChunkMeshPrepassStats stats = default;
-            long exposureInternalSum = 0; // sum of per-section internal exposure
-
-            int totalVoxels = dimX * dimY * dimZ;
-            dest.AsSpan(0, totalVoxels).Clear();
-
-            var occludedFull = PrecomputeOccludedFullSections();
-
-            // Track shared face adjacency counts
-            long sharedAdjX = 0, sharedAdjY = 0, sharedAdjZ = 0;
-
-            // Accurate unique slice counting setup
-            EnsureSliceStampArrays();
-
-            for (int sx = 0; sx < sectionsX; sx++)
-            {
-                int baseX = sx * sectionSize; if (baseX >= dimX) break;
-                int maxLocalX = Math.Min(sectionSize, dimX - baseX);
-                for (int sz = 0; sz < sectionsZ; sz++)
-                {
-                    int baseZ = sz * sectionSize; if (baseZ >= dimZ) break;
-                    int maxLocalZ = Math.Min(sectionSize, dimZ - baseZ);
-                    for (int sy = 0; sy < sectionsY; sy++)
-                    {
-                        int baseY = sy * sectionSize; if (baseY >= dimY) break;
-                        int maxLocalY = Math.Min(sectionSize, dimY - baseY);
-
-                        var sec = sections[sx, sy, sz];
-                        if (sec == null || sec.NonAirCount == 0 || sec.Kind == ChunkSection.RepresentationKind.Empty) continue;
-
-                        bool isOccludedFull = occludedFull[sx, sy, sz] && sec.CompletelyFull;
-                        if (isOccludedFull)
+                        if (sec == null)
                         {
-                            // Preserve actual uniform block if available.
-                            ushort solid = sec.Kind == ChunkSection.RepresentationKind.Uniform ? sec.UniformBlockId : (ushort)BaseBlockType.Stone;
-                            int voxels = maxLocalX * maxLocalZ * maxLocalY;
-                            nonAirTotal += voxels;
-                            for (int lx = 0; lx < maxLocalX; lx++)
-                            {
-                                int gx = baseX + lx; int destXBase = gx * strideX;
-                                for (int lz = 0; lz < maxLocalZ; lz++)
-                                {
-                                    int gz = baseZ + lz;
-                                    dest.AsSpan(destXBase + gz * strideZ + baseY, maxLocalY).Fill(solid);
-                                }
-                            }
-                            // Uniform full section => bounds are whole local range
-                            if (!stats.HasStats)
-                            {
-                                stats.MinX = baseX; stats.MaxX = baseX + maxLocalX - 1;
-                                stats.MinY = baseY; stats.MaxY = baseY + maxLocalY - 1;
-                                stats.MinZ = baseZ; stats.MaxZ = baseZ + maxLocalZ - 1;
-                                stats.HasStats = true;
-                            }
-                            else
-                            {
-                                if (baseX < stats.MinX) stats.MinX = baseX; if (baseX + maxLocalX - 1 > stats.MaxX) stats.MaxX = baseX + maxLocalX - 1;
-                                if (baseY < stats.MinY) stats.MinY = baseY; if (baseY + maxLocalY - 1 > stats.MaxY) stats.MaxY = baseY + maxLocalY - 1;
-                                if (baseZ < stats.MinZ) stats.MinZ = baseZ; if (baseZ + maxLocalZ - 1 > stats.MaxZ) stats.MaxZ = baseZ + maxLocalZ - 1;
-                            }
-                            // Slice stamping (accurate unique counts)
-                            for (int gx = baseX; gx < baseX + maxLocalX; gx++) if (xSliceStamp[gx] != sliceStampVersion) { xSliceStamp[gx] = sliceStampVersion; stats.XNonEmpty++; }
-                            for (int gy = baseY; gy < baseY + maxLocalY; gy++) if (ySliceStamp[gy] != sliceStampVersion) { ySliceStamp[gy] = sliceStampVersion; stats.YNonEmpty++; }
-                            for (int gz = baseZ; gz < baseZ + maxLocalZ; gz++) if (zSliceStamp[gz] != sliceStampVersion) { zSliceStamp[gz] = sliceStampVersion; stats.ZNonEmpty++; }
+                            arr[idx] = default;
                             continue;
                         }
-
-                        // Ensure metadata built (in case of on-demand classification earlier not executed)
-                        if (!sec.MetadataBuilt)
+                        arr[idx] = new SectionPrerenderDesc
                         {
-                            MVGE_GEN.Utils.SectionUtils.ClassifyRepresentation(sec);
-                        }
-
-                        nonAirTotal += sec.NonAirCount;
-                        exposureInternalSum += sec.InternalExposure;
-
-                        // Update global bounds from section-local bounds
-                        if (sec.HasBounds)
-                        {
-                            int gMinX = baseX + sec.MinLX;
-                            int gMaxX = baseX + sec.MaxLX;
-                            int gMinY = baseY + sec.MinLY;
-                            int gMaxY = baseY + sec.MaxLY;
-                            int gMinZ = baseZ + sec.MinLZ;
-                            int gMaxZ = baseZ + sec.MaxLZ;
-                            if (!stats.HasStats)
-                            {
-                                stats.MinX = gMinX; stats.MaxX = gMaxX;
-                                stats.MinY = gMinY; stats.MaxY = gMaxY;
-                                stats.MinZ = gMinZ; stats.MaxZ = gMaxZ;
-                                stats.HasStats = true;
-                            }
-                            else
-                            {
-                                if (gMinX < stats.MinX) stats.MinX = gMinX; if (gMaxX > stats.MaxX) stats.MaxX = gMaxX;
-                                if (gMinY < stats.MinY) stats.MinY = gMinY; if (gMaxY > stats.MaxY) stats.MaxY = gMaxY;
-                                if (gMinZ < stats.MinZ) stats.MinZ = gMinZ; if (gMaxZ > stats.MaxZ) stats.MaxZ = gMaxZ;
-                            }
-                            // Accurate slice stamping per axis using real bounds (no overestimation)
-                            for (int gx = gMinX; gx <= gMaxX; gx++) if (xSliceStamp[gx] != sliceStampVersion) { xSliceStamp[gx] = sliceStampVersion; stats.XNonEmpty++; }
-                            for (int gy = gMinY; gy <= gMaxY; gy++) if (ySliceStamp[gy] != sliceStampVersion) { ySliceStamp[gy] = sliceStampVersion; stats.YNonEmpty++; }
-                            for (int gz = gMinZ; gz <= gMaxZ; gz++) if (zSliceStamp[gz] != sliceStampVersion) { zSliceStamp[gz] = sliceStampVersion; stats.ZNonEmpty++; }
-                        }
-
-                        // Boundary solidity flag (cheap) – if section touches chunk boundary and has any voxel on that face
-                        if (!HasAnyBoundarySolid)
-                        {
-                            if ((baseX == 0 && sec.MinLX == 0) || (baseX + maxLocalX == dimX && sec.MaxLX == sectionSize - 1) ||
-                                (baseY == 0 && sec.MinLY == 0) || (baseY + maxLocalY == dimY && sec.MaxLY == sectionSize - 1) ||
-                                (baseZ == 0 && sec.MinLZ == 0) || (baseZ + maxLocalZ == dimZ && sec.MaxLZ == sectionSize - 1))
-                            {
-                                HasAnyBoundarySolid = true;
-                            }
-                        }
-
-                        // Write voxel data fast based on representation
-                        switch (sec.Kind)
-                        {
-                            case ChunkSection.RepresentationKind.Uniform:
-                                {
-                                    ushort solid = sec.UniformBlockId;
-                                    for (int lx = 0; lx < maxLocalX; lx++)
-                                    {
-                                        int gx = baseX + lx; int destXBase = gx * strideX;
-                                        for (int lz = 0; lz < maxLocalZ; lz++)
-                                        {
-                                            int gz = baseZ + lz;
-                                            dest.AsSpan(destXBase + gz * strideZ + baseY, maxLocalY).Fill(solid);
-                                        }
-                                    }
-                                    break;
-                                }
-                            case ChunkSection.RepresentationKind.DenseExpanded:
-                                {
-                                    var arr = sec.ExpandedDense;
-                                    for (int lx = 0; lx < maxLocalX; lx++)
-                                    {
-                                        int gx = baseX + lx; int destXBase = gx * strideX;
-                                        for (int lz = 0; lz < maxLocalZ; lz++)
-                                        {
-                                            int gz = baseZ + lz; int destBase = destXBase + gz * strideZ + baseY;
-                                            int columnIndex = lz * sectionSize + lx; // z*S + x
-                                            int li = columnIndex << 4; // y=0
-                                            for (int ly = 0; ly < maxLocalY; ly++, li++)
-                                            {
-                                                ushort id = arr[li];
-                                                if (id != ChunkSection.AIR) dest[destBase + ly] = id;
-                                            }
-                                        }
-                                    }
-                                    break;
-                                }
-                            case ChunkSection.RepresentationKind.Sparse:
-                                {
-                                    var idx = sec.SparseIndices; var blocks = sec.SparseBlocks;
-                                    for (int i = 0; i < idx.Length; i++)
-                                    {
-                                        int li = idx[i];
-                                        int y = li & 15; int columnIndex = li >> 4; int x = columnIndex & 15; int z = columnIndex >> 4;
-                                        if (x >= maxLocalX || y >= maxLocalY || z >= maxLocalZ) continue;
-                                        int gx = baseX + x; int gy = baseY + y; int gz = baseZ + z;
-                                        dest[gx * strideX + gz * strideZ + gy] = blocks[i];
-                                    }
-                                    break;
-                                }
-                            case ChunkSection.RepresentationKind.Packed:
-                                {
-                                    var occ = sec.OccupancyBits;
-                                    if (occ == null)
-                                    {
-                                        goto case ChunkSection.RepresentationKind.Uniform;
-                                    }
-                                    int bpi = sec.BitsPerIndex; var bitData = sec.BitData; var palette = sec.Palette; int maskLocal = (1 << bpi) - 1;
-                                    for (int word = 0; word < occ.Length; word++)
-                                    {
-                                        ulong w = occ[word];
-                                        while (w != 0)
-                                        {
-                                            int bit = System.Numerics.BitOperations.TrailingZeroCount(w);
-                                            int li = (word << 6) + bit;
-                                            int y = li & 15; int columnIndex = li >> 4; int x = columnIndex & 15; int z = columnIndex >> 4;
-                                            if (x >= maxLocalX || y >= maxLocalY || z >= maxLocalZ) { w &= w - 1; continue; }
-                                            // Inline packed palette index decode
-                                            long bitPos = (long)li * bpi;
-                                            int dataIndex = (int)(bitPos >> 5);
-                                            int bitOffset = (int)(bitPos & 31);
-                                            uint value = bitData[dataIndex] >> bitOffset;
-                                            int remaining = 32 - bitOffset;
-                                            if (remaining < bpi) value |= bitData[dataIndex + 1] << remaining;
-                                            int paletteIndex = (int)(value & (uint)maskLocal);
-                                            ushort blockId = palette[paletteIndex];
-                                            int gx = baseX + x; int gy = baseY + y; int gz = baseZ + z;
-                                            dest[gx * strideX + gz * strideZ + gy] = blockId;
-                                            w &= w - 1;
-                                        }
-                                    }
-                                    break;
-                                }
-                        }
-
-                        // Accumulate slice counts approximately (use section bounds). This is cheaper than per-voxel stamps.
-                        if (sec.HasBounds)
-                        {
-                            stats.XNonEmpty += (sec.MaxLX - sec.MinLX + 1);
-                            stats.YNonEmpty += (sec.MaxLY - sec.MinLY + 1);
-                            stats.ZNonEmpty += (sec.MaxLZ - sec.MinLZ + 1);
-                        }
+                            Kind = (byte)sec.Kind,
+                            UniformBlockId = sec.UniformBlockId,
+                            NonAirCount = sec.NonAirCount,
+                            SparseIndices = sec.SparseIndices,
+                            SparseBlocks = sec.SparseBlocks,
+                            ExpandedDense = sec.ExpandedDense,
+                            PackedBitData = sec.BitData,
+                            Palette = sec.Palette,
+                            BitsPerIndex = sec.BitsPerIndex,
+                            OccupancyBits = sec.OccupancyBits,
+                            FaceNegXBits = sec.FaceNegXBits,
+                            FacePosXBits = sec.FacePosXBits,
+                            FaceNegYBits = sec.FaceNegYBits,
+                            FacePosYBits = sec.FacePosYBits,
+                            FaceNegZBits = sec.FaceNegZBits,
+                            FacePosZBits = sec.FacePosZBits,
+                            HasBounds = sec.HasBounds,
+                            MinLX = sec.MinLX,
+                            MinLY = sec.MinLY,
+                            MinLZ = sec.MinLZ,
+                            MaxLX = sec.MaxLX,
+                            MaxLY = sec.MaxLY,
+                            MaxLZ = sec.MaxLZ,
+                            SectionBaseX = sx * S,
+                            SectionBaseY = sy * S,
+                            SectionBaseZ = sz * S
+                        };
                     }
                 }
             }
-
-            // Cross-section shared face adjustment (subtract 2 per shared solid pair) using face masks
-            for (int sx = 0; sx < sectionsX - 1; sx++)
-            {
-                for (int sy = 0; sy < sectionsY; sy++)
-                {
-                    for (int sz = 0; sz < sectionsZ; sz++)
-                    {
-                        var a = sections[sx, sy, sz]; var b = sections[sx + 1, sy, sz];
-                        if (a == null || b == null || a.NonAirCount == 0 || b.NonAirCount == 0) continue;
-                        var fa = a.FacePosXBits; var fb = b.FaceNegXBits;
-                        if (fa != null && fb != null)
-                        {
-                            for (int w = 0; w < fa.Length; w++) sharedAdjX += System.Numerics.BitOperations.PopCount(fa[w] & fb[w]);
-                        }
-                        else if (a.Kind == ChunkSection.RepresentationKind.Uniform && b.Kind == ChunkSection.RepresentationKind.Uniform)
-                        {
-                            sharedAdjX += 16 * 16; // full face
-                        }
-                    }
-                }
-            }
-            for (int sy = 0; sy < sectionsY - 1; sy++)
-            {
-                for (int sx = 0; sx < sectionsX; sx++)
-                {
-                    for (int sz = 0; sz < sectionsZ; sz++)
-                    {
-                        var a = sections[sx, sy, sz]; var b = sections[sx, sy + 1, sz];
-                        if (a == null || b == null || a.NonAirCount == 0 || b.NonAirCount == 0) continue;
-                        var fa = a.FacePosYBits; var fb = b.FaceNegYBits;
-                        if (fa != null && fb != null)
-                        {
-                            for (int w = 0; w < fa.Length; w++) sharedAdjY += System.Numerics.BitOperations.PopCount(fa[w] & fb[w]);
-                        }
-                        else if (a.Kind == ChunkSection.RepresentationKind.Uniform && b.Kind == ChunkSection.RepresentationKind.Uniform)
-                        {
-                            sharedAdjY += 16 * 16;
-                        }
-                    }
-                }
-            }
-            for (int sz = 0; sz < sectionsZ - 1; sz++)
-            {
-                for (int sx = 0; sx < sectionsX; sx++)
-                {
-                    for (int sy = 0; sy < sectionsY; sy++)
-                    {
-                        var a = sections[sx, sy, sz]; var b = sections[sx, sy, sz + 1];
-                        if (a == null || b == null || a.NonAirCount == 0 || b.NonAirCount == 0) continue;
-                        var fa = a.FacePosZBits; var fb = b.FaceNegZBits;
-                        if (fa != null && fb != null)
-                        {
-                            for (int w = 0; w < fa.Length; w++) sharedAdjZ += System.Numerics.BitOperations.PopCount(fa[w] & fb[w]);
-                        }
-                        else if (a.Kind == ChunkSection.RepresentationKind.Uniform && b.Kind == ChunkSection.RepresentationKind.Uniform)
-                        {
-                            sharedAdjZ += 16 * 16;
-                        }
-                    }
-                }
-            }
-
-            long exposure = exposureInternalSum - 2L * (sharedAdjX + sharedAdjY + sharedAdjZ);
-            stats.SolidCount = nonAirTotal;
-            stats.ExposureEstimate = (int)Math.Min(int.MaxValue, exposure);
-            MeshPrepassStats = stats;
-            IsEmpty = nonAirTotal == 0;
-            return nonAirTotal;
+            return arr;
         }
 
         public void BuildRender(Func<int, int, int, ushort> worldBlockGetter)
         {
             chunkRender?.ScheduleDelete();
 
-            // Unified occlusion early exit
             if (AllAirChunk || OcclusionStatus != OcclusionClass.None)
             {
-                return; // leave chunkRender null
+                return;
             }
 
-            // Two-phase stats shortcut: if chunk is uniform single block we can skip full flatten
             if (AllOneBlockChunk)
             {
                 int vol = dimX * dimY * dimZ;
-                // Analytical exposure estimate for solid rectangular prism fully filled
                 long internalAdj = (long)(dimX - 1) * dimY * dimZ + (long)dimX * (dimZ - 1) * dimY + (long)dimX * dimZ * (dimY - 1);
                 int exposure = (int)(6L * vol - 2L * internalAdj);
                 MeshPrepassStats = new ChunkMeshPrepassStats
                 {
                     SolidCount = vol,
                     ExposureEstimate = exposure,
-                    MinX = 0,
-                    MinY = 0,
-                    MinZ = 0,
-                    MaxX = dimX - 1,
-                    MaxY = dimY - 1,
-                    MaxZ = dimZ - 1,
-                    XNonEmpty = dimX,
-                    YNonEmpty = dimY,
-                    ZNonEmpty = dimZ,
-                    HasStats = true
+                    MinX = 0, MinY = 0, MinZ = 0,
+                    MaxX = dimX - 1, MaxY = dimY - 1, MaxZ = dimZ - 1,
+                    XNonEmpty = dimX, YNonEmpty = dimY, ZNonEmpty = dimZ, HasStats = true
                 };
-
-                // Provide a fully-populated flat array so ChunkRender logic that still indexes flatBlocks (occlusion checks etc.) is safe.
-                int voxelCountUniform = vol;
-                ushort[] uniformFlat = ArrayPool<ushort>.Shared.Rent(voxelCountUniform);
-                // Fill with uniform block id
-                uniformFlat.AsSpan(0, voxelCountUniform).Fill(AllOneBlockBlockId);
-
-                var prerender = BuildPrerenderData(uniformFlat);
-                chunkRender = new ChunkRender(prerender);
+                var prerenderUniform = BuildPrerenderData(BuildSectionDescriptors());
+                chunkRender = new ChunkRender(prerenderUniform);
                 return;
             }
 
-            int voxelCount = dimX * dimY * dimZ;
-            ushort[] flat = ArrayPool<ushort>.Shared.Rent(voxelCount);
-            // Removed full zero init (empty block == 0); per-section zero fill applied selectively in FlattenSections
-            int nonAir = FlattenSections(flat);
-
-            if (nonAir == 0)
+            // Aggregate stats directly from sections (no flatten)
+            long internalExposureSum = 0;
+            int totalNonAir = 0;
+            bool boundsInit = false;
+            int gMinX = 0, gMinY = 0, gMinZ = 0, gMaxX = 0, gMaxY = 0, gMaxZ = 0;
+            for (int sx = 0; sx < sectionsX; sx++)
             {
-                ArrayPool<ushort>.Shared.Return(flat, false);
-                return; // chunkRender stays null; Render() will no-op
+                for (int sy = 0; sy < sectionsY; sy++)
+                {
+                    for (int sz = 0; sz < sectionsZ; sz++)
+                    {
+                        var sec = sections[sx, sy, sz];
+                        if (sec == null || sec.NonAirCount == 0) continue;
+                        totalNonAir += sec.NonAirCount;
+                        internalExposureSum += sec.InternalExposure;
+                        if (sec.HasBounds)
+                        {
+                            int baseX = sx * ChunkSection.SECTION_SIZE;
+                            int baseY = sy * ChunkSection.SECTION_SIZE;
+                            int baseZ = sz * ChunkSection.SECTION_SIZE;
+                            int sMinX = baseX + sec.MinLX; int sMaxX = baseX + sec.MaxLX;
+                            int sMinY = baseY + sec.MinLY; int sMaxY = baseY + sec.MaxLY;
+                            int sMinZ = baseZ + sec.MinLZ; int sMaxZ = baseZ + sec.MaxLZ;
+                            if (!boundsInit)
+                            {
+                                gMinX = sMinX; gMaxX = sMaxX; gMinY = sMinY; gMaxY = sMaxY; gMinZ = sMinZ; gMaxZ = sMaxZ; boundsInit = true;
+                            }
+                            else
+                            {
+                                if (sMinX < gMinX) gMinX = sMinX; if (sMaxX > gMaxX) gMaxX = sMaxX;
+                                if (sMinY < gMinY) gMinY = sMinY; if (sMaxY > gMaxY) gMaxY = sMaxY;
+                                if (sMinZ < gMinZ) gMinZ = sMinZ; if (sMaxZ > gMaxZ) gMaxZ = sMaxZ;
+                            }
+                        }
+                    }
+                }
             }
-
-            var prerenderData = BuildPrerenderData(flat);
-            chunkRender = new ChunkRender(prerenderData);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void EnsureSliceStampArrays()
-        {
-            xSliceStamp ??= new int[dimX];
-            ySliceStamp ??= new int[dimY];
-            zSliceStamp ??= new int[dimZ];
-            // Handle rare int overflow / wrap
-            if (sliceStampVersion == int.MaxValue)
+            MeshPrepassStats = new ChunkMeshPrepassStats
             {
-                Array.Clear(xSliceStamp);
-                Array.Clear(ySliceStamp);
-                Array.Clear(zSliceStamp);
-                sliceStampVersion = 0;
-            }
-            sliceStampVersion++;
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void MarkSlices(ref ChunkMeshPrepassStats stats, int gx, int gy, int gz)
-        {
-            if (xSliceStamp[gx] != sliceStampVersion) { xSliceStamp[gx] = sliceStampVersion; stats.XNonEmpty++; }
-            if (ySliceStamp[gy] != sliceStampVersion) { ySliceStamp[gy] = sliceStampVersion; stats.YNonEmpty++; }
-            if (zSliceStamp[gz] != sliceStampVersion) { zSliceStamp[gz] = sliceStampVersion; stats.ZNonEmpty++; }
+                SolidCount = totalNonAir,
+                ExposureEstimate = (int)Math.Min(int.MaxValue, internalExposureSum),
+                MinX = gMinX, MinY = gMinY, MinZ = gMinZ,
+                MaxX = gMaxX, MaxY = gMaxY, MaxZ = gMaxZ,
+                XNonEmpty = dimX, // coarse placeholders
+                YNonEmpty = dimY,
+                ZNonEmpty = dimZ,
+                HasStats = boundsInit
+            };
+            if (totalNonAir == 0) return;
+            var prerender = BuildPrerenderData(BuildSectionDescriptors());
+            chunkRender = new ChunkRender(prerender);
         }
     }
 }
