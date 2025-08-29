@@ -49,7 +49,6 @@ namespace MVGE_GFX.Terrain.Sections
                 lzMin = desc.MinLZ; lzMax = desc.MaxLZ;
             }
 
-            // Ensure static boundary bit masks (x==0, x==15, etc.) are available
             EnsureBoundaryMasks();
 
             // ----------------------------------------------------------------------------------
@@ -88,11 +87,7 @@ namespace MVGE_GFX.Terrain.Sections
             // Shift helpers (bitwise address translation across linear voxel ordering)
             static void ShiftLeft(ReadOnlySpan<ulong> src, int shiftBits, Span<ulong> dst)
             {
-                if (shiftBits == 0)
-                {
-                    src.CopyTo(dst);
-                    return;
-                }
+                if (shiftBits == 0) { src.CopyTo(dst); return; }
                 int wordShift = shiftBits >> 6;
                 int bitShift = shiftBits & 63;
                 for (int i = 63; i >= 0; i--)
@@ -115,11 +110,7 @@ namespace MVGE_GFX.Terrain.Sections
             }
             static void ShiftRight(ReadOnlySpan<ulong> src, int shiftBits, Span<ulong> dst)
             {
-                if (shiftBits == 0)
-                {
-                    src.CopyTo(dst);
-                    return;
-                }
+                if (shiftBits == 0) { src.CopyTo(dst); return; }
                 int wordShift = shiftBits >> 6;
                 int bitShift = shiftBits & 63;
                 for (int i = 0; i < 64; i++)
@@ -142,10 +133,9 @@ namespace MVGE_GFX.Terrain.Sections
             }
 
             // ----------------------------------------------------------------------------------
-            // 2. Build internal face masks: visible = nonAir & ! (selfOpaque & neighborOpaque & neighborPresent)
-            //    Boundary-layer bits are masked out here; boundaries are processed separately later.
+            // 2. Build internal face masks (excludes boundary layer bits)
             // ----------------------------------------------------------------------------------
-            // -X faces (compare with neighbor at -X -> shift right by strideX)
+            // -X faces
             ShiftRight(nonAirBits, strideX, shiftA);
             ShiftRight(opaqueBits, strideX, shiftB);
             for (int i = 0; i < 64; i++)
@@ -201,10 +191,139 @@ namespace MVGE_GFX.Terrain.Sections
             }
 
             // ----------------------------------------------------------------------------------
-            // 3. Emit internal faces from masks
+            // 3. Integrate boundary faces directly into masks (unified mask generation)
+            // ----------------------------------------------------------------------------------
+            // Helper to test chunk plane bit (treat plane occupancy as opaque for occlusion)
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            static bool PlaneBit(ulong[] plane, int index)
+            {
+                if (plane == null) return false;
+                int w = index >> 6; int b = index & 63;
+                return w < plane.Length && (plane[w] & (1UL << b)) != 0UL;
+            }
+
+            // Generic block accessor for a section descriptor (local coords)
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            static ushort GetLocalBlock(ref SectionPrerenderDesc d, int lx, int ly, int lz)
+            {
+                switch (d.Kind)
+                {
+                    case 0: return 0;
+                    case 1: return d.UniformBlockId;
+                    case 2:
+                        if (d.SparseIndices == null || d.SparseBlocks == null) return 0;
+                        // linear index ((z * 16 + x) * 16) + y
+                        int li = ((lz * 16 + lx) * 16) + ly;
+                        var idxs = d.SparseIndices; var blks = d.SparseBlocks;
+                        for (int i = 0; i < idxs.Length; i++) if (idxs[i] == li) return blks[i];
+                        return 0;
+                    case 3:
+                        return d.ExpandedDense == null ? (ushort)0 : d.ExpandedDense[((lz * 16 + lx) * 16) + ly];
+                    case 4: // Packed
+                        if (d.PackedBitData == null || d.Palette == null || d.BitsPerIndex <= 0) return 0;
+                        {
+                            int li2 = ((lz * 16 + lx) * 16) + ly;
+                            long bitPos = (long)li2 * d.BitsPerIndex;
+                            int word = (int)(bitPos >> 5);
+                            int bitOffset = (int)(bitPos & 31);
+                            uint value = d.PackedBitData[word] >> bitOffset;
+                            int rem = 32 - bitOffset;
+                            if (rem < d.BitsPerIndex)
+                                value |= d.PackedBitData[word + 1] << rem;
+                            int mask = (1 << d.BitsPerIndex) - 1;
+                            int pi = (int)(value & mask);
+                            if (pi < 0 || pi >= d.Palette.Count) return 0;
+                            return d.Palette[pi];
+                        }
+                    default: return 0;
+                }
+            }
+
+            SectionPrerenderDesc[] allSecs = data.SectionDescs;
+            int sxCount = data.sectionsX, syCount = data.sectionsY, szCount = data.sectionsZ;
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            static int SecIndex(int sxL, int syL, int szL, int syC, int szC) => ((sxL * syC) + syL) * szC + szL;
+
+            // Boundary processing function: iterates bits of a boundary mask, determines visibility and sets face bit in provided target mask span.
+            void ProcessBoundary(ReadOnlySpan<ulong> boundaryMask, Span<ulong> targetMask, Faces face, ReadOnlySpan<ulong> nonAirBitsLocal, ReadOnlySpan<ulong> opaqueBitsLocal)
+            {
+                for (int wi = 0; wi < 64; wi++)
+                {
+                    ulong word = boundaryMask[wi] & nonAirBitsLocal[wi];
+                    if (word == 0) continue;
+                    while (word != 0)
+                    {
+                        int bit = BitOperations.TrailingZeroCount(word);
+                        int li = (wi << 6) + bit;
+                        word &= word - 1;
+                        int ly = li & 15; int t = li >> 4; int lx = t & 15; int lz = t >> 4;
+                        if (lx < lxMin || lx > lxMax || ly < lyMin || ly > lyMax || lz < lzMin || lz > lzMax) continue;
+
+                        bool selfOpaque = (opaqueBitsLocal[wi] & (1UL << bit)) != 0UL;
+                        bool hide = false;
+                        int wx = baseX + lx; int wy = baseY + ly; int wz = baseZ + lz;
+
+                        switch (face)
+                        {
+                            case Faces.LEFT:
+                                if (lx == 0)
+                                {
+                                    if (wx == 0) { int planeIdx = wz * maxY + wy; bool covered = PlaneBit(planeNegX, planeIdx); hide = covered && selfOpaque; }
+                                    else if (sx > 0) { ref var nd = ref allSecs[SecIndex(sx - 1, sy, sz, syCount, szCount)]; if (nd.NonAirCount > 0) { ushort nb = GetLocalBlock(ref nd, 15, ly, lz); if (nb != 0 && selfOpaque && BlockProperties.IsOpaque(nb)) hide = true; } }
+                                }
+                                break;
+                            case Faces.RIGHT:
+                                if (lx == S - 1)
+                                {
+                                    if (wx == maxX - 1) { int planeIdx = wz * maxY + wy; bool covered = PlaneBit(planePosX, planeIdx); hide = covered && selfOpaque; }
+                                    else if (sx + 1 < sxCount) { ref var nd = ref allSecs[SecIndex(sx + 1, sy, sz, syCount, szCount)]; if (nd.NonAirCount > 0) { ushort nb = GetLocalBlock(ref nd, 0, ly, lz); if (nb != 0 && selfOpaque && BlockProperties.IsOpaque(nb)) hide = true; } }
+                                }
+                                break;
+                            case Faces.BOTTOM:
+                                if (ly == 0)
+                                {
+                                    if (wy == 0) { int planeIdx = wx * maxZ + wz; bool covered = PlaneBit(planeNegY, planeIdx); hide = covered && selfOpaque; }
+                                    else if (sy > 0) { ref var nd = ref allSecs[SecIndex(sx, sy - 1, sz, syCount, szCount)]; if (nd.NonAirCount > 0) { ushort nb = GetLocalBlock(ref nd, lx, 15, lz); if (nb != 0 && selfOpaque && BlockProperties.IsOpaque(nb)) hide = true; } }
+                                }
+                                break;
+                            case Faces.TOP:
+                                if (ly == S - 1)
+                                {
+                                    if (wy == maxY - 1) { int planeIdx = wx * maxZ + wz; bool covered = PlaneBit(planePosY, planeIdx); hide = covered && selfOpaque; }
+                                    else if (sy + 1 < syCount) { ref var nd = ref allSecs[SecIndex(sx, sy + 1, sz, syCount, szCount)]; if (nd.NonAirCount > 0) { ushort nb = GetLocalBlock(ref nd, lx, 0, lz); if (nb != 0 && selfOpaque && BlockProperties.IsOpaque(nb)) hide = true; } }
+                                }
+                                break;
+                            case Faces.BACK:
+                                if (lz == 0)
+                                {
+                                    if (wz == 0) { int planeIdx = wx * maxY + wy; bool covered = PlaneBit(planeNegZ, planeIdx); hide = covered && selfOpaque; }
+                                    else if (sz > 0) { ref var nd = ref allSecs[SecIndex(sx, sy, sz - 1, syCount, szCount)]; if (nd.NonAirCount > 0) { ushort nb = GetLocalBlock(ref nd, lx, ly, 15); if (nb != 0 && selfOpaque && BlockProperties.IsOpaque(nb)) hide = true; } }
+                                }
+                                break;
+                            case Faces.FRONT:
+                                if (lz == S - 1)
+                                {
+                                    if (wz == maxZ - 1) { int planeIdx = wx * maxY + wy; bool covered = PlaneBit(planePosZ, planeIdx); hide = covered && selfOpaque; }
+                                    else if (sz + 1 < szCount) { ref var nd = ref allSecs[SecIndex(sx, sy, sz + 1, syCount, szCount)]; if (nd.NonAirCount > 0) { ushort nb = GetLocalBlock(ref nd, lx, ly, 0); if (nb != 0 && selfOpaque && BlockProperties.IsOpaque(nb)) hide = true; } }
+                                }
+                                break;
+                        }
+                        if (!hide) { int tw = li >> 6; int tb = li & 63; targetMask[tw] |= 1UL << tb; }
+                    }
+                }
+            }
+
+            ProcessBoundary(_maskX0, faceNX, Faces.LEFT, nonAirBits, opaqueBits);
+            ProcessBoundary(_maskX15, facePX, Faces.RIGHT, nonAirBits, opaqueBits);
+            ProcessBoundary(_maskY0, faceNY, Faces.BOTTOM, nonAirBits, opaqueBits);
+            ProcessBoundary(_maskY15, facePY, Faces.TOP, nonAirBits, opaqueBits);
+            ProcessBoundary(_maskZ0, faceNZ, Faces.BACK, nonAirBits, opaqueBits);
+            ProcessBoundary(_maskZ15, facePZ, Faces.FRONT, nonAirBits, opaqueBits);
+
+            // ----------------------------------------------------------------------------------
+            // 4. Emit faces from final masks (internal + boundary unified)
             // ----------------------------------------------------------------------------------
             var uvCache = new Dictionary<ushort, List<ByteVector2>[]?>();
-
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             List<ByteVector2> GetUV(ushort block, Faces face)
             {
@@ -218,7 +337,6 @@ namespace MVGE_GFX.Terrain.Sections
             }
 
             uint vb = vertBase;
-
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             void EmitFace(Faces face, int wx, int wy, int wz, ushort block)
             {
@@ -235,16 +353,11 @@ namespace MVGE_GFX.Terrain.Sections
                     uvList.Add(uvFace[i].x);
                     uvList.Add(uvFace[i].y);
                 }
-                idxList.Add(vb + 0); idxList.Add(vb + 1); idxList.Add(vb + 2);
-                idxList.Add(vb + 2); idxList.Add(vb + 3); idxList.Add(vb + 0);
+                idxList.Add(vb + 0); idxList.Add(vb + 1); idxList.Add(vb + 2); idxList.Add(vb + 2); idxList.Add(vb + 3); idxList.Add(vb + 0);
                 vb += 4;
             }
 
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            bool InBounds(int lx, int ly, int lz)
-                => lx >= lxMin && lx <= lxMax && ly >= lyMin && ly <= lyMax && lz >= lzMin && lz <= lzMax;
-
-            void EmitInternal(Span<ulong> mask, Faces face)
+            void EmitMask(Span<ulong> mask, Faces face)
             {
                 for (int wi = 0; wi < 64; wi++)
                 {
@@ -254,123 +367,21 @@ namespace MVGE_GFX.Terrain.Sections
                         int bit = BitOperations.TrailingZeroCount(word);
                         int li = (wi << 6) + bit;
                         word &= word - 1;
-                        int ly = li & 15;
-                        int t = li >> 4;
-                        int lx = t & 15;
-                        int lz = t >> 4;
-                        if (!InBounds(lx, ly, lz))
-                            continue;
+                        int ly = li & 15; int t = li >> 4; int lx = t & 15; int lz = t >> 4;
+                        if (lx < lxMin || lx > lxMax || ly < lyMin || ly > lyMax || lz < lzMin || lz > lzMax) continue;
                         EmitFace(face, baseX + lx, baseY + ly, baseZ + lz, dense[li]);
                     }
                 }
             }
 
-            EmitInternal(faceNX, Faces.LEFT);
-            EmitInternal(facePX, Faces.RIGHT);
-            EmitInternal(faceNY, Faces.BOTTOM);
-            EmitInternal(facePY, Faces.TOP);
-            EmitInternal(faceNZ, Faces.BACK);
-            EmitInternal(facePZ, Faces.FRONT);
+            EmitMask(faceNX, Faces.LEFT);
+            EmitMask(facePX, Faces.RIGHT);
+            EmitMask(faceNY, Faces.BOTTOM);
+            EmitMask(facePY, Faces.TOP);
+            EmitMask(faceNZ, Faces.BACK);
+            EmitMask(facePZ, Faces.FRONT);
 
-            // ----------------------------------------------------------------------------------
-            // 4. Emit boundary faces (section edges) with neighbor / chunk boundary tests
-            // ----------------------------------------------------------------------------------
-            static bool PlaneBit(ulong[] plane, int index)
-            {
-                if (plane == null) return false;
-                int w = index >> 6; int b = index & 63;
-                return w < plane.Length && (plane[w] & (1UL << b)) != 0UL;
-            }
-
-            // Copy to arrays to avoid ref/stack-span capture issues in subsequent loops
-            ulong[] nonAirArr = nonAirBits.ToArray();
-            ulong[] opaqueArr = opaqueBits.ToArray();
-
-            void EmitBoundaryFace(ulong[] boundaryMask, Faces face)
-            {
-                for (int wi = 0; wi < 64; wi++)
-                {
-                    ulong word = boundaryMask[wi] & nonAirArr[wi];
-                    while (word != 0)
-                    {
-                        int bit = BitOperations.TrailingZeroCount(word);
-                        int li = (wi << 6) + bit;
-                        word &= word - 1;
-                        int ly = li & 15;
-                        int t = li >> 4;
-                        int lx = t & 15;
-                        int lz = t >> 4;
-                        if (!InBounds(lx, ly, lz)) continue;
-
-                        ushort block = dense[li];
-                        bool selfOpaque = (opaqueArr[wi] & (1UL << bit)) != 0UL;
-                        bool hide = false;
-
-                        int wx = baseX + lx;
-                        int wy = baseY + ly;
-                        int wz = baseZ + lz;
-
-                        switch (face)
-                        {
-                            case Faces.LEFT:
-                                hide = lx > 0
-                                    ? selfOpaque && ((opaqueArr[(li - strideX) >> 6] & (1UL << ((li - strideX) & 63))) != 0UL)
-                                    : (wx == 0
-                                        ? (selfOpaque && PlaneBit(planeNegX, wz * maxY + wy))
-                                        : selfOpaque && BlockProperties.IsOpaque(GetBlock(wx - 1, wy, wz)));
-                                break;
-                            case Faces.RIGHT:
-                                hide = lx < S - 1
-                                    ? selfOpaque && ((opaqueArr[(li + strideX) >> 6] & (1UL << ((li + strideX) & 63))) != 0UL)
-                                    : (wx == maxX - 1
-                                        ? (selfOpaque && PlaneBit(planePosX, wz * maxY + wy))
-                                        : selfOpaque && BlockProperties.IsOpaque(GetBlock(wx + 1, wy, wz)));
-                                break;
-                            case Faces.BOTTOM:
-                                hide = ly > 0
-                                    ? selfOpaque && ((opaqueArr[(li - strideY) >> 6] & (1UL << ((li - strideY) & 63))) != 0UL)
-                                    : (wy == 0
-                                        ? (selfOpaque && PlaneBit(planeNegY, wx * maxZ + wz))
-                                        : selfOpaque && BlockProperties.IsOpaque(GetBlock(wx, wy - 1, wz)));
-                                break;
-                            case Faces.TOP:
-                                hide = ly < S - 1
-                                    ? selfOpaque && ((opaqueArr[(li + strideY) >> 6] & (1UL << ((li + strideY) & 63))) != 0UL)
-                                    : (wy == maxY - 1
-                                        ? (selfOpaque && PlaneBit(planePosY, wx * maxZ + wz))
-                                        : selfOpaque && BlockProperties.IsOpaque(GetBlock(wx, wy + 1, wz)));
-                                break;
-                            case Faces.BACK:
-                                hide = lz > 0
-                                    ? selfOpaque && ((opaqueArr[(li - strideZ) >> 6] & (1UL << ((li - strideZ) & 63))) != 0UL)
-                                    : (wz == 0
-                                        ? (selfOpaque && PlaneBit(planeNegZ, wx * maxY + wy))
-                                        : selfOpaque && BlockProperties.IsOpaque(GetBlock(wx, wy, wz - 1)));
-                                break;
-                            case Faces.FRONT:
-                                hide = lz < S - 1
-                                    ? selfOpaque && ((opaqueArr[(li + strideZ) >> 6] & (1UL << ((li + strideZ) & 63))) != 0UL)
-                                    : (wz == maxZ - 1
-                                        ? (selfOpaque && PlaneBit(planePosZ, wx * maxY + wy))
-                                        : selfOpaque && BlockProperties.IsOpaque(GetBlock(wx, wy, wz + 1)));
-                                break;
-                        }
-
-                        if (!hide)
-                            EmitFace(face, wx, wy, wz, block);
-                    }
-                }
-            }
-
-            EmitBoundaryFace(_maskX0, Faces.LEFT);
-            EmitBoundaryFace(_maskX15, Faces.RIGHT);
-            EmitBoundaryFace(_maskY0, Faces.BOTTOM);
-            EmitBoundaryFace(_maskY15, Faces.TOP);
-            EmitBoundaryFace(_maskZ0, Faces.BACK);
-            EmitBoundaryFace(_maskZ15, Faces.FRONT);
-
-            // Write back updated vertex base
-            vertBase = vb;
+            vertBase = vb; // write back
         }
     }
 }
