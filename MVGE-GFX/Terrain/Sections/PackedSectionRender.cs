@@ -8,7 +8,7 @@ using System.Runtime.CompilerServices;
 namespace MVGE_GFX.Terrain.Sections
 {
     internal partial class SectionRender
-    {
+    {/* Commented until rewrite is done
         // Precomputed boundary masks for 16x16x16 section (column-major layout: li = ((z*16 + x)*16)+y )
         private static readonly ulong[] _maskX0 = new ulong[64];
         private static readonly ulong[] _maskX15 = new ulong[64];
@@ -941,5 +941,5 @@ namespace MVGE_GFX.Terrain.Sections
 
             vertBase = (uint)vbInt; // write back updated vertex base
         }
-    }
+    */}
 }

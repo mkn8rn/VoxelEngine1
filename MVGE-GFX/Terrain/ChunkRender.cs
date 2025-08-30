@@ -13,6 +13,7 @@ using Vector3 = OpenTK.Mathematics.Vector3;
 using MVGE_GFX.Textures;
 using MVGE_INF.Models.Generation;
 using MVGE_GFX.Terrain.Sections;
+using System.Linq;
 
 namespace MVGE_GFX.Terrain
 {
@@ -22,24 +23,23 @@ namespace MVGE_GFX.Terrain
 
         private bool isBuilt = false;
         private Vector3 chunkWorldPosition;
-        private byte[] vertBuffer;
-        private byte[] uvBuffer;
-        private uint[] indicesUIntBuffer;
-        private ushort[] indicesUShortBuffer;
-        private int vertBytesUsed;
-        private int uvBytesUsed;
-        private int indicesUsed;
-        private bool useUShort;
+
+        private byte[] instanceOffsetBuffer; // 3 bytes per face
+        private uint[] instanceTileIndexBuffer; // 1 uint per face
+        private byte[] instanceFaceDirBuffer; // 1 byte per face
+        private int instanceCount;
 
         private VAO chunkVAO;
-        private VBO chunkVertexVBO;
-        private VBO chunkUVVBO;
-        private IBO chunkIBO;
+        private VBO quadPosVBO;
+        private VBO quadUVVBO;
+        private VBO instanceOffsetVBO;
+        private VBO instanceTileIndexVBO;
+        private VBO instanceFaceDirVBO;
+        private IBO quadIndexIBO; // index buffer for the shared quad
 
         public static BlockTextureAtlas terrainTextureAtlas { get; set; }
 
         private readonly ChunkData chunkMeta;
-        private readonly ushort emptyBlock = (ushort)BaseBlockType.Empty;
         private readonly int maxX; private readonly int maxY; private readonly int maxZ;
         private readonly bool faceNegX, facePosX, faceNegY, facePosY, faceNegZ, facePosZ;
         private readonly bool nNegXPosX, nPosXNegX, nNegYPosY, nPosYNegY, nNegZPosZ, nPosZNegZ;
@@ -48,7 +48,23 @@ namespace MVGE_GFX.Terrain
         private readonly ChunkPrerenderData prerenderData;
         private bool fullyOccluded;
 
-        private SectionRender sectionRender; // new renderer abstraction
+        private SectionRender sectionRender;
+
+        // Static quad data (positions & base UVs 0..1) reused for all faces.
+        private static readonly byte[] QuadPositions = new byte[]
+        {
+            0,0,0,  1,0,0,  1,1,0,  0,1,0 // a flat unit quad in XY plane; orientation adjusted in shader using faceDir
+        };
+        private static readonly byte[] QuadUVs = new byte[]
+        {
+            0,0, 1,0, 1,1, 0,1
+        };
+        // If you're reading this, you need to know:
+        // Must be like this due to vertex shader's row-major style: vec4(pos)*model*view*projection
+        // Usually we use column-major: projection*view*model*vec4(pos)
+        // That mismatch mirrors geometry turning front faces into back faces, so
+        // Which is why our indices are flipped from how they normally are (0,1,2,0,2,3 -> 0,2,1,0,3,2)
+        private static readonly ushort[] QuadIndices = new ushort[] { 0, 2, 1, 0, 3, 2 }; // two triangles
 
         public ChunkRender(ChunkPrerenderData prerenderData)
         {
@@ -66,37 +82,58 @@ namespace MVGE_GFX.Terrain
 
         private void GenerateFaces()
         {
-            // Full enclosure early exit using face flags + neighbor flags (simple conservative check)
             if (prepassSolidCount > 0 && faceNegX && facePosX && faceNegY && facePosY && faceNegZ && facePosZ &&
                 nNegXPosX && nPosXNegX && nNegYPosY && nPosYNegY && nNegZPosZ && nPosZNegZ)
             {
                 fullyOccluded = true; return;
             }
 
-            // Build section-level renderer abstraction (no legacy flattened array path)
             sectionRender = new SectionRender(prerenderData, terrainTextureAtlas);
-            sectionRender.Build(out vertBuffer, out uvBuffer, out indicesUShortBuffer, out indicesUIntBuffer, out useUShort, out vertBytesUsed, out uvBytesUsed, out indicesUsed);
+            sectionRender.Build(out instanceCount, out instanceOffsetBuffer, out instanceTileIndexBuffer, out instanceFaceDirBuffer);
         }
 
         public void Build()
         {
             if (isBuilt) return;
-            if (fullyOccluded)
-            {
-                chunkVAO = new VAO(); chunkVAO.Bind();
-                chunkVertexVBO = new VBO(Array.Empty<byte>(), 0); chunkVertexVBO.Bind();
-                chunkVAO.LinkToVAO(0, 3, VertexAttribPointerType.UnsignedByte, false, chunkVertexVBO);
-                chunkUVVBO = new VBO(Array.Empty<byte>(), 0); chunkUVVBO.Bind();
-                chunkVAO.LinkToVAO(1, 2, VertexAttribPointerType.UnsignedByte, false, chunkUVVBO);
-                chunkIBO = new IBO(Array.Empty<uint>(), 0); isBuilt = true; return;
-            }
-
             chunkVAO = new VAO(); chunkVAO.Bind();
-            chunkVertexVBO = new VBO(vertBuffer ?? Array.Empty<byte>(), vertBytesUsed); chunkVertexVBO.Bind();
-            chunkVAO.LinkToVAO(0, 3, VertexAttribPointerType.UnsignedByte, false, chunkVertexVBO);
-            chunkUVVBO = new VBO(uvBuffer ?? Array.Empty<byte>(), uvBytesUsed); chunkUVVBO.Bind();
-            chunkVAO.LinkToVAO(1, 2, VertexAttribPointerType.UnsignedByte, false, chunkUVVBO);
-            chunkIBO = useUShort ? new IBO(indicesUShortBuffer ?? Array.Empty<ushort>(), indicesUsed) : new IBO(indicesUIntBuffer ?? Array.Empty<uint>(), indicesUsed);
+
+            // Static quad position VBO (location 0)
+            quadPosVBO = new VBO(QuadPositions, QuadPositions.Length); quadPosVBO.Bind();
+            chunkVAO.LinkToVAO(0, 3, VertexAttribPointerType.UnsignedByte, false, quadPosVBO);
+
+            // Static quad UV VBO (location 1)
+            quadUVVBO = new VBO(QuadUVs, QuadUVs.Length); quadUVVBO.Bind();
+            chunkVAO.LinkToVAO(1, 2, VertexAttribPointerType.UnsignedByte, false, quadUVVBO);
+
+            // Instance offsets (location 2)
+            instanceOffsetVBO = new VBO(instanceOffsetBuffer ?? Array.Empty<byte>(), instanceOffsetBuffer?.Length ?? 0); instanceOffsetVBO.Bind();
+            chunkVAO.LinkToVAO(2, 3, VertexAttribPointerType.UnsignedByte, false, instanceOffsetVBO);
+            chunkVAO.SetDivisor(2, 1);
+
+            // Instance tile indices (location 3) - pack uints into byte[] for VBO
+            byte[] tileBytes;
+            if (instanceTileIndexBuffer == null || instanceTileIndexBuffer.Length == 0)
+            {
+                tileBytes = Array.Empty<byte>();
+            }
+            else
+            {
+                tileBytes = new byte[instanceTileIndexBuffer.Length * sizeof(uint)];
+                System.Buffer.BlockCopy(instanceTileIndexBuffer, 0, tileBytes, 0, tileBytes.Length);
+            }
+            instanceTileIndexVBO = new VBO(tileBytes, tileBytes.Length); instanceTileIndexVBO.Bind();
+            chunkVAO.LinkIntegerToVAO(3, 1, VertexAttribIntegerType.UnsignedInt, instanceTileIndexVBO);
+            chunkVAO.SetDivisor(3, 1);
+
+            // Instance face directions (location 4) 
+            var faceDirBytes = instanceFaceDirBuffer ?? Array.Empty<byte>();
+            instanceFaceDirVBO = new VBO(faceDirBytes, faceDirBytes.Length); instanceFaceDirVBO.Bind();
+            chunkVAO.LinkIntegerToVAO(4, 1, VertexAttribIntegerType.UnsignedByte, instanceFaceDirVBO);
+            chunkVAO.SetDivisor(4, 1);
+
+            // Index buffer for quad
+            quadIndexIBO = new IBO(QuadIndices, QuadIndices.Length);
+
             isBuilt = true;
         }
 
@@ -104,16 +141,15 @@ namespace MVGE_GFX.Terrain
         {
             ProcessPendingDeletes();
             if (!isBuilt) Build();
-            if (fullyOccluded) return;
+            if (fullyOccluded || instanceCount == 0) return;
             Vector3 adjustedChunkPosition = chunkWorldPosition + new Vector3(1f, 1f, 1f);
             program.Bind();
             program.SetUniform("chunkPosition", adjustedChunkPosition);
             program.SetUniform("tilesX", terrainTextureAtlas.tilesX);
             program.SetUniform("tilesY", terrainTextureAtlas.tilesY);
             chunkVAO.Bind();
-            chunkIBO.Bind();
-            int count = chunkIBO.Count; if (count <= 0) return;
-            GL.DrawElements(PrimitiveType.Triangles, count, useUShort ? DrawElementsType.UnsignedShort : DrawElementsType.UnsignedInt, 0);
+            quadIndexIBO.Bind();
+            GL.DrawElementsInstanced(PrimitiveType.Triangles, 6, DrawElementsType.UnsignedShort, IntPtr.Zero, instanceCount);
         }
 
         public static void ProcessPendingDeletes()
@@ -131,9 +167,12 @@ namespace MVGE_GFX.Terrain
         {
             if (!isBuilt) return;
             chunkVAO.Delete();
-            chunkVertexVBO.Delete();
-            chunkUVVBO.Delete();
-            chunkIBO.Delete();
+            quadPosVBO.Delete();
+            quadUVVBO.Delete();
+            instanceOffsetVBO.Delete();
+            instanceTileIndexVBO.Delete();
+            instanceFaceDirVBO.Delete();
+            quadIndexIBO.Delete();
             isBuilt = false;
         }
     }

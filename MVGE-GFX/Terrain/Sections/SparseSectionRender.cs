@@ -7,7 +7,7 @@ using System.Runtime.CompilerServices;
 namespace MVGE_GFX.Terrain.Sections
 {
     internal partial class SectionRender
-    {
+    {/*
         // Specialized emission for Sparse sections (Kind=2)
         // SparseIndices contain linear indices in column-major layout: li = ( (z * S + x) * S ) + y
         private void EmitSparseSection(
@@ -243,5 +243,5 @@ namespace MVGE_GFX.Terrain.Sections
 
             vertBase = vb; // write back
         }
-    }
+    */}
 }

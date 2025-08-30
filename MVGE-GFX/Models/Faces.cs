@@ -8,11 +8,11 @@ namespace MVGE_GFX.Models
 {
     public enum Faces : byte
     {
-        FRONT, // North
-        BACK, // South
-        LEFT, // West
-        RIGHT, // East
-        TOP, // Up
-        BOTTOM // Down
+        LEFT = 0, // -X
+        RIGHT = 1, // +X
+        BOTTOM = 2, // -Y
+        TOP = 3, // +Y
+        BACK = 4, // -Z
+        FRONT = 5  // +Z
     }
 }

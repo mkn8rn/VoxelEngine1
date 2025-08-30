@@ -25,6 +25,22 @@ namespace MVGE_GFX.BufferObjects
             Unbind();
         }
 
+        public void LinkIntegerToVAO(int location, int numComponents, VertexAttribIntegerType type, VBO vbo)
+        {
+            Bind();
+            vbo.Bind();
+            GL.VertexAttribIPointer(location, numComponents, type, 0, IntPtr.Zero);
+            GL.EnableVertexAttribArray(location);
+            Unbind();
+        }
+
+        public void SetDivisor(int location, int divisor)
+        {
+            Bind();
+            GL.VertexAttribDivisor(location, divisor);
+            Unbind();
+        }
+
         public void Bind()
         {
             GL.BindVertexArray(ID);

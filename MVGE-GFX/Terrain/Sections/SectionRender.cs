@@ -18,21 +18,23 @@ namespace MVGE_GFX.Terrain.Sections
             this.data = data; this.atlas = atlas;
         }
 
-        // Build uses per-section specialized paths and a fallback per-section brute scan.
-        public void Build(out byte[] verts, out byte[] uvs, out ushort[] idxU16, out uint[] idxU32,
-                          out bool useUShort, out int vertBytes, out int uvBytes, out int indices)
+        // Build instance data: one instance per emitted face
+        // Outputs:
+        //  faceCount: number of faces (instances)
+        //  offsets:  faceCount * 3 bytes (x,y,z) block coordinates
+        //  tileIndices: faceCount uint tile index into atlas
+        //  faceDirs: faceCount bytes (0..5) orientation (LEFT,RIGHT,BOTTOM,TOP,BACK,FRONT)
+        public void Build(out int faceCount, out byte[] offsets, out uint[] tileIndices, out byte[] faceDirs)
         {
             int maxX = data.maxX; int maxY = data.maxY; int maxZ = data.maxZ;
             if (maxX == 0 || maxY == 0 || maxZ == 0 || data.SectionDescs == null)
             {
-                verts = Array.Empty<byte>(); uvs = Array.Empty<byte>(); idxU16 = Array.Empty<ushort>(); idxU32 = Array.Empty<uint>();
-                useUShort = true; vertBytes = uvBytes = indices = 0; return;
+                faceCount = 0; offsets = Array.Empty<byte>(); tileIndices = Array.Empty<uint>(); faceDirs = Array.Empty<byte>(); return;
             }
 
-            var vertList = new List<byte>(2048);
-            var uvList = new List<byte>(2048);
-            var idxListU32 = new List<uint>(4096);
-            uint vertBase = 0;
+            var offsetList = new List<byte>(2048);
+            var tileIndexList = new List<uint>(1024);
+            var faceDirList = new List<byte>(1024);
 
             int S = data.sectionSize;
 
@@ -44,53 +46,23 @@ namespace MVGE_GFX.Terrain.Sections
                     {
                         int si = ((sx * data.sectionsY) + sy) * data.sectionsZ + sz;
                         ref var desc = ref data.SectionDescs[si];
-                        switch (desc.Kind)
-                        {
-                            case 0: // Empty
-                                EmitEmptySection(); // no-op, just a placeholder for possible future use
-                                continue;
-                            case 1: // Uniform
-                                EmitUniformSection(ref desc, sx, sy, sz, vertList, uvList, idxListU32, ref vertBase);
-                                continue;
-                            case 2: // Sparse
-                                EmitSparseSection(ref desc, sx, sy, sz, vertList, uvList, idxListU32, ref vertBase);
-                                continue;
-                            case 3: // DenseExpanded
-                                EmitDenseExpandedSection(ref desc, sx, sy, sz, vertList, uvList, idxListU32, ref vertBase);
-                                continue;
-                            case 4: // Packed
-                                EmitPackedSection(ref desc, sx, sy, sz, vertList, uvList, idxListU32, ref vertBase);
-                                continue;
-                            default:
-                                FallbackSectionScan(ref desc, sx, sy, sz, S, maxX, maxY, maxZ, vertList, uvList, idxListU32, ref vertBase);
-                                break;
-                        }
+                        if (desc.Kind == 0) continue; // empty
+                        FallbackSectionScan(ref desc, sx, sy, sz, S, maxX, maxY, maxZ,
+                            offsetList, tileIndexList, faceDirList);
                     }
                 }
             }
 
-            int totalVerts = (int)vertBase;
-            useUShort = totalVerts <= 65535;
-            if (useUShort)
-            {
-                idxU16 = new ushort[idxListU32.Count];
-                for (int i = 0; i < idxListU32.Count; i++) idxU16[i] = (ushort)idxListU32[i];
-                idxU32 = Array.Empty<uint>();
-            }
-            else
-            {
-                idxU32 = idxListU32.ToArray();
-                idxU16 = Array.Empty<ushort>();
-            }
-            verts = vertList.ToArray();
-            uvs = uvList.ToArray();
-            vertBytes = verts.Length; uvBytes = uvs.Length; indices = idxListU32.Count;
+            faceCount = faceDirList.Count;
+            offsets = offsetList.ToArray();
+            tileIndices = tileIndexList.ToArray();
+            faceDirs = faceDirList.ToArray();
         }
 
-        // Fallback brute-force scan in case of corrupt or invalid section data.
+        // Fallback brute-force scan emitting face instances only
         private void FallbackSectionScan(ref SectionPrerenderDesc desc, int sx, int sy, int sz, int S,
                                          int maxX, int maxY, int maxZ,
-                                         List<byte> vertList, List<byte> uvList, List<uint> idxListU32, ref uint vertBase)
+                                         List<byte> offsetList, List<uint> tileIndexList, List<byte> faceDirList)
         {
             int baseX = sx * S; int baseY = sy * S; int baseZ = sz * S;
             int endX = Math.Min(baseX + S, maxX);
@@ -108,42 +80,24 @@ namespace MVGE_GFX.Terrain.Sections
                     for (int z = baseZ; z < endZ; z++)
                     {
                         ushort block = GetBlock(x, y, z); if (block == EMPTY) continue;
-                        // LEFT
-                        if (x == 0)
-                        {
-                            if (!PlaneBit(nNegX, z * maxY + y)) TryEmit(block, Faces.LEFT, x, y, z, ref vertBase, vertList, uvList, idxListU32);
-                        }
-                        else if (GetBlock(x - 1, y, z) == EMPTY) TryEmit(block, Faces.LEFT, x, y, z, ref vertBase, vertList, uvList, idxListU32);
-                        // RIGHT
-                        if (x == maxX - 1)
-                        {
-                            if (!PlaneBit(nPosX, z * maxY + y)) TryEmit(block, Faces.RIGHT, x, y, z, ref vertBase, vertList, uvList, idxListU32);
-                        }
-                        else if (GetBlock(x + 1, y, z) == EMPTY) TryEmit(block, Faces.RIGHT, x, y, z, ref vertBase, vertList, uvList, idxListU32);
-                        // BOTTOM
-                        if (y == 0)
-                        {
-                            if (!PlaneBit(nNegY, x * maxZ + z)) TryEmit(block, Faces.BOTTOM, x, y, z, ref vertBase, vertList, uvList, idxListU32);
-                        }
-                        else if (GetBlock(x, y - 1, z) == EMPTY) TryEmit(block, Faces.BOTTOM, x, y, z, ref vertBase, vertList, uvList, idxListU32);
-                        // TOP
-                        if (y == maxY - 1)
-                        {
-                            if (!PlaneBit(nPosY, x * maxZ + z)) TryEmit(block, Faces.TOP, x, y, z, ref vertBase, vertList, uvList, idxListU32);
-                        }
-                        else if (GetBlock(x, y + 1, z) == EMPTY) TryEmit(block, Faces.TOP, x, y, z, ref vertBase, vertList, uvList, idxListU32);
-                        // BACK
-                        if (z == 0)
-                        {
-                            if (!PlaneBit(nNegZ, x * maxY + y)) TryEmit(block, Faces.BACK, x, y, z, ref vertBase, vertList, uvList, idxListU32);
-                        }
-                        else if (GetBlock(x, y, z - 1) == EMPTY) TryEmit(block, Faces.BACK, x, y, z, ref vertBase, vertList, uvList, idxListU32);
-                        // FRONT
-                        if (z == maxZ - 1)
-                        {
-                            if (!PlaneBit(nPosZ, x * maxY + y)) TryEmit(block, Faces.FRONT, x, y, z, ref vertBase, vertList, uvList, idxListU32);
-                        }
-                        else if (GetBlock(x, y, z + 1) == EMPTY) TryEmit(block, Faces.FRONT, x, y, z, ref vertBase, vertList, uvList, idxListU32);
+                        // LEFT (-X)
+                        if ((x == 0 && !PlaneBit(nNegX, z * maxY + y)) || (x > 0 && GetBlock(x - 1, y, z) == EMPTY))
+                            EmitFaceInstance(block, 0, x, y, z, offsetList, tileIndexList, faceDirList);
+                        // RIGHT (+X)
+                        if ((x == maxX - 1 && !PlaneBit(nPosX, z * maxY + y)) || (x < maxX - 1 && GetBlock(x + 1, y, z) == EMPTY))
+                            EmitFaceInstance(block, 1, x, y, z, offsetList, tileIndexList, faceDirList);
+                        // BOTTOM (-Y)
+                        if ((y == 0 && !PlaneBit(nNegY, x * maxZ + z)) || (y > 0 && GetBlock(x, y - 1, z) == EMPTY))
+                            EmitFaceInstance(block, 2, x, y, z, offsetList, tileIndexList, faceDirList);
+                        // TOP (+Y)
+                        if ((y == maxY - 1 && !PlaneBit(nPosY, x * maxZ + z)) || (y < maxY - 1 && GetBlock(x, y + 1, z) == EMPTY))
+                            EmitFaceInstance(block, 3, x, y, z, offsetList, tileIndexList, faceDirList);
+                        // BACK (-Z)
+                        if ((z == 0 && !PlaneBit(nNegZ, x * maxY + y)) || (z > 0 && GetBlock(x, y, z - 1) == EMPTY))
+                            EmitFaceInstance(block, 4, x, y, z, offsetList, tileIndexList, faceDirList);
+                        // FRONT (+Z)
+                        if ((z == maxZ - 1 && !PlaneBit(nPosZ, x * maxY + y)) || (z < maxZ - 1 && GetBlock(x, y, z + 1) == EMPTY))
+                            EmitFaceInstance(block, 5, x, y, z, offsetList, tileIndexList, faceDirList);
                     }
                 }
             }
@@ -156,14 +110,21 @@ namespace MVGE_GFX.Terrain.Sections
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void TryEmit(ushort block, Faces face, int x, int y, int z,
-                             ref uint vertBase, List<byte> vertList, List<byte> uvList, List<uint> idxListU32)
+        private void EmitFaceInstance(ushort block, byte faceDir, int x, int y, int z,
+                                      List<byte> offsetList, List<uint> tileIndexList, List<byte> faceDirList)
         {
-            var faceVerts = RawFaceData.rawVertexData[face];
-            for (int i = 0; i < 4; i++) { vertList.Add((byte)(faceVerts[i].x + x)); vertList.Add((byte)(faceVerts[i].y + y)); vertList.Add((byte)(faceVerts[i].z + z)); }
-            var uvFace = atlas.GetBlockUVs(block, face); for (int i = 0; i < 4; i++) { uvList.Add(uvFace[i].x); uvList.Add(uvFace[i].y); }
-            idxListU32.Add(vertBase + 0); idxListU32.Add(vertBase + 1); idxListU32.Add(vertBase + 2); idxListU32.Add(vertBase + 2); idxListU32.Add(vertBase + 3); idxListU32.Add(vertBase + 0);
-            vertBase += 4;
+            // Extract tile index for this face
+            var uvFace = atlas.GetBlockUVs(block, (Faces)faceDir);
+            byte minTileX = 255, minTileY = 255;
+            for (int i = 0; i < 4; i++)
+            {
+                if (uvFace[i].x < minTileX) minTileX = uvFace[i].x;
+                if (uvFace[i].y < minTileY) minTileY = uvFace[i].y;
+            }
+            uint tileIndex = (uint)(minTileY * atlas.tilesX + minTileX);
+            offsetList.Add((byte)x); offsetList.Add((byte)y); offsetList.Add((byte)z);
+            tileIndexList.Add(tileIndex);
+            faceDirList.Add(faceDir);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

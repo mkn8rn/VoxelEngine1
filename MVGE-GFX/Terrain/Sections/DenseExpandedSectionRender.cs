@@ -8,7 +8,7 @@ using System.Runtime.CompilerServices;
 namespace MVGE_GFX.Terrain.Sections
 {
     internal partial class SectionRender
-    {
+    {/* Commented until rewrite is done
         private void EmitDenseExpandedSection(
             ref SectionPrerenderDesc desc,
             int sx, int sy, int sz,
@@ -383,5 +383,6 @@ namespace MVGE_GFX.Terrain.Sections
 
             vertBase = vb; // write back
         }
+    */
     }
 }

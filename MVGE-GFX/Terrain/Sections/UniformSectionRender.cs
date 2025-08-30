@@ -7,7 +7,7 @@ using System.Diagnostics;
 namespace MVGE_GFX.Terrain.Sections
 {
     internal partial class SectionRender
-    {
+    {/*
         // Optimized emission for uniform (completely solid) section with opacity awareness.
         private void EmitUniformSection(
             ref SectionPrerenderDesc desc,
@@ -607,5 +607,5 @@ namespace MVGE_GFX.Terrain.Sections
                 }
             }
         }
-    }
+    */}
 }
