@@ -18,7 +18,8 @@ namespace MVGE_GFX.Terrain.Sections
             this.data = data; this.atlas = atlas;
         }
 
-        // Build instance data: one instance per emitted face
+        // Builds: one instance per emitted face
+        // uses per-section specialized paths and a fallback per-section brute scan.
         // Outputs:
         //  faceCount: number of faces (instances)
         //  offsets:  faceCount * 3 bytes (x,y,z) block coordinates
@@ -46,9 +47,32 @@ namespace MVGE_GFX.Terrain.Sections
                     {
                         int si = ((sx * data.sectionsY) + sy) * data.sectionsZ + sz;
                         ref var desc = ref data.SectionDescs[si];
-                        if (desc.Kind == 0) continue; // empty
-                        FallbackSectionScan(ref desc, sx, sy, sz, S, maxX, maxY, maxZ,
-                            offsetList, tileIndexList, faceDirList);
+                        if (desc.Kind == 0 || desc.NonAirCount == 0) continue; // empty
+
+                        bool specializedHandled = false;
+                        switch (desc.Kind)
+                        {
+                            case 0: // Empty
+                                specializedHandled = EmitEmptySectionInstances(); // no-op placeholder for potential future use
+                                break;
+                            case 1: // Uniform
+                                specializedHandled = EmitUniformSectionInstances(ref desc, sx, sy, sz, S, offsetList, tileIndexList, faceDirList);
+                                break;
+                            case 2: // Sparse
+                                specializedHandled = EmitSparseSectionInstances(ref desc, sx, sy, sz, S, offsetList, tileIndexList, faceDirList);
+                                break;
+                            case 3: // DenseExpanded
+                                specializedHandled = EmitDenseExpandedSectionInstances(ref desc, sx, sy, sz, S, offsetList, tileIndexList, faceDirList);
+                                break;
+                            case 4: // Packed (may have multiple ids but we still try a packed fast path)
+                                specializedHandled = EmitPackedSectionInstances(ref desc, sx, sy, sz, S, offsetList, tileIndexList, faceDirList);
+                                break;
+                        }
+                        if (!specializedHandled)
+                        {
+                            FallbackSectionScan(ref desc, sx, sy, sz, S, maxX, maxY, maxZ,
+                                offsetList, tileIndexList, faceDirList);
+                        }
                     }
                 }
             }
@@ -69,13 +93,24 @@ namespace MVGE_GFX.Terrain.Sections
             int endY = Math.Min(baseY + S, maxY);
             int endZ = Math.Min(baseZ + S, maxZ);
 
+            // If tight bounds exist, clamp iteration volume to those bounds in world coords.
+            if (desc.HasBounds)
+            {
+                int bMinX = baseX + desc.MinLX; int bMaxX = baseX + desc.MaxLX;
+                int bMinY = baseY + desc.MinLY; int bMaxY = baseY + desc.MaxLY;
+                int bMinZ = baseZ + desc.MinLZ; int bMaxZ = baseZ + desc.MaxLZ;
+                if (bMinX > baseX) baseX = bMinX; if (bMaxX + 1 < endX) endX = bMaxX + 1;
+                if (bMinY > baseY) baseY = bMinY; if (bMaxY + 1 < endY) endY = bMaxY + 1;
+                if (bMinZ > baseZ) baseZ = bMinZ; if (bMaxZ + 1 < endZ) endZ = bMaxZ + 1;
+            }
+
             var nNegX = data.NeighborPlaneNegX; var nPosX = data.NeighborPlanePosX;
             var nNegY = data.NeighborPlaneNegY; var nPosY = data.NeighborPlanePosY;
             var nNegZ = data.NeighborPlaneNegZ; var nPosZ = data.NeighborPlanePosZ;
 
             for (int x = baseX; x < endX; x++)
             {
-                for (int y = baseY; y < endY; y++)
+                for (int y = baseY, newY = baseY; y < endY; y++, newY++)
                 {
                     for (int z = baseZ; z < endZ; z++)
                     {
@@ -113,14 +148,9 @@ namespace MVGE_GFX.Terrain.Sections
         private void EmitFaceInstance(ushort block, byte faceDir, int x, int y, int z,
                                       List<byte> offsetList, List<uint> tileIndexList, List<byte> faceDirList)
         {
-            // Extract tile index for this face
             var uvFace = atlas.GetBlockUVs(block, (Faces)faceDir);
             byte minTileX = 255, minTileY = 255;
-            for (int i = 0; i < 4; i++)
-            {
-                if (uvFace[i].x < minTileX) minTileX = uvFace[i].x;
-                if (uvFace[i].y < minTileY) minTileY = uvFace[i].y;
-            }
+            for (int i = 0; i < 4; i++) { if (uvFace[i].x < minTileX) minTileX = uvFace[i].x; if (uvFace[i].y < minTileY) minTileY = uvFace[i].y; }
             uint tileIndex = (uint)(minTileY * atlas.tilesX + minTileX);
             offsetList.Add((byte)x); offsetList.Add((byte)y); offsetList.Add((byte)z);
             tileIndexList.Add(tileIndex);

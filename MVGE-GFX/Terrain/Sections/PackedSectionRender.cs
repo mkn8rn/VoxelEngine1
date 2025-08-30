@@ -8,7 +8,7 @@ using System.Runtime.CompilerServices;
 namespace MVGE_GFX.Terrain.Sections
 {
     internal partial class SectionRender
-    {/* Commented until rewrite is done
+    {
         // Precomputed boundary masks for 16x16x16 section (column-major layout: li = ((z*16 + x)*16)+y )
         private static readonly ulong[] _maskX0 = new ulong[64];
         private static readonly ulong[] _maskX15 = new ulong[64];
@@ -941,5 +941,47 @@ namespace MVGE_GFX.Terrain.Sections
 
             vertBase = (uint)vbInt; // write back updated vertex base
         }
-    */}
+
+        private bool EmitPackedSectionInstances(ref SectionPrerenderDesc desc, int sx, int sy, int sz, int S,
+            List<byte> offsetList, List<uint> tileIndexList, List<byte> faceDirList)
+        {
+            if (desc.OccupancyBits == null || desc.NonAirCount == 0) return false; // fallback if no bitset
+            // Fast path only if palette small enough; otherwise fallback OK.
+            int baseX = sx * S; int baseY = sy * S; int baseZ = sz * S; int maxX = data.maxX; int maxY = data.maxY; int maxZ = data.maxZ;
+            var occ = desc.OccupancyBits; // 64 ulongs
+            // Precompute neighbor occupancy queries via GetBlock
+            for (int li = 0; li < 4096; li++)
+            {
+                if ((occ[li >> 6] & (1UL << (li & 63))) == 0) continue;
+                int ly = li & 15; int t = li >> 4; int lx = t & 15; int lz = t >> 4;
+                int wx = baseX + lx; int wy = baseY + ly; int wz = baseZ + lz;
+                ushort block = DecodePacked(ref desc, lx, ly, lz); if (block == 0) continue;
+                // LEFT
+                if (lx == 0 ? (wx == 0 ? !PlaneBit(data.NeighborPlaneNegX, wz * maxY + wy) : GetBlock(wx - 1, wy, wz) == 0)
+                             : ( (occ[((li - 16) >> 6)] & (1UL << ((li - 16) & 63))) == 0 ))
+                    EmitFaceInstance(block, 0, wx, wy, wz, offsetList, tileIndexList, faceDirList);
+                // RIGHT
+                if (lx == 15 ? (wx == maxX - 1 ? !PlaneBit(data.NeighborPlanePosX, wz * maxY + wy) : GetBlock(wx + 1, wy, wz) == 0)
+                              : ( (occ[((li + 16) >> 6)] & (1UL << ((li + 16) & 63))) == 0 ))
+                    EmitFaceInstance(block, 1, wx, wy, wz, offsetList, tileIndexList, faceDirList);
+                // BOTTOM
+                if (ly == 0 ? (wy == 0 ? !PlaneBit(data.NeighborPlaneNegY, wx * maxZ + wz) : GetBlock(wx, wy - 1, wz) == 0)
+                             : ( (occ[((li - 1) >> 6)] & (1UL << ((li - 1) & 63))) == 0 ))
+                    EmitFaceInstance(block, 2, wx, wy, wz, offsetList, tileIndexList, faceDirList);
+                // TOP
+                if (ly == 15 ? (wy == maxY - 1 ? !PlaneBit(data.NeighborPlanePosY, wx * maxZ + wz) : GetBlock(wx, wy + 1, wz) == 0)
+                              : ( (occ[((li + 1) >> 6)] & (1UL << ((li + 1) & 63))) == 0 ))
+                    EmitFaceInstance(block, 3, wx, wy, wz, offsetList, tileIndexList, faceDirList);
+                // BACK
+                if (lz == 0 ? (wz == 0 ? !PlaneBit(data.NeighborPlaneNegZ, wx * maxY + wy) : GetBlock(wx, wy, wz - 1) == 0)
+                             : ( (occ[((li - 256) >> 6)] & (1UL << ((li - 256) & 63))) == 0 ))
+                    EmitFaceInstance(block, 4, wx, wy, wz, offsetList, tileIndexList, faceDirList);
+                // FRONT
+                if (lz == 15 ? (wz == maxZ - 1 ? !PlaneBit(data.NeighborPlanePosZ, wx * maxY + wy) : GetBlock(wx, wy, wz + 1) == 0)
+                              : ( (occ[((li + 256) >> 6)] & (1UL << ((li + 256) & 63))) == 0 ))
+                    EmitFaceInstance(block, 5, wx, wy, wz, offsetList, tileIndexList, faceDirList);
+            }
+            return true;
+        }
+    }
 }

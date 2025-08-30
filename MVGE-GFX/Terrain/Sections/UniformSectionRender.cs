@@ -1,611 +1,266 @@
 ﻿using MVGE_INF.Models.Generation;
-using MVGE_GFX.Models;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
-using System.Diagnostics;
 
 namespace MVGE_GFX.Terrain.Sections
 {
     internal partial class SectionRender
-    {/*
-        // Optimized emission for uniform (completely solid) section with opacity awareness.
-        private void EmitUniformSection(
-            ref SectionPrerenderDesc desc,
-            int sx, int sy, int sz,
-            List<byte> vertList,
-            List<byte> uvList,
-            List<uint> idxList,
-            ref uint vertBase)
+    {
+        // Instanced emission for uniform sections. Emits only boundary faces.
+        // Returns true if handled (always true for uniform non-air).
+        private bool EmitUniformSectionInstances(ref SectionPrerenderDesc desc, int sx, int sy, int sz, int S,
+            List<byte> offsetList, List<uint> tileIndexList, List<byte> faceDirList)
         {
-            int S = data.sectionSize; // usually 16
-            ushort block = desc.UniformBlockId;
-            if (block == 0)
-            {
-                // Defensive: uniform descriptor but air
-                return;
-            }
+            ushort block = desc.UniformBlockId; if (block == 0) return true; // treat as empty
+            int baseX = sx * S; int baseY = sy * S; int baseZ = sz * S;
+            int maxX = data.maxX; int maxY = data.maxY; int maxZ = data.maxZ;
 
-            bool thisOpaque = BlockProperties.IsOpaque(block);
-
-            Debug.Assert(data.maxX <= 256 && data.maxY <= 256 && data.maxZ <= 256,
-                "Chunk dimension exceeds 255 – packed byte vertices will overflow.");
-
-            // UV cache per face (array index by Faces enum)
-            var uvCache = new List<ByteVector2>[6];
+            // Helper to emit an entire face plane of SxS blocks
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            List<ByteVector2> GetUV(Faces f)
+            void EmitPlane(int faceDir, int wxFixed, int wyFixed, int wzFixed, int axis)
             {
-                int i = (int)f;
-                return uvCache[i] ??= atlas.GetBlockUVs(block, f);
-            }
-
-            int baseX = sx * S;
-            int baseY = sy * S;
-            int baseZ = sz * S;
-            int maxY = data.maxY;
-
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            SectionPrerenderDesc? Neighbor(int nsx, int nsy, int nsz)
-            {
-                if ((uint)nsx >= (uint)data.sectionsX ||
-                    (uint)nsy >= (uint)data.sectionsY ||
-                    (uint)nsz >= (uint)data.sectionsZ)
-                    return null;
-                int ni = ((nsx * data.sectionsY) + nsy) * data.sectionsZ + nsz;
-                return data.SectionDescs[ni];
-            }
-
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            static bool Bit(ulong[] arr, int idx)
-            {
-                return arr != null && (idx >> 6) < arr.Length && (arr[idx >> 6] & (1UL << (idx & 63))) != 0UL;
-            }
-
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            static int OccIndex(int x, int y, int z, int S)
-            {
-                return ((z * S) + x) * S + y;
-            }
-
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            static bool OccBit(ulong[] occ, int x, int y, int z, int S)
-            {
-                return occ != null && Bit(occ, OccIndex(x, y, z, S));
-            }
-
-            // Returns true if neighbor cell at (lx,ly,lz) exists AND is opaque.
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            static bool NeighborOpaque(SectionPrerenderDesc s, int lx, int ly, int lz, int S)
-            {
-                switch (s.Kind)
+                // axis: 0=x varies,1=y varies,2=z varies
+                for (int a = 0; a < S; a++)
                 {
-                    case 0: // Empty
-                        return false;
-                    case 1: // Uniform
-                        return BlockProperties.IsOpaque(s.UniformBlockId);
-                    case 2: // Sparse
-                        if (s.SparseIndices == null || s.SparseBlocks == null) return false;
-                        int ci = lz * S + lx;
-                        int liLegacy = (ci << 4) + ly; // legacy layout (S==16)
-                        int generic = (ci * S) + ly;    // generic layout
-                        for (int i = 0; i < s.SparseIndices.Length; i++)
+                    for (int b = 0; b < S; b++)
+                    {
+                        int x = wxFixed, y = wyFixed, z = wzFixed;
+                        switch (faceDir)
                         {
-                            int idx = s.SparseIndices[i];
-                            if (idx == liLegacy || idx == generic)
-                                return BlockProperties.IsOpaque(s.SparseBlocks[i]);
+                            case 0: // LEFT  (x fixed)
+                            case 1: // RIGHT (x fixed)
+                                y = baseY + a; z = baseZ + b; break;
+                            case 2: // BOTTOM (y fixed)
+                            case 3: // TOP    (y fixed)
+                                x = baseX + a; z = baseZ + b; break;
+                            case 4: // BACK  (z fixed)
+                            case 5: // FRONT (z fixed)
+                                x = baseX + a; y = baseY + b; break;
                         }
-                        return false;
-                    case 3: // DenseExpanded
-                        if (s.ExpandedDense == null) return false;
-                        return BlockProperties.IsOpaque(s.ExpandedDense[((lz * S + lx) * S) + ly]);
-                    case 4: // Packed
-                        if (s.PackedBitData == null || s.Palette == null || s.BitsPerIndex <= 0) return false;
-                        int li = ((lz * S + lx) * S) + ly;
-                        long bitPos = (long)li * s.BitsPerIndex;
-                        int word = (int)(bitPos >> 5);
-                        int bitOffset = (int)(bitPos & 31);
-                        uint value = s.PackedBitData[word] >> bitOffset;
-                        int rem = 32 - bitOffset;
-                        if (rem < s.BitsPerIndex)
-                            value |= s.PackedBitData[word + 1] << rem;
-                        int mask = (1 << s.BitsPerIndex) - 1;
-                        int paletteIndex = (int)(value & mask);
-                        if (paletteIndex <= 0 || paletteIndex >= s.Palette.Count) return false;
-                        return BlockProperties.IsOpaque(s.Palette[paletteIndex]);
-                    default:
-                        return false;
+                        EmitFaceInstance(block, (byte)faceDir, x, y, z, offsetList, tileIndexList, faceDirList);
+                    }
                 }
             }
 
+            // Neighbor section queries for whole-face occlusion
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            uint EmitFace(Faces face, int wx, int wy, int wz, uint vb)
+            ref SectionPrerenderDesc Neighbor(int nsx, int nsy, int nsz)
             {
-                var vtx = RawFaceData.rawVertexData[face];
-                for (int i = 0; i < 4; i++)
-                {
-                    vertList.Add((byte)(vtx[i].x + wx));
-                    vertList.Add((byte)(vtx[i].y + wy));
-                    vertList.Add((byte)(vtx[i].z + wz));
-                }
-                var uvFace = GetUV(face);
-                for (int i = 0; i < 4; i++)
-                {
-                    uvList.Add(uvFace[i].x);
-                    uvList.Add(uvFace[i].y);
-                }
-                idxList.Add(vb + 0);
-                idxList.Add(vb + 1);
-                idxList.Add(vb + 2);
-                idxList.Add(vb + 2);
-                idxList.Add(vb + 3);
-                idxList.Add(vb + 0);
-                return vb + 4;
+                int idx = ((nsx * data.sectionsY) + nsy) * data.sectionsZ + nsz;
+                return ref data.SectionDescs[idx];
             }
 
-            // Neighbor chunk plane arrays
-            var planeNegX = data.NeighborPlaneNegX;
-            var planePosX = data.NeighborPlanePosX;
-            var planeNegY = data.NeighborPlaneNegY;
-            var planePosY = data.NeighborPlanePosY;
-            var planeNegZ = data.NeighborPlaneNegZ;
-            var planePosZ = data.NeighborPlanePosZ;
-
-            // ---------------------- -X (LEFT) ----------------------
+            // LEFT
             if (sx == 0)
             {
-                uint vb = vertBase;
-                for (int lz = 0; lz < S; lz++)
+                // Check neighbor plane bitset at chunk boundary
+                for (int z = 0; z < S; z++)
                 {
-                    int gz = baseZ + lz;
-                    for (int ly = 0; ly < S; ly++)
+                    int wz = baseZ + z; if (wz >= maxZ) break;
+                    for (int y = 0; y < S; y++)
                     {
-                        int gy = baseY + ly;
-                        int planeIdx = gz * maxY + gy;
-                        bool covered = Bit(planeNegX, planeIdx);
-                        if (!covered || !thisOpaque)
-                        {
-                            vb = EmitFace(Faces.LEFT, baseX, baseY + ly, baseZ + lz, vb);
-                        }
+                        int wy = baseY + y; if (wy >= maxY) break;
+                        if (baseX == 0 && PlaneBit(data.NeighborPlaneNegX, wz * maxY + wy)) continue; // hidden
+                        EmitFaceInstance(block, 0, baseX, wy, wz, offsetList, tileIndexList, faceDirList);
                     }
                 }
-                vertBase = vb;
             }
             else
             {
-                var n = Neighbor(sx - 1, sy, sz);
-                if (n == null || n.Value.NonAirCount == 0)
+                ref var n = ref Neighbor(sx - 1, sy, sz);
+                if (n.Kind == 0 || (n.Kind == 1 && n.UniformBlockId == 0))
                 {
-                    uint vb = vertBase;
-                    for (int lz = 0; lz < S; lz++)
-                        for (int ly = 0; ly < S; ly++)
-                            vb = EmitFace(Faces.LEFT, baseX, baseY + ly, baseZ + lz, vb);
-                    vertBase = vb;
-                }
-                else if (n.Value.Kind == 1)
-                {
-                    // Neighbor uniform: occlude only if both opaque
-                    if (!(thisOpaque && BlockProperties.IsOpaque(n.Value.UniformBlockId)))
-                    {
-                        uint vb = vertBase;
-                        for (int lz = 0; lz < S; lz++)
-                            for (int ly = 0; ly < S; ly++)
-                                vb = EmitFace(Faces.LEFT, baseX, baseY + ly, baseZ + lz, vb);
-                        vertBase = vb;
-                    }
+                    EmitPlane(0, baseX, 0, 0, 0);
                 }
                 else
                 {
-                    var bits = n.Value.FacePosXBits;
-                    var occ = n.Value.OccupancyBits;
-                    uint vb = vertBase;
-                    for (int lz = 0; lz < S; lz++)
+                    bool fullOcclude = (n.Kind == 1 && n.UniformBlockId != 0);
+                    if (!fullOcclude)
                     {
-                        for (int ly = 0; ly < S; ly++)
+                        // Need per-voxel test (sparse/dense). Simpler: iterate plane and test neighbor blocks directly.
+                        for (int z = 0; z < S; z++)
                         {
-                            bool opaqueNeighbor;
-                            if (bits != null)
+                            int wz = baseZ + z; if (wz >= maxZ) break;
+                            for (int y = 0; y < S; y++)
                             {
-                                opaqueNeighbor = Bit(bits, lz * S + ly); // face bits imply opaque
-                            }
-                            else if (occ != null)
-                            {
-                                opaqueNeighbor = OccBit(occ, S - 1, ly, lz, S) && NeighborOpaque(n.Value, S - 1, ly, lz, S);
-                            }
-                            else
-                            {
-                                opaqueNeighbor = NeighborOpaque(n.Value, S - 1, ly, lz, S);
-                            }
-                            if (!(thisOpaque && opaqueNeighbor))
-                            {
-                                vb = EmitFace(Faces.LEFT, baseX, baseY + ly, baseZ + lz, vb);
+                                int wy = baseY + y; if (wy >= maxY) break;
+                                ushort nb = GetBlock(baseX - 1, wy, wz);
+                                if (nb == 0) EmitFaceInstance(block, 0, baseX, wy, wz, offsetList, tileIndexList, faceDirList);
                             }
                         }
                     }
-                    vertBase = vb;
+                    else if (fullOcclude) { /* all hidden */ }
                 }
             }
-
-            // ---------------------- +X (RIGHT) ----------------------
+            // RIGHT
+            int wxRight = baseX + S - 1;
             if (sx == data.sectionsX - 1)
             {
-                uint vb = vertBase;
-                int wx = baseX + S - 1;
-                for (int lz = 0; lz < S; lz++)
+                for (int z = 0; z < S; z++)
                 {
-                    int gz = baseZ + lz;
-                    for (int ly = 0; ly < S; ly++)
+                    int wz = baseZ + z; if (wz >= maxZ) break;
+                    for (int y = 0; y < S; y++)
                     {
-                        int gy = baseY + ly;
-                        int planeIdx = gz * maxY + gy;
-                        bool covered = Bit(planePosX, planeIdx);
-                        if (!covered || !thisOpaque)
-                        {
-                            vb = EmitFace(Faces.RIGHT, wx, baseY + ly, baseZ + lz, vb);
-                        }
+                        int wy = baseY + y; if (wy >= maxY) break;
+                        if (wxRight == maxX - 1 && PlaneBit(data.NeighborPlanePosX, wz * maxY + wy)) continue;
+                        EmitFaceInstance(block, 1, wxRight, wy, wz, offsetList, tileIndexList, faceDirList);
                     }
                 }
-                vertBase = vb;
             }
             else
             {
-                var n = Neighbor(sx + 1, sy, sz);
-                if (n == null || n.Value.NonAirCount == 0)
+                ref var n = ref Neighbor(sx + 1, sy, sz);
+                if (n.Kind == 0 || (n.Kind == 1 && n.UniformBlockId == 0))
                 {
-                    uint vb = vertBase;
-                    int wx = baseX + S - 1;
-                    for (int lz = 0; lz < S; lz++)
-                        for (int ly = 0; ly < S; ly++)
-                            vb = EmitFace(Faces.RIGHT, wx, baseY + ly, baseZ + lz, vb);
-                    vertBase = vb;
-                }
-                else if (n.Value.Kind == 1)
-                {
-                    if (!(thisOpaque && BlockProperties.IsOpaque(n.Value.UniformBlockId)))
-                    {
-                        uint vb = vertBase;
-                        int wx = baseX + S - 1;
-                        for (int lz = 0; lz < S; lz++)
-                            for (int ly = 0; ly < S; ly++)
-                                vb = EmitFace(Faces.RIGHT, wx, baseY + ly, baseZ + lz, vb);
-                        vertBase = vb;
-                    }
+                    EmitPlane(1, wxRight, 0, 0, 0);
                 }
                 else
                 {
-                    var bits = n.Value.FaceNegXBits;
-                    var occ = n.Value.OccupancyBits;
-                    uint vb = vertBase;
-                    int wx = baseX + S - 1;
-                    for (int lz = 0; lz < S; lz++)
+                    bool fullOcclude = (n.Kind == 1 && n.UniformBlockId != 0);
+                    if (!fullOcclude)
                     {
-                        for (int ly = 0; ly < S; ly++)
+                        for (int z = 0; z < S; z++)
                         {
-                            bool opaqueNeighbor;
-                            if (bits != null)
+                            int wz = baseZ + z; if (wz >= maxZ) break;
+                            for (int y = 0; y < S; y++)
                             {
-                                opaqueNeighbor = Bit(bits, lz * S + ly);
-                            }
-                            else if (occ != null)
-                            {
-                                opaqueNeighbor = OccBit(occ, 0, ly, lz, S) && NeighborOpaque(n.Value, 0, ly, lz, S);
-                            }
-                            else
-                            {
-                                opaqueNeighbor = NeighborOpaque(n.Value, 0, ly, lz, S);
-                            }
-                            if (!(thisOpaque && opaqueNeighbor))
-                            {
-                                vb = EmitFace(Faces.RIGHT, wx, baseY + ly, baseZ + lz, vb);
+                                int wy = baseY + y; if (wy >= maxY) break;
+                                ushort nb = GetBlock(wxRight + 1, wy, wz);
+                                if (nb == 0) EmitFaceInstance(block, 1, wxRight, wy, wz, offsetList, tileIndexList, faceDirList);
                             }
                         }
                     }
-                    vertBase = vb;
                 }
             }
-
-            // ---------------------- -Y (BOTTOM) ----------------------
+            // BOTTOM
             if (sy == 0)
             {
-                uint vb = vertBase;
-                for (int lx = 0; lx < S; lx++)
+                for (int x = 0; x < S; x++)
                 {
-                    int gx = baseX + lx;
-                    for (int lz = 0; lz < S; lz++)
+                    int wx = baseX + x; if (wx >= maxX) break;
+                    for (int z = 0; z < S; z++)
                     {
-                        int gz = baseZ + lz;
-                        int planeIdx = gx * data.maxZ + gz;
-                        bool covered = Bit(planeNegY, planeIdx);
-                        if (!covered || !thisOpaque)
-                        {
-                            vb = EmitFace(Faces.BOTTOM, gx, baseY, gz, vb);
-                        }
+                        int wz = baseZ + z; if (wz >= maxZ) break;
+                        if (baseY == 0 && PlaneBit(data.NeighborPlaneNegY, wx * maxZ + wz)) continue;
+                        EmitFaceInstance(block, 2, wx, baseY, wz, offsetList, tileIndexList, faceDirList);
                     }
                 }
-                vertBase = vb;
             }
             else
             {
-                var n = Neighbor(sx, sy - 1, sz);
-                if (n == null || n.Value.NonAirCount == 0)
+                ref var n = ref Neighbor(sx, sy - 1, sz);
+                bool fullOcclude = (n.Kind == 1 && n.UniformBlockId != 0);
+                if (!fullOcclude)
                 {
-                    uint vb = vertBase;
-                    for (int lx = 0; lx < S; lx++)
-                        for (int lz = 0; lz < S; lz++)
-                            vb = EmitFace(Faces.BOTTOM, baseX + lx, baseY, baseZ + lz, vb);
-                    vertBase = vb;
-                }
-                else if (n.Value.Kind == 1)
-                {
-                    if (!(thisOpaque && BlockProperties.IsOpaque(n.Value.UniformBlockId)))
+                    for (int x = 0; x < S; x++)
                     {
-                        uint vb = vertBase;
-                        for (int lx = 0; lx < S; lx++)
-                            for (int lz = 0; lz < S; lz++)
-                                vb = EmitFace(Faces.BOTTOM, baseX + lx, baseY, baseZ + lz, vb);
-                        vertBase = vb;
-                    }
-                }
-                else
-                {
-                    var bits = n.Value.FacePosYBits;
-                    var occ = n.Value.OccupancyBits;
-                    uint vb = vertBase;
-                    for (int lx = 0; lx < S; lx++)
-                    {
-                        for (int lz = 0; lz < S; lz++)
+                        int wx = baseX + x; if (wx >= maxX) break;
+                        for (int z = 0; z < S; z++)
                         {
-                            bool opaqueNeighbor;
-                            if (bits != null)
-                            {
-                                opaqueNeighbor = Bit(bits, lx * S + lz);
-                            }
-                            else if (occ != null)
-                            {
-                                opaqueNeighbor = OccBit(occ, lx, S - 1, lz, S) && NeighborOpaque(n.Value, lx, S - 1, lz, S);
-                            }
-                            else
-                            {
-                                opaqueNeighbor = NeighborOpaque(n.Value, lx, S - 1, lz, S);
-                            }
-                            if (!(thisOpaque && opaqueNeighbor))
-                            {
-                                vb = EmitFace(Faces.BOTTOM, baseX + lx, baseY, baseZ + lz, vb);
-                            }
+                            int wz = baseZ + z; if (wz >= maxZ) break;
+                            ushort nb = GetBlock(wx, baseY - 1, wz);
+                            if (nb == 0) EmitFaceInstance(block, 2, wx, baseY, wz, offsetList, tileIndexList, faceDirList);
                         }
                     }
-                    vertBase = vb;
                 }
             }
-
-            // ---------------------- +Y (TOP) ----------------------
+            // TOP
+            int wyTop = baseY + S - 1;
             if (sy == data.sectionsY - 1)
             {
-                uint vb = vertBase;
-                int wy = baseY + S - 1;
-                for (int lx = 0; lx < S; lx++)
+                for (int x = 0; x < S; x++)
                 {
-                    int gx = baseX + lx;
-                    for (int lz = 0; lz < S; lz++)
+                    int wx = baseX + x; if (wx >= maxX) break;
+                    for (int z = 0; z < S; z++)
                     {
-                        int gz = baseZ + lz;
-                        int planeIdx = gx * data.maxZ + gz;
-                        bool covered = Bit(planePosY, planeIdx);
-                        if (!covered || !thisOpaque)
-                        {
-                            vb = EmitFace(Faces.TOP, gx, wy, gz, vb);
-                        }
+                        int wz = baseZ + z; if (wz >= maxZ) break;
+                        if (wyTop == maxY - 1 && PlaneBit(data.NeighborPlanePosY, wx * maxZ + wz)) continue;
+                        EmitFaceInstance(block, 3, wx, wyTop, wz, offsetList, tileIndexList, faceDirList);
                     }
                 }
-                vertBase = vb;
             }
             else
             {
-                var n = Neighbor(sx, sy + 1, sz);
-                if (n == null || n.Value.NonAirCount == 0)
+                ref var n = ref Neighbor(sx, sy + 1, sz);
+                bool fullOcclude = (n.Kind == 1 && n.UniformBlockId != 0);
+                if (!fullOcclude)
                 {
-                    uint vb = vertBase;
-                    int wy = baseY + S - 1;
-                    for (int lx = 0; lx < S; lx++)
-                        for (int lz = 0; lz < S; lz++)
-                            vb = EmitFace(Faces.TOP, baseX + lx, wy, baseZ + lz, vb);
-                    vertBase = vb;
-                }
-                else if (n.Value.Kind == 1)
-                {
-                    if (!(thisOpaque && BlockProperties.IsOpaque(n.Value.UniformBlockId)))
+                    for (int x = 0; x < S; x++)
                     {
-                        uint vb = vertBase;
-                        int wy = baseY + S - 1;
-                        for (int lx = 0; lx < S; lx++)
-                            for (int lz = 0; lz < S; lz++)
-                                vb = EmitFace(Faces.TOP, baseX + lx, wy, baseZ + lz, vb);
-                        vertBase = vb;
-                    }
-                }
-                else
-                {
-                    var bits = n.Value.FaceNegYBits;
-                    var occ = n.Value.OccupancyBits;
-                    uint vb = vertBase;
-                    int wy = baseY + S - 1;
-                    for (int lx = 0; lx < S; lx++)
-                    {
-                        for (int lz = 0; lz < S; lz++)
+                        int wx = baseX + x; if (wx >= maxX) break;
+                        for (int z = 0; z < S; z++)
                         {
-                            bool opaqueNeighbor;
-                            if (bits != null)
-                            {
-                                opaqueNeighbor = Bit(bits, lx * S + lz);
-                            }
-                            else if (occ != null)
-                            {
-                                opaqueNeighbor = OccBit(occ, lx, 0, lz, S) && NeighborOpaque(n.Value, lx, 0, lz, S);
-                            }
-                            else
-                            {
-                                opaqueNeighbor = NeighborOpaque(n.Value, lx, 0, lz, S);
-                            }
-                            if (!(thisOpaque && opaqueNeighbor))
-                            {
-                                vb = EmitFace(Faces.TOP, baseX + lx, wy, baseZ + lz, vb);
-                            }
+                            int wz = baseZ + z; if (wz >= maxZ) break;
+                            ushort nb = GetBlock(wx, wyTop + 1, wz);
+                            if (nb == 0) EmitFaceInstance(block, 3, wx, wyTop, wz, offsetList, tileIndexList, faceDirList);
                         }
                     }
-                    vertBase = vb;
                 }
             }
-
-            // ---------------------- -Z (BACK) ----------------------
+            // BACK
             if (sz == 0)
             {
-                uint vb = vertBase;
-                for (int lx = 0; lx < S; lx++)
+                for (int x = 0; x < S; x++)
                 {
-                    int gx = baseX + lx;
-                    for (int ly = 0; ly < S; ly++)
+                    int wx = baseX + x; if (wx >= maxX) break;
+                    for (int y = 0; y < S; y++)
                     {
-                        int gy = baseY + ly;
-                        int planeIdx = gx * maxY + gy;
-                        bool covered = Bit(planeNegZ, planeIdx);
-                        if (!covered || !thisOpaque)
-                        {
-                            vb = EmitFace(Faces.BACK, gx, gy, baseZ, vb);
-                        }
+                        int wy = baseY + y; if (wy >= maxY) break;
+                        if (baseZ == 0 && PlaneBit(data.NeighborPlaneNegZ, wx * maxY + wy)) continue;
+                        EmitFaceInstance(block, 4, wx, wy, baseZ, offsetList, tileIndexList, faceDirList);
                     }
                 }
-                vertBase = vb;
             }
             else
             {
-                var n = Neighbor(sx, sy, sz - 1);
-                if (n == null || n.Value.NonAirCount == 0)
+                ref var n = ref Neighbor(sx, sy, sz - 1); bool fullOcclude = (n.Kind == 1 && n.UniformBlockId != 0);
+                if (!fullOcclude)
                 {
-                    uint vb = vertBase;
-                    for (int lx = 0; lx < S; lx++)
-                        for (int ly = 0; ly < S; ly++)
-                            vb = EmitFace(Faces.BACK, baseX + lx, baseY + ly, baseZ, vb);
-                    vertBase = vb;
-                }
-                else if (n.Value.Kind == 1)
-                {
-                    if (!(thisOpaque && BlockProperties.IsOpaque(n.Value.UniformBlockId)))
+                    for (int x = 0; x < S; x++)
                     {
-                        uint vb = vertBase;
-                        for (int lx = 0; lx < S; lx++)
-                            for (int ly = 0; ly < S; ly++)
-                                vb = EmitFace(Faces.BACK, baseX + lx, baseY + ly, baseZ, vb);
-                        vertBase = vb;
-                    }
-                }
-                else
-                {
-                    var bits = n.Value.FacePosZBits;
-                    var occ = n.Value.OccupancyBits;
-                    uint vb = vertBase;
-                    for (int lx = 0; lx < S; lx++)
-                    {
-                        for (int ly = 0; ly < S; ly++)
+                        int wx = baseX + x; if (wx >= maxX) break;
+                        for (int y = 0; y < S; y++)
                         {
-                            bool opaqueNeighbor;
-                            if (bits != null)
-                            {
-                                opaqueNeighbor = Bit(bits, lx * S + ly);
-                            }
-                            else if (occ != null)
-                            {
-                                opaqueNeighbor = OccBit(occ, lx, ly, S - 1, S) && NeighborOpaque(n.Value, lx, ly, S - 1, S);
-                            }
-                            else
-                            {
-                                opaqueNeighbor = NeighborOpaque(n.Value, lx, ly, S - 1, S);
-                            }
-                            if (!(thisOpaque && opaqueNeighbor))
-                            {
-                                vb = EmitFace(Faces.BACK, baseX + lx, baseY + ly, baseZ, vb);
-                            }
+                            int wy = baseY + y; if (wy >= maxY) break;
+                            ushort nb = GetBlock(wx, wy, baseZ - 1);
+                            if (nb == 0) EmitFaceInstance(block, 4, wx, wy, baseZ, offsetList, tileIndexList, faceDirList);
                         }
                     }
-                    vertBase = vb;
                 }
             }
-
-            // ---------------------- +Z (FRONT) ----------------------
+            // FRONT
+            int wzFront = baseZ + S - 1;
             if (sz == data.sectionsZ - 1)
             {
-                uint vb = vertBase;
-                int wz = baseZ + S - 1;
-                for (int lx = 0; lx < S; lx++)
+                for (int x = 0; x < S; x++)
                 {
-                    int gx = baseX + lx;
-                    for (int ly = 0; ly < S; ly++)
+                    int wx = baseX + x; if (wx >= maxX) break;
+                    for (int y = 0; y < S; y++)
                     {
-                        int gy = baseY + ly;
-                        int planeIdx = gx * maxY + gy;
-                        bool covered = Bit(planePosZ, planeIdx);
-                        if (!covered || !thisOpaque)
-                        {
-                            vb = EmitFace(Faces.FRONT, gx, gy, wz, vb);
-                        }
+                        int wy = baseY + y; if (wy >= maxY) break;
+                        if (wzFront == maxZ - 1 && PlaneBit(data.NeighborPlanePosZ, wx * maxY + wy)) continue;
+                        EmitFaceInstance(block, 5, wx, wy, wzFront, offsetList, tileIndexList, faceDirList);
                     }
                 }
-                vertBase = vb;
             }
             else
             {
-                var n = Neighbor(sx, sy, sz + 1);
-                if (n == null || n.Value.NonAirCount == 0)
+                ref var n = ref Neighbor(sx, sy, sz + 1); bool fullOcclude = (n.Kind == 1 && n.UniformBlockId != 0);
+                if (!fullOcclude)
                 {
-                    uint vb = vertBase;
-                    int wz = baseZ + S - 1;
-                    for (int lx = 0; lx < S; lx++)
-                        for (int ly = 0; ly < S; ly++)
-                            vb = EmitFace(Faces.FRONT, baseX + lx, baseY + ly, wz, vb);
-                    vertBase = vb;
-                }
-                else if (n.Value.Kind == 1)
-                {
-                    if (!(thisOpaque && BlockProperties.IsOpaque(n.Value.UniformBlockId)))
+                    for (int x = 0; x < S; x++)
                     {
-                        uint vb = vertBase;
-                        int wz = baseZ + S - 1;
-                        for (int lx = 0; lx < S; lx++)
-                            for (int ly = 0; ly < S; ly++)
-                                vb = EmitFace(Faces.FRONT, baseX + lx, baseY + ly, wz, vb);
-                        vertBase = vb;
-                    }
-                }
-                else
-                {
-                    var bits = n.Value.FaceNegZBits;
-                    var occ = n.Value.OccupancyBits;
-                    uint vb = vertBase;
-                    int wz = baseZ + S - 1;
-                    for (int lx = 0; lx < S; lx++)
-                    {
-                        for (int ly = 0; ly < S; ly++)
+                        int wx = baseX + x; if (wx >= maxX) break;
+                        for (int y = 0; y < S; y++)
                         {
-                            bool opaqueNeighbor;
-                            if (bits != null)
-                            {
-                                opaqueNeighbor = Bit(bits, lx * S + ly);
-                            }
-                            else if (occ != null)
-                            {
-                                opaqueNeighbor = OccBit(occ, lx, ly, 0, S) && NeighborOpaque(n.Value, lx, ly, 0, S);
-                            }
-                            else
-                            {
-                                opaqueNeighbor = NeighborOpaque(n.Value, lx, ly, 0, S);
-                            }
-                            if (!(thisOpaque && opaqueNeighbor))
-                            {
-                                vb = EmitFace(Faces.FRONT, baseX + lx, baseY + ly, wz, vb);
-                            }
+                            int wy = baseY + y; if (wy >= maxY) break;
+                            ushort nb = GetBlock(wx, wy, wzFront + 1);
+                            if (nb == 0) EmitFaceInstance(block, 5, wx, wy, wzFront, offsetList, tileIndexList, faceDirList);
                         }
                     }
-                    vertBase = vb;
                 }
             }
+            return true;
         }
-    */}
+    }
 }
