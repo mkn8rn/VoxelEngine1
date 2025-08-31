@@ -152,55 +152,40 @@ namespace MVGE_GEN.Utils
                     sec.IsAllAir = false; sec.MetadataBuilt = true; sec.BuildScratch = null; ReturnScratch(scratch); return;
                 }
 
-                // Rebuild distinct list if any replacements changed ids mid‑build.
-                if (scratch.DistinctDirty)
-                {
-                    Span<ushort> tmp = stackalloc ushort[8];
-                    int count = 0;
-                    for (int ci = 0; ci < COLUMN_COUNT; ci++)
-                    {
-                        ref var col = ref scratch.GetReadonlyColumn(ci);
-                        byte rc = col.RunCount;
-                        if (rc == 0) continue;
-                        if (rc >= 1 && col.Id0 != AIR)
-                        {
-                            bool found = false; for (int i = 0; i < count; i++) if (tmp[i] == col.Id0) { found = true; break; }
-                            if (!found && count < tmp.Length) tmp[count++] = col.Id0;
-                        }
-                        if (rc == 2 && col.Id1 != AIR)
-                        {
-                            bool found = false; for (int i = 0; i < count; i++) if (tmp[i] == col.Id1) { found = true; break; }
-                            if (!found && count < tmp.Length) tmp[count++] = col.Id1;
-                        }
-                    }
-                    scratch.DistinctCount = count; for (int i = 0; i < count; i++) scratch.Distinct[i] = tmp[i];
-                    scratch.DistinctDirty = false;
-                }
-
+                // -----------------------------------------------------------------------------------------
+                // Fused single traversal for distinct rebuild (if needed), counts, bounds and adjacency.
+                // -----------------------------------------------------------------------------------------
                 sec.VoxelCount = S * S * S;
                 int nonAir = 0; int adjY = 0; int adjX = 0; int adjZ = 0;
                 bool boundsInit = false; byte minX = 0, maxX = 0, minY = 0, maxY = 0, minZ = 0, maxZ = 0;
 
-                // -----------------------------------------------------------------------------------------
-                // Aggregate counts / bounds from columns using already maintained per‑column metadata.
-                // -----------------------------------------------------------------------------------------
+                Span<ushort> prevRowOccMask = stackalloc ushort[16];
+                prevRowOccMask.Clear();
+                bool rebuildDistinct = scratch.DistinctDirty;
+                Span<ushort> tmpDistinct = stackalloc ushort[8];
+                int tmpDistinctCount = rebuildDistinct ? 0 : scratch.DistinctCount;
+
                 for (int z = 0; z < S; z++)
                 {
-                    int zBase = z * S;
+                    ushort prevOccInRow = 0; // for X adjacency within row
                     for (int x = 0; x < S; x++)
                     {
-                        int ci = zBase + x;
+                        int ci = z * S + x;
                         ref var col = ref scratch.GetReadonlyColumn(ci);
-                        if (col.RunCount == 0) continue;
-                        if (col.NonAir == 0) continue;
+                        if (col.RunCount == 0 || col.NonAir == 0)
+                        {
+                            prevOccInRow = col.OccMask; // zero or stale
+                            continue;
+                        }
+
+                        // non-air + vertical adjacency accumulation
                         nonAir += col.NonAir;
                         adjY += col.AdjY;
 
-                        // Bounds: pull directly from run starts/ends (cheaper than scanning masks).
+                        // bounds update from run starts/ends
                         if (!boundsInit)
                         {
-                            boundsInit = true; minX = maxX = (byte)x; minZ = maxZ = (byte)z;
-                            minY = 15; maxY = 0; // will be refined
+                            boundsInit = true; minX = maxX = (byte)x; minZ = maxZ = (byte)z; minY = 15; maxY = 0;
                         }
                         if (col.RunCount >= 1)
                         {
@@ -212,7 +197,42 @@ namespace MVGE_GEN.Utils
                         }
                         if (x < minX) minX = (byte)x; else if (x > maxX) maxX = (byte)x;
                         if (z < minZ) minZ = (byte)z; else if (z > maxZ) maxZ = (byte)z;
+
+                        ushort occ = col.OccMask;
+                        // X adjacency (with previous column in same row)
+                        if (x > 0 && prevOccInRow != 0 && occ != 0)
+                            adjX += BitOperations.PopCount((uint)(occ & prevOccInRow));
+                        prevOccInRow = occ;
+                        // Z adjacency (with previous row same x)
+                        ushort prevZOcc = prevRowOccMask[x];
+                        if (z > 0 && prevZOcc != 0 && occ != 0)
+                            adjZ += BitOperations.PopCount((uint)(occ & prevZOcc));
+
+                        if (rebuildDistinct)
+                        {
+                            // gather distinct ids (up to 8) from the runs
+                            if (col.RunCount >= 1 && col.Id0 != AIR)
+                            {
+                                bool found = false; for (int i = 0; i < tmpDistinctCount; i++) if (tmpDistinct[i] == col.Id0) { found = true; break; }
+                                if (!found && tmpDistinctCount < 8) tmpDistinct[tmpDistinctCount++] = col.Id0;
+                            }
+                            if (col.RunCount == 2 && col.Id1 != AIR)
+                            {
+                                bool found = false; for (int i = 0; i < tmpDistinctCount; i++) if (tmpDistinct[i] == col.Id1) { found = true; break; }
+                                if (!found && tmpDistinctCount < 8) tmpDistinct[tmpDistinctCount++] = col.Id1;
+                            }
+                        }
                     }
+                    // store current row occ masks for next z layer comparison
+                    for (int x = 0; x < S; x++)
+                        prevRowOccMask[x] = scratch.GetReadonlyColumn(z * S + x).OccMask;
+                }
+
+                if (rebuildDistinct)
+                {
+                    scratch.DistinctCount = tmpDistinctCount;
+                    for (int i = 0; i < tmpDistinctCount; i++) scratch.Distinct[i] = tmpDistinct[i];
+                    scratch.DistinctDirty = false;
                 }
 
                 sec.NonAirCount = nonAir;
@@ -224,38 +244,11 @@ namespace MVGE_GEN.Utils
 
                 sec.HasBounds = true; sec.MinLX = minX; sec.MaxLX = maxX; sec.MinLY = minY; sec.MaxLY = maxY; sec.MinLZ = minZ; sec.MaxLZ = maxZ;
 
-                // -----------------------------------------------------------------------------------------
-                // Horizontal adjacency (X and Z directions) using compact 16‑bit per‑column occupancy.
-                // Each column's OccMask encodes which y levels are filled; overlapping bits across
-                // neighboring columns yield adjacency counts directly.
-                // -----------------------------------------------------------------------------------------
-                for (int z = 0; z < S; z++)
-                {
-                    int baseIdx = z * S;
-                    for (int x = 0; x < S - 1; x++)
-                    {
-                        ref var a = ref scratch.GetReadonlyColumn(baseIdx + x);
-                        ref var b = ref scratch.GetReadonlyColumn(baseIdx + x + 1);
-                        if (a.OccMask == 0 || b.OccMask == 0) continue;
-                        adjX += BitOperations.PopCount((uint)(a.OccMask & b.OccMask));
-                    }
-                }
-                for (int z = 0; z < S - 1; z++)
-                {
-                    int baseA = z * S; int baseB = (z + 1) * S;
-                    for (int x = 0; x < S; x++)
-                    {
-                        ref var a = ref scratch.GetReadonlyColumn(baseA + x);
-                        ref var b = ref scratch.GetReadonlyColumn(baseB + x);
-                        if (a.OccMask == 0 || b.OccMask == 0) continue;
-                        adjZ += BitOperations.PopCount((uint)(a.OccMask & b.OccMask));
-                    }
-                }
-
+                // Internal exposure (same formula) now that adjX/adjY/adjZ are computed.
                 sec.InternalExposure = 6 * nonAir - 2 * (adjX + adjY + adjZ);
 
                 // -----------------------------------------------------------------------------------------
-                // Representation selection heuristics.
+                // Representation selection heuristics (unchanged logic, using updated DistinctCount).
                 // -----------------------------------------------------------------------------------------
                 if (nonAir == S * S * S && scratch.DistinctCount == 1)
                 {
