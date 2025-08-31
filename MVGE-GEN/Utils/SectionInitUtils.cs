@@ -308,6 +308,65 @@ namespace MVGE_GEN.Utils
             ushort replacementId)
         {
             if (sec == null) return;
+
+            // Early fast-paths when there is no scratch attached: avoid creating scratch and unnecessary escalations.
+            var existingScratch = sec.BuildScratch as SectionBuildScratch;
+            if (existingScratch == null)
+            {
+                // If the replacement covers the full vertical range of the section, we can do some safe in-place substitutions
+                // without converting to scratch.
+                if (fullCover)
+                {
+                    // Uniform section -> change the uniform block id directly if predicate matches.
+                    if (sec.Kind == ChunkSection.RepresentationKind.Uniform)
+                    {
+                        ushort currentId = sec.UniformBlockId;
+                        if (currentId != replacementId)
+                        {
+                            var bt = baseTypeGetter(currentId);
+                            if (predicate(currentId, bt))
+                            {
+                                sec.UniformBlockId = replacementId;
+                                // metadata (counts, exposure) unaffected by id change
+                                // keep MetadataBuilt true
+                                return;
+                            }
+                        }
+                        return;
+                    }
+
+                    // Packed section with palette [AIR, id] (single non-air id). We can change the id in the palette
+                    // without modifying occupancy bitsets or allocating scratch, provided replacementId is non-air.
+                    if (sec.Kind == ChunkSection.RepresentationKind.Packed && sec.Palette != null && sec.Palette.Count == 2 && sec.Palette[0] == ChunkSection.AIR)
+                    {
+                        ushort oldId = sec.Palette[1];
+                        if (oldId != replacementId)
+                        {
+                            // Only handle non-air replacement here; replacing to AIR would require clearing occupancy.
+                            if (replacementId != ChunkSection.AIR)
+                            {
+                                var bt = baseTypeGetter(oldId);
+                                if (predicate(oldId, bt))
+                                {
+                                    // Update palette and lookup safely.
+                                    sec.Palette[1] = replacementId;
+                                    if (sec.PaletteLookup != null)
+                                    {
+                                        // Remove old mapping if present, and set new mapping to index 1.
+                                        if (sec.PaletteLookup.ContainsKey(oldId)) sec.PaletteLookup.Remove(oldId);
+                                        sec.PaletteLookup[replacementId] = 1;
+                                    }
+                                    // Other metadata (OccupancyBits, NonAirCount, InternalExposure, Face masks) remain valid.
+                                    return;
+                                }
+                            }
+                        }
+                        return;
+                    }
+                }
+            }
+
+            // Fallback: use scratch-based replacement logic.
             var scratch = GetScratch(sec);
             int distinctCount = scratch.DistinctCount;
             if (distinctCount == 0) return;

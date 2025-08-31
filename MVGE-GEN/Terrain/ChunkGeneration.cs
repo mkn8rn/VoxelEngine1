@@ -7,7 +7,6 @@ using MVGE_GEN.Utils;
 using MVGE_INF.Models.Generation;
 using MVGE_INF.Loaders;
 using MVGE_GEN.Models;
-using System.Collections.Generic; // needed for lists
 
 namespace MVGE_GEN.Terrain
 {
@@ -17,131 +16,6 @@ namespace MVGE_GEN.Terrain
         {
             var rules = biome.simpleReplacements;
             if (rules == null || rules.Count == 0) return;
-
-            if (AllStoneChunk || AllSoilChunk)
-            {
-                ushort uniformId = (ushort)(AllStoneChunk ? BaseBlockType.Stone : BaseBlockType.Soil);
-                var baseType = GetBaseTypeFast(uniformId);
-                // Collect only rules that actually target the uniform block id and intersect the chunk vertically.
-                List<SimpleReplacementRule> affectingRules = null;
-                foreach (var r in rules)
-                {
-                    if (r.microbiomeId.HasValue) continue;
-                    if (SectionOutside(chunkBaseY, topOfChunk, r.absoluteMinYlevel, r.absoluteMaxYlevel)) continue; // no vertical overlap with chunk
-                    if (!RuleTargetsBlock(r, uniformId, baseType)) continue; // does not target this block type (initially uniform stone/soil)
-                    affectingRules ??= new List<SimpleReplacementRule>();
-                    affectingRules.Add(r);
-                }
-                if (affectingRules == null || affectingRules.Count == 0) return; // no rule affects this uniform chunk
-
-                // For each uniform section, attempt to apply only full-cover uniform -> uniform substitutions
-                // without converting to scratch. Only when a partial-cover targeting rule applies (or multiple ids appear)
-                // do we convert that section.
-                int S = ChunkSection.SECTION_SIZE;
-                bool anySectionConverted = false;
-                bool anySectionChangedUniformId = false;
-                for (int sy = 0; sy < sectionsY; sy++)
-                {
-                    int sectionY0 = chunkBaseY + sy * S;
-                    int sectionY1 = sectionY0 + S - 1;
-
-                    // Gather subset of affecting rules that overlap this section vertically.
-                    List<SimpleReplacementRule> overlapping = null;
-                    foreach (var r in affectingRules)
-                    {
-                        if (!SectionOutside(sectionY0, sectionY1, r.absoluteMinYlevel, r.absoluteMaxYlevel))
-                        {
-                            overlapping ??= new List<SimpleReplacementRule>();
-                            overlapping.Add(r);
-                        }
-                    }
-                    if (overlapping == null) continue; // no overlap -> section untouched
-
-                    // Determine whether all overlapping rules that target current id(s) are full-cover.
-                    // We simulate sequential application per section; since section is uniform, only one id at a time.
-                    bool needsConversionForSy = false;
-                    // Precompute full-cover flag for each rule relative to this section band
-                    Span<bool> ruleFullCover = stackalloc bool[overlapping.Count];
-                    for (int i = 0; i < overlapping.Count; i++)
-                    {
-                        var r = overlapping[i];
-                        ruleFullCover[i] = SectionFullyInside(sectionY0, sectionY1, r.absoluteMinYlevel, r.absoluteMaxYlevel);
-                    }
-
-                    for (int sx = 0; sx < sectionsX && !needsConversionForSy; sx++)
-                    {
-                        for (int sz = 0; sz < sectionsZ && !needsConversionForSy; sz++)
-                        {
-                            var sec = sections[sx, sy, sz];
-                            if (sec == null) continue;
-                            if (sec.Kind != ChunkSection.RepresentationKind.Uniform) continue; // already non-uniform (unlikely here but safe)
-
-                            ushort currentId = sec.UniformBlockId;
-                            var currentBase = GetBaseTypeFast(currentId);
-
-                            for (int i = 0; i < overlapping.Count; i++)
-                            {
-                                var r = overlapping[i];
-                                // If rule would target current uniform id
-                                if (RuleTargetsBlock(r, currentId, currentBase))
-                                {
-                                    if (ruleFullCover[i])
-                                    {
-                                        // apply direct uniform substitution
-                                        currentId = r.block_type.ID;
-                                        currentBase = GetBaseTypeFast(currentId);
-                                    }
-                                    else
-                                    {
-                                        // partial cover requires conversion to scratch for this section
-                                        needsConversionForSy = true;
-                                        break;
-                                    }
-                                }
-                            }
-
-                            if (!needsConversionForSy)
-                            {
-                                if (currentId != sec.UniformBlockId)
-                                {
-                                    sec.UniformBlockId = currentId; // update in-place; remains uniform
-                                    anySectionChangedUniformId = true;
-                                }
-                            }
-                        }
-                    }
-
-                    if (needsConversionForSy)
-                    {
-                        // Convert only the uniform sections in this vertical slice sy
-                        for (int sx = 0; sx < sectionsX; sx++)
-                        for (int sz = 0; sz < sectionsZ; sz++)
-                        {
-                            var sec = sections[sx, sy, sz];
-                            if (sec == null) continue;
-                            if (sec.Kind == ChunkSection.RepresentationKind.Uniform)
-                            {
-                                SectionUtils.ConvertUniformSectionToScratch(sec);
-                                anySectionConverted = true;
-                            }
-                        }
-                    }
-                }
-
-                if (!anySectionConverted)
-                {
-                    // If we only changed uniform IDs (no partial conversions) update top-level uniform flags accordingly.
-                    if (anySectionChangedUniformId)
-                    {
-                        // original flags (AllStoneChunk / AllSoilChunk) no longer valid if any id differs from original uniformId
-                        AllStoneChunk = false; AllSoilChunk = false;
-                    }
-                    return; // nothing to convert; exit early
-                }
-
-                // At least one section required conversion, disable original uniform fast-path flags.
-                AllStoneChunk = AllSoilChunk = false; // will re-evaluate uniform state at finalize
-            }
 
             int S2 = ChunkSection.SECTION_SIZE;
             for (int sx=0; sx<sectionsX; sx++)
@@ -153,8 +27,6 @@ namespace MVGE_GEN.Terrain
                     for (int sz=0; sz<sectionsZ; sz++)
                     {
                         var sec = sections[sx,sy,sz]; if (sec==null) continue;
-                        // Skip uniform sections (either unaffected or only full-cover substituted) – they remain uniform
-                        if (sec.Kind == ChunkSection.RepresentationKind.Uniform) continue;
                         // Iterate rules
                         foreach (var r in rules)
                         {
@@ -165,7 +37,44 @@ namespace MVGE_GEN.Terrain
                             int yMax = r.absoluteMaxYlevel.HasValue ? Math.Min(sectionY1, r.absoluteMaxYlevel.Value) : sectionY1;
                             if (yMax < yMin) continue;
                             int lyStart = yMin - sectionY0; int lyEnd = yMax - sectionY0;
-                            // Predicate wrap
+
+                            // Quick prefilter: if the section has no build scratch and is packed/sparse,
+                            // check palette/sparse blocks cheaply to avoid converting to scratch unnecessarily.
+                            if (sec.BuildScratch == null)
+                            {
+                                bool maybeTarget = true; // default allow
+                                if (sec.Kind == ChunkSection.RepresentationKind.Packed && sec.Palette != null)
+                                {
+                                    maybeTarget = false;
+                                    foreach (var pid in sec.Palette)
+                                    {
+                                        if (pid == ChunkSection.AIR) continue;
+                                        var baseType = GetBaseTypeFast(pid);
+                                        if (RuleTargetsBlock(r, pid, baseType))
+                                        {
+                                            maybeTarget = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                                else if (sec.Kind == ChunkSection.RepresentationKind.Sparse && sec.SparseBlocks != null)
+                                {
+                                    maybeTarget = false;
+                                    foreach (var pid in sec.SparseBlocks)
+                                    {
+                                        if (pid == ChunkSection.AIR) continue;
+                                        var baseType = GetBaseTypeFast(pid);
+                                        if (RuleTargetsBlock(r, pid, baseType))
+                                        {
+                                            maybeTarget = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                                if (!maybeTarget) continue; // skip rule for this section — no palette/sparse id targets
+                            }
+
+                            // Predicate wrap - now call replacement (unchanged)
                             SectionUtils.ApplyReplacement(
                                 sec,
                                 lyStart, lyEnd,
