@@ -130,30 +130,31 @@ namespace MVGE_GEN.Utils
                     sec.BitData = RentBitData(128); // 4096 bits / 32 = 128 uint words
                     Array.Clear(sec.BitData, 0, 128);
 
-                    var occ = RentOccupancy();
+                    var occFull = RentOccupancy();
                     for (int ci = 0; ci < COLUMN_COUNT; ci++)
                     {
                         ref var col = ref scratch.GetReadonlyColumn(ci);
                         if (col.RunCount == 1 && col.Y0Start == 0 && col.Y0End == 15 && col.Id0 == candidateId)
                         {
-                            SetRunBits(occ, ci, 0, 15);
+                            SetRunBits(occFull, ci, 0, 15);
                         }
                     }
-                    sec.OccupancyBits = occ;
+                    sec.OccupancyBits = occFull;
                     // Copy 4096 occupancy bits into BitData (pair of uint per ulong word)
                     for (int w = 0; w < 64; w++)
                     {
-                        ulong ow = occ[w];
+                        ulong ow = occFull[w];
                         int dst = w << 1;
                         sec.BitData[dst] = (uint)(ow & 0xFFFFFFFF);
                         sec.BitData[dst + 1] = (uint)(ow >> 32);
                     }
-                    BuildFaceMasks(sec, occ);
+                    BuildFaceMasks(sec, occFull);
                     sec.IsAllAir = false; sec.MetadataBuilt = true; sec.BuildScratch = null; ReturnScratch(scratch); return;
                 }
 
                 // -----------------------------------------------------------------------------------------
                 // Fused single traversal for distinct rebuild (if needed), counts, bounds and adjacency.
+                // Opportunistic occupancy build for potential single-id classification.
                 // -----------------------------------------------------------------------------------------
                 sec.VoxelCount = S * S * S;
                 int nonAir = 0; int adjY = 0; int adjX = 0; int adjZ = 0;
@@ -164,6 +165,11 @@ namespace MVGE_GEN.Utils
                 bool rebuildDistinct = scratch.DistinctDirty;
                 Span<ushort> tmpDistinct = stackalloc ushort[8];
                 int tmpDistinctCount = rebuildDistinct ? 0 : scratch.DistinctCount;
+
+                // Opportunistic single-id tracking
+                bool singleIdPossible = !rebuildDistinct ? (scratch.DistinctCount == 1) : true; // optimistic if rebuilding
+                ushort firstId = 0;
+                ulong[] occSingle = null; // occupancy bits for single-id scenario
 
                 for (int z = 0; z < S; z++)
                 {
@@ -176,6 +182,31 @@ namespace MVGE_GEN.Utils
                         {
                             prevOccInRow = col.OccMask; // zero or stale
                             continue;
+                        }
+
+                        // distinct / single-id tracking
+                        if (singleIdPossible)
+                        {
+                            // Examine run ids present in this column
+                            if (col.RunCount >= 1 && col.Id0 != AIR)
+                            {
+                                if (firstId == 0) firstId = col.Id0;
+                                else if (col.Id0 != firstId) singleIdPossible = false;
+                            }
+                            if (singleIdPossible && col.RunCount == 2 && col.Id1 != AIR)
+                            {
+                                if (firstId == 0) firstId = col.Id1;
+                                else if (col.Id1 != firstId) singleIdPossible = false;
+                            }
+                            if (singleIdPossible && firstId != 0)
+                            {
+                                // lazily allocate occupancy bitset
+                                occSingle ??= RentOccupancy();
+                                if (occSingle[0] != 0 || occSingle[1] != 0) { /* assume zeroed by pool? */ }
+                                // set bits for this column's runs (id-agnostic since single id assumption)
+                                if (col.RunCount >= 1) SetRunBits(occSingle, ci, col.Y0Start, col.Y0End);
+                                if (col.RunCount == 2) SetRunBits(occSingle, ci, col.Y1Start, col.Y1End);
+                            }
                         }
 
                         // non-air + vertical adjacency accumulation
@@ -221,6 +252,9 @@ namespace MVGE_GEN.Utils
                                 bool found = false; for (int i = 0; i < tmpDistinctCount; i++) if (tmpDistinct[i] == col.Id1) { found = true; break; }
                                 if (!found && tmpDistinctCount < 8) tmpDistinct[tmpDistinctCount++] = col.Id1;
                             }
+                            // If more than one distinct id recorded and differs -> single-id no longer possible
+                            if (singleIdPossible && tmpDistinctCount > 1)
+                                singleIdPossible = false;
                         }
                     }
                     // store current row occ masks for next z layer comparison
@@ -235,10 +269,20 @@ namespace MVGE_GEN.Utils
                     scratch.DistinctDirty = false;
                 }
 
+                // If during traversal singleIdPossible became false but we allocated occSingle, return pool copy.
+                if (!singleIdPossible && occSingle != null)
+                {
+                    ReturnOccupancy(occSingle);
+                    occSingle = null;
+                }
+
+                bool finalSingleId = singleIdPossible && scratch.DistinctCount == 1 && scratch.Distinct[0] == firstId && firstId != 0;
+
                 sec.NonAirCount = nonAir;
                 if (!boundsInit || nonAir == 0)
                 {
                     // All air after aggregation.
+                    if (occSingle != null) ReturnOccupancy(occSingle);
                     sec.Kind = ChunkSection.RepresentationKind.Empty; sec.IsAllAir = true; sec.MetadataBuilt = true; ReturnScratch(scratch); sec.BuildScratch = null; return;
                 }
 
@@ -252,7 +296,7 @@ namespace MVGE_GEN.Utils
                 // -----------------------------------------------------------------------------------------
                 if (nonAir == S * S * S && scratch.DistinctCount == 1)
                 {
-                    // Fully filled section of one id.
+                    if (occSingle != null) ReturnOccupancy(occSingle); // uniform path won't use it
                     sec.Kind = ChunkSection.RepresentationKind.Uniform; sec.UniformBlockId = scratch.Distinct[0]; sec.IsAllAir = false; sec.CompletelyFull = true;
                 }
                 else if (nonAir <= 128)
@@ -275,10 +319,24 @@ namespace MVGE_GEN.Utils
                     sec.Kind = ChunkSection.RepresentationKind.Sparse; sec.SparseIndices = idxArr; sec.SparseBlocks = blkArr; sec.IsAllAir = false;
                     if (count >= SPARSE_MASK_BUILD_MIN && count <= 128)
                     {
-                        // Optional occupancy + face masks for mid‑sized sparse sets.
-                        var occSparse = RentOccupancy();
-                        for (int i = 0; i < idxArr.Length; i++) { int li = idxArr[i]; occSparse[li >> 6] |= 1UL << (li & 63); }
-                        sec.OccupancyBits = occSparse; BuildFaceMasks(sec, occSparse);
+                        if (finalSingleId && occSingle != null)
+                        {
+                            sec.OccupancyBits = occSingle; // reuse prebuilt occupancy
+                            BuildFaceMasks(sec, occSingle);
+                            occSingle = null; // consumed
+                        }
+                        else
+                        {
+                            var occSparse = RentOccupancy();
+                            for (int i = 0; i < idxArr.Length; i++) { int li = idxArr[i]; occSparse[li >> 6] |= 1UL << (li & 63); }
+                            sec.OccupancyBits = occSparse; BuildFaceMasks(sec, occSparse);
+                            if (occSingle != null) { ReturnOccupancy(occSingle); occSingle = null; }
+                        }
+                    }
+                    else if (occSingle != null)
+                    {
+                        // Not using occupancy for sparse (small count)
+                        ReturnOccupancy(occSingle); occSingle = null;
                     }
                 }
                 else
@@ -288,13 +346,18 @@ namespace MVGE_GEN.Utils
                     {
                         // Single id with gaps: store as 1‑bit packed occupancy.
                         sec.Kind = ChunkSection.RepresentationKind.Packed; sec.Palette = new List<ushort> { AIR, scratch.Distinct[0] }; sec.PaletteLookup = new Dictionary<ushort, int> { { AIR, 0 }, { scratch.Distinct[0], 1 } }; sec.BitsPerIndex = 1; sec.BitData = RentBitData(128); Array.Clear(sec.BitData, 0, 128);
-                        var occSingle = RentOccupancy();
-                        for (int ci = 0; ci < COLUMN_COUNT; ci++) { ref var col = ref scratch.GetReadonlyColumn(ci); byte rc = col.RunCount; if (rc == 0) continue; if (rc >= 1) SetRunBits(occSingle, ci, col.Y0Start, col.Y0End); if (rc == 2) SetRunBits(occSingle, ci, col.Y1Start, col.Y1End); }
-                        sec.OccupancyBits = occSingle; for (int w = 0; w < 64; w++) { ulong ow = occSingle[w]; int dst = w << 1; sec.BitData[dst] = (uint)(ow & 0xFFFFFFFF); sec.BitData[dst + 1] = (uint)(ow >> 32); }
-                        sec.IsAllAir = false; BuildFaceMasks(sec, occSingle);
+                        ulong[] occToUse = occSingle;
+                        if (occToUse == null)
+                        {
+                            occToUse = RentOccupancy();
+                            for (int ci = 0; ci < COLUMN_COUNT; ci++) { ref var col = ref scratch.GetReadonlyColumn(ci); byte rc = col.RunCount; if (rc == 0) continue; if (rc >= 1) SetRunBits(occToUse, ci, col.Y0Start, col.Y0End); if (rc == 2) SetRunBits(occToUse, ci, col.Y1Start, col.Y1End); }
+                        }
+                        sec.OccupancyBits = occToUse; for (int w = 0; w < 64; w++) { ulong ow = occToUse[w]; int dst = w << 1; sec.BitData[dst] = (uint)(ow & 0xFFFFFFFF); sec.BitData[dst + 1] = (uint)(ow >> 32); }
+                        sec.IsAllAir = false; BuildFaceMasks(sec, occToUse); occSingle = null; // consumed
                     }
                     else
                     {
+                        if (occSingle != null) { ReturnOccupancy(occSingle); occSingle = null; }
                         // Multi‑id fill -> expanded dense array.
                         sec.Kind = ChunkSection.RepresentationKind.DenseExpanded; var dense = RentDense(); var occDense = RentOccupancy();
                         for (int ci = 0; ci < COLUMN_COUNT; ci++) { ref var col = ref scratch.GetReadonlyColumn(ci); byte rc = col.RunCount; if (rc == 0) continue; int baseLi = ci << 4; if (rc >= 1) for (int y = col.Y0Start; y <= col.Y0End; y++) { int li = baseLi + y; dense[li] = col.Id0; occDense[li >> 6] |= 1UL << (li & 63); } if (rc == 2) for (int y = col.Y1Start; y <= col.Y1End; y++) { int li = baseLi + y; dense[li] = col.Id1; occDense[li >> 6] |= 1UL << (li & 63); } }
