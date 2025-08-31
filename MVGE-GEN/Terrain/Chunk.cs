@@ -129,12 +129,6 @@ namespace MVGE_GEN.Terrain
 
             InitializeSectionGrid();
             InitializeChunkData(); // implemented in ChunkGenerator partial
-
-            // Confirm burial only if all six faces ended up solid
-            if (candidateFullyBuried && FaceSolidNegX && FaceSolidPosX && FaceSolidNegY && FaceSolidPosY && FaceSolidNegZ && FaceSolidPosZ)
-            {
-                SetFullyBuried();
-            }
         }
 
         public void InitializeSectionGrid()
