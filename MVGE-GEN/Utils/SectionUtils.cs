@@ -17,6 +17,48 @@ namespace MVGE_GEN.Utils
         private const int SECTION_SIZE = ChunkSection.SECTION_SIZE;
         private const int VOXELS_PER_SECTION = SECTION_SIZE * SECTION_SIZE * SECTION_SIZE; // 4096
 
+
+        // ---------------------------------------------------------------------
+        // Unified entry point: finalize a section either from scratch run data
+        // (when BuildScratch present) or refresh metadata from existing
+        // representation when no scratch is available.
+        // ---------------------------------------------------------------------
+        public static void FinalizeOrRefreshSection(ChunkSection sec)
+        {
+            if (sec == null) return;
+            var scratch = sec.BuildScratch as SectionBuildScratch;
+            if (scratch != null)
+            {
+                // Reuse existing run-length based finalize path.
+                FinalizeSection(sec);
+                return;
+            }
+            // No scratch: refresh metadata from current representation.
+            // If already built and caller does not require a forced rebuild, we could early return.
+            // For safety always rebuild to ensure consistency after external mutations.
+            switch (sec.Kind)
+            {
+                case ChunkSection.RepresentationKind.Empty:
+                    sec.IsAllAir = true;
+                    sec.NonAirCount = 0;
+                    sec.MetadataBuilt = true;
+                    break;
+                case ChunkSection.RepresentationKind.Uniform:
+                    BuildMetadataUniform(sec);
+                    break;
+                case ChunkSection.RepresentationKind.Sparse:
+                    BuildMetadataSparse(sec);
+                    break;
+                case ChunkSection.RepresentationKind.DenseExpanded:
+                    BuildMetadataDense(sec);
+                    break;
+                case ChunkSection.RepresentationKind.Packed:
+                default:
+                    BuildMetadataPacked(sec);
+                    break;
+            }
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static ushort GetBlock(ChunkSection sec, int x, int y, int z)
         {

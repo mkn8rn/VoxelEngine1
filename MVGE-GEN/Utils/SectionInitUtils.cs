@@ -18,47 +18,6 @@ namespace MVGE_GEN.Utils
         private const int COLUMN_COUNT = S * S; // 256 columns per section (z * S + x)
 
         // ---------------------------------------------------------------------
-        // Unified entry point: finalize a section either from scratch run data
-        // (when BuildScratch present) or refresh metadata from existing
-        // representation when no scratch is available.
-        // ---------------------------------------------------------------------
-        public static void FinalizeOrRefreshSection(ChunkSection sec)
-        {
-            if (sec == null) return;
-            var scratch = sec.BuildScratch as SectionBuildScratch;
-            if (scratch != null)
-            {
-                // Reuse existing run-length based finalize path.
-                FinalizeSection(sec);
-                return;
-            }
-            // No scratch: refresh metadata from current representation.
-            // If already built and caller does not require a forced rebuild, we could early return.
-            // For safety always rebuild to ensure consistency after external mutations.
-            switch (sec.Kind)
-            {
-                case ChunkSection.RepresentationKind.Empty:
-                    sec.IsAllAir = true;
-                    sec.NonAirCount = 0;
-                    sec.MetadataBuilt = true;
-                    break;
-                case ChunkSection.RepresentationKind.Uniform:
-                    BuildMetadataUniform(sec);
-                    break;
-                case ChunkSection.RepresentationKind.Sparse:
-                    BuildMetadataSparse(sec);
-                    break;
-                case ChunkSection.RepresentationKind.DenseExpanded:
-                    BuildMetadataDense(sec);
-                    break;
-                case ChunkSection.RepresentationKind.Packed:
-                default:
-                    BuildMetadataPacked(sec);
-                    break;
-            }
-        }
-
-        // ---------------------------------------------------------------------
         // Array pools to reduce allocation / GC pressure.
         //  Occupancy: 64 * 8 bytes = 512 bytes (4096 bits) per section when needed.
         //  Dense: 4096 ushorts (8 KB) for DenseExpanded or escalated fallback.
