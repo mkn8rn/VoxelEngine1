@@ -254,6 +254,12 @@ namespace MVGE_GEN.Terrain
 
             precomputedHeightmap = null;
             BuildAllBoundaryPlanesInitial();
+
+            // Confirm burial only if all six faces ended up solid
+            if (candidateFullyBuried && FaceSolidNegX && FaceSolidPosX && FaceSolidNegY && FaceSolidPosY && FaceSolidNegZ && FaceSolidPosZ)
+            {
+                SetFullyBuried();
+            }
         }
 
         // Cheaply set per-face solidity flags using cached boundary plane bitsets
