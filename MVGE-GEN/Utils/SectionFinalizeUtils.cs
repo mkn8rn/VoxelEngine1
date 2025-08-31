@@ -131,12 +131,16 @@ namespace MVGE_GEN.Utils
                     Array.Clear(sec.BitData, 0, 128);
 
                     var occFull = RentOccupancy();
-                    for (int ci = 0; ci < COLUMN_COUNT; ci++)
+                    // Column-oriented occupancy using existing OccMask (full-height columns have 0xFFFF)
+                    if (C > 0)
                     {
-                        ref var col = ref scratch.GetReadonlyColumn(ci);
-                        if (col.RunCount == 1 && col.Y0Start == 0 && col.Y0End == 15 && col.Id0 == candidateId)
+                        for (int ci = 0; ci < COLUMN_COUNT; ci++)
                         {
-                            SetRunBits(occFull, ci, 0, 15);
+                            ref var col = ref scratch.GetReadonlyColumn(ci);
+                            if (col.RunCount == 1 && col.Y0Start == 0 && col.Y0End == 15 && col.Id0 == candidateId)
+                            {
+                                WriteColumnMask(occFull, ci, col.OccMask); // col.OccMask should be 0xFFFF
+                            }
                         }
                     }
                     sec.OccupancyBits = occFull;
@@ -204,8 +208,8 @@ namespace MVGE_GEN.Utils
                                 occSingle ??= RentOccupancy();
                                 if (occSingle[0] != 0 || occSingle[1] != 0) { /* assume zeroed by pool? */ }
                                 // set bits for this column's runs (id-agnostic since single id assumption)
-                                if (col.RunCount >= 1) SetRunBits(occSingle, ci, col.Y0Start, col.Y0End);
-                                if (col.RunCount == 2) SetRunBits(occSingle, ci, col.Y1Start, col.Y1End);
+                                if (col.RunCount >= 1) WriteColumnMask(occSingle, ci, (ushort)(((1 << (col.Y0End - col.Y0Start + 1)) - 1) << col.Y0Start));
+                                if (col.RunCount == 2) WriteColumnMask(occSingle, ci, (ushort)(((1 << (col.Y1End - col.Y1Start + 1)) - 1) << col.Y1Start));
                             }
                         }
 
@@ -321,9 +325,7 @@ namespace MVGE_GEN.Utils
                     {
                         if (finalSingleId && occSingle != null)
                         {
-                            sec.OccupancyBits = occSingle; // reuse prebuilt occupancy
-                            BuildFaceMasks(sec, occSingle);
-                            occSingle = null; // consumed
+                            sec.OccupancyBits = occSingle; BuildFaceMasks(sec, occSingle); occSingle = null;
                         }
                         else
                         {
@@ -350,10 +352,10 @@ namespace MVGE_GEN.Utils
                         if (occToUse == null)
                         {
                             occToUse = RentOccupancy();
-                            for (int ci = 0; ci < COLUMN_COUNT; ci++) { ref var col = ref scratch.GetReadonlyColumn(ci); byte rc = col.RunCount; if (rc == 0) continue; if (rc >= 1) SetRunBits(occToUse, ci, col.Y0Start, col.Y0End); if (rc == 2) SetRunBits(occToUse, ci, col.Y1Start, col.Y1End); }
+                            for (int ci = 0; ci < COLUMN_COUNT; ci++) { ref var col = ref scratch.GetReadonlyColumn(ci); if (col.RunCount == 0) continue; WriteColumnMask(occToUse, ci, col.OccMask); }
                         }
                         sec.OccupancyBits = occToUse; for (int w = 0; w < 64; w++) { ulong ow = occToUse[w]; int dst = w << 1; sec.BitData[dst] = (uint)(ow & 0xFFFFFFFF); sec.BitData[dst + 1] = (uint)(ow >> 32); }
-                        sec.IsAllAir = false; BuildFaceMasks(sec, occToUse); occSingle = null; // consumed
+                        sec.IsAllAir = false; BuildFaceMasks(sec, occToUse); occSingle = null;
                     }
                     else
                     {

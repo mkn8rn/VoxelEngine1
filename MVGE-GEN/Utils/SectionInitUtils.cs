@@ -557,5 +557,21 @@ namespace MVGE_GEN.Utils
                 occ[endWord] |= (1UL << remaining) - 1;
             }
         }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void WriteColumnMask(ulong[] occ, int columnIndex, ushort mask)
+        {
+            if (mask == 0) return;
+            int baseLi = columnIndex << 4; // 16 voxels per column
+            int w0 = baseLi >> 6;          // starting 64-bit word index
+            int bit = baseLi & 63;         // starting bit within word
+            ulong shifted = (ulong)mask << bit;
+            occ[w0] |= shifted;
+            int spill = bit + 16 - 64;    // how many bits overflow into next word (if any)
+            if (spill > 0)
+            {
+                occ[w0 + 1] |= (ulong)mask >> (16 - spill);
+            }
+        }
     }
 }
