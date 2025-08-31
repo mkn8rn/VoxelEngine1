@@ -13,10 +13,50 @@ namespace MVGE_GEN.Utils
 {
     internal static partial class SectionUtils
     {
-        public static bool EnableFastSectionClassification = true;
         private const int S = ChunkSection.SECTION_SIZE;
         private const int AIR = ChunkSection.AIR;
         private const int COLUMN_COUNT = S * S; // 256 columns per section (z * S + x)
+
+        // ---------------------------------------------------------------------
+        // Unified entry point: finalize a section either from scratch run data
+        // (when BuildScratch present) or refresh metadata from existing
+        // representation when no scratch is available.
+        // ---------------------------------------------------------------------
+        public static void FinalizeOrRefreshSection(ChunkSection sec)
+        {
+            if (sec == null) return;
+            var scratch = sec.BuildScratch as SectionBuildScratch;
+            if (scratch != null)
+            {
+                // Reuse existing run-length based finalize path.
+                FinalizeSection(sec);
+                return;
+            }
+            // No scratch: refresh metadata from current representation.
+            // If already built and caller does not require a forced rebuild, we could early return.
+            // For safety always rebuild to ensure consistency after external mutations.
+            switch (sec.Kind)
+            {
+                case ChunkSection.RepresentationKind.Empty:
+                    sec.IsAllAir = true;
+                    sec.NonAirCount = 0;
+                    sec.MetadataBuilt = true;
+                    break;
+                case ChunkSection.RepresentationKind.Uniform:
+                    BuildMetadataUniform(sec);
+                    break;
+                case ChunkSection.RepresentationKind.Sparse:
+                    BuildMetadataSparse(sec);
+                    break;
+                case ChunkSection.RepresentationKind.DenseExpanded:
+                    BuildMetadataDense(sec);
+                    break;
+                case ChunkSection.RepresentationKind.Packed:
+                default:
+                    BuildMetadataPacked(sec);
+                    break;
+            }
+        }
 
         // ---------------------------------------------------------------------
         // Array pools to reduce allocation / GC pressure.
