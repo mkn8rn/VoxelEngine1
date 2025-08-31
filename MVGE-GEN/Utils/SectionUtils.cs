@@ -443,61 +443,87 @@ namespace MVGE_GEN.Utils
             exposure = (int)(6L * N - 2L * internalAdj);
         }
 
-        private static void BuildFaceMasks(ChunkSection sec, ulong[] bits)
+        // Builds 256‑bit (4 * ulong) masks for each boundary face of a 16^3 section
+        // using the section's occupancy bitset (column‑major: li = ((z*16 + x)*16)+y).
+        // Layouts must match renderer expectations:
+        //  Neg/Pos X: YZ plane  index = z*16 + y
+        //  Neg/Pos Y: XZ plane  index = x*16 + z
+        //  Neg/Pos Z: XY plane  index = x*16 + y
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void BuildFaceMasks(ChunkSection sec, ulong[] occ)
         {
-            // Allocate mask arrays (4 ulongs per 256-bit plane)
-            sec.FaceNegXBits = new ulong[4];
-            sec.FacePosXBits = new ulong[4];
-            sec.FaceNegYBits = new ulong[4];
-            sec.FacePosYBits = new ulong[4];
-            sec.FaceNegZBits = new ulong[4];
-            sec.FacePosZBits = new ulong[4];
-            for (int y = 0; y < 16; y++)
+            const int S = 16;
+            if (occ == null) return;
+
+            static void EnsureAndClear(ref ulong[] arr)
             {
-                for (int z = 0; z < 16; z++)
+                if (arr == null) arr = new ulong[4];
+                else Array.Clear(arr);
+            }
+
+            EnsureAndClear(ref sec.FaceNegXBits);
+            EnsureAndClear(ref sec.FacePosXBits);
+            EnsureAndClear(ref sec.FaceNegYBits);
+            EnsureAndClear(ref sec.FacePosYBits);
+            EnsureAndClear(ref sec.FaceNegZBits);
+            EnsureAndClear(ref sec.FacePosZBits);
+
+            // X faces (x = 0 and x = 15)  -> YZ plane (z,y)
+            for (int z = 0; z < S; z++)
+            {
+                int zBase256 = z * 256; // z * 16 * 16
+                for (int y = 0; y < S; y++)
                 {
-                    int liNegX = LinearIndex(0, y, z);
-                    if ((bits[liNegX >> 6] & (1UL << (liNegX & 63))) != 0)
-                    {
-                        int yzIndex = z * 16 + y; sec.FaceNegXBits[yzIndex >> 6] |= 1UL << (yzIndex & 63);
-                    }
-                    int liPosX = LinearIndex(15, y, z);
-                    if ((bits[liPosX >> 6] & (1UL << (liPosX & 63))) != 0)
-                    {
-                        int yzIndex = z * 16 + y; sec.FacePosXBits[yzIndex >> 6] |= 1UL << (yzIndex & 63);
-                    }
+                    int liNeg = zBase256 + y;            // x=0
+                    int liPos = zBase256 + 240 + y;      // x=15 -> (15 * 16) = 240
+                    int idxYZ = z * S + y;               // plane index
+                    int w = idxYZ >> 6; int b = idxYZ & 63;
+
+                    if ((occ[liNeg >> 6] & (1UL << (liNeg & 63))) != 0UL)
+                        sec.FaceNegXBits[w] |= 1UL << b;
+                    if ((occ[liPos >> 6] & (1UL << (liPos & 63))) != 0UL)
+                        sec.FacePosXBits[w] |= 1UL << b;
                 }
             }
-            for (int x = 0; x < 16; x++)
+
+            // Y faces (y = 0 and y = 15) -> XZ plane (x,z)
+            for (int x = 0; x < S; x++)
             {
-                for (int z = 0; z < 16; z++)
+                int xOffset16 = x * 16;
+                for (int z = 0; z < S; z++)
                 {
-                    int liNegY = LinearIndex(x, 0, z);
-                    if ((bits[liNegY >> 6] & (1UL << (liNegY & 63))) != 0)
-                    {
-                        int xzIndex = x * 16 + z; sec.FaceNegYBits[xzIndex >> 6] |= 1UL << (xzIndex & 63);
-                    }
-                    int liPosY = LinearIndex(x, 15, z);
-                    if ((bits[liPosY >> 6] & (1UL << (liPosY & 63))) != 0)
-                    {
-                        int xzIndex = x * 16 + z; sec.FacePosYBits[xzIndex >> 6] |= 1UL << (xzIndex & 63);
-                    }
+                    int ci = z * S + x;          // (z,x) pair inside XZ iteration for convenience
+                    // Reconstruct li base for (z,x,y) ordering:
+                    // li = ((z*16 + x)*16)+y = (z*256) + (x*16) + y
+                    int baseZX = z * 256 + xOffset16;
+
+                    int liNeg = baseZX + 0;      // y=0
+                    int liPos = baseZX + 15;     // y=15
+                    int idxXZ = x * S + z;       // plane index mapping (x,z)
+                    int w = idxXZ >> 6; int b = idxXZ & 63;
+
+                    if ((occ[liNeg >> 6] & (1UL << (liNeg & 63))) != 0UL)
+                        sec.FaceNegYBits[w] |= 1UL << b;
+                    if ((occ[liPos >> 6] & (1UL << (liPos & 63))) != 0UL)
+                        sec.FacePosYBits[w] |= 1UL << b;
                 }
             }
-            for (int x = 0; x < 16; x++)
+
+            // Z faces (z = 0 and z = 15) -> XY plane (x,y)
+            for (int x = 0; x < S; x++)
             {
-                for (int y = 0; y < 16; y++)
+                int xOffset16 = x * 16;
+                for (int y = 0; y < S; y++)
                 {
-                    int liNegZ = LinearIndex(x, y, 0);
-                    if ((bits[liNegZ >> 6] & (1UL << (liNegZ & 63))) != 0)
-                    {
-                        int xyIndex = x * 16 + y; sec.FaceNegZBits[xyIndex >> 6] |= 1UL << (xyIndex & 63);
-                    }
-                    int liPosZ = LinearIndex(x, y, 15);
-                    if ((bits[liPosZ >> 6] & (1UL << (liPosZ & 63))) != 0)
-                    {
-                        int xyIndex = x * 16 + y; sec.FacePosZBits[xyIndex >> 6] |= 1UL << (xyIndex & 63);
-                    }
+                    int liNeg = xOffset16 + y;                 // z=0
+                    int liPos = 15 * 256 + xOffset16 + y;      // z=15 -> 15*256 = 3840
+                    int idxXY = x * S + y;                     // plane index (x,y)
+                    int w = idxXY >> 6; int b = idxXY & 63;
+
+                    if ((occ[liNeg >> 6] & (1UL << (liNeg & 63))) != 0UL)
+                        sec.FaceNegZBits[w] |= 1UL << b;
+                    if ((occ[liPos >> 6] & (1UL << (liPos & 63))) != 0UL)
+                        sec.FacePosZBits[w] |= 1UL << b;
                 }
             }
         }

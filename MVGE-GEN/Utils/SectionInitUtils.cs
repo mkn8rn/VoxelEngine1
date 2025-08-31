@@ -758,7 +758,14 @@ namespace MVGE_GEN.Utils
                             }
                         }
                         sec.IsAllAir = false;
-                        // Keep occupancy (not returned) so faces can be built later.
+                        // Build boundary face bitsets for this single-id packed section.
+                        // This allows the renderer to skip per-voxel neighbor checks and do bitset tests instead.
+                        if (sec.FaceNegXBits == null || sec.FacePosXBits == null ||
+                            sec.FaceNegYBits == null || sec.FacePosYBits == null ||
+                            sec.FaceNegZBits == null || sec.FacePosZBits == null)
+                        {
+                            BuildFaceMasks(sec, occ);
+                        }
                     }
                     else
                     {

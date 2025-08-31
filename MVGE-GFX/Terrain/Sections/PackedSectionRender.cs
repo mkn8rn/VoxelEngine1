@@ -18,14 +18,13 @@ namespace MVGE_GFX.Terrain.Sections
         private static readonly ulong[] _maskZ15 = new ulong[64];
         private static bool _boundaryMasksInit;
 
-        // li -> local coordinate decode tables (optimization 13)
+        // li -> local coordinate decode tables
         private static byte[] _lxFromLi; // length 4096
         private static byte[] _lyFromLi;
         private static byte[] _lzFromLi;
         private static bool _liDecodeInit;
 
-        // Prebuilt relative vertex byte patterns per face: 4 verts * (x,y,z) = 12 bytes (optimization 9)
-        // Generated lazily from RawFaceData the first time needed.
+        // Optional prebuilt vertex patterns (currently unused in this method)
         private static byte[][] _faceVertexBytes; // index by (int)Faces
         private static bool _faceVertexInit;
 
@@ -41,24 +40,13 @@ namespace MVGE_GFX.Terrain.Sections
                     for (int y = 0; y < 16; y++)
                     {
                         int li = ((z * 16 + x) * 16) + y;  // linear index
-                        int w = li >> 6;                  // word index
-                        int b = li & 63;                  // bit index within word
+                        int w = li >> 6;                  // word index (0..63)
+                        int b = li & 63;                  // bit index inside word
                         ulong bit = 1UL << b;
 
-                        if (x == 0)
-                            _maskX0[w] |= bit;
-                        else if (x == 15)
-                            _maskX15[w] |= bit;
-
-                        if (y == 0)
-                            _maskY0[w] |= bit;
-                        else if (y == 15)
-                            _maskY15[w] |= bit;
-
-                        if (z == 0)
-                            _maskZ0[w] |= bit;
-                        else if (z == 15)
-                            _maskZ15[w] |= bit;
+                        if (x == 0) _maskX0[w] |= bit; else if (x == 15) _maskX15[w] |= bit;
+                        if (y == 0) _maskY0[w] |= bit; else if (y == 15) _maskY15[w] |= bit;
+                        if (z == 0) _maskZ0[w] |= bit; else if (z == 15) _maskZ15[w] |= bit;
                     }
                 }
             }
@@ -110,21 +98,24 @@ namespace MVGE_GFX.Terrain.Sections
             _faceVertexInit = true;
         }
 
-        private bool EmitPackedSectionInstances(ref SectionPrerenderDesc desc, int sx, int sy, int sz, int S,
-        List<byte> offsetList, List<uint> tileIndexList, List<byte> faceDirList)
+        private bool EmitPackedSectionInstances(
+            ref SectionPrerenderDesc desc,
+            int sx, int sy, int sz, int S,
+            List<byte> offsetList,
+            List<uint> tileIndexList,
+            List<byte> faceDirList)
         {
-            // Preconditions: single-id packed (always true for our Packed), occupancy present, some non-air.
+            // Preconditions: must be single‑id packed (BitsPerIndex=1, palette[1] is block id) with occupancy.
             if (desc.OccupancyBits == null || desc.NonAirCount == 0) return false;
             if (desc.Palette == null || desc.Palette.Count < 2 || desc.BitsPerIndex != 1) return false;
 
             EnsureBoundaryMasks();
             EnsureLiDecode();
 
-            var occ = desc.OccupancyBits; // ulong[64] occupancy bitset
-            ushort block = desc.Palette[1]; // constant block id (non-air)
+            var occ = desc.OccupancyBits;          // 64 ulongs (4096 bits) occupancy
+            ushort block = desc.Palette[1];        // single non‑air block id
 
-            // Precompute tileIndex once (instead of per-face EmitFaceInstance path).
-            // Equivalent logic to EmitFaceInstance choosing min UV tile corner.
+            // Precompute tileIndex (same for all faces of this block).
             var uvFaceSample = atlas.GetBlockUVs(block, Faces.LEFT);
             byte minTileX = 255, minTileY = 255;
             for (int i = 0; i < 4; i++)
@@ -141,7 +132,7 @@ namespace MVGE_GFX.Terrain.Sections
             int maxY = data.maxY;
             int maxZ = data.maxZ;
 
-            // Bounds clamp (still honor tight bounding box)
+            // Clamp to tight bounds if present
             int lxMin = 0, lxMax = S - 1;
             int lyMin = 0, lyMax = S - 1;
             int lzMin = 0, lzMax = S - 1;
@@ -152,63 +143,37 @@ namespace MVGE_GFX.Terrain.Sections
                 lzMin = desc.MinLZ; lzMax = desc.MaxLZ;
             }
 
-            // Neighbor section descriptors for direct occupancy probes
+            // Neighbor section descriptors (only for cross‑section boundary occlusion)
             int sxCount = data.sectionsX; int syCount = data.sectionsY; int szCount = data.sectionsZ;
             SectionPrerenderDesc[] allSecs = data.SectionDescs;
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             static int SecIndex(int sxL, int syL, int szL, int syC, int szC) => ((sxL * syC) + syL) * szC + szL;
 
-            bool hasLeft = sx > 0;                 ref SectionPrerenderDesc leftSec = ref hasLeft ? ref allSecs[SecIndex(sx - 1, sy, sz, syCount, szCount)] : ref desc; // dummy ref when unused
+            bool hasLeft = sx > 0;                 ref SectionPrerenderDesc leftSec = ref hasLeft ? ref allSecs[SecIndex(sx - 1, sy, sz, syCount, szCount)] : ref desc;
             bool hasRight = sx + 1 < sxCount;      ref SectionPrerenderDesc rightSec = ref hasRight ? ref allSecs[SecIndex(sx + 1, sy, sz, syCount, szCount)] : ref desc;
             bool hasDown = sy > 0;                 ref SectionPrerenderDesc downSec = ref hasDown ? ref allSecs[SecIndex(sx, sy - 1, sz, syCount, szCount)] : ref desc;
             bool hasUp = sy + 1 < syCount;         ref SectionPrerenderDesc upSec = ref hasUp ? ref allSecs[SecIndex(sx, sy + 1, sz, syCount, szCount)] : ref desc;
             bool hasBack = sz > 0;                 ref SectionPrerenderDesc backSec = ref hasBack ? ref allSecs[SecIndex(sx, sy, sz - 1, syCount, szCount)] : ref desc;
             bool hasFront = sz + 1 < szCount;      ref SectionPrerenderDesc frontSec = ref hasFront ? ref allSecs[SecIndex(sx, sy, sz + 1, syCount, szCount)] : ref desc;
 
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            static bool SectionVoxelSolid(ref SectionPrerenderDesc d, int lx, int ly, int lz)
-            {
-                if (d.Kind == 0 || d.NonAirCount == 0) return false;
-                switch (d.Kind)
-                {
-                    case 1: // Uniform
-                        return d.UniformBlockId != 0;
-                    case 2: // Sparse (should have occupancy bits built in metadata)
-                    case 4: // Packed
-                        if (d.OccupancyBits != null)
-                        {
-                            int li = ((lz * 16 + lx) * 16) + ly;
-                            return (d.OccupancyBits[li >> 6] & (1UL << (li & 63))) != 0UL;
-                        }
-                        // fallback sparse scan
-                        if (d.Kind == 2 && d.SparseIndices != null)
-                        {
-                            int liS = ((lz * 16 + lx) * 16) + ly;
-                            var arr = d.SparseIndices;
-                            for (int i = 0; i < arr.Length; i++) if (arr[i] == liS) return true;
-                        }
-                        return false;
-                    case 3: // DenseExpanded
-                        if (d.ExpandedDense != null)
-                        {
-                            int liD = ((lz * 16 + lx) * 16) + ly;
-                            return d.ExpandedDense[liD] != 0;
-                        }
-                        return false;
-                    default:
-                        return false;
-                }
-            }
+            // Precomputed boundary face occupancy (256 bits each) created during finalization for Packed.
+            ulong[] faceNegX = desc.FaceNegXBits;
+            ulong[] facePosX = desc.FacePosXBits;
+            ulong[] faceNegY = desc.FaceNegYBits;
+            ulong[] facePosY = desc.FacePosYBits;
+            ulong[] faceNegZ = desc.FaceNegZBits;
+            ulong[] facePosZ = desc.FacePosZBits;
 
-            // Allocate face masks on stack (same sequence as DenseExpanded path)
+            // Face bitsets (internal faces + later added visible boundary faces)
             Span<ulong> shift = stackalloc ulong[64];
-            Span<ulong> faceNX = stackalloc ulong[64];
-            Span<ulong> facePX = stackalloc ulong[64];
-            Span<ulong> faceNY = stackalloc ulong[64];
-            Span<ulong> facePY = stackalloc ulong[64];
-            Span<ulong> faceNZ = stackalloc ulong[64];
-            Span<ulong> facePZ = stackalloc ulong[64];
+            Span<ulong> faceNX = stackalloc ulong[64]; // -X
+            Span<ulong> facePX = stackalloc ulong[64]; // +X
+            Span<ulong> faceNY = stackalloc ulong[64]; // -Y
+            Span<ulong> facePY = stackalloc ulong[64]; // +Y
+            Span<ulong> faceNZ = stackalloc ulong[64]; // -Z
+            Span<ulong> facePZ = stackalloc ulong[64]; // +Z
 
+            // Bitset shifting helpers (same as DenseExpanded path)
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             static void ShiftLeft(ReadOnlySpan<ulong> src, int shiftBits, Span<ulong> dst)
             {
@@ -230,7 +195,6 @@ namespace MVGE_GFX.Terrain.Sections
                     dst[i] = v;
                 }
             }
-
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             static void ShiftRight(ReadOnlySpan<ulong> src, int shiftBits, Span<ulong> dst)
             {
@@ -253,54 +217,59 @@ namespace MVGE_GFX.Terrain.Sections
                 }
             }
 
-            const int strideX = 16;
-            const int strideY = 1;
-            const int strideZ = 256;
+            const int strideX = 16;   // linear index delta for +X (skip one 16‑voxel Y column)
+            const int strideY = 1;    // +Y delta
+            const int strideZ = 256;  // +Z delta (16 * 16)
 
-            // Internal faces (-X, exclude boundary X0)
+            // --------------------------------------------------
+            // 1. Internal faces (exclude boundary layers first)
+            // --------------------------------------------------
+            // -X internal faces
             ShiftLeft(occ, strideX, shift);
             for (int i = 0; i < 64; i++)
             {
-                ulong cand = occ[i] & ~_maskX0[i];
-                faceNX[i] = cand & ~shift[i];
+                ulong candidates = occ[i] & ~_maskX0[i];
+                faceNX[i] = candidates & ~shift[i];
             }
-            // +X
+            // +X internal faces
             ShiftRight(occ, strideX, shift);
             for (int i = 0; i < 64; i++)
             {
-                ulong cand = occ[i] & ~_maskX15[i];
-                facePX[i] = cand & ~shift[i];
+                ulong candidates = occ[i] & ~_maskX15[i];
+                facePX[i] = candidates & ~shift[i];
             }
-            // -Y
+            // -Y internal faces
             ShiftLeft(occ, strideY, shift);
             for (int i = 0; i < 64; i++)
             {
-                ulong cand = occ[i] & ~_maskY0[i];
-                faceNY[i] = cand & ~shift[i];
+                ulong candidates = occ[i] & ~_maskY0[i];
+                faceNY[i] = candidates & ~shift[i];
             }
-            // +Y
+            // +Y internal faces
             ShiftRight(occ, strideY, shift);
             for (int i = 0; i < 64; i++)
             {
-                ulong cand = occ[i] & ~_maskY15[i];
-                facePY[i] = cand & ~shift[i];
+                ulong candidates = occ[i] & ~_maskY15[i];
+                facePY[i] = candidates & ~shift[i];
             }
-            // -Z
+            // -Z internal faces
             ShiftLeft(occ, strideZ, shift);
             for (int i = 0; i < 64; i++)
             {
-                ulong cand = occ[i] & ~_maskZ0[i];
-                faceNZ[i] = cand & ~shift[i];
+                ulong candidates = occ[i] & ~_maskZ0[i];
+                faceNZ[i] = candidates & ~shift[i];
             }
-            // +Z
+            // +Z internal faces
             ShiftRight(occ, strideZ, shift);
             for (int i = 0; i < 64; i++)
             {
-                ulong cand = occ[i] & ~_maskZ15[i];
-                facePZ[i] = cand & ~shift[i];
+                ulong candidates = occ[i] & ~_maskZ15[i];
+                facePZ[i] = candidates & ~shift[i];
             }
 
-            // Boundary integration (only outward faces on boundary voxels)
+            // --------------------------------------------------
+            // 2. Boundary faces: add only visible boundary voxels
+            // --------------------------------------------------
             var planeNegX = data.NeighborPlaneNegX; var planePosX = data.NeighborPlanePosX;
             var planeNegY = data.NeighborPlaneNegY; var planePosY = data.NeighborPlanePosY;
             var planeNegZ = data.NeighborPlaneNegZ; var planePosZ = data.NeighborPlanePosZ;
@@ -309,197 +278,213 @@ namespace MVGE_GFX.Terrain.Sections
             static bool PlaneBit(ulong[] plane, int index)
             {
                 if (plane == null) return false;
-                int w = index >> 6;
-                int b = index & 63;
-                return w < plane.Length && (plane[w] & (1UL << b)) != 0UL;
+                int w = index >> 6; int b = index & 63; return w < plane.Length && (plane[w] & (1UL << b)) != 0UL;
+            }
+
+            // Fallback neighbor voxel test when masks missing
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            static bool NeighborVoxelSolidFallback(ref SectionPrerenderDesc n, int lx, int ly, int lz)
+            {
+                if (n.Kind == 0 || n.NonAirCount == 0) return false;
+                switch (n.Kind)
+                {
+                    case 1: return n.UniformBlockId != 0; // Uniform
+                    case 2: // Sparse
+                        if (n.SparseIndices != null)
+                        {
+                            int li = ((lz * 16 + lx) * 16) + ly;
+                            var arr = n.SparseIndices;
+                            for (int i = 0; i < arr.Length; i++) if (arr[i] == li) return true;
+                        }
+                        return false;
+                    case 3: // DenseExpanded
+                        if (n.ExpandedDense != null)
+                        {
+                            int liD = ((lz * 16 + lx) * 16) + ly;
+                            return n.ExpandedDense[liD] != 0;
+                        }
+                        return false;
+                    case 4: // Packed (multi-id or we lack face masks) use occupancy bits if present
+                        if (n.OccupancyBits != null)
+                        {
+                            int li = ((lz * 16 + lx) * 16) + ly;
+                            return (n.OccupancyBits[li >> 6] & (1UL << (li & 63))) != 0UL;
+                        }
+                        return false;
+                    default: return false;
+                }
+            }
+
+            // Neighbor boundary probe using its precomputed face bitsets (with fallback)
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            static bool NeighborBoundarySolid(ref SectionPrerenderDesc n, int faceDir, int x, int y, int z)
+            {
+                ulong[] mask = null; int localIndex = 0; int lx = x, ly = y, lz = z;
+                switch (faceDir)
+                {
+                    case 0: mask = n.FacePosXBits; localIndex = z * 16 + y; lx = 15; break; // neighbor +X face
+                    case 1: mask = n.FaceNegXBits; localIndex = z * 16 + y; lx = 0; break;  // neighbor -X face
+                    case 2: mask = n.FacePosYBits; localIndex = x * 16 + z; ly = 15; break; // neighbor +Y
+                    case 3: mask = n.FaceNegYBits; localIndex = x * 16 + z; ly = 0; break;  // neighbor -Y
+                    case 4: mask = n.FacePosZBits; localIndex = x * 16 + y; lz = 15; break; // neighbor +Z
+                    case 5: mask = n.FaceNegZBits; localIndex = x * 16 + y; lz = 0; break;  // neighbor -Z
+                }
+                if (mask != null)
+                {
+                    int w = localIndex >> 6; int b = localIndex & 63; if ((mask[w] & (1UL << b)) != 0UL) return true;
+                }
+                // fallback per-voxel check if mask missing or bit not set
+                return NeighborVoxelSolidFallback(ref n, lx, ly, lz);
             }
 
             // LEFT boundary (x=0)
-            if (lxMin == 0)
+            if (lxMin == 0 && faceNegX != null)
             {
-                for (int wi = 0; wi < 64; wi++)
+                int wx = baseX;
+                for (int z = lzMin; z <= lzMax; z++)
                 {
-                    ulong word = occ[wi] & _maskX0[wi];
-                    while (word != 0)
+                    for (int y = lyMin; y <= lyMax; y++)
                     {
-                        int bit = BitOperations.TrailingZeroCount(word);
-                        word &= word - 1;
-                        int li = (wi << 6) + bit;
-                        int ly = _lyFromLi[li];
-                        int lz = _lzFromLi[li];
-                        if (ly < lyMin || ly > lyMax || lz < lzMin || lz > lzMax) continue;
-
+                        int idx = z * 16 + y; int w = idx >> 6; int b = idx & 63;
+                        if ((faceNegX[w] & (1UL << b)) == 0) continue; // no voxel
                         bool hidden = false;
-                        int wx = baseX;
-                        int wy = baseY + ly;
-                        int wz = baseZ + lz;
                         if (wx == 0)
                         {
-                            if (PlaneBit(planeNegX, wz * maxY + wy)) hidden = true;
+                            if (PlaneBit(planeNegX, (baseZ + z) * maxY + (baseY + y))) hidden = true;
                         }
-                        else if (hasLeft && SectionVoxelSolid(ref leftSec, 15, ly, lz))
+                        else if (hasLeft && NeighborBoundarySolid(ref leftSec, 0, 15, y, z)) hidden = true;
+                        if (!hidden)
                         {
-                            hidden = true;
+                            int li = ((z * 16) + 0) * 16 + y; // voxel linear index at x=0
+                            faceNX[li >> 6] |= 1UL << (li & 63);
                         }
-                        if (!hidden) faceNX[wi] |= 1UL << bit;
                     }
                 }
             }
             // RIGHT boundary (x=15)
-            if (lxMax == S - 1)
+            if (lxMax == S - 1 && facePosX != null)
             {
-                int wxRight = baseX + (S - 1);
-                for (int wi = 0; wi < 64; wi++)
+                int wxRight = baseX + 15;
+                for (int z = lzMin; z <= lzMax; z++)
                 {
-                    ulong word = occ[wi] & _maskX15[wi];
-                    while (word != 0)
+                    for (int y = lyMin; y <= lyMax; y++)
                     {
-                        int bit = BitOperations.TrailingZeroCount(word);
-                        word &= word - 1;
-                        int li = (wi << 6) + bit;
-                        int ly = _lyFromLi[li];
-                        int lz = _lzFromLi[li];
-                        if (ly < lyMin || ly > lyMax || lz < lzMin || lz > lzMax) continue;
-
+                        int idx = z * 16 + y; int w = idx >> 6; int b = idx & 63;
+                        if ((facePosX[w] & (1UL << b)) == 0) continue;
                         bool hidden = false;
-                        int wy = baseY + ly;
-                        int wz = baseZ + lz;
                         if (wxRight == maxX - 1)
                         {
-                            if (PlaneBit(planePosX, wz * maxY + wy)) hidden = true;
+                            if (PlaneBit(planePosX, (baseZ + z) * maxY + (baseY + y))) hidden = true;
                         }
-                        else if (hasRight && SectionVoxelSolid(ref rightSec, 0, ly, lz))
+                        else if (hasRight && NeighborBoundarySolid(ref rightSec, 1, 0, y, z)) hidden = true;
+                        if (!hidden)
                         {
-                            hidden = true;
+                            int li = ((z * 16) + 15) * 16 + y; // x=15
+                            facePX[li >> 6] |= 1UL << (li & 63);
                         }
-                        if (!hidden) facePX[wi] |= 1UL << bit;
                     }
                 }
             }
-            // BOTTOM (y=0)
-            if (lyMin == 0)
+            // BOTTOM boundary (y=0)
+            if (lyMin == 0 && faceNegY != null)
             {
-                for (int wi = 0; wi < 64; wi++)
+                int wy = baseY;
+                for (int x = lxMin; x <= lxMax; x++)
                 {
-                    ulong word = occ[wi] & _maskY0[wi];
-                    while (word != 0)
+                    for (int z = lzMin; z <= lzMax; z++)
                     {
-                        int bit = BitOperations.TrailingZeroCount(word);
-                        word &= word - 1;
-                        int li = (wi << 6) + bit;
-                        int lx = _lxFromLi[li];
-                        int lz = _lzFromLi[li];
-                        if (lx < lxMin || lx > lxMax || lz < lzMin || lz > lzMax) continue;
-
+                        int idx = x * 16 + z; int w = idx >> 6; int b = idx & 63;
+                        if ((faceNegY[w] & (1UL << b)) == 0) continue;
                         bool hidden = false;
-                        int wx = baseX + lx;
-                        int wz = baseZ + lz;
-                        if (baseY == 0)
+                        if (wy == 0)
                         {
-                            if (PlaneBit(planeNegY, wx * maxZ + wz)) hidden = true;
+                            if (PlaneBit(planeNegY, (baseX + x) * maxZ + (baseZ + z))) hidden = true;
                         }
-                        else if (hasDown && SectionVoxelSolid(ref downSec, lx, 15, lz))
+                        else if (hasDown && NeighborBoundarySolid(ref downSec, 2, x, 15, z)) hidden = true;
+                        if (!hidden)
                         {
-                            hidden = true;
+                            int li = ((z * 16 + x) * 16) + 0; // y=0
+                            faceNY[li >> 6] |= 1UL << (li & 63);
                         }
-                        if (!hidden) faceNY[wi] |= 1UL << bit;
                     }
                 }
             }
-            // TOP (y=15)
-            if (lyMax == S - 1)
+            // TOP boundary (y=15)
+            if (lyMax == S - 1 && facePosY != null)
             {
-                int wyTop = baseY + (S - 1);
-                for (int wi = 0; wi < 64; wi++)
+                int wyTop = baseY + 15;
+                for (int x = lxMin; x <= lxMax; x++)
                 {
-                    ulong word = occ[wi] & _maskY15[wi];
-                    while (word != 0)
+                    for (int z = lzMin; z <= lzMax; z++)
                     {
-                        int bit = BitOperations.TrailingZeroCount(word);
-                        word &= word - 1;
-                        int li = (wi << 6) + bit;
-                        int lx = _lxFromLi[li];
-                        int lz = _lzFromLi[li];
-                        if (lx < lxMin || lx > lxMax || lz < lzMin || lz > lzMax) continue;
-
+                        int idx = x * 16 + z; int w = idx >> 6; int b = idx & 63;
+                        if ((facePosY[w] & (1UL << b)) == 0) continue;
                         bool hidden = false;
-                        int wx = baseX + lx;
-                        int wz = baseZ + lz;
                         if (wyTop == maxY - 1)
                         {
-                            if (PlaneBit(planePosY, wx * maxZ + wz)) hidden = true;
+                            if (PlaneBit(planePosY, (baseX + x) * maxZ + (baseZ + z))) hidden = true;
                         }
-                        else if (hasUp && SectionVoxelSolid(ref upSec, lx, 0, lz))
+                        else if (hasUp && NeighborBoundarySolid(ref upSec, 3, x, 0, z)) hidden = true;
+                        if (!hidden)
                         {
-                            hidden = true;
+                            int li = ((z * 16 + x) * 16) + 15; // y=15
+                            facePY[li >> 6] |= 1UL << (li & 63);
                         }
-                        if (!hidden) facePY[wi] |= 1UL << bit;
                     }
                 }
             }
-            // BACK (z=0)
-            if (lzMin == 0)
+            // BACK boundary (z=0)
+            if (lzMin == 0 && faceNegZ != null)
             {
-                for (int wi = 0; wi < 64; wi++)
+                int wz = baseZ;
+                for (int x = lxMin; x <= lxMax; x++)
                 {
-                    ulong word = occ[wi] & _maskZ0[wi];
-                    while (word != 0)
+                    for (int y = lyMin; y <= lyMax; y++)
                     {
-                        int bit = BitOperations.TrailingZeroCount(word);
-                        word &= word - 1;
-                        int li = (wi << 6) + bit;
-                        int lx = _lxFromLi[li];
-                        int ly = _lyFromLi[li];
-                        if (lx < lxMin || lx > lxMax || ly < lyMin || ly > lyMax) continue;
-
+                        int idx = x * 16 + y; int w = idx >> 6; int b = idx & 63;
+                        if ((faceNegZ[w] & (1UL << b)) == 0) continue;
                         bool hidden = false;
-                        int wx = baseX + lx;
-                        int wy = baseY + ly;
-                        if (baseZ == 0)
+                        if (wz == 0)
                         {
-                            if (PlaneBit(planeNegZ, wx * maxY + wy)) hidden = true;
+                            if (PlaneBit(planeNegZ, (baseX + x) * maxY + (baseY + y))) hidden = true;
                         }
-                        else if (hasBack && SectionVoxelSolid(ref backSec, lx, ly, 15))
+                        else if (hasBack && NeighborBoundarySolid(ref backSec, 4, x, y, 15)) hidden = true;
+                        if (!hidden)
                         {
-                            hidden = true;
+                            int li = ((0 * 16 + x) * 16) + y; // z=0
+                            faceNZ[li >> 6] |= 1UL << (li & 63);
                         }
-                        if (!hidden) faceNZ[wi] |= 1UL << bit;
                     }
                 }
             }
-            // FRONT (z=15)
-            if (lzMax == S - 1)
+            // FRONT boundary (z=15)
+            if (lzMax == S - 1 && facePosZ != null)
             {
-                int wzFront = baseZ + (S - 1);
-                for (int wi = 0; wi < 64; wi++)
+                int wzFront = baseZ + 15;
+                for (int x = lxMin; x <= lxMax; x++)
                 {
-                    ulong word = occ[wi] & _maskZ15[wi];
-                    while (word != 0)
+                    for (int y = lyMin; y <= lyMax; y++)
                     {
-                        int bit = BitOperations.TrailingZeroCount(word);
-                        word &= word - 1;
-                        int li = (wi << 6) + bit;
-                        int lx = _lxFromLi[li];
-                        int ly = _lyFromLi[li];
-                        if (lx < lxMin || lx > lxMax || ly < lyMin || ly > lyMax) continue;
-
+                        int idx = x * 16 + y; int w = idx >> 6; int b = idx & 63;
+                        if ((facePosZ[w] & (1UL << b)) == 0) continue;
                         bool hidden = false;
-                        int wx = baseX + lx;
-                        int wy = baseY + ly;
                         if (wzFront == maxZ - 1)
                         {
-                            if (PlaneBit(planePosZ, wx * maxY + wy)) hidden = true;
+                            if (PlaneBit(planePosZ, (baseX + x) * maxY + (baseY + y))) hidden = true;
                         }
-                        else if (hasFront && SectionVoxelSolid(ref frontSec, lx, ly, 0))
+                        else if (hasFront && NeighborBoundarySolid(ref frontSec, 5, x, y, 0)) hidden = true;
+                        if (!hidden)
                         {
-                            hidden = true;
+                            int li = ((15 * 16 + x) * 16) + y; // z=15
+                            facePZ[li >> 6] |= 1UL << (li & 63);
                         }
-                        if (!hidden) facePZ[wi] |= 1UL << bit;
                     }
                 }
             }
 
-            // Emit helper (avoids atlas & block lookups per face).
+            // --------------------------------------------------
+            // 3. Emit faces from masks
+            // --------------------------------------------------
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             void EmitMask(Span<ulong> mask, byte faceDir)
             {
@@ -511,13 +496,9 @@ namespace MVGE_GFX.Terrain.Sections
                         int bit = BitOperations.TrailingZeroCount(word);
                         word &= word - 1;
                         int li = (wi << 6) + bit;
-
-                        int lx = _lxFromLi[li];
                         int ly = _lyFromLi[li];
-                        int lz = _lzFromLi[li];
-                        if (lx < lxMin || lx > lxMax || ly < lyMin || ly > lyMax || lz < lzMin || lz > lzMax)
-                            continue;
-
+                        int t = li >> 4; int lx = t & 15; int lz = t >> 4;
+                        if (lx < lxMin || lx > lxMax || ly < lyMin || ly > lyMax || lz < lzMin || lz > lzMax) continue;
                         offsetList.Add((byte)(baseX + lx));
                         offsetList.Add((byte)(baseY + ly));
                         offsetList.Add((byte)(baseZ + lz));
