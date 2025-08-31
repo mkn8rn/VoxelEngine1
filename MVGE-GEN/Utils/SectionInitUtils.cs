@@ -545,6 +545,18 @@ namespace MVGE_GEN.Utils
                 byte minY = 0, maxY = 0;
                 byte minZ = 0, maxZ = 0;
 
+                [MethodImpl(MethodImplOptions.AggressiveInlining)]
+                static void UpdateBounds(ref bool init, ref byte minXb, ref byte maxXb, ref byte minYb, ref byte maxYb, ref byte minZb, ref byte maxZb, int x, int z, byte yStart, byte yEnd)
+                {
+                    if (!init)
+                    {
+                        init = true; minXb = maxXb = (byte)x; minZb = maxZb = (byte)z; minYb = yStart; maxYb = yEnd; return;
+                    }
+                    if (x < minXb) minXb = (byte)x; else if (x > maxXb) maxXb = (byte)x;
+                    if (z < minZb) minZb = (byte)z; else if (z > maxZb) maxZb = (byte)z;
+                    if (yStart < minYb) minYb = yStart; if (yEnd > maxYb) maxYb = yEnd;
+                }
+
                 for (int z = 0; z < S; z++)
                 {
                     int zBase = z * S;
@@ -562,20 +574,7 @@ namespace MVGE_GEN.Utils
                             nonAir += len0;
                             adjY += len0 - 1; // each contiguous pair inside run contributes one internal vertical adjacency
 
-                            if (!boundsInit)
-                            {
-                                minX = maxX = (byte)x;
-                                minZ = maxZ = (byte)z;
-                                minY = col.Y0Start;
-                                maxY = col.Y0End;
-                                boundsInit = true;
-                            }
-                            else
-                            {
-                                if (x < minX) minX = (byte)x; else if (x > maxX) maxX = (byte)x;
-                                if (z < minZ) minZ = (byte)z; else if (z > maxZ) maxZ = (byte)z;
-                                if (col.Y0Start < minY) minY = col.Y0Start; if (col.Y0End > maxY) maxY = col.Y0End;
-                            }
+                            UpdateBounds(ref boundsInit, ref minX, ref maxX, ref minY, ref maxY, ref minZ, ref maxZ, x, z, col.Y0Start, col.Y0End);
                         }
 
                         // Second run statistics
@@ -585,20 +584,7 @@ namespace MVGE_GEN.Utils
                             nonAir += len1;
                             adjY += len1 - 1;
 
-                            if (!boundsInit)
-                            {
-                                minX = maxX = (byte)x;
-                                minZ = maxZ = (byte)z;
-                                minY = col.Y1Start;
-                                maxY = col.Y1End;
-                                boundsInit = true;
-                            }
-                            else
-                            {
-                                if (x < minX) minX = (byte)x; else if (x > maxX) maxX = (byte)x;
-                                if (z < minZ) minZ = (byte)z; else if (z > maxZ) maxZ = (byte)z;
-                                if (col.Y1Start < minY) minY = col.Y1Start; if (col.Y1End > maxY) maxY = col.Y1End;
-                            }
+                            UpdateBounds(ref boundsInit, ref minX, ref maxX, ref minY, ref maxY, ref minZ, ref maxZ, x, z, col.Y1Start, col.Y1End);
                         }
                     }
                 }
@@ -721,23 +707,6 @@ namespace MVGE_GEN.Utils
                                 p++;
                             }
                         }
-                        // Safety: escalated should not appear here but handle defensively
-                        if (rc == 255)
-                        {
-                            var arr = col.Escalated;
-                            if (arr != null)
-                            {
-                                for (int y = 0; y < S; y++)
-                                {
-                                    ushort id = arr[y];
-                                    if (id == AIR) continue;
-                                    int li = (ci << 4) + y;
-                                    idxArr[p] = li;
-                                    blkArr[p] = singleId != 0 ? singleId : id;
-                                    p++;
-                                }
-                            }
-                        }
                     }
                     sec.Kind = ChunkSection.RepresentationKind.Sparse;
                     sec.SparseIndices = idxArr;
@@ -766,7 +735,8 @@ namespace MVGE_GEN.Utils
                         sec.Palette = new List<ushort> { AIR, scratch.Distinct[0] };
                         sec.PaletteLookup = new Dictionary<ushort, int> { { AIR, 0 }, { scratch.Distinct[0], 1 } };
                         sec.BitsPerIndex = 1;
-                        sec.BitData = new uint[(4096 + 31) / 32]; // 128 uints
+                        sec.BitData = RentBitData(128);
+                        Array.Clear(sec.BitData, 0, 128);
 
                         var occSingle = RentOccupancy();
                         for (int ci = 0; ci < COLUMN_COUNT; ci++)
@@ -774,25 +744,8 @@ namespace MVGE_GEN.Utils
                             ref var col = ref scratch.GetReadonlyColumn(ci);
                             byte rc = col.RunCount;
                             if (rc == 0) continue;
-                            if (rc == 255)
-                            {
-                                // Defensive only (should not happen without AnyEscalated)
-                                var arr = col.Escalated;
-                                if (arr != null)
-                                {
-                                    for (int y = 0; y < S; y++)
-                                    {
-                                        if (arr[y] == AIR) continue;
-                                        int li = (ci << 4) + y;
-                                        occSingle[li >> 6] |= 1UL << (li & 63);
-                                    }
-                                }
-                            }
-                            else
-                            {
-                                if (rc >= 1) SetRunBits(occSingle, ci, col.Y0Start, col.Y0End);
-                                if (rc == 2) SetRunBits(occSingle, ci, col.Y1Start, col.Y1End);
-                            }
+                            if (rc >= 1) SetRunBits(occSingle, ci, col.Y0Start, col.Y0End);
+                            if (rc == 2) SetRunBits(occSingle, ci, col.Y1Start, col.Y1End);
                         }
                         sec.OccupancyBits = occSingle;
 
@@ -822,40 +775,22 @@ namespace MVGE_GEN.Utils
                             if (rc == 0) continue;
                             int baseLi = ci << 4; // start linear index for column (y=0)
 
-                            if (rc == 255)
+                            if (rc >= 1)
                             {
-                                var arr = col.Escalated; // defensive
-                                if (arr != null)
+                                for (int y = col.Y0Start; y <= col.Y0End; y++)
                                 {
-                                    for (int y = 0; y < S; y++)
-                                    {
-                                        ushort id = arr[y];
-                                        if (id == AIR) continue;
-                                        int li = baseLi + y;
-                                        dense[li] = id;
-                                        occDense[li >> 6] |= 1UL << (li & 63);
-                                    }
+                                    int li = baseLi + y;
+                                    dense[li] = col.Id0;
+                                    occDense[li >> 6] |= 1UL << (li & 63);
                                 }
                             }
-                            else
+                            if (rc == 2)
                             {
-                                if (rc >= 1)
+                                for (int y = col.Y1Start; y <= col.Y1End; y++)
                                 {
-                                    for (int y = col.Y0Start; y <= col.Y0End; y++)
-                                    {
-                                        int li = baseLi + y;
-                                        dense[li] = col.Id0;
-                                        occDense[li >> 6] |= 1UL << (li & 63);
-                                    }
-                                }
-                                if (rc == 2)
-                                {
-                                    for (int y = col.Y1Start; y <= col.Y1End; y++)
-                                    {
-                                        int li = baseLi + y;
-                                        dense[li] = col.Id1;
-                                        occDense[li >> 6] |= 1UL << (li & 63);
-                                    }
+                                    int li = baseLi + y;
+                                    dense[li] = col.Id1;
+                                    occDense[li >> 6] |= 1UL << (li & 63);
                                 }
                             }
                         }
