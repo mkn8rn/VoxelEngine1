@@ -152,6 +152,54 @@ namespace MVGE_GFX.Terrain.Sections
                 lzMin = desc.MinLZ; lzMax = desc.MaxLZ;
             }
 
+            // Neighbor section descriptors for direct occupancy probes
+            int sxCount = data.sectionsX; int syCount = data.sectionsY; int szCount = data.sectionsZ;
+            SectionPrerenderDesc[] allSecs = data.SectionDescs;
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            static int SecIndex(int sxL, int syL, int szL, int syC, int szC) => ((sxL * syC) + syL) * szC + szL;
+
+            bool hasLeft = sx > 0;                 ref SectionPrerenderDesc leftSec = ref hasLeft ? ref allSecs[SecIndex(sx - 1, sy, sz, syCount, szCount)] : ref desc; // dummy ref when unused
+            bool hasRight = sx + 1 < sxCount;      ref SectionPrerenderDesc rightSec = ref hasRight ? ref allSecs[SecIndex(sx + 1, sy, sz, syCount, szCount)] : ref desc;
+            bool hasDown = sy > 0;                 ref SectionPrerenderDesc downSec = ref hasDown ? ref allSecs[SecIndex(sx, sy - 1, sz, syCount, szCount)] : ref desc;
+            bool hasUp = sy + 1 < syCount;         ref SectionPrerenderDesc upSec = ref hasUp ? ref allSecs[SecIndex(sx, sy + 1, sz, syCount, szCount)] : ref desc;
+            bool hasBack = sz > 0;                 ref SectionPrerenderDesc backSec = ref hasBack ? ref allSecs[SecIndex(sx, sy, sz - 1, syCount, szCount)] : ref desc;
+            bool hasFront = sz + 1 < szCount;      ref SectionPrerenderDesc frontSec = ref hasFront ? ref allSecs[SecIndex(sx, sy, sz + 1, syCount, szCount)] : ref desc;
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            static bool SectionVoxelSolid(ref SectionPrerenderDesc d, int lx, int ly, int lz)
+            {
+                if (d.Kind == 0 || d.NonAirCount == 0) return false;
+                switch (d.Kind)
+                {
+                    case 1: // Uniform
+                        return d.UniformBlockId != 0;
+                    case 2: // Sparse (should have occupancy bits built in metadata)
+                    case 4: // Packed
+                        if (d.OccupancyBits != null)
+                        {
+                            int li = ((lz * 16 + lx) * 16) + ly;
+                            return (d.OccupancyBits[li >> 6] & (1UL << (li & 63))) != 0UL;
+                        }
+                        // fallback sparse scan
+                        if (d.Kind == 2 && d.SparseIndices != null)
+                        {
+                            int liS = ((lz * 16 + lx) * 16) + ly;
+                            var arr = d.SparseIndices;
+                            for (int i = 0; i < arr.Length; i++) if (arr[i] == liS) return true;
+                        }
+                        return false;
+                    case 3: // DenseExpanded
+                        if (d.ExpandedDense != null)
+                        {
+                            int liD = ((lz * 16 + lx) * 16) + ly;
+                            return d.ExpandedDense[liD] != 0;
+                        }
+                        return false;
+                    default:
+                        return false;
+                }
+            }
+
             // Allocate face masks on stack (same sequence as DenseExpanded path)
             Span<ulong> shift = stackalloc ulong[64];
             Span<ulong> faceNX = stackalloc ulong[64];
@@ -289,10 +337,9 @@ namespace MVGE_GFX.Terrain.Sections
                         {
                             if (PlaneBit(planeNegX, wz * maxY + wy)) hidden = true;
                         }
-                        else
+                        else if (hasLeft && SectionVoxelSolid(ref leftSec, 15, ly, lz))
                         {
-                            ushort nb = GetBlock(wx - 1, wy, wz);
-                            if (nb != 0) hidden = true;
+                            hidden = true;
                         }
                         if (!hidden) faceNX[wi] |= 1UL << bit;
                     }
@@ -321,10 +368,9 @@ namespace MVGE_GFX.Terrain.Sections
                         {
                             if (PlaneBit(planePosX, wz * maxY + wy)) hidden = true;
                         }
-                        else
+                        else if (hasRight && SectionVoxelSolid(ref rightSec, 0, ly, lz))
                         {
-                            ushort nb = GetBlock(wxRight + 1, wy, wz);
-                            if (nb != 0) hidden = true;
+                            hidden = true;
                         }
                         if (!hidden) facePX[wi] |= 1UL << bit;
                     }
@@ -352,10 +398,9 @@ namespace MVGE_GFX.Terrain.Sections
                         {
                             if (PlaneBit(planeNegY, wx * maxZ + wz)) hidden = true;
                         }
-                        else
+                        else if (hasDown && SectionVoxelSolid(ref downSec, lx, 15, lz))
                         {
-                            ushort nb = GetBlock(wx, baseY - 1, wz);
-                            if (nb != 0) hidden = true;
+                            hidden = true;
                         }
                         if (!hidden) faceNY[wi] |= 1UL << bit;
                     }
@@ -384,10 +429,9 @@ namespace MVGE_GFX.Terrain.Sections
                         {
                             if (PlaneBit(planePosY, wx * maxZ + wz)) hidden = true;
                         }
-                        else
+                        else if (hasUp && SectionVoxelSolid(ref upSec, lx, 0, lz))
                         {
-                            ushort nb = GetBlock(wx, wyTop + 1, wz);
-                            if (nb != 0) hidden = true;
+                            hidden = true;
                         }
                         if (!hidden) facePY[wi] |= 1UL << bit;
                     }
@@ -415,10 +459,9 @@ namespace MVGE_GFX.Terrain.Sections
                         {
                             if (PlaneBit(planeNegZ, wx * maxY + wy)) hidden = true;
                         }
-                        else
+                        else if (hasBack && SectionVoxelSolid(ref backSec, lx, ly, 15))
                         {
-                            ushort nb = GetBlock(wx, wy, baseZ - 1);
-                            if (nb != 0) hidden = true;
+                            hidden = true;
                         }
                         if (!hidden) faceNZ[wi] |= 1UL << bit;
                     }
@@ -447,10 +490,9 @@ namespace MVGE_GFX.Terrain.Sections
                         {
                             if (PlaneBit(planePosZ, wx * maxY + wy)) hidden = true;
                         }
-                        else
+                        else if (hasFront && SectionVoxelSolid(ref frontSec, lx, ly, 0))
                         {
-                            ushort nb = GetBlock(wx, wy, wzFront + 1);
-                            if (nb != 0) hidden = true;
+                            hidden = true;
                         }
                         if (!hidden) facePZ[wi] |= 1UL << bit;
                     }
