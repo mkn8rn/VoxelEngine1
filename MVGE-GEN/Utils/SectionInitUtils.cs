@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using MVGE_GEN.Models;
 using MVGE_INF.Models.Terrain;
-using static MVGE_GEN.Models.ChunkSection; // added for BaseBlockType
 using System.Numerics;
 using System.Runtime.Intrinsics.X86;
 using System.Buffers;
@@ -13,17 +12,17 @@ namespace MVGE_GEN.Utils
 {
     internal static partial class SectionUtils
     {
-        private const int S = ChunkSection.SECTION_SIZE;
-        private const int AIR = ChunkSection.AIR;
-        private const int COLUMN_COUNT = S * S; // 256 columns per section (z * S + x)
-        // Threshold above which we build occupancy + face masks for sparse sections (mid-sparse speedup)
-        private const int SPARSE_MASK_BUILD_MIN = 33; // build when 33..128 voxels (tunable)
+        private const int S = ChunkSection.SECTION_SIZE;          // Section linear dimension (16)
+        private const int AIR = ChunkSection.AIR;                  // Block id representing empty space
+        private const int COLUMN_COUNT = S * S;                    // 256 vertical columns (z * S + x)
+        private const int SPARSE_MASK_BUILD_MIN = 33;              // Threshold for building face masks in sparse form
 
-        // ---------------------------------------------------------------------
-        // Array pools to reduce allocation / GC pressure.
-        //  Occupancy: 64 * 8 bytes = 512 bytes (4096 bits) per section when needed.
-        //  Dense: 4096 ushorts (8 KB) for DenseExpanded or escalated fallback.
-        // ---------------------------------------------------------------------
+        // -------------------------------------------------------------------------------------------------
+        // Array pooling: reduces allocation pressure for frequently reused temporary structures.
+        //   Occupancy: 4096 bits (64 * ulong) used when building face masks or packed/sparse data.
+        //   Dense:     4096 ushorts storing full per‑voxel ids (8 KB) for DenseExpanded or fallback.
+        // Objects are cleared before returning to pool to avoid leaking data across uses.
+        // -------------------------------------------------------------------------------------------------
         private static readonly ConcurrentBag<ulong[]> _occupancyPool = new();
         private static readonly ConcurrentBag<ushort[]> _densePool = new();
 
@@ -34,8 +33,7 @@ namespace MVGE_GEN.Utils
         private static void ReturnOccupancy(ulong[] arr)
         {
             if (arr == null || arr.Length != 64) return;
-            // Clear for safety (small) then return to pool.
-            Array.Clear(arr);
+            Array.Clear(arr);            // ensure no stale bits leak
             _occupancyPool.Add(arr);
         }
 
@@ -50,7 +48,11 @@ namespace MVGE_GEN.Utils
             _densePool.Add(arr);
         }
 
-        // ---------------- Scratch pooling ----------------
+        // -------------------------------------------------------------------------------------------------
+        // Scratch pooling: Each in‑progress section maintains a SectionBuildScratch instance holding
+        // per‑column run data + small distinct id tracking. Pooling avoids churn when many sections
+        // are generated frame to frame.
+        // -------------------------------------------------------------------------------------------------
         private static readonly ConcurrentBag<SectionBuildScratch> _scratchPool = new();
 
         private static SectionBuildScratch RentScratch()
@@ -75,6 +77,11 @@ namespace MVGE_GEN.Utils
         private static SectionBuildScratch GetScratch(ChunkSection sec)
             => sec.BuildScratch as SectionBuildScratch ?? (SectionBuildScratch)(sec.BuildScratch = RentScratch());
 
+        // -------------------------------------------------------------------------------------------------
+        // TrackDistinct: Maintains up to 8 distinct non‑air block ids encountered while building.
+        // If more are encountered than fit, we simply stop adding (cap). This heuristic still allows
+        // rapid detection of single‑id or low‑variety sections without needing a larger structure.
+        // -------------------------------------------------------------------------------------------------
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void TrackDistinct(SectionBuildScratch sc, ushort id)
         {
@@ -91,15 +98,17 @@ namespace MVGE_GEN.Utils
             }
             else
             {
-                // Clamp (we do not add beyond capacity; large variety will push dense anyway)
-                sc.DistinctCount = dc; // unchanged
+                // Capacity reached: silently ignore further unique ids.
+                sc.DistinctCount = dc;
             }
         }
 
-        // ---------------------------------------------------------------------
-        // Convert a Uniform section to scratch-based run representation so
-        // later mutation / replacement logic can proceed uniformly.
-        // ---------------------------------------------------------------------
+        // -------------------------------------------------------------------------------------------------
+        // ConvertUniformSectionToScratch:
+        // Turns a finalized Uniform section back into scratch run form so that subsequent mutation
+        // passes (e.g. replacements) can operate using the same incremental path as during initial
+        // generation. All 256 columns become a single full‑height run with the uniform id.
+        // -------------------------------------------------------------------------------------------------
         public static void ConvertUniformSectionToScratch(ChunkSection sec)
         {
             if (sec == null || sec.Kind != ChunkSection.RepresentationKind.Uniform) return;
@@ -116,44 +125,77 @@ namespace MVGE_GEN.Utils
                     col.Id0 = id;
                     col.Y0Start = 0;
                     col.Y0End = 15;
-                    col.Escalated = null; // ensure not carrying previous allocation
+                    col.Escalated = null;      // ensure clean column
+                    col.OccMask = 0xFFFF;      // every y filled
+                    col.NonAir = 16;           // 16 voxels
+                    col.AdjY = 15;             // 15 vertical adjacency pairs in a full stack
                 }
             }
 
             TrackDistinct(scratch, id);
             scratch.AnyNonAir = true;
 
-            // Reset the section so finalization will choose the new representation.
+            // Reset the section so finalization re‑evaluates representation later.
             sec.Kind = ChunkSection.RepresentationKind.Empty;
             sec.MetadataBuilt = false;
             sec.UniformBlockId = 0;
             sec.CompletelyFull = false;
         }
 
-        // ---------------------------------------------------------------------
-        // AddRun: adds a vertical run [yStart,yEnd] of a block inside a column.
-        // Escalates to per-voxel (RunCount==255) only when necessary.
-        // ---------------------------------------------------------------------
+        // -------------------------------------------------------------------------------------------------
+        // AddRun:
+        // Adds a contiguous vertical run [yStart, yEnd] with the provided blockId inside the column
+        // specified by (localX, localZ). Columns start empty (RunCount = 0).
+        // Representation transitions per column:
+        //   0 -> 1 run -> possibly 2 runs -> escalated (RunCount == 255) when fragmentation appears
+        // or partial overlaps make the compact form impractical.
+        // While runs are added we incrementally update:
+        //   - OccMask: 16 bits marking filled y positions
+        //   - NonAir:  count of set bits
+        //   - AdjY:    count of vertical adjacency pairs (set bits touching vertically)
+        // This incremental metadata allows finalization to compute exposure and counts quickly.
+        // -------------------------------------------------------------------------------------------------
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void AddRun(ChunkSection sec, int localX, int localZ, int yStart, int yEnd, ushort blockId)
         {
-            if (blockId == AIR || yEnd < yStart) return; // trivial rejects
+            if (blockId == AIR || yEnd < yStart) return; // reject empty or inverted intervals
             var scratch = GetScratch(sec);
             scratch.AnyNonAir = true;
 
             int ci = localZ * S + localX;
             ref var col = ref scratch.GetWritableColumn(ci);
 
+            // Local helper: apply occupancy bits for the interval, adjusting counts and adjacency.
+            static void ApplyMask(ref ColumnData c, int ys, int ye)
+            {
+                int len = ye - ys + 1;
+                ushort segment = (ushort)(((1 << len) - 1) << ys); // bit field for the run
+                ushort prev = c.OccMask;
+                ushort added = (ushort)(segment & ~prev);          // newly set bits only
+                if (added == 0) return;                            // nothing new
+                c.OccMask = (ushort)(prev | segment);
+                c.NonAir += (byte)BitOperations.PopCount((uint)added);
+
+                ushort m = c.OccMask;
+                c.AdjY = (byte)BitOperations.PopCount((uint)(m & (m << 1))); // vertical adjacency count
+            }
+
+            // Escalated column: directly write per‑voxel values.
             if (col.RunCount == 255)
             {
-                // Already escalated -> just write the cells.
                 var arr = col.Escalated ??= new ushort[S];
                 for (int y = yStart; y <= yEnd; y++)
+                {
+                    // Occupancy counters rely on mask differences, so we just overwrite; changes
+                    // in id do not affect NonAir if the cell was already non‑air.
                     arr[y] = blockId;
+                }
+                ApplyMask(ref col, yStart, yEnd);
                 TrackDistinct(scratch, blockId);
                 return;
             }
 
+            // Empty column -> first run.
             if (col.RunCount == 0)
             {
                 col.Id0 = blockId;
@@ -161,71 +203,101 @@ namespace MVGE_GEN.Utils
                 col.Y0End = (byte)yEnd;
                 col.RunCount = 1;
                 col.Escalated = null;
+                ApplyMask(ref col, yStart, yEnd);
                 TrackDistinct(scratch, blockId);
                 return;
             }
 
+            // Single run column: attempt extension or creation of a second run.
             if (col.RunCount == 1)
             {
-                // Try extend first run or add second distinct run.
+                // Append contiguous run of same id at the top.
                 if (blockId == col.Id0 && yStart == col.Y0End + 1)
                 {
                     col.Y0End = (byte)yEnd;
+                    ApplyMask(ref col, yStart, yEnd);
                     return;
                 }
+                // Non‑overlapping new run higher than first run.
                 if (yStart > col.Y0End)
                 {
                     col.Id1 = blockId;
                     col.Y1Start = (byte)yStart;
                     col.Y1End = (byte)yEnd;
                     col.RunCount = 2;
+                    ApplyMask(ref col, yStart, yEnd);
                     TrackDistinct(scratch, blockId);
                     return;
                 }
             }
 
+            // Two run column: attempt to extend second run only.
             if (col.RunCount == 2)
             {
-                // Try extend second run.
                 if (blockId == col.Id1 && yStart == col.Y1End + 1)
                 {
                     col.Y1End = (byte)yEnd;
+                    ApplyMask(ref col, yStart, yEnd);
                     return;
                 }
             }
 
-            // Escalate to per-voxel storage (rare path)
+            // Escalation path: runs overlap or fragmentation appeared.
             scratch.AnyEscalated = true;
             var full = col.Escalated ?? new ushort[S];
 
+            // Replay existing compact runs into the per‑voxel buffer (only once per escalation).
             if (col.RunCount != 255)
             {
-                // Replay existing runs into escalated storage once.
                 if (col.RunCount >= 1)
                 {
-                    for (int y = col.Y0Start; y <= col.Y0End; y++)
-                        full[y] = col.Id0;
+                    for (int y = col.Y0Start; y <= col.Y0End; y++) full[y] = col.Id0;
                     if (col.RunCount == 2)
-                    {
-                        for (int y = col.Y1Start; y <= col.Y1End; y++)
-                            full[y] = col.Id1;
-                    }
+                        for (int y = col.Y1Start; y <= col.Y1End; y++) full[y] = col.Id1;
                 }
             }
 
-            // Write the new run cells.
-            for (int y = yStart; y <= yEnd; y++)
-                full[y] = blockId;
-
+            // Apply new interval.
+            for (int y = yStart; y <= yEnd; y++) full[y] = blockId;
             col.Escalated = full;
-            col.RunCount = 255;
+            col.RunCount = 255; // sentinel for escalated
+
+            // Rebuild occupancy + adjacency from escalated data (16 iterations only).
+            ushort mask = 0;
+            byte nonAir = 0;
+            byte adj = 0;
+            ushort prevBit = 0;
+            for (int y = 0; y < S; y++)
+            {
+                if (full[y] != AIR)
+                {
+                    mask |= (ushort)(1 << y);
+                    nonAir++;
+                    if (prevBit == 1) adj++;
+                    prevBit = 1;
+                }
+                else
+                {
+                    prevBit = 0;
+                }
+            }
+            col.OccMask = mask;
+            col.NonAir = nonAir;
+            col.AdjY = adj;
             TrackDistinct(scratch, blockId);
         }
 
-        // ---------------------------------------------------------------------
-        // ApplyReplacement: replaces targeted block ids within a vertical slice.
-        // Distinct palette scanned first for predicate to reduce per-voxel checks.
-        // ---------------------------------------------------------------------
+        // -------------------------------------------------------------------------------------------------
+        // ApplyReplacement:
+        // Replaces block ids satisfying a predicate within an inclusive vertical slice [lyStart, lyEnd].
+        // Strategy:
+        //   1. Inspect the small distinct id list to determine which ids are targeted. If none, exit.
+        //   2. For full vertical cover (slice spans the entire 0..15 range) we can modify runs directly
+        //      without escalation unless partial overlaps force per‑voxel edits.
+        //   3. For partial slices, only escalate columns that require partial run edits; full run
+        //      replacement is done in place.
+        // DistinctDirty is set when ids change so finalization can rebuild the distinct list.
+        // -------------------------------------------------------------------------------------------------
         public static void ApplyReplacement(
             ChunkSection sec,
             int lyStart,
@@ -244,14 +316,14 @@ namespace MVGE_GEN.Utils
             Span<bool> targeted = stackalloc bool[distinctCount];
             bool anyTarget = false;
 
-            // Build targeted map.
+            // Build targeted map from distinct list.
             for (int i = 0; i < distinctCount; i++)
             {
                 ushort id = scratch.Distinct[i];
                 ids[i] = id;
                 if (id == replacementId)
                 {
-                    targeted[i] = false; // Avoid replacing with itself
+                    targeted[i] = false; // avoid self replacement
                     continue;
                 }
                 var bt = baseTypeGetter(id);
@@ -259,7 +331,7 @@ namespace MVGE_GEN.Utils
                 targeted[i] = shouldReplace;
                 if (shouldReplace) anyTarget = true;
             }
-            if (!anyTarget) return;
+            if (!anyTarget) return; // nothing qualifies
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             static bool IdMatches(ushort id, Span<ushort> idsLocal, Span<bool> targetedLocal)
@@ -271,7 +343,7 @@ namespace MVGE_GEN.Utils
 
             bool anyChange = false;
 
-            // Full cover: we know the vertical interval matches whole section height, so we can mutate run ids directly when possible.
+            // Full vertical cover: attempt in‑place run id substitution.
             if (fullCover)
             {
                 for (int z = 0; z < S; z++)
@@ -281,6 +353,7 @@ namespace MVGE_GEN.Utils
                         ref var col = ref scratch.GetWritableColumn(z * S + x);
                         byte rc = col.RunCount;
                         if (rc == 0) continue;
+
                         if (rc == 255)
                         {
                             var arr = col.Escalated;
@@ -312,7 +385,7 @@ namespace MVGE_GEN.Utils
                 return;
             }
 
-            // Partial slice cover: escalate only when partial overlap forces per-voxel edits.
+            // Partial vertical slice: only escalate columns that require editing a subset of a run.
             for (int z = 0; z < S; z++)
             {
                 for (int x = 0; x < S; x++)
@@ -321,6 +394,7 @@ namespace MVGE_GEN.Utils
                     byte rc = col.RunCount;
                     if (rc == 0) continue;
 
+                    // Escalated: directly iterate targeted y span.
                     if (rc == 255)
                     {
                         var arr = col.Escalated;
@@ -337,41 +411,50 @@ namespace MVGE_GEN.Utils
                         continue;
                     }
 
-                    // First run partial or full overlap.
+                    // First run overlap.
                     if (rc >= 1 && RangesOverlap(col.Y0Start, col.Y0End, lyStart, lyEnd) && col.Id0 != replacementId && IdMatches(col.Id0, ids, targeted))
                     {
                         bool runContained = lyStart <= col.Y0Start && lyEnd >= col.Y0End;
                         if (runContained)
                         {
-                            col.Id0 = replacementId;
+                            col.Id0 = replacementId; // whole run replaced
                             anyChange = true;
                         }
                         else
                         {
-                            // Escalate to per-voxel for partial modification.
+                            // Partial run edit forces escalation.
                             var arr = col.Escalated ?? new ushort[S];
                             if (col.Escalated == null)
                             {
-                                for (int y = col.Y0Start; y <= col.Y0End; y++)
-                                    arr[y] = col.Id0;
-                                if (rc == 2)
-                                {
-                                    for (int y = col.Y1Start; y <= col.Y1End; y++)
-                                        arr[y] = col.Id1;
-                                }
+                                for (int y = col.Y0Start; y <= col.Y0End; y++) arr[y] = col.Id0;
+                                if (rc == 2) for (int y = col.Y1Start; y <= col.Y1End; y++) arr[y] = col.Id1;
                             }
                             int ys = Math.Max(col.Y0Start, lyStart);
                             int ye = Math.Min(col.Y0End, lyEnd);
-                            for (int y = ys; y <= ye; y++)
-                                arr[y] = replacementId;
+                            for (int y = ys; y <= ye; y++) arr[y] = replacementId;
                             col.Escalated = arr;
                             col.RunCount = 255;
+
+                            // Rebuild fast metadata (16 iterations).
+                            ushort mask = 0; byte nonAir = 0; byte adj = 0; ushort prevBit = 0;
+                            for (int y = 0; y < S; y++)
+                            {
+                                if (arr[y] != AIR)
+                                {
+                                    mask |= (ushort)(1 << y);
+                                    nonAir++;
+                                    if (prevBit == 1) adj++;
+                                    prevBit = 1;
+                                }
+                                else prevBit = 0;
+                            }
+                            col.OccMask = mask; col.NonAir = nonAir; col.AdjY = adj;
                             anyChange = true;
                             continue; // move to next column
                         }
                     }
 
-                    // Second run partial or full overlap.
+                    // Second run overlap.
                     if (rc == 2 && RangesOverlap(col.Y1Start, col.Y1End, lyStart, lyEnd) && col.Id1 != replacementId && IdMatches(col.Id1, ids, targeted))
                     {
                         bool runContained = lyStart <= col.Y1Start && lyEnd >= col.Y1End;
@@ -385,17 +468,29 @@ namespace MVGE_GEN.Utils
                             var arr = col.Escalated ?? new ushort[S];
                             if (col.Escalated == null)
                             {
-                                for (int y = col.Y0Start; y <= col.Y0End; y++)
-                                    arr[y] = col.Id0;
-                                for (int y = col.Y1Start; y <= col.Y1End; y++)
-                                    arr[y] = col.Id1;
+                                for (int y = col.Y0Start; y <= col.Y0End; y++) arr[y] = col.Id0;
+                                for (int y = col.Y1Start; y <= col.Y1End; y++) arr[y] = col.Id1;
                             }
                             int ys = Math.Max(col.Y1Start, lyStart);
                             int ye = Math.Min(col.Y1End, lyEnd);
-                            for (int y = ys; y <= ye; y++)
-                                arr[y] = replacementId;
+                            for (int y = ys; y <= ye; y++) arr[y] = replacementId;
                             col.Escalated = arr;
                             col.RunCount = 255;
+
+                            // Rebuild fast metadata (16 iterations).
+                            ushort mask = 0; byte nonAir = 0; byte adj = 0; ushort prevBit = 0;
+                            for (int y = 0; y < S; y++)
+                            {
+                                if (arr[y] != AIR)
+                                {
+                                    mask |= (ushort)(1 << y);
+                                    nonAir++;
+                                    if (prevBit == 1) adj++;
+                                    prevBit = 1;
+                                }
+                                else prevBit = 0;
+                            }
+                            col.OccMask = mask; col.NonAir = nonAir; col.AdjY = adj;
                             anyChange = true;
                         }
                     }
@@ -403,13 +498,13 @@ namespace MVGE_GEN.Utils
             }
 
             if (anyChange)
-                scratch.DistinctDirty = true;
+                scratch.DistinctDirty = true; // distinct set must be recomputed at finalize
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool RangesOverlap(int a0, int a1, int b0, int b1) => a0 <= b1 && b0 <= a1;
 
-        // Popcount over occupancy (hardware accelerated if available)
+        // Popcount over occupancy array (uses hardware intrinsic when available).
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static int PopCountBatch(ulong[] occ)
         {
@@ -425,6 +520,7 @@ namespace MVGE_GEN.Utils
             return total;
         }
 
+        // Length of intersection of two inclusive integer ranges (returns 0 when disjoint).
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static int OverlapLen(int a0, int a1, int b0, int b1)
         {
@@ -434,12 +530,14 @@ namespace MVGE_GEN.Utils
             return len > 0 ? len : 0;
         }
 
-        // Set contiguous y bits for column 'columnIndex' in occupancy bitset.
+        // SetRunBits:
+        // Marks [yStart, yEnd] for a specific column in a 4096‑bit occupancy array (64 * ulong).
+        // Each column consists of 16 consecutive bits (one per y) laid out by linear index (ci << 4).
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void SetRunBits(ulong[] occ, int columnIndex, int yStart, int yEnd)
         {
-            int baseLi = (columnIndex << 4) + yStart;     // first linear index in run
-            int endLi = (columnIndex << 4) + yEnd;        // last linear index in run
+            int baseLi = (columnIndex << 4) + yStart;  // first linear index in run
+            int endLi = (columnIndex << 4) + yEnd;     // last linear index in run
             int startWord = baseLi >> 6;
             int endWord = endLi >> 6;
             int startBit = baseLi & 63;
@@ -447,532 +545,17 @@ namespace MVGE_GEN.Utils
 
             if (startWord == endWord)
             {
-                // All bits in one 64-bit word
+                // Entire run resides inside a single 64‑bit word.
                 occ[startWord] |= ((1UL << len) - 1) << startBit;
             }
             else
             {
-                // Spans exactly two words (since run <=16 and word boundary alignment)
+                // Run crosses a 64‑bit boundary (at most once because length <= 16).
                 int firstLen = 64 - startBit;
                 occ[startWord] |= ((1UL << firstLen) - 1) << startBit;
                 int remaining = len - firstLen;
                 occ[endWord] |= (1UL << remaining) - 1;
             }
-        }
-
-        // ---------------------------------------------------------------------
-        // FinalizeSection: builds final representation + metadata from scratch runs.
-        // Fast path avoids allocating occupancy if we can decide representation
-        // directly (uniform / sparse / dense w/o faces yet needed).
-        // ---------------------------------------------------------------------
-        public static void FinalizeSection(ChunkSection sec)
-        {
-            if (sec == null) return;
-            var scratch = sec.BuildScratch as SectionBuildScratch;
-
-            // Empty / all‑air quick exit
-            if (scratch == null || !scratch.AnyNonAir)
-            {
-                sec.Kind = ChunkSection.RepresentationKind.Empty;
-                sec.IsAllAir = true;
-                sec.MetadataBuilt = true;
-                sec.VoxelCount = S * S * S;
-                if (scratch != null)
-                {
-                    sec.BuildScratch = null;
-                    ReturnScratch(scratch);
-                }
-                return;
-            }
-
-            // FAST PATH: no escalated columns (each column has <= 2 runs)
-            if (!scratch.AnyEscalated)
-            {
-                // Rebuild distinct ids if dirty (iterate only column metadata)
-                if (scratch.DistinctDirty)
-                {
-                    Span<ushort> tmp = stackalloc ushort[8];
-                    int count = 0;
-                    for (int ci = 0; ci < COLUMN_COUNT; ci++)
-                    {
-                        ref var col = ref scratch.GetReadonlyColumn(ci);
-                        byte rc = col.RunCount;
-                        if (rc == 0) continue;
-
-                        // First run
-                        if (rc >= 1 && col.Id0 != AIR)
-                        {
-                            bool found = false;
-                            for (int i = 0; i < count; i++)
-                                if (tmp[i] == col.Id0) { found = true; break; }
-                            if (!found && count < tmp.Length)
-                                tmp[count++] = col.Id0;
-                        }
-                        if (rc == 2 && col.Id1 != AIR)
-                        {
-                            bool found = false;
-                            for (int i = 0; i < count; i++)
-                                if (tmp[i] == col.Id1) { found = true; break; }
-                            if (!found && count < tmp.Length)
-                                tmp[count++] = col.Id1;
-                        }
-                    }
-                    scratch.DistinctCount = count;
-                    for (int i = 0; i < count; i++) scratch.Distinct[i] = tmp[i];
-                    scratch.DistinctDirty = false;
-                }
-
-                sec.VoxelCount = S * S * S;
-
-                // ------------------------------------------------------------------
-                // Single pass: build per-column 16-bit occupancy masks, bounds,
-                // accumulate non-air & vertical adjacency.
-                // ------------------------------------------------------------------
-                Span<ushort> columnMasks = stackalloc ushort[COLUMN_COUNT]; // 256 * 2 bytes
-                int nonAir = 0;
-                int adjY = 0;
-                bool boundsInit = false;
-                byte minX = 0, maxX = 0, minY = 0, maxY = 0, minZ = 0, maxZ = 0;
-
-                for (int z = 0; z < S; z++)
-                {
-                    int zBase = z * S;
-                    for (int x = 0; x < S; x++)
-                    {
-                        int ci = zBase + x;
-                        ref var col = ref scratch.GetReadonlyColumn(ci);
-                        byte rc = col.RunCount;
-                        if (rc == 0)
-                        {
-                            columnMasks[ci] = 0;
-                            continue;
-                        }
-
-                        ushort mask = 0;
-
-                        if (rc >= 1)
-                        {
-                            int len0 = col.Y0End - col.Y0Start + 1;
-                            // contiguous bits: ((1 << len) - 1) << yStart
-                            mask |= (ushort)(((1 << len0) - 1) << col.Y0Start);
-
-                            if (!boundsInit)
-                            {
-                                boundsInit = true;
-                                minX = maxX = (byte)x;
-                                minZ = maxZ = (byte)z;
-                                minY = col.Y0Start;
-                                maxY = col.Y0End;
-                            }
-                            else
-                            {
-                                if (x < minX) minX = (byte)x; else if (x > maxX) maxX = (byte)x;
-                                if (z < minZ) minZ = (byte)z; else if (z > maxZ) maxZ = (byte)z;
-                                if (col.Y0Start < minY) minY = col.Y0Start;
-                                if (col.Y0End > maxY) maxY = col.Y0End;
-                            }
-                        }
-
-                        if (rc == 2)
-                        {
-                            int len1 = col.Y1End - col.Y1Start + 1;
-                            mask |= (ushort)(((1 << len1) - 1) << col.Y1Start);
-
-                            if (!boundsInit)
-                            {
-                                boundsInit = true;
-                                minX = maxX = (byte)x;
-                                minZ = maxZ = (byte)z;
-                                minY = col.Y1Start;
-                                maxY = col.Y1End;
-                            }
-                            else
-                            {
-                                if (x < minX) minX = (byte)x; else if (x > maxX) maxX = (byte)x;
-                                if (z < minZ) minZ = (byte)z; else if (z > maxZ) maxZ = (byte)z;
-                                if (col.Y1Start < minY) minY = col.Y1Start;
-                                if (col.Y1End > maxY) maxY = col.Y1End;
-                            }
-                        }
-
-                        columnMasks[ci] = mask;
-
-                        if (mask != 0)
-                        {
-                            int pc = BitOperations.PopCount((uint)mask);
-                            nonAir += pc;
-                            // vertical adjacency inside column: sum(len_i - 1) = popcount - runCount
-                            adjY += pc - (rc == 2 ? 2 : 1);
-                        }
-                    }
-                }
-
-                sec.NonAirCount = nonAir;
-                if (!boundsInit || nonAir == 0)
-                {
-                    // Defensive fallback
-                    sec.Kind = ChunkSection.RepresentationKind.Empty;
-                    sec.IsAllAir = true;
-                    sec.MetadataBuilt = true;
-                    ReturnScratch(scratch);
-                    sec.BuildScratch = null;
-                    return;
-                }
-
-                // Persist bounds
-                sec.HasBounds = true;
-                sec.MinLX = minX; sec.MaxLX = maxX;
-                sec.MinLY = minY; sec.MaxLY = maxY;
-                sec.MinLZ = minZ; sec.MaxLZ = maxZ;
-
-                // ------------------------------------------------------------------
-                // Horizontal adjacency via mask intersections (popcount(maskA & maskB))
-                // ------------------------------------------------------------------
-                int adjX = 0;
-                int adjZ = 0;
-
-                // +X pairs (same z row)
-                for (int z = 0; z < S; z++)
-                {
-                    int row = z * S;
-                    for (int x = 0; x < S - 1; x++)
-                    {
-                        ushort a = columnMasks[row + x];
-                        if (a == 0) continue;
-                        ushort b = columnMasks[row + x + 1];
-                        if (b == 0) continue;
-                        adjX += BitOperations.PopCount((uint)(a & b));
-                    }
-                }
-
-                // +Z pairs (between rows)
-                for (int z = 0; z < S - 1; z++)
-                {
-                    int baseA = z * S;
-                    int baseB = (z + 1) * S;
-                    for (int x = 0; x < S; x++)
-                    {
-                        ushort a = columnMasks[baseA + x];
-                        if (a == 0) continue;
-                        ushort b = columnMasks[baseB + x];
-                        if (b == 0) continue;
-                        adjZ += BitOperations.PopCount((uint)(a & b));
-                    }
-                }
-
-                // Internal exposure: 6*N - 2*(adjX + adjY + adjZ)
-                int exposure = 6 * nonAir - 2 * (adjX + adjY + adjZ);
-                sec.InternalExposure = exposure;
-
-                // ------------------------------------------------------------------
-                // Representation selection (unchanged logic after computing counts)
-                // ------------------------------------------------------------------
-                if (nonAir == S * S * S && scratch.DistinctCount == 1)
-                {
-                    // Entire section filled by one block id
-                    sec.Kind = ChunkSection.RepresentationKind.Uniform;
-                    sec.UniformBlockId = scratch.Distinct[0];
-                    sec.IsAllAir = false;
-                    sec.CompletelyFull = true;
-                }
-                else if (nonAir <= 128)
-                {
-                    // Sparse representation: materialize parallel index & block arrays.
-                    int count = nonAir;
-                    int[] idxArr = new int[count];
-                    ushort[] blkArr = new ushort[count];
-                    int p = 0;
-                    ushort singleId = scratch.DistinctCount == 1 ? scratch.Distinct[0] : (ushort)0;
-
-                    for (int ci = 0; ci < COLUMN_COUNT; ci++)
-                    {
-                        ref var col = ref scratch.GetReadonlyColumn(ci);
-                        byte rc = col.RunCount;
-                        if (rc == 0) continue;
-                        int baseLi = ci << 4;
-
-                        if (rc >= 1)
-                        {
-                            if (singleId != 0)
-                            {
-                                for (int y = col.Y0Start; y <= col.Y0End; y++)
-                                {
-                                    idxArr[p] = baseLi + y;
-                                    blkArr[p++] = singleId;
-                                }
-                            }
-                            else
-                            {
-                                for (int y = col.Y0Start; y <= col.Y0End; y++)
-                                {
-                                    idxArr[p] = baseLi + y;
-                                    blkArr[p++] = col.Id0;
-                                }
-                            }
-                        }
-                        if (rc == 2)
-                        {
-                            if (singleId != 0)
-                            {
-                                for (int y = col.Y1Start; y <= col.Y1End; y++)
-                                {
-                                    idxArr[p] = baseLi + y;
-                                    blkArr[p++] = singleId;
-                                }
-                            }
-                            else
-                            {
-                                for (int y = col.Y1Start; y <= col.Y1End; y++)
-                                {
-                                    idxArr[p] = baseLi + y;
-                                    blkArr[p++] = col.Id1;
-                                }
-                            }
-                        }
-                    }
-
-                    sec.Kind = ChunkSection.RepresentationKind.Sparse;
-                    sec.SparseIndices = idxArr;
-                    sec.SparseBlocks = blkArr;
-                    sec.IsAllAir = false;
-
-                    // Optional sparse occupancy + face masks for mid-size sparse sets
-                    if (count >= SPARSE_MASK_BUILD_MIN && count <= 128)
-                    {
-                        var occSparse = RentOccupancy(); // zeroed after rent via pool policy
-                        for (int i = 0; i < idxArr.Length; i++)
-                        {
-                            int li = idxArr[i];
-                            occSparse[li >> 6] |= 1UL << (li & 63);
-                        }
-                        sec.OccupancyBits = occSparse;
-                        BuildFaceMasks(sec, occSparse);
-                    }
-                }
-                else
-                {
-                    if (scratch.DistinctCount == 1)
-                    {
-                        // Packed single-id (partial fill)
-                        sec.Kind = ChunkSection.RepresentationKind.Packed;
-                        sec.Palette = new List<ushort> { AIR, scratch.Distinct[0] };
-                        sec.PaletteLookup = new Dictionary<ushort, int> { { AIR, 0 }, { scratch.Distinct[0], 1 } };
-                        sec.BitsPerIndex = 1;
-                        sec.BitData = RentBitData(128);
-                        Array.Clear(sec.BitData, 0, 128);
-
-                        var occSingle = RentOccupancy();
-                        for (int ci = 0; ci < COLUMN_COUNT; ci++)
-                        {
-                            ref var col = ref scratch.GetReadonlyColumn(ci);
-                            byte rc = col.RunCount;
-                            if (rc == 0) continue;
-                            if (rc >= 1) SetRunBits(occSingle, ci, col.Y0Start, col.Y0End);
-                            if (rc == 2) SetRunBits(occSingle, ci, col.Y1Start, col.Y1End);
-                        }
-                        sec.OccupancyBits = occSingle;
-
-                        // Optimized fill: directly map 64-bit occupancy words to 32-bit packed words
-                        // Each 64-bit word corresponds to two consecutive 32-bit words in BitData.
-                        for (int w = 0; w < 64; w++)
-                        {
-                            ulong ow = occSingle[w];
-                            int dst = w << 1; // two uints per occupancy word
-                            sec.BitData[dst] = (uint)(ow & 0xFFFFFFFF);
-                            sec.BitData[dst + 1] = (uint)(ow >> 32);
-                        }
-                        sec.IsAllAir = false;
-                        BuildFaceMasks(sec, occSingle);
-                    }
-                    else
-                    {
-                        // Dense multi‑id: expand to per‑voxel dense array + occupancy in one pass
-                        sec.Kind = ChunkSection.RepresentationKind.DenseExpanded;
-                        var dense = RentDense();
-                        var occDense = RentOccupancy();
-
-                        for (int ci = 0; ci < COLUMN_COUNT; ci++)
-                        {
-                            ref var col = ref scratch.GetReadonlyColumn(ci);
-                            byte rc = col.RunCount;
-                            if (rc == 0) continue;
-                            int baseLi = ci << 4; // start linear index for column (y=0)
-
-                            if (rc >= 1)
-                            {
-                                for (int y = col.Y0Start; y <= col.Y0End; y++)
-                                {
-                                    int li = baseLi + y;
-                                    dense[li] = col.Id0;
-                                    occDense[li >> 6] |= 1UL << (li & 63);
-                                }
-                            }
-                            if (rc == 2)
-                            {
-                                for (int y = col.Y1Start; y <= col.Y1End; y++)
-                                {
-                                    int li = baseLi + y;
-                                    dense[li] = col.Id1;
-                                    occDense[li >> 6] |= 1UL << (li & 63);
-                                }
-                            }
-                        }
-                        sec.ExpandedDense = dense;
-                        sec.OccupancyBits = occDense;
-                        sec.IsAllAir = false;
-                        BuildFaceMasks(sec, occDense);
-                    }
-                }
-
-                sec.MetadataBuilt = true;
-                sec.BuildScratch = null;
-                ReturnScratch(scratch);
-                return;
-            }
-
-            // Slow path: some columns escalated to per‑voxel arrays; build dense + occupancy directly
-            FinalizeSectionFallBack(sec, scratch);
-        }
-
-        // Escalated fallback path: build dense representation + metadata using pooled dense array.
-        private static void FinalizeSectionFallBack(ChunkSection sec, SectionBuildScratch scratch)
-        {
-            sec.VoxelCount = S * S * S;
-            var dense = RentDense();
-            var occ = RentOccupancy(); // occupancy constructed alongside dense fill
-
-            int nonAir = 0;
-            byte minX = 255, minY = 255, minZ = 255;
-            byte maxX = 0,   maxY = 0,   maxZ = 0;
-            bool bounds = false;
-
-            int adjX = 0, adjY = 0, adjZ = 0;
-
-            // Writes a voxel value if first time encountered; updates bounds, occupancy & counts.
-            void SetVoxel(int ci, int x, int z, int y, ushort id)
-            {
-                if (id == AIR) return;
-                int li = (ci << 4) + y;
-                if (dense[li] != 0) return; // already set by another overlapping run (should not happen but safe)
-                dense[li] = id;
-                nonAir++;
-                occ[li >> 6] |= 1UL << (li & 63);
-                if (!bounds)
-                {
-                    bounds = true;
-                    minX = maxX = (byte)x;
-                    minY = maxY = (byte)y;
-                    minZ = maxZ = (byte)z;
-                }
-                else
-                {
-                    if (x < minX) minX = (byte)x; else if (x > maxX) maxX = (byte)x;
-                    if (y < minY) minY = (byte)y; else if (y > maxY) maxY = (byte)y;
-                    if (z < minZ) minZ = (byte)z; else if (z > maxZ) maxZ = (byte)z;
-                }
-            }
-
-            // Populate dense + vertical adjacency
-            for (int ci = 0; ci < COLUMN_COUNT; ci++)
-            {
-                ref var col = ref scratch.GetReadonlyColumn(ci);
-                byte rc = col.RunCount;
-                if (rc == 0) continue;
-                int x = ci % S;
-                int z = ci / S;
-
-                if (rc == 255)
-                {
-                    // Escalated column – copy whole escalated array
-                    var arr = col.Escalated;
-                    ushort prev = 0;
-                    for (int y = 0; y < S; y++)
-                    {
-                        ushort id = arr[y];
-                        if (id != AIR)
-                        {
-                            SetVoxel(ci, x, z, y, id);
-                            if (prev != 0)
-                            {
-                                // previous voxel in column also solid -> vertical adjacency pair
-                                adjY++;
-                            }
-                            prev = id;
-                        }
-                        else
-                        {
-                            prev = 0; // reset run tracking
-                        }
-                    }
-                }
-                else
-                {
-                    // First run
-                    if (rc >= 1)
-                    {
-                        for (int y = col.Y0Start; y <= col.Y0End; y++)
-                        {
-                            SetVoxel(ci, x, z, y, col.Id0);
-                            if (y > col.Y0Start)
-                            {
-                                adjY++; // internal adjacency inside first run
-                            }
-                        }
-                    }
-                    // Second run
-                    if (rc == 2)
-                    {
-                        for (int y = col.Y1Start; y <= col.Y1End; y++)
-                        {
-                            SetVoxel(ci, x, z, y, col.Id1);
-                            if (y > col.Y1Start)
-                            {
-                                adjY++; // internal adjacency inside second run
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Horizontal adjacency: +X (delta 16) and +Z (delta 256)
-            const int DeltaX = 16;
-            const int DeltaZ = 256;
-            for (int z = 0; z < S; z++)
-            {
-                for (int x = 0; x < S; x++)
-                {
-                    int ci = z * S + x;
-                    for (int y = 0; y < S; y++)
-                    {
-                        int li = (ci << 4) + y;
-                        if (dense[li] == 0) continue;
-                        // +X neighbor
-                        if (x + 1 < S && dense[li + DeltaX] != 0) adjX++;
-                        // +Z neighbor
-                        if (z + 1 < S && dense[li + DeltaZ] != 0) adjZ++;
-                    }
-                }
-            }
-
-            // Finalize section metadata
-            sec.Kind = ChunkSection.RepresentationKind.DenseExpanded;
-            sec.ExpandedDense = dense;
-            sec.NonAirCount = nonAir;
-            if (bounds)
-            {
-                sec.HasBounds = true;
-                sec.MinLX = minX; sec.MaxLX = maxX;
-                sec.MinLY = minY; sec.MaxLY = maxY;
-                sec.MinLZ = minZ; sec.MaxLZ = maxZ;
-            }
-            long internalAdj = (long)adjX + adjY + adjZ;
-            sec.InternalExposure = (int)(6L * nonAir - 2L * internalAdj);
-            sec.IsAllAir = nonAir == 0;
-            sec.OccupancyBits = occ;
-            BuildFaceMasks(sec, occ);
-            sec.MetadataBuilt = true;
-            sec.BuildScratch = null;
-            ReturnScratch(scratch);
         }
     }
 }

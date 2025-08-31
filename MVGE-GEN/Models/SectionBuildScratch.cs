@@ -36,7 +36,14 @@ namespace MVGE_GEN.Models
             {
                 // Rare wrap (every 65k resets). Do a full clear to avoid stale columns misread.
                 Array.Clear(_columnStamps, 0, _columnStamps.Length);
-                for (int i = 0; i < COLUMN_COUNT; i++) Columns[i].RunCount = 0; // ensure consistent
+                for (int i = 0; i < COLUMN_COUNT; i++)
+                {
+                    Columns[i].RunCount = 0; // ensure consistent
+                    Columns[i].Escalated = null;
+                    Columns[i].OccMask = 0;
+                    Columns[i].NonAir = 0;
+                    Columns[i].AdjY = 0;
+                }
             }
         }
 
@@ -49,6 +56,9 @@ namespace MVGE_GEN.Models
                 _columnStamps[columnIndex] = ActiveStamp;
                 Columns[columnIndex].RunCount = 0;
                 Columns[columnIndex].Escalated = null; // release escalated reference (GC) if any
+                Columns[columnIndex].OccMask = 0;
+                Columns[columnIndex].NonAir = 0;
+                Columns[columnIndex].AdjY = 0;
             }
             return ref Columns[columnIndex];
         }
@@ -62,6 +72,9 @@ namespace MVGE_GEN.Models
                 _columnStamps[columnIndex] = ActiveStamp;
                 Columns[columnIndex].RunCount = 0;
                 Columns[columnIndex].Escalated = null;
+                Columns[columnIndex].OccMask = 0;
+                Columns[columnIndex].NonAir = 0;
+                Columns[columnIndex].AdjY = 0;
             }
             return ref Columns[columnIndex];
         }
@@ -73,5 +86,9 @@ namespace MVGE_GEN.Models
         public ushort Id0, Id1;
         public byte Y0Start, Y0End, Y1Start, Y1End; // second run only if RunCount==2
         public ushort[] Escalated; // length 16 when escalated (RunCount==255)
+        // Incrementally maintained fast-path metadata
+        public ushort OccMask;   // 16-bit occupancy (bit y)
+        public byte NonAir;      // number of solid voxels in this column (<=16)
+        public byte AdjY;        // vertical adjacency pairs inside column (sum over runs len-1)
     }
 }
