@@ -130,17 +130,11 @@ namespace MVGE_GEN.Terrain
             InitializeSectionGrid();
             InitializeChunkData(); // implemented in ChunkGenerator partial
 
-            // After generation compute per-face solidity once (all writes were generation-only bulk writes)
-            if (!AllAirChunk && !AllStoneChunk && !AllSoilChunk) // nothing to scan for pure air or uniform stone/soil fast-path (stone/soil sets flags directly)
-                ComputeAllFaceSolidity();
-
             // Confirm burial only if all six faces ended up solid
             if (candidateFullyBuried && FaceSolidNegX && FaceSolidPosX && FaceSolidNegY && FaceSolidPosY && FaceSolidNegZ && FaceSolidPosZ)
             {
                 SetFullyBuried();
             }
-
-            BuildAllBoundaryPlanesInitial();
         }
 
         public void InitializeSectionGrid()

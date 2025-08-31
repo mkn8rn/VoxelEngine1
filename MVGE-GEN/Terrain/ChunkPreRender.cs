@@ -48,46 +48,6 @@ namespace MVGE_GEN.Terrain
             PlanePosZ ??= new ulong[xyWC];
         }
 
-        private void BuildAllBoundaryPlanesInitial()
-        {
-            EnsurePlaneArrays();
-            Array.Clear(PlaneNegX); Array.Clear(PlanePosX);
-            Array.Clear(PlaneNegY); Array.Clear(PlanePosY);
-            Array.Clear(PlaneNegZ); Array.Clear(PlanePosZ);
-            ushort EMPTY = (ushort)BaseBlockType.Empty;
-
-            // -X / +X (YZ planes)
-            for (int z = 0; z < dimZ; z++)
-            {
-                for (int y = 0; y < dimY; y++)
-                {
-                    int yzIndex = z * dimY + y; int w = yzIndex >> 6; int b = yzIndex & 63;
-                    if (GetBlockLocal(0, y, z) != EMPTY) PlaneNegX[w] |= 1UL << b;
-                    if (GetBlockLocal(dimX - 1, y, z) != EMPTY) PlanePosX[w] |= 1UL << b;
-                }
-            }
-            // -Y / +Y (XZ planes)
-            for (int x = 0; x < dimX; x++)
-            {
-                for (int z = 0; z < dimZ; z++)
-                {
-                    int xzIndex = x * dimZ + z; int w = xzIndex >> 6; int b = xzIndex & 63;
-                    if (GetBlockLocal(x, 0, z) != EMPTY) PlaneNegY[w] |= 1UL << b;
-                    if (GetBlockLocal(x, dimY - 1, z) != EMPTY) PlanePosY[w] |= 1UL << b;
-                }
-            }
-            // -Z / +Z (XY planes)
-            for (int x = 0; x < dimX; x++)
-            {
-                for (int y = 0; y < dimY; y++)
-                {
-                    int xyIndex = x * dimY + y; int w = xyIndex >> 6; int b = xyIndex & 63;
-                    if (GetBlockLocal(x, y, 0) != EMPTY) PlaneNegZ[w] |= 1UL << b;
-                    if (GetBlockLocal(x, y, dimZ - 1) != EMPTY) PlanePosZ[w] |= 1UL << b;
-                }
-            }
-        }
-
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void UpdateBoundaryPlaneBit(int lx, int ly, int lz, ushort blockId)
         {

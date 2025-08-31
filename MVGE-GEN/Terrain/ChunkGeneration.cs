@@ -251,7 +251,93 @@ namespace MVGE_GEN.Terrain
             for (int sy=0; sy<sectionsY; sy++)
             for (int sz=0; sz<sectionsZ; sz++)
             { var sec = sections[sx,sy,sz]; if (sec==null) continue; SectionUtils.FinalizeSection(sec); }
-            precomputedHeightmap = null; BuildAllBoundaryPlanesInitial();
+
+            precomputedHeightmap = null;
+            BuildAllBoundaryPlanesInitial();
+        }
+
+        // Cheaply set per-face solidity flags using cached boundary plane bitsets
+        private static bool PlaneIsFull(ulong[] plane, int wordCount, ulong fullWord, ulong lastMask)
+        {
+            if (plane == null || wordCount == 0) return false;
+            // ensure plane length is sufficient
+            if (plane.Length < wordCount) return false;
+            // all full words must be 0xFFFFFFFFFFFFFFFF
+            for (int i = 0; i < wordCount - 1; i++)
+            {
+                if (plane[i] != fullWord) return false;
+            }
+            // last word uses a partial mask
+            if (plane[wordCount - 1] != lastMask) return false;
+            return true;
+        }
+        private void SetFaceSolidFromPlanes()
+        {
+            // YZ plane (Neg/Pos X): size = dimY * dimZ
+            int yzBits = dimY * dimZ;
+            int yzWC = (yzBits + 63) >> 6;
+            ulong fullWord = ~0UL;
+            int remYZ = yzBits & 63;
+            ulong lastYZ = remYZ == 0 ? fullWord : ((1UL << remYZ) - 1);
+            FaceSolidNegX = PlaneIsFull(PlaneNegX, yzWC, fullWord, lastYZ);
+            FaceSolidPosX = PlaneIsFull(PlanePosX, yzWC, fullWord, lastYZ);
+
+            // XZ plane (Neg/Pos Y): size = dimX * dimZ
+            int xzBits = dimX * dimZ;
+            int xzWC = (xzBits + 63) >> 6;
+            int remXZ = xzBits & 63;
+            ulong lastXZ = remXZ == 0 ? fullWord : ((1UL << remXZ) - 1);
+            FaceSolidNegY = PlaneIsFull(PlaneNegY, xzWC, fullWord, lastXZ);
+            FaceSolidPosY = PlaneIsFull(PlanePosY, xzWC, fullWord, lastXZ);
+
+            // XY plane (Neg/Pos Z): size = dimX * dimY
+            int xyBits = dimX * dimY;
+            int xyWC = (xyBits + 63) >> 6;
+            int remXY = xyBits & 63;
+            ulong lastXY = remXY == 0 ? fullWord : ((1UL << remXY) - 1);
+            FaceSolidNegZ = PlaneIsFull(PlaneNegZ, xyWC, fullWord, lastXY);
+            FaceSolidPosZ = PlaneIsFull(PlanePosZ, xyWC, fullWord, lastXY);
+        }
+        private void BuildAllBoundaryPlanesInitial()
+        {
+            EnsurePlaneArrays();
+            Array.Clear(PlaneNegX); Array.Clear(PlanePosX);
+            Array.Clear(PlaneNegY); Array.Clear(PlanePosY);
+            Array.Clear(PlaneNegZ); Array.Clear(PlanePosZ);
+            ushort EMPTY = (ushort)BaseBlockType.Empty;
+
+            // -X / +X (YZ planes)
+            for (int z = 0; z < dimZ; z++)
+            {
+                for (int y = 0; y < dimY; y++)
+                {
+                    int yzIndex = z * dimY + y; int w = yzIndex >> 6; int b = yzIndex & 63;
+                    if (GetBlockLocal(0, y, z) != EMPTY) PlaneNegX[w] |= 1UL << b;
+                    if (GetBlockLocal(dimX - 1, y, z) != EMPTY) PlanePosX[w] |= 1UL << b;
+                }
+            }
+            // -Y / +Y (XZ planes)
+            for (int x = 0; x < dimX; x++)
+            {
+                for (int z = 0; z < dimZ; z++)
+                {
+                    int xzIndex = x * dimZ + z; int w = xzIndex >> 6; int b = xzIndex & 63;
+                    if (GetBlockLocal(x, 0, z) != EMPTY) PlaneNegY[w] |= 1UL << b;
+                    if (GetBlockLocal(x, dimY - 1, z) != EMPTY) PlanePosY[w] |= 1UL << b;
+                }
+            }
+            // -Z / +Z (XY planes)
+            for (int x = 0; x < dimX; x++)
+            {
+                for (int y = 0; y < dimY; y++)
+                {
+                    int xyIndex = x * dimY + y; int w = xyIndex >> 6; int b = xyIndex & 63;
+                    if (GetBlockLocal(x, y, 0) != EMPTY) PlaneNegZ[w] |= 1UL << b;
+                    if (GetBlockLocal(x, y, dimZ - 1) != EMPTY) PlanePosZ[w] |= 1UL << b;
+                }
+            }
+
+            SetFaceSolidFromPlanes();
         }
     }
 }
