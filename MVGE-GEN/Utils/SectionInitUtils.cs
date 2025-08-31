@@ -16,6 +16,8 @@ namespace MVGE_GEN.Utils
         private const int S = ChunkSection.SECTION_SIZE;
         private const int AIR = ChunkSection.AIR;
         private const int COLUMN_COUNT = S * S; // 256 columns per section (z * S + x)
+        // Threshold above which we build occupancy + face masks for sparse sections (mid-sparse speedup)
+        private const int SPARSE_MASK_BUILD_MIN = 33; // build when 33..128 voxels (tunable)
 
         // ---------------------------------------------------------------------
         // Array pools to reduce allocation / GC pressure.
@@ -741,6 +743,19 @@ namespace MVGE_GEN.Utils
                     sec.SparseIndices = idxArr;
                     sec.SparseBlocks = blkArr;
                     sec.IsAllAir = false;
+
+                    // Optional sparse occupancy + face masks for mid-size sparse sets
+                    if (count >= SPARSE_MASK_BUILD_MIN && count <= 128)
+                    {
+                        var occSparse = RentOccupancy(); // zeroed after rent via pool policy
+                        for (int i = 0; i < idxArr.Length; i++)
+                        {
+                            int li = idxArr[i];
+                            occSparse[li >> 6] |= 1UL << (li & 63);
+                        }
+                        sec.OccupancyBits = occSparse;
+                        BuildFaceMasks(sec, occSparse);
+                    }
                 }
                 else
                 {
@@ -781,19 +796,14 @@ namespace MVGE_GEN.Utils
                         }
                         sec.OccupancyBits = occSingle;
 
-                        // Fill packed BitData bits (palette index 1 indicates solid)
-                        for (int w = 0; w < occSingle.Length; w++)
+                        // Optimized fill: directly map 64-bit occupancy words to 32-bit packed words
+                        // Each 64-bit word corresponds to two consecutive 32-bit words in BitData.
+                        for (int w = 0; w < 64; w++)
                         {
-                            ulong val = occSingle[w];
-                            while (val != 0)
-                            {
-                                int bit = BitOperations.TrailingZeroCount(val);
-                                int li = (w << 6) + bit; // 64 bits per word
-                                int bw = li >> 5;         // 32-bit word index
-                                int bo = li & 31;         // bit offset within that word
-                                sec.BitData[bw] |= 1u << bo;
-                                val &= val - 1;          // clear lowest set bit
-                            }
+                            ulong ow = occSingle[w];
+                            int dst = w << 1; // two uints per occupancy word
+                            sec.BitData[dst] = (uint)(ow & 0xFFFFFFFF);
+                            sec.BitData[dst + 1] = (uint)(ow >> 32);
                         }
                         sec.IsAllAir = false;
                         BuildFaceMasks(sec, occSingle);
