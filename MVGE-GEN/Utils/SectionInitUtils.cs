@@ -446,10 +446,9 @@ namespace MVGE_GEN.Utils
             int distinctCount = scratch.DistinctCount;
             if (distinctCount == 0) return;
 
-            // Build compact list of target ids (≤8)
-            Span<ushort> targetIds = stackalloc ushort[distinctCount];
+            // Build target set using match flags (≤8 ids)
+            Span<byte> matchFlags = stackalloc byte[distinctCount]; // 1 if that distinct id is a target
             int targetCount = 0;
-
             for (int i = 0; i < distinctCount; i++)
             {
                 ushort id = scratch.Distinct[i];
@@ -457,27 +456,21 @@ namespace MVGE_GEN.Utils
                 var bt = baseTypeGetter(id);
                 if (predicate(id, bt))
                 {
-                    targetIds[targetCount++] = id;
+                    matchFlags[i] = 1;
+                    targetCount++;
                 }
             }
             if (targetCount == 0) return;
 
-            // Unrolled match (critical inner loop); JIT prunes unused cases based on targetCount constant range
+            // Local helper: membership test via matchFlags
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            static bool IsTarget(ushort id, Span<ushort> t, int count)
+            static bool IsTargetDistinct(ushort id, ushort[] distinct, Span<byte> flags, int count)
             {
-                switch (count)
+                for (int i = 0; i < count; i++)
                 {
-                    case 1:  return id == t[0];
-                    case 2:  return id == t[0] || id == t[1];
-                    case 3:  return id == t[0] || id == t[1] || id == t[2];
-                    case 4:  return id == t[0] || id == t[1] || id == t[2] || id == t[3];
-                    case 5:  return id == t[0] || id == t[1] || id == t[2] || id == t[3] || id == t[4];
-                    case 6:  return id == t[0] || id == t[1] || id == t[2] || id == t[3] || id == t[4] || id == t[5];
-                    case 7:  return id == t[0] || id == t[1] || id == t[2] || id == t[3] || id == t[4] || id == t[5] || id == t[6];
-                    case 8:  return id == t[0] || id == t[1] || id == t[2] || id == t[3] || id == t[4] || id == t[5] || id == t[6] || id == t[7];
-                    default: return false;
+                    if (distinct[i] == id) return flags[i] != 0;
                 }
+                return false;
             }
 
             bool anyChange = false;
@@ -501,7 +494,7 @@ namespace MVGE_GEN.Utils
                             {
                                 ushort id = arr[y];
                                 if (id == AIR || id == replacementId) continue;
-                                if (IsTarget(id, targetIds, targetCount))
+                                if (IsTargetDistinct(id, scratch.Distinct, matchFlags, distinctCount))
                                 {
                                     arr[y] = replacementId;
                                     anyChange = true;
@@ -510,12 +503,12 @@ namespace MVGE_GEN.Utils
                             continue;
                         }
 
-                        if (rc >= 1 && col.Id0 != replacementId && IsTarget(col.Id0, targetIds, targetCount))
+                        if (rc >= 1 && col.Id0 != replacementId && IsTargetDistinct(col.Id0, scratch.Distinct, matchFlags, distinctCount))
                         {
                             col.Id0 = replacementId;
                             anyChange = true;
                         }
-                        if (rc == 2 && col.Id1 != replacementId && IsTarget(col.Id1, targetIds, targetCount))
+                        if (rc == 2 && col.Id1 != replacementId && IsTargetDistinct(col.Id1, scratch.Distinct, matchFlags, distinctCount))
                         {
                             col.Id1 = replacementId;
                             anyChange = true;
@@ -524,10 +517,6 @@ namespace MVGE_GEN.Utils
                 }
                 if (anyChange)
                 {
-                    // Optimization: since fullCover guarantees every occurrence of targeted ids was replaced,
-                    // we can update the distinct list in-place instead of forcing a DistinctDirty rebuild.
-                    // Only safe when replacementId is non-air. If replacementId is AIR we fall back to dirty flag
-                    // because NonAir counts and potential empty section classification require finalize path.
                     if (replacementId != AIR)
                     {
                         bool replacementPresent = false;
@@ -535,22 +524,18 @@ namespace MVGE_GEN.Utils
                         int originalCount = scratch.DistinctCount;
                         for (int i = 0; i < originalCount; i++)
                         {
+                            if (matchFlags[i] != 0) continue; // removed
                             ushort id = scratch.Distinct[i];
-                            if (IsTarget(id, targetIds, targetCount))
-                                continue; // fully removed
                             if (id == replacementId) replacementPresent = true;
                             scratch.Distinct[write++] = id;
                         }
                         if (!replacementPresent)
                         {
-                            // add replacement id if room (there must be room because at least one target removed)
                             if (write < scratch.Distinct.Length)
                                 scratch.Distinct[write++] = replacementId;
                         }
-                        // Clear any trailing old entries (optional)
                         for (int i = write; i < originalCount; i++) scratch.Distinct[i] = 0;
                         scratch.DistinctCount = write;
-                        // DistinctDirty not needed; list already consistent
                     }
                     else
                     {
@@ -560,7 +545,17 @@ namespace MVGE_GEN.Utils
                 return;
             }
 
-            // Partial slice
+            // ---------------- Partial slice path ----------------
+            int sliceLen = lyEnd - lyStart + 1;
+            ushort sliceMask = (ushort)(((1 << sliceLen) - 1) << lyStart);
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            static ushort BuildRunMask(byte ys, byte ye)
+            {
+                int len = ye - ys + 1;
+                return (ushort)(((1 << len) - 1) << ys);
+            }
+
             for (int z = 0; z < S; z++)
             {
                 int zBase = z * S;
@@ -570,15 +565,18 @@ namespace MVGE_GEN.Utils
                     byte rc = col.RunCount;
                     if (rc == 0) continue;
 
-                    // Escalated: directly iterate targeted y span.
+                    // Escalated: iterate only bits inside sliceMask
                     if (rc == 255)
                     {
                         var arr = col.Escalated;
-                        for (int y = lyStart; y <= lyEnd; y++)
+                        ushort mask = sliceMask;
+                        while (mask != 0)
                         {
+                            int y = BitOperations.TrailingZeroCount(mask);
+                            mask = (ushort)(mask & (mask - 1));
                             ushort id = arr[y];
                             if (id == AIR || id == replacementId) continue;
-                            if (IsTarget(id, targetIds, targetCount))
+                            if (IsTargetDistinct(id, scratch.Distinct, matchFlags, distinctCount))
                             {
                                 arr[y] = replacementId;
                                 anyChange = true;
@@ -587,66 +585,78 @@ namespace MVGE_GEN.Utils
                         continue;
                     }
 
-                    // First run
-                    if (rc >= 1 && col.Id0 != replacementId &&
-                        RangesOverlap(col.Y0Start, col.Y0End, lyStart, lyEnd) &&
-                        IsTarget(col.Id0, targetIds, targetCount))
+                    // First run processing
+                    if (rc >= 1 && col.Id0 != replacementId && IsTargetDistinct(col.Id0, scratch.Distinct, matchFlags, distinctCount))
                     {
-                        bool contained = lyStart <= col.Y0Start && lyEnd >= col.Y0End;
-                        if (contained)
+                        ushort runMask0 = BuildRunMask(col.Y0Start, col.Y0End);
+                        ushort overlap0 = (ushort)(runMask0 & sliceMask);
+                        if (overlap0 != 0)
                         {
-                            col.Id0 = replacementId;
-                            anyChange = true;
-                        }
-                        else
-                        {
-                            // Partial run edit forces escalation. Preserve existing occupancy metadata (only IDs change).
-                            ushort prevMask = col.OccMask; byte prevNonAir = col.NonAir; byte prevAdj = col.AdjY;
-                            var arr = col.Escalated ?? new ushort[S];
-                            if (col.Escalated == null)
+                            if (overlap0 == runMask0) // fully contained in slice
                             {
-                                for (int y = col.Y0Start; y <= col.Y0End; y++) arr[y] = col.Id0;
-                                if (rc == 2) for (int y = col.Y1Start; y <= col.Y1End; y++) arr[y] = col.Id1;
+                                col.Id0 = replacementId;
+                                anyChange = true;
                             }
-                            int ys = Math.Max(col.Y0Start, lyStart);
-                            int ye = Math.Min(col.Y0End, lyEnd);
-                            for (int y = ys; y <= ye; y++) arr[y] = replacementId;
-                            col.Escalated = arr;
-                            col.RunCount = 255;
-                            col.OccMask = prevMask; col.NonAir = prevNonAir; col.AdjY = prevAdj;
-                            anyChange = true;
-                            // continue to next column (second run logic skipped because now escalated)
-                            continue;
+                            else
+                            {
+                                // Partial run edit forces escalation (retain previous logic semantics)
+                                ushort prevMask = col.OccMask; byte prevNonAir = col.NonAir; byte prevAdj = col.AdjY;
+                                var arr = col.Escalated ?? new ushort[S];
+                                if (col.Escalated == null)
+                                {
+                                    for (int y = col.Y0Start; y <= col.Y0End; y++) arr[y] = col.Id0;
+                                    if (rc == 2) for (int y = col.Y1Start; y <= col.Y1End; y++) arr[y] = col.Id1;
+                                }
+                                // Apply only overlapping y positions using bit walk
+                                ushort mask = overlap0;
+                                while (mask != 0)
+                                {
+                                    int y = BitOperations.TrailingZeroCount(mask);
+                                    mask = (ushort)(mask & (mask - 1));
+                                    arr[y] = replacementId;
+                                }
+                                col.Escalated = arr;
+                                col.RunCount = 255;
+                                col.OccMask = prevMask; col.NonAir = prevNonAir; col.AdjY = prevAdj;
+                                anyChange = true;
+                                continue; // skip second run logic (now escalated)
+                            }
                         }
                     }
 
                     // Second run
-                    if (rc == 2 && col.Id1 != replacementId &&
-                        RangesOverlap(col.Y1Start, col.Y1End, lyStart, lyEnd) &&
-                        IsTarget(col.Id1, targetIds, targetCount))
+                    if (rc == 2 && col.Id1 != replacementId && IsTargetDistinct(col.Id1, scratch.Distinct, matchFlags, distinctCount))
                     {
-                        bool contained = lyStart <= col.Y1Start && lyEnd >= col.Y1End;
-                        if (contained)
+                        ushort runMask1 = BuildRunMask(col.Y1Start, col.Y1End);
+                        ushort overlap1 = (ushort)(runMask1 & sliceMask);
+                        if (overlap1 != 0)
                         {
-                            col.Id1 = replacementId;
-                            anyChange = true;
-                        }
-                        else
-                        {
-                            ushort prevMask = col.OccMask; byte prevNonAir = col.NonAir; byte prevAdj = col.AdjY;
-                            var arr = col.Escalated ?? new ushort[S];
-                            if (col.Escalated == null)
+                            if (overlap1 == runMask1)
                             {
-                                for (int y = col.Y0Start; y <= col.Y0End; y++) arr[y] = col.Id0;
-                                for (int y = col.Y1Start; y <= col.Y1End; y++) arr[y] = col.Id1;
+                                col.Id1 = replacementId;
+                                anyChange = true;
                             }
-                            int ys = Math.Max(col.Y1Start, lyStart);
-                            int ye = Math.Min(col.Y1End, lyEnd);
-                            for (int y = ys; y <= ye; y++) arr[y] = replacementId;
-                            col.Escalated = arr;
-                            col.RunCount = 255;
-                            col.OccMask = prevMask; col.NonAir = prevNonAir; col.AdjY = prevAdj;
-                            anyChange = true;
+                            else
+                            {
+                                ushort prevMask = col.OccMask; byte prevNonAir = col.NonAir; byte prevAdj = col.AdjY;
+                                var arr = col.Escalated ?? new ushort[S];
+                                if (col.Escalated == null)
+                                {
+                                    for (int y = col.Y0Start; y <= col.Y0End; y++) arr[y] = col.Id0;
+                                    for (int y = col.Y1Start; y <= col.Y1End; y++) arr[y] = col.Id1;
+                                }
+                                ushort mask = overlap1;
+                                while (mask != 0)
+                                {
+                                    int y = BitOperations.TrailingZeroCount(mask);
+                                    mask = (ushort)(mask & (mask - 1));
+                                    arr[y] = replacementId;
+                                }
+                                col.Escalated = arr;
+                                col.RunCount = 255;
+                                col.OccMask = prevMask; col.NonAir = prevNonAir; col.AdjY = prevAdj;
+                                anyChange = true;
+                            }
                         }
                     }
                 }
