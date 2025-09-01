@@ -187,240 +187,270 @@ namespace MVGE_GEN.Utils
                 }
             }
 
-            // Build union column bitset of affected columns using per-id membership
-            ulong u0 = 0;
-            ulong u1 = 0;
-            ulong u2 = 0;
-            ulong u3 = 0;
-            for (int i = 0; i < d; i++)
+            // Early multi-id uniformization opportunity: if all changed ids full cover and all map to the same replacement
+            if (allChangedFullCover)
             {
-                if (!changedSpan[i] && sliceMaskSpan[i] == 0 && !isFullCoverSpan[i])
+                ushort firstFinal = 0;
+                bool sameFinal = true;
+                for (int i = 0; i < d; i++)
                 {
-                    continue; // unaffected
+                    if (!changedSpan[i] || !isFullCoverSpan[i]) continue;
+                    if (firstFinal == 0) firstFinal = finalIdSpan[i];
+                    else if (finalIdSpan[i] != firstFinal) { sameFinal = false; break; }
                 }
-                u0 |= scratch.IdColumnBits[i, 0];
-                u1 |= scratch.IdColumnBits[i, 1];
-                u2 |= scratch.IdColumnBits[i, 2];
-                u3 |= scratch.IdColumnBits[i, 3];
-            }
-
-            ushort[] original = originalSpan.ToArray();
-            ushort[] finalId = finalIdSpan.ToArray();
-            ushort[] sliceMask = sliceMaskSpan.ToArray();
-            bool[] isFullCover = isFullCoverSpan.ToArray();
-            bool[] changed = changedSpan.ToArray();
-
-            // Helper: map id -> distinct index (linear search small d)
-            static int FindDistinctIndex(ushort[] arr, int count, ushort id)
-            {
-                for (int i = 0; i < count; i++)
+                if (sameFinal && firstFinal != 0)
                 {
-                    if (arr[i] == id)
+                    // If single resulting id fills all solids we can turn uniform directly when representation simple
+                    if (sec.Kind == ChunkSection.RepresentationKind.Uniform)
                     {
-                        return i;
-                    }
-                }
-                return -1;
-            }
-
-            // Phase 2: apply
-            void ProcessColumn(int ci)
-            {
-                ref var col = ref scratch.GetWritableColumn(ci);
-                byte rc = col.RunCount;
-                if (rc == 0)
-                {
-                    return;
-                }
-
-                if (rc == 255)
-                {
-                    var arr = col.Escalated;
-                    if (arr == null)
-                    {
+                        sec.UniformBlockId = firstFinal;
                         return;
                     }
-                    if (allChangedFullCover)
+                    // For packed single-id palette (AIR + oldId) we can just change palette[1]
+                    if (sec.Kind == ChunkSection.RepresentationKind.Packed && sec.Palette != null && sec.Palette.Count == 2 && sec.Palette[0] == ChunkSection.AIR)
                     {
-                        for (int y = 0; y < S; y++)
+                        if (sec.Palette[1] != firstFinal)
                         {
-                            ushort id = arr[y];
-                            if (id == ChunkSection.AIR) continue;
-                            int di = FindDistinctIndex(original, d, id);
-                            if (di < 0) continue;
-                            if (isFullCover[di] && finalId[di] != id)
+                            ushort old = sec.Palette[1];
+                            sec.Palette[1] = firstFinal;
+                            if (sec.PaletteLookup != null)
                             {
-                                arr[y] = finalId[di];
+                                sec.PaletteLookup.Remove(old);
+                                sec.PaletteLookup[firstFinal] = 1;
                             }
                         }
                         return;
                     }
-                    for (int y = 0; y < S; y++)
-                    {
-                        ushort id = arr[y];
-                        if (id == ChunkSection.AIR) continue;
-                        int di = FindDistinctIndex(original, d, id);
-                        if (di < 0) continue;
-                        if (!changed[di] && sliceMask[di] == 0 && !isFullCover[di]) continue;
-                        if (isFullCover[di])
-                        {
-                            if (finalId[di] != id)
-                            {
-                                arr[y] = finalId[di];
-                            }
-                        }
-                        else if ((sliceMask[di] & (1 << y)) != 0 && finalId[di] != id)
-                        {
-                            arr[y] = finalId[di];
-                        }
-                    }
-                    return;
-                }
-
-                // compact runs
-                if (rc >= 1)
-                {
-                    int di0 = FindDistinctIndex(original, d, col.Id0);
-                    if (di0 >= 0 && (changed[di0] || sliceMask[di0] != 0 || isFullCover[di0]))
-                    {
-                        if (isFullCover[di0])
-                        {
-                            if (finalId[di0] != col.Id0)
-                            {
-                                col.Id0 = finalId[di0];
-                            }
-                        }
-                        else if (sliceMask[di0] != 0)
-                        {
-                            ushort runMask = (ushort)(((1 << (col.Y0End - col.Y0Start + 1)) - 1) << col.Y0Start);
-                            ushort overlap = (ushort)(runMask & sliceMask[di0]);
-                            if (overlap != 0)
-                            {
-                                if (overlap == runMask)
-                                {
-                                    if (finalId[di0] != col.Id0)
-                                    {
-                                        col.Id0 = finalId[di0];
-                                    }
-                                }
-                                else
-                                {
-                                    var arr = col.Escalated ?? new ushort[S];
-                                    if (col.Escalated == null)
-                                    {
-                                        for (int y = col.Y0Start; y <= col.Y0End; y++)
-                                        {
-                                            arr[y] = col.Id0;
-                                        }
-                                        if (rc == 2)
-                                        {
-                                            for (int y = col.Y1Start; y <= col.Y1End; y++)
-                                            {
-                                                arr[y] = col.Id1;
-                                            }
-                                        }
-                                    }
-                                    ushort mask = overlap;
-                                    while (mask != 0)
-                                    {
-                                        int y = BitOperations.TrailingZeroCount(mask);
-                                        mask &= (ushort)(mask - 1);
-                                        if (finalId[di0] != arr[y])
-                                        {
-                                            arr[y] = finalId[di0];
-                                        }
-                                    }
-                                    col.Escalated = arr;
-                                    col.RunCount = 255;
-                                    return;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if (rc == 2)
-                {
-                    int di1 = FindDistinctIndex(original, d, col.Id1);
-                    if (di1 >= 0 && (changed[di1] || sliceMask[di1] != 0 || isFullCover[di1]))
-                    {
-                        if (isFullCover[di1])
-                        {
-                            if (finalId[di1] != col.Id1)
-                            {
-                                col.Id1 = finalId[di1];
-                            }
-                        }
-                        else if (sliceMask[di1] != 0)
-                        {
-                            ushort runMask = (ushort)(((1 << (col.Y1End - col.Y1Start + 1)) - 1) << col.Y1Start);
-                            ushort overlap = (ushort)(runMask & sliceMask[di1]);
-                            if (overlap != 0)
-                            {
-                                if (overlap == runMask)
-                                {
-                                    if (finalId[di1] != col.Id1)
-                                    {
-                                        col.Id1 = finalId[di1];
-                                    }
-                                }
-                                else
-                                {
-                                    var arr = col.Escalated ?? new ushort[S];
-                                    if (col.Escalated == null)
-                                    {
-                                        for (int y = col.Y0Start; y <= col.Y0End; y++)
-                                        {
-                                            arr[y] = col.Id0;
-                                        }
-                                        for (int y = col.Y1Start; y <= col.Y1End; y++)
-                                        {
-                                            arr[y] = col.Id1;
-                                        }
-                                    }
-                                    ushort mask = overlap;
-                                    while (mask != 0)
-                                    {
-                                        int y = BitOperations.TrailingZeroCount(mask);
-                                        mask &= (ushort)(mask - 1);
-                                        if (finalId[di1] != arr[y])
-                                        {
-                                            arr[y] = finalId[di1];
-                                        }
-                                    }
-                                    col.Escalated = arr;
-                                    col.RunCount = 255;
-                                }
-                            }
-                        }
-                    }
                 }
             }
 
-            if (allChangedFullCover && u0 == 0 && u1 == 0 && u2 == 0 && u3 == 0)
+            // Phase 2 (refactored): per-id iteration over membership bitsets.
+            // Helper local static to attempt partial run split for prefix/suffix replacement on single-run columns.
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            static bool TrySplitSingleRun(ref ColumnData col, ushort targetId, ushort newId, ushort sliceMask)
             {
-                // Fallback: full scan but only swap ids (no partial logic) because we lack membership bits
-                for (int ci = 0; ci < COLUMN_COUNT; ci++)
+                // Preconditions: RunCount==1, col.Id0 == targetId, partial overlap already verified.
+                int runStart = col.Y0Start;
+                int runEnd = col.Y0End;
+                int runLen = runEnd - runStart + 1;
+                ushort runMask = (ushort)(((1 << runLen) - 1) << runStart);
+                ushort overlap = (ushort)(runMask & sliceMask);
+                if (overlap == 0 || overlap == runMask) return false; // not partial
+
+                // Extract contiguous overlap boundaries
+                int firstBit = BitOperations.TrailingZeroCount(overlap);
+                int lastBit = 15 - BitOperations.LeadingZeroCount(overlap);
+                bool prefix = firstBit == runStart && lastBit < runEnd; // bottom segment replaced
+                bool suffix = firstBit > runStart && lastBit == runEnd; // top segment replaced
+                if (!(prefix || suffix)) return false; // interior -> would produce 3 segments
+
+                if (prefix)
                 {
-                    ProcessColumn(ci);
+                    // New run becomes first (replacement), original becomes second
+                    col.Id1 = col.Id0; col.Y1Start = (byte)(lastBit + 1); col.Y1End = (byte)runEnd;
+                    col.Id0 = newId; col.Y0Start = (byte)runStart; col.Y0End = (byte)lastBit; col.RunCount = 2;
                 }
+                else // suffix
+                {
+                    // Keep original as first, add replacement as second
+                    col.Id1 = newId; col.Y1Start = (byte)firstBit; col.Y1End = (byte)runEnd; col.RunCount = 2;
+                    // shrink first run
+                    col.Y0End = (byte)(firstBit - 1);
+                }
+                return true;
             }
-            else
+
+            bool touchedAnyColumn = false;
+
+            for (int di = 0; di < d; di++)
             {
-                void IterateWord(ulong word, int wordIndex)
+                ushort originalId = originalSpan[di];
+                ushort newId = finalIdSpan[di];
+                bool fullCover = isFullCoverSpan[di];
+                ushort sliceMask = sliceMaskSpan[di];
+                bool changed = changedSpan[di];
+                if (!changed && sliceMask == 0 && !fullCover) continue; // unaffected
+
+                // Column membership bitsets
+                ulong m0 = scratch.IdColumnBits[di, 0];
+                ulong m1 = scratch.IdColumnBits[di, 1];
+                ulong m2 = scratch.IdColumnBits[di, 2];
+                ulong m3 = scratch.IdColumnBits[di, 3];
+
+                if (m0 == 0 && m1 == 0 && m2 == 0 && m3 == 0)
+                {
+                    continue; // no columns recorded (safety)
+                }
+
+                void ProcessWord(ulong word, int wordIndex)
                 {
                     while (word != 0)
                     {
                         int bit = BitOperations.TrailingZeroCount(word);
-                        int ci = (wordIndex << 6) + bit; // 0..255
                         word &= word - 1;
-                        ProcessColumn(ci);
+                        int ci = (wordIndex << 6) + bit;
+                        ref var col = ref scratch.GetWritableColumn(ci);
+                        byte rc = col.RunCount;
+                        if (rc == 0) continue;
+
+                        if (rc == 255)
+                        {
+                            var arr = col.Escalated;
+                            if (arr == null) continue;
+                            if (fullCover)
+                            {
+                                for (int y = 0; y < S; y++) if (arr[y] == originalId) arr[y] = newId;
+                            }
+                            else
+                            {
+                                ushort mask = sliceMask;
+                                while (mask != 0)
+                                {
+                                    int y = BitOperations.TrailingZeroCount(mask);
+                                    mask &= (ushort)(mask - 1);
+                                    if (arr[y] == originalId) arr[y] = newId;
+                                }
+                            }
+                            touchedAnyColumn = true;
+                            continue;
+                        }
+
+                        // compact columns (runs)
+                        if (rc >= 1 && col.Id0 == originalId)
+                        {
+                            if (fullCover)
+                            {
+                                col.Id0 = newId;
+                                touchedAnyColumn = true;
+                            }
+                            else if (sliceMask != 0)
+                            {
+                                int runStart = col.Y0Start;
+                                int runEnd = col.Y0End;
+                                int len = runEnd - runStart + 1;
+                                ushort runMask = (ushort)(((1 << len) - 1) << runStart);
+                                ushort overlap = (ushort)(runMask & sliceMask);
+                                if (overlap != 0)
+                                {
+                                    if (overlap == runMask)
+                                    {
+                                        col.Id0 = newId;
+                                        touchedAnyColumn = true;
+                                    }
+                                    else if (TrySplitSingleRun(ref col, originalId, newId, sliceMask))
+                                    {
+                                        touchedAnyColumn = true;
+                                    }
+                                    else
+                                    {
+                                        // escalate and patch only overlapping y
+                                        var arr = col.Escalated ?? new ushort[S];
+                                        if (col.Escalated == null)
+                                        {
+                                            for (int y = runStart; y <= runEnd; y++) arr[y] = originalId;
+                                            if (rc == 2)
+                                            {
+                                                for (int y = col.Y1Start; y <= col.Y1End; y++) arr[y] = col.Id1;
+                                            }
+                                            col.Escalated = arr;
+                                            col.RunCount = 255;
+                                        }
+                                        ushort mask = overlap;
+                                        while (mask != 0)
+                                        {
+                                            int y = BitOperations.TrailingZeroCount(mask);
+                                            mask &= (ushort)(mask - 1);
+                                            if (arr[y] == originalId) arr[y] = newId;
+                                        }
+                                        touchedAnyColumn = true;
+                                    }
+                                }
+                            }
+                        }
+                        if (rc == 2 && col.Id1 == originalId)
+                        {
+                            if (fullCover)
+                            {
+                                col.Id1 = newId;
+                                touchedAnyColumn = true;
+                            }
+                            else if (sliceMask != 0)
+                            {
+                                int runStart = col.Y1Start;
+                                int runEnd = col.Y1End;
+                                int len = runEnd - runStart + 1;
+                                ushort runMask = (ushort)(((1 << len) - 1) << runStart);
+                                ushort overlap = (ushort)(runMask & sliceMask);
+                                if (overlap != 0)
+                                {
+                                    if (overlap == runMask)
+                                    {
+                                        col.Id1 = newId;
+                                        touchedAnyColumn = true;
+                                    }
+                                    else
+                                    {
+                                        // escalate (simpler for second run)
+                                        var arr = col.Escalated ?? new ushort[S];
+                                        if (col.Escalated == null)
+                                        {
+                                            for (int y = col.Y0Start; y <= col.Y0End; y++) arr[y] = col.Id0;
+                                            for (int y = col.Y1Start; y <= col.Y1End; y++) arr[y] = col.Id1;
+                                            col.Escalated = arr;
+                                            col.RunCount = 255;
+                                        }
+                                        ushort mask = overlap;
+                                        while (mask != 0)
+                                        {
+                                            int y = BitOperations.TrailingZeroCount(mask);
+                                            mask &= (ushort)(mask - 1);
+                                            if (arr[y] == originalId) arr[y] = newId;
+                                        }
+                                        touchedAnyColumn = true;
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
-                IterateWord(u0, 0);
-                IterateWord(u1, 1);
-                IterateWord(u2, 2);
-                IterateWord(u3, 3);
+
+                ProcessWord(m0, 0); ProcessWord(m1, 1); ProcessWord(m2, 2); ProcessWord(m3, 3);
+            }
+
+            if (!touchedAnyColumn && allChangedFullCover)
+            {
+                // Fallback: full scan because membership bits missing (very rare safety path)
+                for (int ci = 0; ci < COLUMN_COUNT; ci++)
+                {
+                    ref var col = ref scratch.GetWritableColumn(ci);
+                    byte rc = col.RunCount;
+                    if (rc == 0) continue;
+                    if (rc == 255)
+                    {
+                        var arr = col.Escalated; if (arr == null) continue;
+                        for (int y = 0; y < S; y++)
+                        {
+                            ushort id = arr[y];
+                            for (int di = 0; di < d; di++)
+                            {
+                                if (isFullCoverSpan[di] && id == originalSpan[di] && finalIdSpan[di] != id)
+                                {
+                                    arr[y] = finalIdSpan[di];
+                                    break;
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    if (rc >= 1)
+                    {
+                        for (int di = 0; di < d; di++) if (isFullCoverSpan[di] && col.Id0 == originalSpan[di]) { col.Id0 = finalIdSpan[di]; break; }
+                    }
+                    if (rc == 2)
+                    {
+                        for (int di = 0; di < d; di++) if (isFullCoverSpan[di] && col.Id1 == originalSpan[di]) { col.Id1 = finalIdSpan[di]; break; }
+                    }
+                }
             }
 
             scratch.DistinctDirty = true; // allow finalize to rebuild accurately (handles removed ids, new id insertion)
