@@ -13,7 +13,7 @@ namespace MVGE_GEN
     {
         private const ushort CHUNK_SAVE_VERSION = 1;
         private static readonly byte[] CHUNK_MAGIC = new byte[] { (byte)'M', (byte)'V', (byte)'C', (byte)'H' }; // "MVCH" (MVGE Chunk)
-        private static readonly byte[] CHUNK_FOOTER_MAGIC = new byte[] { (byte)'C', (byte)'M', (byte)'D'}; // Chunk Meta Data
+        private static readonly byte[] CHUNK_FOOTER_MAGIC = new byte[] { (byte)'C', (byte)'M', (byte)'D'}; // Chunk Meta Data (NOTE: currently 3 bytes written; loader adjusted accordingly)
 
         // File Layout (little endian)
         // Header:
@@ -221,7 +221,7 @@ namespace MVGE_GEN
                                         }
                                         if (sec.PaletteLookup != null)
                                         {
-                                            ps.Write((byte)1); // present flag (persist from v1+ since we always wrote it)
+                                            ps.Write((byte)1); // present flag
                                             ps.Write((ushort)sec.PaletteLookup.Count);
                                             foreach (var kv in sec.PaletteLookup)
                                             {
@@ -319,13 +319,21 @@ namespace MVGE_GEN
         {
             string path = GetChunkFilePath(cx, cy, cz);
             if (!File.Exists(path)) return null;
+            string phase = "Start";
             try
             {
+                phase = "OpenFile";
                 using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, FileOptions.SequentialScan);
+                long fileLen = fs.Length;
+                if (fileLen < 40) { Console.WriteLine($"[World] Reject chunk {cx},{cy},{cz}: file too small ({fileLen})."); return null; }
                 using var br = new BinaryReader(fs);
+
+                phase = "ReadMagic";
                 var magic = br.ReadBytes(4);
                 if (magic.Length != 4 || magic[0] != CHUNK_MAGIC[0] || magic[1] != CHUNK_MAGIC[1] || magic[2] != CHUNK_MAGIC[2] || magic[3] != CHUNK_MAGIC[3])
-                    return null; // invalid
+                    return null; // invalid magic
+
+                phase = "ReadHeaderFields";
                 ushort ver = br.ReadUInt16();
                 br.ReadUInt16(); // padding
                 int fileCx = br.ReadInt32();
@@ -335,23 +343,73 @@ namespace MVGE_GEN
                 int syCount = br.ReadInt32();
                 int szCount = br.ReadInt32();
                 int sectionCount = br.ReadInt32();
-                if (sectionCount != sxCount * syCount * szCount) return null;
 
-                // Read offsets
+                // Validate section grid matches current expected derived from chunk dimensions
+                phase = "ValidateSectionGrid";
+                int expectedSX = GameManager.settings.chunkMaxX / ChunkSection.SECTION_SIZE;
+                int expectedSY = GameManager.settings.chunkMaxY / ChunkSection.SECTION_SIZE;
+                int expectedSZ = GameManager.settings.chunkMaxZ / ChunkSection.SECTION_SIZE;
+                if (sxCount != expectedSX || syCount != expectedSY || szCount != expectedSZ)
+                {
+                    Console.WriteLine($"[World] Reject chunk {cx},{cy},{cz}: section grid mismatch file=({sxCount},{syCount},{szCount}) expected=({expectedSX},{expectedSY},{expectedSZ}).");
+                    return null;
+                }
+                if (sectionCount != sxCount * syCount * szCount)
+                {
+                    Console.WriteLine($"[World] Reject chunk {cx},{cy},{cz}: sectionCount mismatch {sectionCount} vs product {sxCount * syCount * szCount}.");
+                    return null;
+                }
+
+                // Offsets array size check
+                phase = "ReadOffsets";
+                long offsetsStart = fs.Position;
+                long requiredBytesForOffsets = (long)sectionCount * 4;
+                if (offsetsStart + requiredBytesForOffsets > fileLen)
+                {
+                    Console.WriteLine($"[World] Reject chunk {cx},{cy},{cz}: offset table truncated.");
+                    return null;
+                }
+
                 uint[] offsets = new uint[sectionCount];
-                for (int i = 0; i < sectionCount; i++) offsets[i] = br.ReadUInt32();
+                for (int i = 0; i < sectionCount; i++)
+                {
+                    phase = $"ReadOffset[{i}]";
+                    offsets[i] = br.ReadUInt32();
+                }
 
-                // Construct chunk at world position (convert chunk indices back to world base coords)
+                // Validate offsets strictly (basic): each offset < fileLen, and minimal room for kind+len (3 bytes)
+                phase = "ValidateOffsets";
+                for (int i = 0; i < sectionCount; i++)
+                {
+                    uint off = offsets[i];
+                    if (off == 0) continue; // treated as empty
+                    if (off >= fileLen || off + 3 > fileLen)
+                    {
+                        Console.WriteLine($"[World] In chunk {cx},{cy},{cz}: invalid section offset index {i} value {off} (fileLen={fileLen}). Nulling section.");
+                        offsets[i] = 0; // force empty
+                    }
+                }
+
+                // Construct chunk at world position
+                phase = "ConstructChunk";
                 int baseX = fileCx * GameManager.settings.chunkMaxX;
                 int baseY = fileCy * GameManager.settings.chunkMaxY;
                 int baseZ = fileCz * GameManager.settings.chunkMaxZ;
-                var chunk = new Chunk(new Vector3(baseX, baseY, baseZ), loader.seed, loader.currentWorldSaveDirectory, null);
-                // Ensure section grid
+                Chunk chunk;
+                try { chunk = new Chunk(new Vector3(baseX, baseY, baseZ), loader.seed, loader.currentWorldSaveDirectory, null); }
+                catch (Exception ctorEx)
+                {
+                    Console.WriteLine($"[World] Chunk ctor failed ({cx},{cy},{cz}) phase={phase}: {ctorEx.Message}");
+                    return null;
+                }
+
+                phase = "InitSectionArray";
                 if (chunk.sections == null || chunk.sections.GetLength(0) != sxCount || chunk.sections.GetLength(1) != syCount || chunk.sections.GetLength(2) != szCount)
                 {
                     chunk.sections = new ChunkSection[sxCount, syCount, szCount];
                 }
 
+                phase = "ParseSections";
                 int linear = 0;
                 for (int sx = 0; sx < sxCount; sx++)
                 {
@@ -360,27 +418,60 @@ namespace MVGE_GEN
                         for (int sz = 0; sz < szCount; sz++, linear++)
                         {
                             uint off = offsets[linear];
-                            if (off == 0 || off >= fs.Length) { chunk.sections[sx, sy, sz] = new ChunkSection(); continue; }
-                            fs.Position = off;
-                            byte kindByte = br.ReadByte();
-                            ChunkSection.RepresentationKind kind = (ChunkSection.RepresentationKind)kindByte;
-                            ushort payloadLen = br.ReadUInt16();
-                            if (payloadLen > fs.Length - fs.Position) payloadLen = (ushort)(fs.Length - fs.Position);
-                            byte[] payload = br.ReadBytes(payloadLen);
-                            var sec = new ChunkSection();
-                            sec.Kind = kind;
-                            sec.VoxelCount = ChunkSection.SECTION_SIZE * ChunkSection.SECTION_SIZE * ChunkSection.SECTION_SIZE;
-                            using var ms = new MemoryStream(payload);
-                            using var prs = new BinaryReader(ms);
-                            if (payloadLen >= 7) // minimum metadata length
+                            string sectionTag = $"sec({sx},{sy},{sz})";
+                            if (off == 0) { chunk.sections[sx, sy, sz] = new ChunkSection(); continue; }
+                            try
                             {
+                                phase = $"SeekSection:{sectionTag}";
+                                fs.Position = off;
+                                if (fs.Position + 3 > fileLen) { Console.WriteLine($"[World] Section truncated pre-header c=({cx},{cy},{cz}) {sectionTag}."); chunk.sections[sx, sy, sz] = new ChunkSection(); continue; }
+
+                                phase = $"ReadSectionHeader:{sectionTag}";
+                                byte kindByte = br.ReadByte();
+                                ChunkSection.RepresentationKind kind = (ChunkSection.RepresentationKind)kindByte;
+                                ushort payloadLen = br.ReadUInt16();
+                                if (payloadLen == 0 || fs.Position + payloadLen > fileLen)
+                                {
+                                    Console.WriteLine($"[World] Section payload length invalid c=({cx},{cy},{cz}) {sectionTag} len={payloadLen} remaining={fileLen - fs.Position}.");
+                                    chunk.sections[sx, sy, sz] = new ChunkSection();
+                                    continue;
+                                }
+
+                                phase = $"ReadSectionPayload:{sectionTag}";
+                                byte[] payload = br.ReadBytes(payloadLen);
+                                if (payload.Length != payloadLen)
+                                {
+                                    Console.WriteLine($"[World] Section payload truncated c=({cx},{cy},{cz}) {sectionTag}.");
+                                    chunk.sections[sx, sy, sz] = new ChunkSection();
+                                    continue;
+                                }
+
+                                phase = $"ParseSectionPayload:{sectionTag}";
+                                var sec = new ChunkSection();
+                                sec.Kind = kind;
+                                sec.VoxelCount = ChunkSection.SECTION_SIZE * ChunkSection.SECTION_SIZE * ChunkSection.SECTION_SIZE;
+                                using var ms = new MemoryStream(payload);
+                                using var prs = new BinaryReader(ms);
+                                // Need at least minimal metadata 7 bytes
+                                if (payloadLen < 7)
+                                {
+                                    Console.WriteLine($"[World] Section metadata too small c=({cx},{cy},{cz}) {sectionTag} len={payloadLen}.");
+                                    chunk.sections[sx, sy, sz] = new ChunkSection();
+                                    continue;
+                                }
                                 sec.NonAirCount = prs.ReadUInt16();
                                 sec.InternalExposure = prs.ReadInt32();
                                 byte metaFlags = prs.ReadByte();
                                 bool hasBounds = (metaFlags & 1) != 0;
                                 bool hasOcc = (metaFlags & 2) != 0;
-                                if (hasBounds && ms.Position + 6 <= ms.Length)
+                                if (hasBounds)
                                 {
+                                    if (ms.Position + 6 > ms.Length)
+                                    {
+                                        Console.WriteLine($"[World] Section bounds truncated c=({cx},{cy},{cz}) {sectionTag}.");
+                                        chunk.sections[sx, sy, sz] = new ChunkSection();
+                                        continue;
+                                    }
                                     sec.HasBounds = true;
                                     sec.MinLX = prs.ReadByte();
                                     sec.MinLY = prs.ReadByte();
@@ -407,6 +498,13 @@ namespace MVGE_GEN
                                     sec.FacePosYBits = ReadOcc();
                                     sec.FaceNegZBits = ReadOcc();
                                     sec.FacePosZBits = ReadOcc();
+                                    // If any occupancy arrays failed but others not null -> treat as invalid
+                                    if (sec.OccupancyBits == null && (sec.FaceNegXBits != null || sec.FacePosXBits != null))
+                                    {
+                                        Console.WriteLine($"[World] Section occupancy corrupt c=({cx},{cy},{cz}) {sectionTag}.");
+                                        chunk.sections[sx, sy, sz] = new ChunkSection();
+                                        continue;
+                                    }
                                 }
                                 sec.CompletelyFull = (metaFlags & (1 << 2)) != 0;
                                 sec.MetadataBuilt = (metaFlags & (1 << 3)) != 0;
@@ -414,74 +512,78 @@ namespace MVGE_GEN
                                 sec.StructuralDirty = (metaFlags & (1 << 5)) != 0;
                                 sec.IdMapDirty = (metaFlags & (1 << 6)) != 0;
                                 sec.BoundingBoxDirty = (metaFlags & (1 << 7)) != 0;
-                            }
-                            // Representation specific
-                            switch (kind)
-                            {
-                                case ChunkSection.RepresentationKind.Empty:
-                                    sec.IsAllAir = true;
-                                    break;
-                                case ChunkSection.RepresentationKind.Uniform:
-                                    if (ms.Position + 2 <= ms.Length) sec.UniformBlockId = prs.ReadUInt16();
-                                    if (!sec.MetadataBuilt) sec.IsAllAir = (sec.NonAirCount == 0);
-                                    break;
-                                case ChunkSection.RepresentationKind.Sparse:
-                                    if (ms.Position + 2 <= ms.Length)
-                                    {
-                                        int scount = prs.ReadUInt16();
-                                        sec.SparseIndices = new int[scount];
-                                        sec.SparseBlocks = new ushort[scount];
-                                        for (int i = 0; i < scount && ms.Position + 4 <= ms.Length; i++)
-                                        {
-                                            sec.SparseIndices[i] = prs.ReadUInt16();
-                                            sec.SparseBlocks[i] = prs.ReadUInt16();
-                                        }
-                                    }
-                                    break;
-                                case ChunkSection.RepresentationKind.DenseExpanded:
-                                    int expectedBytes = sec.VoxelCount * 2;
-                                    sec.ExpandedDense = new ushort[sec.VoxelCount];
-                                    int toRead = Math.Min(expectedBytes, (int)(ms.Length - ms.Position));
-                                    byte[] dense = prs.ReadBytes(toRead);
-                                    MemoryMarshal.Cast<byte, ushort>(dense).CopyTo(sec.ExpandedDense.AsSpan());
-                                    break;
-                                case ChunkSection.RepresentationKind.Packed:
-                                    if (ms.Position < ms.Length)
-                                    {
-                                        sec.BitsPerIndex = prs.ReadByte();
+
+                                // Representation specific guarded parsing
+                                phase = $"ParseSectionRep:{sectionTag}";
+                                switch (kind)
+                                {
+                                    case ChunkSection.RepresentationKind.Empty:
+                                        sec.IsAllAir = true;
+                                        break;
+                                    case ChunkSection.RepresentationKind.Uniform:
+                                        if (ms.Position + 2 <= ms.Length) sec.UniformBlockId = prs.ReadUInt16();
+                                        else Console.WriteLine($"[World] Uniform id truncated c=({cx},{cy},{cz}) {sectionTag}.");
+                                        if (!sec.MetadataBuilt) sec.IsAllAir = (sec.NonAirCount == 0);
+                                        break;
+                                    case ChunkSection.RepresentationKind.Sparse:
                                         if (ms.Position + 2 <= ms.Length)
                                         {
-                                            int paletteCount = prs.ReadUInt16();
-                                            sec.Palette = new List<ushort>(paletteCount);
-                                            for (int i = 0; i < paletteCount && ms.Position + 2 <= ms.Length; i++)
-                                                sec.Palette.Add(prs.ReadUInt16());
-                                            if (ms.Position + 4 <= ms.Length)
+                                            int scount = prs.ReadUInt16();
+                                            if (scount < 0 || scount > 4096) { Console.WriteLine($"[World] Sparse count invalid {scount} c=({cx},{cy},{cz}) {sectionTag}."); break; }
+                                            if (ms.Position + scount * 4 > ms.Length) { Console.WriteLine($"[World] Sparse payload truncated count={scount} c=({cx},{cy},{cz}) {sectionTag}."); break; }
+                                            sec.SparseIndices = new int[scount];
+                                            sec.SparseBlocks = new ushort[scount];
+                                            for (int i = 0; i < scount; i++) { sec.SparseIndices[i] = prs.ReadUInt16(); sec.SparseBlocks[i] = prs.ReadUInt16(); }
+                                        }
+                                        break;
+                                    case ChunkSection.RepresentationKind.DenseExpanded:
+                                        int expectedBytes = sec.VoxelCount * 2;
+                                        int remain = (int)(ms.Length - ms.Position);
+                                        if (remain < expectedBytes)
+                                        {
+                                            Console.WriteLine($"[World] DenseExpanded truncated remain={remain} expected={expectedBytes} c=({cx},{cy},{cz}) {sectionTag}.");
+                                            break;
+                                        }
+                                        sec.ExpandedDense = new ushort[sec.VoxelCount];
+                                        byte[] dense = prs.ReadBytes(expectedBytes);
+                                        try
+                                        {
+                                            phase = $"DenseCast:{sectionTag}";
+                                            MemoryMarshal.Cast<byte, ushort>(dense).CopyTo(sec.ExpandedDense.AsSpan());
+                                        }
+                                        catch (Exception castEx)
+                                        {
+                                            Console.WriteLine($"[World] DenseExpanded copy failed c=({cx},{cy},{cz}) {sectionTag}: {castEx.Message}");
+                                        }
+                                        break;
+                                    case ChunkSection.RepresentationKind.Packed:
+                                        if (ms.Position >= ms.Length) break;
+                                        sec.BitsPerIndex = prs.ReadByte();
+                                        if (ms.Position + 2 > ms.Length) { Console.WriteLine($"[World] Packed palette header truncated c=({cx},{cy},{cz}) {sectionTag}."); break; }
+                                        int paletteCount = prs.ReadUInt16();
+                                        if (paletteCount < 0 || paletteCount > 4096) { Console.WriteLine($"[World] Packed paletteCount invalid {paletteCount} c=({cx},{cy},{cz}) {sectionTag}."); break; }
+                                        if (ms.Position + paletteCount * 2 > ms.Length) { Console.WriteLine($"[World] Packed palette truncated c=({cx},{cy},{cz}) {sectionTag}."); break; }
+                                        sec.Palette = new List<ushort>(paletteCount);
+                                        for (int pi = 0; pi < paletteCount; pi++) sec.Palette.Add(prs.ReadUInt16());
+                                        if (ms.Position + 4 > ms.Length) { Console.WriteLine($"[World] Packed bitData header truncated c=({cx},{cy},{cz}) {sectionTag}."); break; }
+                                        int wordCount = prs.ReadInt32();
+                                        if (wordCount < 0 || wordCount > 1_000_000) { Console.WriteLine($"[World] Packed wordCount invalid {wordCount} c=({cx},{cy},{cz}) {sectionTag}."); break; }
+                                        if (ms.Position + wordCount * 4 > ms.Length) { Console.WriteLine($"[World] Packed bitData truncated wordCount={wordCount} c=({cx},{cy},{cz}) {sectionTag}."); break; }
+                                        if (wordCount > 0)
+                                        {
+                                            sec.BitData = new uint[wordCount];
+                                            for (int wi = 0; wi < wordCount; wi++) sec.BitData[wi] = prs.ReadUInt32();
+                                        }
+                                        if (ms.Position < ms.Length)
+                                        {
+                                            byte mapPresent = prs.ReadByte();
+                                            if (mapPresent != 0 && ms.Position + 2 <= ms.Length)
                                             {
-                                                int wordCount = prs.ReadInt32();
-                                                if (wordCount > 0 && ms.Position + wordCount * 4 <= ms.Length)
+                                                int mapCount = prs.ReadUInt16();
+                                                if (mapCount >= 0 && ms.Position + mapCount * 4 <= ms.Length && mapCount <= 4096)
                                                 {
-                                                    sec.BitData = new uint[wordCount];
-                                                    for (int i = 0; i < wordCount; i++) sec.BitData[i] = prs.ReadUInt32();
-                                                }
-                                            }
-                                            if (ms.Position < ms.Length)
-                                            {
-                                                byte mapPresent = prs.ReadByte();
-                                                if (mapPresent != 0 && ms.Position + 2 <= ms.Length)
-                                                {
-                                                    int mapCount = prs.ReadUInt16();
                                                     sec.PaletteLookup = new Dictionary<ushort, int>(mapCount);
-                                                    for (int mi = 0; mi < mapCount && ms.Position + 4 <= ms.Length; mi++)
-                                                    {
-                                                        ushort blockId = prs.ReadUInt16();
-                                                        ushort index = prs.ReadUInt16();
-                                                        sec.PaletteLookup[blockId] = index;
-                                                    }
-                                                }
-                                                else if (sec.Palette != null)
-                                                {
-                                                    sec.PaletteLookup = new Dictionary<ushort, int>(sec.Palette.Count);
-                                                    for (int i = 0; i < sec.Palette.Count; i++) sec.PaletteLookup[sec.Palette[i]] = i;
+                                                    for (int mi = 0; mi < mapCount; mi++) { ushort blockId = prs.ReadUInt16(); ushort index = prs.ReadUInt16(); sec.PaletteLookup[blockId] = index; }
                                                 }
                                             }
                                             else if (sec.Palette != null)
@@ -490,83 +592,104 @@ namespace MVGE_GEN
                                                 for (int i = 0; i < sec.Palette.Count; i++) sec.PaletteLookup[sec.Palette[i]] = i;
                                             }
                                         }
-                                    }
-                                    break;
+                                        break;
+                                }
+                                if (sec.Kind == ChunkSection.RepresentationKind.Packed && sec.Palette != null && sec.PaletteLookup == null)
+                                {
+                                    sec.PaletteLookup = new Dictionary<ushort, int>(sec.Palette.Count);
+                                    for (int i = 0; i < sec.Palette.Count; i++) sec.PaletteLookup[sec.Palette[i]] = i;
+                                }
+                                chunk.sections[sx, sy, sz] = sec;
                             }
-                            if (sec.Kind == ChunkSection.RepresentationKind.Packed && sec.Palette != null && sec.PaletteLookup == null)
+                            catch (Exception sectionEx)
                             {
-                                sec.PaletteLookup = new Dictionary<ushort, int>(sec.Palette.Count);
-                                for (int i = 0; i < sec.Palette.Count; i++) sec.PaletteLookup[sec.Palette[i]] = i;
+                                Console.WriteLine($"[World] Exception parsing {sectionTag} c=({cx},{cy},{cz}) phase={phase}: {sectionEx.Message}");
+                                chunk.sections[sx, sy, sz] = new ChunkSection();
                             }
-                            chunk.sections[sx, sy, sz] = sec;
                         }
                     }
                 }
 
                 // Footer attempt. We always try to read if bytes remain.
-                if (fs.Position + 4 <= fs.Length)
+                phase = "Footer";
+                if (fs.Position + CHUNK_FOOTER_MAGIC.Length <= fs.Length)
                 {
                     long footerPos = fs.Position;
-                    byte[] fmagic = br.ReadBytes(4);
-                    bool footerOk = fmagic.Length == 4 && fmagic[0] == CHUNK_FOOTER_MAGIC[0] && fmagic[1] == CHUNK_FOOTER_MAGIC[1] && fmagic[2] == CHUNK_FOOTER_MAGIC[2] && fmagic[3] == CHUNK_FOOTER_MAGIC[3];
+                    byte[] fmagic = br.ReadBytes(CHUNK_FOOTER_MAGIC.Length); // read exactly the magic length we write (3 bytes currently)
+                    bool footerOk = fmagic.Length == CHUNK_FOOTER_MAGIC.Length;
                     if (footerOk)
                     {
-                        float tempF = br.ReadSingle();
-                        float humF = br.ReadSingle();
-                        chunk.chunkData.temperature = (byte)Math.Clamp((int)Math.Round(tempF), 0, 255);
-                        chunk.chunkData.humidity = (byte)Math.Clamp((int)Math.Round(humF), 0, 255);
-                        uint flagsA = br.ReadUInt32();
-                        byte faceFlags = br.ReadByte();
-                        byte occStatus = br.ReadByte();
-                        br.ReadUInt16(); // padding
-                        chunk.AllOneBlockBlockId = br.ReadUInt16();
-                        byte statsPresent = br.ReadByte();
-                        br.ReadByte(); // padding
-                        chunk.AllAirChunk = (flagsA & (1u << 0)) != 0;
-                        chunk.AllStoneChunk = (flagsA & (1u << 1)) != 0;
-                        chunk.AllSoilChunk = (flagsA & (1u << 2)) != 0;
-                        chunk.AllOneBlockChunk = (flagsA & (1u << 3)) != 0;
-                        chunk.FullyBuried = (flagsA & (1u << 4)) != 0;
-                        chunk.BuriedByNeighbors = (flagsA & (1u << 5)) != 0;
-                        chunk.OcclusionStatus = (Chunk.OcclusionClass)occStatus;
-                        chunk.FaceSolidNegX = (faceFlags & (1 << 0)) != 0;
-                        chunk.FaceSolidPosX = (faceFlags & (1 << 1)) != 0;
-                        chunk.FaceSolidNegY = (faceFlags & (1 << 2)) != 0;
-                        chunk.FaceSolidPosY = (faceFlags & (1 << 3)) != 0;
-                        chunk.FaceSolidNegZ = (faceFlags & (1 << 4)) != 0;
-                        chunk.FaceSolidPosZ = (faceFlags & (1 << 5)) != 0;
-                        if (statsPresent != 0)
+                        for (int i = 0; i < CHUNK_FOOTER_MAGIC.Length; i++)
                         {
-                            var stats = chunk.MeshPrepassStats;
-                            stats.SolidCount = br.ReadInt32();
-                            stats.ExposureEstimate = br.ReadInt32();
-                            stats.MinX = br.ReadInt32(); stats.MinY = br.ReadInt32(); stats.MinZ = br.ReadInt32();
-                            stats.MaxX = br.ReadInt32(); stats.MaxY = br.ReadInt32(); stats.MaxZ = br.ReadInt32();
-                            stats.XNonEmpty = br.ReadInt32(); stats.YNonEmpty = br.ReadInt32(); stats.ZNonEmpty = br.ReadInt32();
-                            byte hasStats = br.ReadByte();
-                            stats.HasStats = hasStats != 0;
-                            chunk.MeshPrepassStats = stats;
+                            if (fmagic[i] != CHUNK_FOOTER_MAGIC[i]) { footerOk = false; break; }
                         }
-                        // planes
-                        ulong[] ReadPlane()
-                        {
-                            if (br.BaseStream.Position + 4 > br.BaseStream.Length) return null;
-                            int len = br.ReadInt32();
-                            if (len <= 0 || br.BaseStream.Position + (long)len * 8 > br.BaseStream.Length) return null;
-                            var arr = new ulong[len];
-                            for (int i = 0; i < len; i++) arr[i] = br.ReadUInt64();
-                            return arr;
-                        }
-                        chunk.PlaneNegX = ReadPlane();
-                        chunk.PlanePosX = ReadPlane();
-                        chunk.PlaneNegY = ReadPlane();
-                        chunk.PlanePosY = ReadPlane();
-                        chunk.PlaneNegZ = ReadPlane();
-                        chunk.PlanePosZ = ReadPlane();
                     }
-                    else
+                    // minimal size check AFTER magic (temperature..padding..allOneBlockId..stats flags) = 4+4+4+1+1+2+2+1+1 = 20 bytes
+                    long minimalFooterRemainder = 4 + 4 + 4 + 1 + 1 + 2 + 2 + 1 + 1;
+                    if (footerOk && fs.Position + minimalFooterRemainder <= fs.Length)
                     {
-                        fs.Position = footerPos; // revert if not footer
+                        try
+                        {
+                            phase = "FooterParse";
+                            float tempF = br.ReadSingle();
+                            float humF = br.ReadSingle();
+                            chunk.chunkData.temperature = (byte)Math.Clamp((int)Math.Round(tempF), 0, 255);
+                            chunk.chunkData.humidity = (byte)Math.Clamp((int)Math.Round(humF), 0, 255);
+                            uint flagsA = br.ReadUInt32();
+                            byte faceFlags = br.ReadByte();
+                            byte occStatus = br.ReadByte();
+                            br.ReadUInt16(); // padding
+                            chunk.AllOneBlockBlockId = br.ReadUInt16();
+                            byte statsPresent = br.ReadByte();
+                            br.ReadByte(); // padding
+                            chunk.AllAirChunk = (flagsA & (1u << 0)) != 0;
+                            chunk.AllStoneChunk = (flagsA & (1u << 1)) != 0;
+                            chunk.AllSoilChunk = (flagsA & (1u << 2)) != 0;
+                            chunk.AllOneBlockChunk = (flagsA & (1u << 3)) != 0;
+                            chunk.FullyBuried = (flagsA & (1u << 4)) != 0;
+                            chunk.BuriedByNeighbors = (flagsA & (1u << 5)) != 0;
+                            chunk.OcclusionStatus = (Chunk.OcclusionClass)occStatus;
+                            chunk.FaceSolidNegX = (faceFlags & (1 << 0)) != 0;
+                            chunk.FaceSolidPosX = (faceFlags & (1 << 1)) != 0;
+                            chunk.FaceSolidNegY = (faceFlags & (1 << 2)) != 0;
+                            chunk.FaceSolidPosY = (faceFlags & (1 << 3)) != 0;
+                            chunk.FaceSolidNegZ = (faceFlags & (1 << 4)) != 0;
+                            chunk.FaceSolidPosZ = (faceFlags & (1 << 5)) != 0;
+                            if (statsPresent != 0 && fs.Position + (11 * 4) + 1 <= fs.Length)
+                            {
+                                phase = "FooterStats";
+                                var stats = chunk.MeshPrepassStats;
+                                stats.SolidCount = br.ReadInt32();
+                                stats.ExposureEstimate = br.ReadInt32();
+                                stats.MinX = br.ReadInt32(); stats.MinY = br.ReadInt32(); stats.MinZ = br.ReadInt32();
+                                stats.MaxX = br.ReadInt32(); stats.MaxY = br.ReadInt32(); stats.MaxZ = br.ReadInt32();
+                                stats.XNonEmpty = br.ReadInt32(); stats.YNonEmpty = br.ReadInt32(); stats.ZNonEmpty = br.ReadInt32();
+                                byte hasStats = br.ReadByte();
+                                stats.HasStats = hasStats != 0;
+                                chunk.MeshPrepassStats = stats;
+                            }
+                            // Planes (guarded)
+                            phase = "FooterPlanes";
+                            ulong[] ReadPlane()
+                            {
+                                if (br.BaseStream.Position + 4 > br.BaseStream.Length) return null;
+                                int len = br.ReadInt32();
+                                if (len <= 0 || br.BaseStream.Position + (long)len * 8 > br.BaseStream.Length) return null;
+                                var arr = new ulong[len];
+                                for (int i = 0; i < len; i++) arr[i] = br.ReadUInt64();
+                                return arr;
+                            }
+                            chunk.PlaneNegX = ReadPlane();
+                            chunk.PlanePosX = ReadPlane();
+                            chunk.PlaneNegY = ReadPlane();
+                            chunk.PlanePosY = ReadPlane();
+                            chunk.PlaneNegZ = ReadPlane();
+                            chunk.PlanePosZ = ReadPlane();
+                        }
+                        catch (Exception fex)
+                        {
+                            Console.WriteLine($"[World] Footer parse error chunk ({cx},{cy},{cz}) phase={phase}: {fex.Message}");
+                        }
                     }
                 }
 
@@ -574,7 +697,7 @@ namespace MVGE_GEN
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[World] Failed to load chunk ({cx},{cy},{cz}): {ex.Message}");
+                Console.WriteLine($"[World] Failed to load chunk ({cx},{cy},{cz}) phase={phase}: {ex.Message}");
                 return null;
             }
         }

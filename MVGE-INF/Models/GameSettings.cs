@@ -28,8 +28,8 @@ namespace MVGE_INF.Models
         // Generation settings (required)
         public required long regionWidthInChunks { get; set; }
         public required bool oneRegionWorld { get; set; }
-        public required int chunkGenerationBufferRuntime { get; set; }
         public required int chunkGenerationBufferInitial { get; set; }
+        public required int chunkGenerationBufferRuntime { get; set; }
 
         // Directories (required in JSON except those computed at runtime)
         public string gamesDirectory { get; set; } = string.Empty;

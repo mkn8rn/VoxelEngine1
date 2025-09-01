@@ -49,8 +49,12 @@ namespace MVGE_GEN
         // Asynchronous generation pipeline (current active workers)
         private int generationWorkerCount; // current (may change after staged init)
         private Task[] generationWorkers;
-        private BlockingCollection<Vector3> chunkPositionQueue; // gen tasks
+        private BlockingCollection<Vector3> chunkPositionQueue; // gen tasks (LoD1 + active rings)
         private readonly ConcurrentDictionary<(int cx, int cy, int cz), byte> chunkGenSchedule = new(); // track enqueued but not yet generated
+
+        // Buffer (pre-generation) queue: chunks beyond LoD1 up to buffer distance; saved then released
+        private BlockingCollection<Vector3> bufferChunkPositionQueue; // buffer gen tasks
+        private readonly ConcurrentDictionary<(int cx, int cy, int cz), byte> bufferGenSchedule = new();
 
         // Asynchronous mesh build pipeline
         private int meshBuildWorkerCount; // current (may change after staged init)
@@ -62,6 +66,11 @@ namespace MVGE_GEN
         private volatile int playerChunkX;
         private volatile int playerChunkY;
         private volatile int playerChunkZ;
+
+        // Tracks the currently permitted buffer radius
+        private int currentBufferRadius; 
+
+        // current position of player in chunk coords
         public (int cx, int cy, int cz) PlayerChunkPosition
         {
             get => (playerChunkX, playerChunkY, playerChunkZ);
@@ -92,6 +101,7 @@ namespace MVGE_GEN
 
             worldBlockAccessor = GetBlock;
             chunkPositionQueue = new BlockingCollection<Vector3>(new ConcurrentQueue<Vector3>());
+            bufferChunkPositionQueue = new BlockingCollection<Vector3>(new ConcurrentQueue<Vector3>());
             meshBuildQueue = new BlockingCollection<(int cx, int cy, int cz)>(new ConcurrentQueue<(int, int, int)>());
             schedulingCts = new CancellationTokenSource();
             Console.WriteLine("World resources initialized.");
@@ -99,6 +109,9 @@ namespace MVGE_GEN
             bool streamGeneration = FlagManager.flags.renderStreamingIfAllowed ?? throw new InvalidOperationException("Render streaming flag is not set.");
 
             Console.WriteLine($"Initializing region: {RegionID}");
+
+            // Establish initial buffer radius BEFORE starting scheduling worker so it does not schedule full runtime buffer prematurely
+            currentBufferRadius = GameManager.settings.chunkGenerationBufferInitial; // start with initial pregen horizon
 
             // Always start scheduling first
             InitializeScheduling();
@@ -114,10 +127,11 @@ namespace MVGE_GEN
                 // 1. Initial world generation workers
                 StartGenerationWorkers(initialGen);
                 EnqueueInitialChunkPositions();
+                EnqueueInitialBufferChunkPositions();
                 WaitForInitialChunkGeneration();
                 StopGenerationWorkers();
 
-                // 2. Initial mesh build workers (after gen complete)
+                // 2. Initial mesh build workers (after gen complete) - only for active (LoD1) chunks
                 StartMeshBuildWorkers(initialMesh);
                 // Chunks were already enqueued for build during generation
                 WaitForInitialChunkRenderBuild();
@@ -126,6 +140,9 @@ namespace MVGE_GEN
                 // 3. Start steady-state workers (may be same counts; restart for clarity per spec)
                 StartGenerationWorkers(finalGen);
                 StartMeshBuildWorkers(finalMesh);
+                // Promote buffer radius to runtime value and schedule remainder
+                currentBufferRadius = GameManager.settings.chunkGenerationBufferRuntime;
+                EnqueueRuntimeBufferChunkPositions();
             }
             else
             {
@@ -135,6 +152,9 @@ namespace MVGE_GEN
                 StartGenerationWorkers(finalGen);
                 StartMeshBuildWorkers(finalMesh);
                 EnqueueInitialChunkPositions();
+                // In streaming we immediately switch to runtime buffer horizon
+                currentBufferRadius = GameManager.settings.chunkGenerationBufferRuntime;
+                EnqueueRuntimeBufferChunkPositions();
             }
         }
 
@@ -199,26 +219,27 @@ namespace MVGE_GEN
             }
         }
 
-        // -------------------- Existing waits (unchanged logic) --------------------
+        // -------------------- Existing waits (unchanged logic except include buffer queue) --------------------
         private void WaitForInitialChunkGeneration()
         {
-            Console.WriteLine("[World] Waiting for initial chunk generation...");
+            Console.WriteLine("[World] Waiting for initial chunk + buffer generation...");
             var sw = Stopwatch.StartNew();
 
-            int done = unbuiltChunks.Count;
-            int remaining = chunkGenSchedule.Count;
-            int total = chunkGenSchedule.Count + done;
+            int activeDone = unbuiltChunks.Count;
+            int remainingActive = chunkGenSchedule.Count;
+            int remainingBuffer = bufferGenSchedule.Count;
+            int total = chunkGenSchedule.Count + bufferGenSchedule.Count + activeDone; // activeDone counts only active-target generation
 
-            while (chunkGenSchedule.Count > 0)
+            while (chunkGenSchedule.Count > 0 || bufferGenSchedule.Count > 0)
             {
-                done = unbuiltChunks.Count;
-                remaining = chunkGenSchedule.Count;
-
-                Console.WriteLine($"[World] Initial chunk generation: {done}/{total}, remaining: {remaining}");
+                activeDone = unbuiltChunks.Count; // number of lod1 chunks generated
+                remainingActive = chunkGenSchedule.Count;
+                remainingBuffer = bufferGenSchedule.Count;
+                Console.WriteLine($"[World] Initial generation progress: activeGenRemaining={remainingActive}, bufferGenRemaining={remainingBuffer}");
                 Thread.Sleep(500);
             }
             sw.Stop();
-            Console.WriteLine($"[World] Initial chunk generation complete: {total} chunks in {sw.ElapsedMilliseconds} ms.");
+            Console.WriteLine($"[World] Initial generation complete in {sw.ElapsedMilliseconds} ms. (Active chunks: {unbuiltChunks.Count})");
         }
 
         private void WaitForInitialChunkRenderBuild()
@@ -293,7 +314,73 @@ namespace MVGE_GEN
                 }
             }
 
-            Console.WriteLine($"[World] Scheduled {count} initial chunks.");
+            Console.WriteLine($"[World] Scheduled {count} initial LoD1 chunks.");
+        }
+
+        private void EnqueueInitialBufferChunkPositions()
+        {
+            int lodDist = GameManager.settings.lod1RenderDistance;
+            int bufferLimit = GameManager.settings.chunkGenerationBufferInitial; // farthest ring for initial buffer pregen
+            if (bufferLimit <= lodDist) return; // no buffer range
+            int maxRadius = (int)Math.Min(bufferLimit - 1, GameManager.settings.regionWidthInChunks); // exclusive of bufferLimit? we interpret bufferLimit as outside radius count -> schedule up to bufferLimit-1 beyond last lod radius; adjust to inclusive semantics below
+            // Clarify: We treat bufferLimit as absolute outer radius inclusive -> schedule radii [lodDist, bufferLimit]
+            maxRadius = (int)Math.Min(bufferLimit, GameManager.settings.regionWidthInChunks);
+            int sizeX = GameManager.settings.chunkMaxX;
+            int sizeY = GameManager.settings.chunkMaxY;
+            int sizeZ = GameManager.settings.chunkMaxZ;
+            int verticalRows = GameManager.settings.lod1RenderDistance; // reuse vertical range heuristic
+            int count = 0;
+            for (int radius = lodDist; radius <= maxRadius; radius++)
+            {
+                int min = -radius; int max = radius;
+                for (int x = min; x <= max; x++)
+                {
+                    for (int z = min; z <= max; z++)
+                    {
+                        if (Math.Abs(x) != radius && Math.Abs(z) != radius) continue; // perimeter
+                        for (int vy = 0; vy < verticalRows; vy++)
+                        {
+                            EnqueueBufferChunkPosition(x * sizeX, vy * sizeY, z * sizeZ);
+                            count++;
+                        }
+                    }
+                }
+            }
+            if (count > 0)
+                Console.WriteLine($"[World] Scheduled {count} initial buffer pregen chunks (radius {lodDist}..{maxRadius}).");
+        }
+
+        private void EnqueueRuntimeBufferChunkPositions()
+        {
+            int lodDist = GameManager.settings.lod1RenderDistance;
+            int initialBuffer = GameManager.settings.chunkGenerationBufferInitial;
+            int runtimeBuffer = GameManager.settings.chunkGenerationBufferRuntime;
+            int startRadius = Math.Max(lodDist, initialBuffer); // schedule beyond what initial pass covered
+            if (runtimeBuffer <= startRadius) return; // nothing extra
+            int maxRadius = (int)Math.Min(runtimeBuffer, GameManager.settings.regionWidthInChunks);
+            int sizeX = GameManager.settings.chunkMaxX;
+            int sizeY = GameManager.settings.chunkMaxY;
+            int sizeZ = GameManager.settings.chunkMaxZ;
+            int verticalRows = GameManager.settings.lod1RenderDistance;
+            int count = 0;
+            for (int radius = startRadius; radius <= maxRadius; radius++)
+            {
+                int min = -radius; int max = radius;
+                for (int x = min; x <= max; x++)
+                {
+                    for (int z = min; z <= max; z++)
+                    {
+                        if (Math.Abs(x) != radius && Math.Abs(z) != radius) continue;
+                        for (int vy = 0; vy < verticalRows; vy++)
+                        {
+                            EnqueueBufferChunkPosition(x * sizeX, vy * sizeY, z * sizeZ);
+                            count++;
+                        }
+                    }
+                }
+            }
+            if (count > 0)
+                Console.WriteLine($"[World] Scheduled {count} runtime buffer pregen chunks (radius {startRadius}..{maxRadius}).");
         }
 
         private void EnqueueUnbuiltChunksForBuild()
@@ -313,6 +400,8 @@ namespace MVGE_GEN
             {
                 return; // outside configured world region
             }
+            // If this chunk had previously been scheduled for buffer pre-generation, drop that request now.
+            bufferGenSchedule.TryRemove(key, out _);
             if (!force)
             {
                 if (unbuiltChunks.ContainsKey(key) || activeChunks.ContainsKey(key)) return; // already generated or built
@@ -325,16 +414,42 @@ namespace MVGE_GEN
             chunkPositionQueue.Add(new Vector3(worldX, worldY, worldZ));
         }
 
+        private void EnqueueBufferChunkPosition(int worldX, int worldY, int worldZ)
+        {
+            var key = ChunkIndexKey(worldX, worldY, worldZ);
+            long regionLimit = GameManager.settings.regionWidthInChunks;
+            if (Math.Abs(key.cx) > regionLimit || Math.Abs(key.cy) > regionLimit || Math.Abs(key.cz) > regionLimit) return;
+            // Avoid scheduling if already present or scheduled for active generation
+            if (unbuiltChunks.ContainsKey(key) || activeChunks.ContainsKey(key)) return;
+            if (chunkGenSchedule.ContainsKey(key)) return;
+            if (!bufferGenSchedule.TryAdd(key, 0)) return; // already queued
+            bufferChunkPositionQueue.Add(new Vector3(worldX, worldY, worldZ));
+        }
+
         private void ChunkGenerationWorker(CancellationToken token)
         {
             string chunkSaveDirectory = Path.Combine(loader.currentWorldSaveDirectory, loader.currentWorldSavedChunksSubDirectory);
             try
             {
-                foreach (var pos in chunkPositionQueue.GetConsumingEnumerable(token))
+                var queues = new[] { chunkPositionQueue, bufferChunkPositionQueue };
+                while (!token.IsCancellationRequested)
                 {
-                    if (token.IsCancellationRequested) break;
+                    int taken = BlockingCollection<Vector3>.TryTakeFromAny(queues, out var pos, 100, token);
+                    if (taken < 0)
+                    {
+                        // timeout; continue loop (allows cancellation checks)
+                        continue;
+                    }
+                    bool isBuffer = (taken == 1); // index 1 = buffer queue
 
-                    // quick discard if far / cancelled before doing any work
+                    // If we pulled a buffer task but there is still active generation queued, requeue buffer to favor near chunks
+                    if (isBuffer && !chunkPositionQueue.IsCompleted && chunkGenSchedule.Count > 0)
+                    {
+                        // push back (best-effort) and service active first
+                        bufferChunkPositionQueue.Add(pos, token);
+                        continue;
+                    }
+
                     int sizeX = GameManager.settings.chunkMaxX;
                     int sizeY = GameManager.settings.chunkMaxY;
                     int sizeZ = GameManager.settings.chunkMaxZ;
@@ -343,31 +458,60 @@ namespace MVGE_GEN
                     int cz = (int)Math.Floor(pos.Z / sizeZ);
                     var key = (cx, cy, cz);
 
+                    // Skip stale buffer entry that was promoted to active (its schedule entry removed earlier)
+                    if (isBuffer && !bufferGenSchedule.ContainsKey(key))
+                        continue;
+
                     long regionLimit = GameManager.settings.regionWidthInChunks;
                     if (Math.Abs(cx) > regionLimit || Math.Abs(cy) > regionLimit || Math.Abs(cz) > regionLimit)
                     {
-                        chunkGenSchedule.TryRemove(key, out _); // outside region
+                        if (isBuffer) bufferGenSchedule.TryRemove(key, out _); else chunkGenSchedule.TryRemove(key, out _);
                         continue;
                     }
 
-                    int lodDist = GameManager.settings.lod1RenderDistance;
-                    int verticalRange = lodDist; // symmetric
-                    if (cancelledChunks.ContainsKey(key) || Math.Abs(cx - playerChunkX) >= lodDist || Math.Abs(cz - playerChunkZ) >= lodDist || Math.Abs(cy - playerChunkY) > verticalRange)
+                    // Distance cull only for active (LoD1) generation; buffer queue already distance filtered at scheduling.
+                    if (!isBuffer)
                     {
-                        chunkGenSchedule.TryRemove(key, out _);
-                        cancelledChunks.TryRemove(key, out _);
-                        continue; // skip generation
+                        int lodDist = GameManager.settings.lod1RenderDistance;
+                        int verticalRange = lodDist; // symmetric
+                        if (cancelledChunks.ContainsKey(key) || Math.Abs(cx - playerChunkX) >= lodDist || Math.Abs(cz - playerChunkZ) >= lodDist || Math.Abs(cy - playerChunkY) > verticalRange)
+                        {
+                            chunkGenSchedule.TryRemove(key, out _);
+                            cancelledChunks.TryRemove(key, out _);
+                            continue; // skip generation
+                        }
                     }
 
-                    // Attempt load from disk first
-                    var existing = LoadChunkFromFile(cx, cy, cz);
-                    if (existing != null)
+                    // Only attempt to load existing chunk files for active (LoD1) generation.
+                    // For buffer pregen we skip deserialization (older save formats, out-of-date dimensions etc.)
+                    // and simply regenerate procedural data if needed.
+                    if (!isBuffer)
                     {
-                        unbuiltChunks[key] = existing;
-                        chunkGenSchedule.TryRemove(key, out _);
-                        EnqueueMeshBuild(key, markDirty:false);
-                        MarkNeighborsDirty(key, existing);
-                        continue; // skip generation
+                        var existing = LoadChunkFromFile(cx, cy, cz);
+                        if (existing != null)
+                        {
+                            unbuiltChunks[key] = existing;
+                            chunkGenSchedule.TryRemove(key, out _);
+                            EnqueueMeshBuild(key, markDirty:false);
+                            MarkNeighborsDirty(key, existing);
+                            continue;
+                        }
+                    }
+                    else
+                    {
+                        // If a buffer file already exists we consider it satisfied and skip re-generation.
+                        // This avoids noisy load failures and redundant work.
+                        // Build the expected path cheaply (mirrors GetChunkFilePath logic) to test existence.
+                        string worldRoot = Path.Combine(loader.currentWorldSaveDirectory, loader.ID.ToString()); // loader.ID already set
+                        // NOTE: chunks are stored under worldRoot/RegionID/chunks
+                        string regionRoot = Path.Combine(GameManager.settings.savesWorldDirectory, loader.ID.ToString(), loader.RegionID.ToString());
+                        string chunksDir = Path.Combine(regionRoot, loader.currentWorldSavedChunksSubDirectory);
+                        string bufferFile = Path.Combine(chunksDir, $"chunk{cx}x{cy}y{cz}z.bin");
+                        if (File.Exists(bufferFile))
+                        {
+                            bufferGenSchedule.TryRemove(key, out _);
+                            continue;
+                        }
                     }
 
                     // Heightmap reuse per (x,z) across vertical stack
@@ -377,17 +521,24 @@ namespace MVGE_GEN
                     float[,] heightmap = heightmapCache.GetOrAdd(hmKey, _ => Chunk.GenerateHeightMap(loader.seed, baseX, baseZ));
 
                     var chunk = new Chunk(pos, loader.seed, Path.Combine(loader.currentWorldSaveDirectory, loader.currentWorldSavedChunksSubDirectory), heightmap);
-                    unbuiltChunks[key] = chunk;
 
                     // Persist immediately after generation
                     SaveChunkToFile(chunk);
 
-                    chunkGenSchedule.TryRemove(key, out _);
+                    if (isBuffer)
+                    {
+                        bufferGenSchedule.TryRemove(key, out _); // do not retain in memory
+                    }
+                    else
+                    {
+                        unbuiltChunks[key] = chunk;
+                        chunkGenSchedule.TryRemove(key, out _);
 
-                    // Enqueue self for initial mesh build
-                    EnqueueMeshBuild(key, markDirty:false);
-                    // Mark neighbors so they can rebuild to hide now occluded faces (only if boundary overlap has solids)
-                    MarkNeighborsDirty(key, chunk);
+                        // Enqueue self for initial mesh build
+                        EnqueueMeshBuild(key, markDirty:false);
+                        // Mark neighbors so they can rebuild to hide now occluded faces (only if boundary overlap has solids)
+                        MarkNeighborsDirty(key, chunk);
+                    }
                 }
             }
             catch (OperationCanceledException) { }
@@ -501,9 +652,7 @@ namespace MVGE_GEN
                     {
                         // attempt neighbor-based burial classification
                         TryMarkBuriedByNeighbors(key, ch);
-
-                        PopulateNeighborFaceFlags(key, ch); // <-- New call to populate neighbor face flags
-
+                        PopulateNeighborFaceFlags(key, ch); // populate neighbor face flags
                         ch.BuildRender(worldBlockAccessor);
 
                         // If this was first-time build (in unbuilt), move to built dictionary
@@ -609,40 +758,64 @@ namespace MVGE_GEN
         private void ScheduleChunksAroundPlayer(int centerCx, int centerCy, int centerCz)
         {
             int lodDist = GameManager.settings.lod1RenderDistance;
+            int bufferRadius = currentBufferRadius; // dynamic buffer radius
             int sizeX = GameManager.settings.chunkMaxX;
             int sizeY = GameManager.settings.chunkMaxY;
             int sizeZ = GameManager.settings.chunkMaxZ;
-            int verticalRows = lodDist; // use same distance vertically for symmetry
+            int verticalRows = lodDist; // permitted vertical layers count (same heuristic as initial load)
+            int vMinLayer = 0;                // enforce non-negative vertical layers (matches initial pregen behavior)
+            int vMaxLayer = Math.Max(0, verticalRows - 1);
 
-            // Define symmetric vertical range around player (includes center layer once)
-            int vMin = -verticalRows; // below
-            int vMax = verticalRows;  // above
-
+            // Active generation rings (LoD1)
             for (int radius = 0; radius < lodDist; radius++)
             {
                 if (radius == 0)
                 {
-                    for (int vy = vMin; vy <= vMax; vy++)
+                    for (int vy = vMinLayer; vy <= vMaxLayer; vy++)
                     {
-                        int cy = centerCy + vy;
+                        int cy = vy; // absolute layer index (ignore player vertical for now)
                         EnqueueChunkPosition(centerCx * sizeX, cy * sizeY, centerCz * sizeZ);
                     }
                     continue;
                 }
-                int min = -radius;
-                int max = radius;
+                int min = -radius; int max = radius;
                 for (int dx = min; dx <= max; dx++)
                 {
                     for (int dz = min; dz <= max; dz++)
                     {
                         if (Math.Abs(dx) != radius && Math.Abs(dz) != radius) continue; // ring perimeter
-                        for (int vy = vMin; vy <= vMax; vy++)
+                        for (int vy = vMinLayer; vy <= vMaxLayer; vy++)
                         {
-                            int cy = centerCy + vy;
+                            int cy = vy;
                             int wx = (centerCx + dx) * sizeX;
                             int wy = cy * sizeY;
                             int wz = (centerCz + dz) * sizeZ;
                             EnqueueChunkPosition(wx, wy, wz);
+                        }
+                    }
+                }
+            }
+
+            // Buffer (initial or runtime depending on currentBufferRadius) beyond LoD1
+            if (bufferRadius > lodDist)
+            {
+                int maxRuntimeRadius = (int)Math.Min(bufferRadius, GameManager.settings.regionWidthInChunks);
+                for (int radius = lodDist; radius <= maxRuntimeRadius; radius++)
+                {
+                    int min = -radius; int max = radius;
+                    for (int dx = min; dx <= max; dx++)
+                    {
+                        for (int dz = min; dz <= max; dz++)
+                        {
+                            if (Math.Abs(dx) != radius && Math.Abs(dz) != radius) continue;
+                            for (int vy = vMinLayer; vy <= vMaxLayer; vy++)
+                            {
+                                int cy = vy;
+                                int wx = (centerCx + dx) * sizeX;
+                                int wy = cy * sizeY;
+                                int wz = (centerCz + dz) * sizeZ;
+                                EnqueueBufferChunkPosition(wx, wy, wz);
+                            }
                         }
                     }
                 }
@@ -682,6 +855,7 @@ namespace MVGE_GEN
                     }
                 }
             }
+            // Buffer-generated chunks are never retained in-memory, so no unload needed for those.
         }
 
         public void Dispose()
@@ -692,6 +866,7 @@ namespace MVGE_GEN
                 generationCts?.Cancel();
                 meshBuildCts?.Cancel();
                 chunkPositionQueue?.CompleteAdding();
+                bufferChunkPositionQueue?.CompleteAdding();
                 meshBuildQueue?.CompleteAdding();
                 if (generationWorkers != null)
                 {
@@ -713,6 +888,7 @@ namespace MVGE_GEN
                 generationCts?.Dispose();
                 meshBuildCts?.Dispose();
                 chunkPositionQueue?.Dispose();
+                bufferChunkPositionQueue?.Dispose();
                 meshBuildQueue?.Dispose();
             }
         }
