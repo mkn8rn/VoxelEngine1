@@ -169,209 +169,170 @@ namespace MVGE_GEN.Utils
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void AddRun(ChunkSection sec, int localX, int localZ, int yStart, int yEnd, ushort blockId)
         {
-            if (blockId == AIR || yEnd < yStart) return; // reject empty or inverted intervals
+            if (blockId == AIR || (uint)yStart > 15 || (uint)yEnd > 15 || yEnd < yStart) return;
+
             var scratch = GetScratch(sec);
             scratch.AnyNonAir = true;
 
             int ci = localZ * S + localX;
             ref var col = ref scratch.GetWritableColumn(ci);
 
-            // Local helper: apply occupancy bits for the interval, adjusting counts and adjacency.
-            static void ApplyMask(ref ColumnData c, int ys, int ye)
+            // Fast full-column insertion
+            if (yStart == 0 && yEnd == 15)
             {
-                int len = ye - ys + 1;
-                ushort segment = (ushort)(((1 << len) - 1) << ys); // bit field for the run
-                ushort prev = c.OccMask;
-                ushort added = (ushort)(segment & ~prev);          // newly set bits only
-                if (added == 0)
+                if (col.RunCount == 0)
                 {
-                    // No new occupancy -> adjacency unchanged (ids may be overwritten higher up but occupancy stable)
-                    return;
-                }
-                c.OccMask = (ushort)(prev | segment);
-                c.NonAir += (byte)BitOperations.PopCount((uint)added);
-
-                // Incremental adjacency maintenance.
-                // Only pairs that lie completely inside [ys-1, ye] can change (due to new bits).
-                int regionStart = ys > 0 ? ys - 1 : ys;
-                int regionEnd = ye < 15 ? ye : 14; // last y that can start a pair y,y+1
-                if (regionStart <= regionEnd)
-                {
-                    int regionBitsLen = regionEnd - regionStart + 2; // include y+1 of last pair
-                    ushort regionMask = (ushort)(((1 << regionBitsLen) - 1) << regionStart);
-
-                    ushort prevRegionBits = (ushort)(prev & regionMask);
-                    ushort newRegionBits = (ushort)(c.OccMask & regionMask);
-                    int prevAdjRegion = BitOperations.PopCount((uint)(prevRegionBits & (prevRegionBits << 1)));
-                    int newAdjRegion = BitOperations.PopCount((uint)(newRegionBits & (newRegionBits << 1)));
-                    int delta = newAdjRegion - prevAdjRegion;
-                    if (delta > 0)
-                    {
-                        c.AdjY = (byte)(c.AdjY + delta);
-                    }
-                    // (delta should never be negative because occupancy only gains bits.)
-                }
-                else
-                {
-                    // Fallback (should rarely hit) – maintain full adjacency (original method):
-                    ushort m = c.OccMask;
-                    c.AdjY = (byte)BitOperations.PopCount((uint)(m & (m << 1)));
-                }
-            }
-
-            // Escalated column: directly write per‑voxel values.
-            if (col.RunCount == 255)
-            {
-                var arr = col.Escalated ??= new ushort[S];
-                for (int y = yStart; y <= yEnd; y++)
-                {
-                    // Occupancy counters rely on mask differences, so we just overwrite; changes
-                    // in id do not affect NonAir if the cell was already non‑air.
-                    arr[y] = blockId;
-                }
-                ApplyMask(ref col, yStart, yEnd);
-                TrackDistinct(scratch, blockId, ci);
-                return;
-            }
-
-            // Empty column -> first run.
-            if (col.RunCount == 0)
-            {
-                col.Id0 = blockId;
-                col.Y0Start = (byte)yStart;
-                col.Y0End = (byte)yEnd;
-                col.RunCount = 1;
-                col.Escalated = null;
-                ApplyMask(ref col, yStart, yEnd);
-                TrackDistinct(scratch, blockId, ci);
-                return;
-            }
-
-            // Single run column: attempt extension or creation of a second run.
-            if (col.RunCount == 1)
-            {
-                // Append contiguous run of same id at the top.
-                if (blockId == col.Id0 && yStart == col.Y0End + 1)
-                {
-                    col.Y0End = (byte)yEnd;
-                    ApplyMask(ref col, yStart, yEnd);
-                    return;
-                }
-                // Non‑overlapping new run higher than first run.
-                if (yStart > col.Y0End)
-                {
-                    col.Id1 = blockId;
-                    col.Y1Start = (byte)yStart;
-                    col.Y1End = (byte)yEnd;
-                    col.RunCount = 2;
-                    ApplyMask(ref col, yStart, yEnd);
+                    col.RunCount = 1;
+                    col.Id0 = blockId;
+                    col.Y0Start = 0; col.Y0End = 15;
+                    col.OccMask = 0xFFFF;
+                    col.NonAir = 16;
+                    col.AdjY = 15;
                     TrackDistinct(scratch, blockId, ci);
                     return;
                 }
+                if (col.RunCount == 1 && col.Y0Start == 0 && col.Y0End == 15)
+                {
+                    if (col.Id0 != blockId)
+                    {
+                        col.Id0 = blockId;
+                        TrackDistinct(scratch, blockId, ci);
+                    }
+                    return;
+                }
+                // Escalated or fragmented: overwrite escalated buffer directly
             }
 
-            // Two run column: attempt to extend second run only.
-            if (col.RunCount == 2)
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            static ushort MaskRange(int ys, int ye)
+                => (ushort)((0xFFFFu >> (15 - ye)) & (0xFFFFu << ys));
+
+            // ApplyMask with quick-path adjacency
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            static bool ApplyMask(ref ColumnData c, int ys, int ye, ushort segMask)
+            {
+                ushort prev = c.OccMask;
+                ushort added = (ushort)(segMask & ~prev);
+                if (added == 0) return false;
+
+                c.OccMask = (ushort)(prev | segMask);
+                c.NonAir += (byte)BitOperations.PopCount(added);
+
+                // Quick contiguous insertion test
+                if (added == segMask)
+                {
+                    int len = ye - ys + 1;
+                    int delta = len - 1;
+                    if (ys > 0 && ((prev >> (ys - 1)) & 1) != 0) delta++;
+                    if (ye < 15 && ((prev >> (ye + 1)) & 1) != 0) delta++;
+                    c.AdjY = (byte)(c.AdjY + delta);
+                }
+                else
+                {
+                    // Fallback region recomputation (localized)
+                    int regionStart = ys > 0 ? ys - 1 : ys;
+                    int regionEnd = ye < 15 ? ye : 14;
+                    int bitsLen = regionEnd - regionStart + 2;
+                    ushort regionMask = (ushort)(((1 << bitsLen) - 1) << regionStart);
+                    ushort prevRegion = (ushort)(prev & regionMask);
+                    ushort newRegion = (ushort)(c.OccMask & regionMask);
+                    int prevAdj = BitOperations.PopCount((uint)(prevRegion & (prevRegion << 1)));
+                    int newAdj = BitOperations.PopCount((uint)(newRegion & (newRegion << 1)));
+                    c.AdjY = (byte)(c.AdjY + (newAdj - prevAdj));
+                }
+                return true;
+            }
+
+            // Escalated path first (hot after replacements)
+            if (col.RunCount == 255)
+            {
+                var arr = col.Escalated ??= new ushort[S];
+                ushort segMask = MaskRange(yStart, yEnd);
+                // Overwrite voxel ids
+                for (int y = yStart; y <= yEnd; y++) arr[y] = blockId;
+                bool added = ApplyMask(ref col, yStart, yEnd, segMask);
+                if (added) TrackDistinct(scratch, blockId, ci);
+                return;
+            }
+
+            // Empty
+            if (col.RunCount == 0)
+            {
+                col.RunCount = 1;
+                col.Id0 = blockId;
+                col.Y0Start = (byte)yStart; col.Y0End = (byte)yEnd;
+                ushort segMask = MaskRange(yStart, yEnd);
+                ApplyMask(ref col, yStart, yEnd, segMask);
+                TrackDistinct(scratch, blockId, ci);
+                return;
+            }
+
+            // Single run: extend or add second
+            if (col.RunCount == 1)
+            {
+                if (blockId == col.Id0 && yStart == col.Y0End + 1)
+                {
+                    col.Y0End = (byte)yEnd;
+                    ushort segMask = MaskRange(yStart, yEnd);
+                    ApplyMask(ref col, yStart, yEnd, segMask);
+                    return;
+                }
+                if (yStart > col.Y0End)
+                {
+                    col.RunCount = 2;
+                    col.Id1 = blockId;
+                    col.Y1Start = (byte)yStart; col.Y1End = (byte)yEnd;
+                    ushort segMask = MaskRange(yStart, yEnd);
+                    ApplyMask(ref col, yStart, yEnd, segMask);
+                    TrackDistinct(scratch, blockId, ci);
+                    return;
+                }
+                // Overlap / fragmentation -> escalate
+            }
+            else if (col.RunCount == 2)
             {
                 if (blockId == col.Id1 && yStart == col.Y1End + 1)
                 {
                     col.Y1End = (byte)yEnd;
-                    ApplyMask(ref col, yStart, yEnd);
+                    ushort segMask = MaskRange(yStart, yEnd);
+                    ApplyMask(ref col, yStart, yEnd, segMask);
                     return;
                 }
+                // Any overlap with either run triggers escalation
             }
 
-            // Escalation path: runs overlap or fragmentation appeared.
+            // Escalate (overlap / interior insertion)
             scratch.AnyEscalated = true;
             var full = col.Escalated ?? new ushort[S];
 
-            // Keep previous occupancy metadata for potential incremental update.
-            ushort prevMaskAll = col.OccMask;
-            byte prevNonAirAll = col.NonAir;
-            byte prevAdjAll = col.AdjY;
-
-            // Replay existing compact runs into the per‑voxel buffer (only once per escalation).
-            if (col.RunCount != 255)
+            if (col.RunCount != 255) // replay existing runs once
             {
-                if (col.RunCount >= 1)
-                {
-                    for (int y = col.Y0Start; y <= col.Y0End; y++) full[y] = col.Id0;
-                    if (col.RunCount == 2)
-                        for (int y = col.Y1Start; y <= col.Y1End; y++) full[y] = col.Id1;
-                }
+                for (int y = col.Y0Start; y <= col.Y0End; y++) full[y] = col.Id0;
+                if (col.RunCount == 2)
+                    for (int y = col.Y1Start; y <= col.Y1End; y++) full[y] = col.Id1;
             }
-
-            // Apply new interval (may overlap existing writes).
             for (int y = yStart; y <= yEnd; y++) full[y] = blockId;
             col.Escalated = full;
-            col.RunCount = 255; // sentinel for escalated
+            col.RunCount = 255;
 
-            int newLen = yEnd - yStart + 1;
-            bool canIncremental = prevMaskAll != 0 && newLen < 16; // if not full rewrite
-            if (canIncremental)
+            // Recompute mask & adjacency cheaply (16 cells)
+            ushort mask = 0;
+            byte nonAir = 0, adj = 0;
+            bool prevSet = false;
+            for (int y = 0; y < S; y++)
             {
-                // Compute added bits only from the explicitly provided interval (safe upper bound; overlap removed next).
-                ushort segment = (ushort)(((1 << newLen) - 1) << yStart);
-                ushort added = (ushort)(segment & ~prevMaskAll);
-                if (added == 0)
+                if (full[y] != AIR)
                 {
-                    // Only overwrote ids, occupancy unchanged.
-                    col.OccMask = prevMaskAll;
-                    col.NonAir = prevNonAirAll;
-                    col.AdjY = prevAdjAll;
+                    mask |= (ushort)(1 << y);
+                    nonAir++;
+                    if (prevSet) adj++;
+                    prevSet = true;
                 }
-                else
-                {
-                    ushort newMask = (ushort)(prevMaskAll | segment);
-                    byte newNonAir = (byte)(prevNonAirAll + BitOperations.PopCount((uint)added));
-
-                    // Adjacency delta localized to [yStart-1, yEnd].
-                    int regionStart = yStart > 0 ? yStart - 1 : yStart;
-                    int regionEnd = yEnd < 15 ? yEnd : 14;
-                    if (regionStart <= regionEnd)
-                    {
-                        int regionBitsLen = regionEnd - regionStart + 2; // include y+1 for last pair
-                        ushort regionMask = (ushort)(((1 << regionBitsLen) - 1) << regionStart);
-                        ushort prevRegionBits = (ushort)(prevMaskAll & regionMask);
-                        ushort newRegionBits = (ushort)(newMask & regionMask);
-                        int prevAdjRegion = BitOperations.PopCount((uint)(prevRegionBits & (prevRegionBits << 1)));
-                        int newAdjRegion = BitOperations.PopCount((uint)(newRegionBits & (newRegionBits << 1)));
-                        int delta = newAdjRegion - prevAdjRegion;
-                        col.AdjY = (byte)(prevAdjAll + (delta > 0 ? delta : 0));
-                    }
-                    else
-                    {
-                        col.AdjY = prevAdjAll;
-                    }
-                    col.OccMask = newMask;
-                    col.NonAir = newNonAir;
-                }
+                else prevSet = false;
             }
-            else
-            {
-                // Rebuild occupancy + adjacency from escalated data (16 iterations only).
-                ushort mask = 0;
-                byte nonAir = 0;
-                byte adj = 0;
-                ushort prevBit = 0;
-                for (int y = 0; y < S; y++)
-                {
-                    if (full[y] != AIR)
-                    {
-                        mask |= (ushort)(1 << y);
-                        nonAir++;
-                        if (prevBit == 1) adj++;
-                        prevBit = 1;
-                    }
-                    else
-                    {
-                        prevBit = 0;
-                    }
-                }
-                col.OccMask = mask;
-                col.NonAir = nonAir;
-                col.AdjY = adj;
-            }
+            col.OccMask = mask;
+            col.NonAir = nonAir;
+            col.AdjY = adj;
 
             TrackDistinct(scratch, blockId, ci);
         }
