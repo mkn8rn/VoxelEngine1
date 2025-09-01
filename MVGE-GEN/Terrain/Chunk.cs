@@ -41,8 +41,7 @@ namespace MVGE_GEN.Terrain
         private Biome biome;
 
         // Occupancy flags
-        public bool IsEmpty { get; private set; }
-        public bool HasAnyBoundarySolid { get; private set; }
+        public bool HasAnyBoundarySolid { get; internal set; }
         [Flags]
         public enum OcclusionClass : byte
         {
@@ -51,9 +50,9 @@ namespace MVGE_GEN.Terrain
             NeighborBuried = 1 << 1
         }
 
-        public OcclusionClass OcclusionStatus { get; private set; } = OcclusionClass.None;
+        public OcclusionClass OcclusionStatus { get; internal set; } = OcclusionClass.None;
 
-        public bool FullyBuried { get; private set; } // heightmap burial classification
+        public bool FullyBuried { get; internal set; } // heightmap burial classification
         public bool BuriedByNeighbors { get; internal set; }
 
         internal void SetFullyBuried()
@@ -74,23 +73,23 @@ namespace MVGE_GEN.Terrain
         }
 
         // Fast path: entire chunk volume is guaranteed all air (lies completely above max surface height for every column)
-        public bool AllAirChunk { get; private set; }
+        public bool AllAirChunk { get; internal set; }
         // Fast path: entire chunk volume is uniform stone (no soil/air inside)
-        public bool AllStoneChunk { get; private set; }
+        public bool AllStoneChunk { get; internal set; }
         // Fast path: entire chunk volume is uniform soil (no stone/air inside)
-        public bool AllSoilChunk { get; private set; }
+        public bool AllSoilChunk { get; internal set; }
         // Post-replacement fast path: entire chunk still a single non-air block (originally stone or soil, may have been transformed by replacement rules)
-        public bool AllOneBlockChunk { get; private set; }
-        public ushort AllOneBlockBlockId { get; private set; } // The uniform non-air block id for AllOneBlockChunk
+        public bool AllOneBlockChunk { get; internal set; }
+        public ushort AllOneBlockBlockId { get; internal set; } // The uniform non-air block id for AllOneBlockChunk
 
         // per-face full solidity flags (all boundary voxels on that face are non-empty)
         // Naming: NegX = x==0 face ("left"), PosX = x==dimX-1 ("right"), etc.
-        public bool FaceSolidNegX { get; private set; }
-        public bool FaceSolidPosX { get; private set; }
-        public bool FaceSolidNegY { get; private set; }
-        public bool FaceSolidPosY { get; private set; }
-        public bool FaceSolidNegZ { get; private set; }
-        public bool FaceSolidPosZ { get; private set; }
+        public bool FaceSolidNegX { get; internal set; }
+        public bool FaceSolidPosX { get; internal set; }
+        public bool FaceSolidNegY { get; internal set; }
+        public bool FaceSolidPosY { get; internal set; }
+        public bool FaceSolidNegZ { get; internal set; }
+        public bool FaceSolidPosZ { get; internal set; }
 
         // Neighbor opposing face solidity flags (populated by WorldResources before BuildRender)
         // These reflect the solidity of the neighbor face that touches this chunk.
