@@ -77,50 +77,6 @@ namespace MVGE_INF.Managers
             _settings = loaded;
         }
 
-        public static void SaveGameDefaultSettings()
-        {
-            if (_settings == null)
-                throw new InvalidOperationException("Cannot save settings before they are loaded.");
-            string gameDir = _settings.loadedGameDirectory;
-            if (string.IsNullOrWhiteSpace(gameDir))
-                throw new InvalidOperationException("Loaded game directory not set in settings.");
-            string defaultsPath = Path.Combine(gameDir, "Defaults.txt");
-
-            // Prepare a clone with paths relative to gameDir for persistence (so they don't duplicate the absolute root each save).
-            var clone = new GameSettings
-            {
-                chunkMaxX = _settings.chunkMaxX,
-                chunkMaxZ = _settings.chunkMaxZ,
-                chunkMaxY = _settings.chunkMaxY,
-                blockTileWidth = _settings.blockTileWidth,
-                blockTileHeight = _settings.blockTileHeight,
-                textureFileExtension = _settings.textureFileExtension,
-                renderStreamingAllowed = _settings.renderStreamingAllowed,
-                lod1RenderDistance = _settings.lod1RenderDistance,
-                lod2RenderDistance = _settings.lod2RenderDistance,
-                lod3RenderDistance = _settings.lod3RenderDistance,
-                lod4RenderDistance = _settings.lod4RenderDistance,
-                lod5RenderDistance = _settings.lod5RenderDistance,
-                entityLoadRange = _settings.entityLoadRange,
-                entitySpawnMaxRange = _settings.entitySpawnMaxRange,
-                entityDespawnMaxRange = _settings.entityDespawnMaxRange,
-                // Directories serialized back to relative form
-                gamesDirectory = _settings.gamesDirectory, // keep absolute root reference
-                loadedGameDirectory = string.Empty, // not persisted (derived)
-                loadedGameSettingsDirectory = MakeRelative(gameDir, _settings.loadedGameSettingsDirectory),
-                assetsBaseBlockTexturesDirectory = MakeRelative(gameDir, _settings.assetsBaseBlockTexturesDirectory),
-                assetsBlockTexturesDirectory = MakeRelative(gameDir, _settings.assetsBlockTexturesDirectory),
-                dataBlockTypesDirectory = MakeRelative(gameDir, _settings.dataBlockTypesDirectory),
-                dataBiomeTypesDirectory = MakeRelative(gameDir, _settings.dataBiomeTypesDirectory),
-                savesWorldDirectory = MakeRelative(gameDir, _settings.savesWorldDirectory),
-                savesCharactersDirectory = MakeRelative(gameDir, _settings.savesCharactersDirectory)
-            };
-
-            string json = JsonSerializer.Serialize(clone, jsonOptions);
-            File.WriteAllText(defaultsPath, json);
-            Console.WriteLine($"Game settings saved to {defaultsPath}");
-        }
-
         private static string MakeRelative(string baseDir, string fullPath)
         {
             try

@@ -25,6 +25,12 @@ namespace MVGE_INF.Models
         public required int entitySpawnMaxRange { get; set; }
         public required int entityDespawnMaxRange { get; set; }
 
+        // Generation settings (required)
+        public required long regionWidthInChunks { get; set; }
+        public required bool oneRegionWorld { get; set; }
+        public required int chunkGenerationBufferRuntime { get; set; }
+        public required int chunkGenerationBufferInitial { get; set; }
+
         // Directories (required in JSON except those computed at runtime)
         public string gamesDirectory { get; set; } = string.Empty;          // set by GameManager (not required in JSON)
         public string loadedGameDirectory { get; set; } = string.Empty;      // set by GameManager (not required in JSON)

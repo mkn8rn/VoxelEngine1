@@ -1,6 +1,6 @@
 ﻿using MVGE_GEN;
 using MVGE_INF.Managers;
-using MVGE_INF.Middleware;
+using MVGE_INF.Flags;
 using System;
 using System.Runtime;
 
@@ -11,8 +11,8 @@ namespace MVGE
         static void Main(string[] args)
         {
             Environment.SetEnvironmentVariable("APP_ENVIRONMENT", "Development");
-            ConsoleFlagsMiddleware.Parse(args);
-            EnvironmentFlagsMiddleware.LoadEnvironmentFlags();
+            ConsoleFlags.Parse(args);
+            EnvironmentFlags.LoadEnvironmentFlags();
             FlagManager.ApplyFlags(args);
 
             using (Window game = new Window())

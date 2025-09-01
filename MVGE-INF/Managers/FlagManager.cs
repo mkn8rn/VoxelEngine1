@@ -1,4 +1,4 @@
-﻿using MVGE_INF.Middleware;
+﻿using MVGE_INF.Flags;
 using MVGE_INF.Models;
 using System;
 using System.Runtime;
@@ -10,8 +10,8 @@ namespace MVGE_INF.Managers
         public static ProgramFlags flags { get; private set; } = new ProgramFlags();
         public static void ApplyFlags(string[] args)
         {
-            var consoleFlags = ConsoleFlagsMiddleware.consoleFlags;
-            var envFlags = EnvironmentFlagsMiddleware.environmentFlags;
+            var consoleFlags = ConsoleFlags.consoleFlags;
+            var envFlags = EnvironmentFlags.environmentFlags;
 
             T? PreferValue<T>(T? console, T? env) where T : struct
                 => console.HasValue ? console : env;
