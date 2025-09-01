@@ -27,7 +27,9 @@ namespace MVGE_INF.Managers
                 useFacePooling = PreferValue(consoleFlags.useFacePooling, envFlags.useFacePooling),
                 faceAmountToPool = PreferValue(consoleFlags.faceAmountToPool, envFlags.faceAmountToPool),
                 worldGenWorkersPerCore = PreferValue(consoleFlags.worldGenWorkersPerCore, envFlags.worldGenWorkersPerCore),
+                worldGenWorkersPerCoreInitial = PreferValue(consoleFlags.worldGenWorkersPerCoreInitial, envFlags.worldGenWorkersPerCoreInitial),
                 meshRenderWorkersPerCore = PreferValue(consoleFlags.meshRenderWorkersPerCore, envFlags.meshRenderWorkersPerCore),
+                meshRenderWorkersPerCoreInitial = PreferValue(consoleFlags.meshRenderWorkersPerCoreInitial, envFlags.meshRenderWorkersPerCoreInitial),
                 renderStreamingIfAllowed = PreferValue(consoleFlags.renderStreamingIfAllowed, envFlags.renderStreamingIfAllowed),
                 GCConcurrent = PreferValue(consoleFlags.GCConcurrent, envFlags.GCConcurrent),
                 GCLatencyMode = PreferValue(consoleFlags.GCLatencyMode, envFlags.GCLatencyMode),
@@ -56,8 +58,12 @@ namespace MVGE_INF.Managers
                 Console.WriteLine($"Set faceAmountToPool: {flags.faceAmountToPool.Value}");
             if (flags.worldGenWorkersPerCore.HasValue)
                 Console.WriteLine($"Set worldGenWorkersPerCore: {flags.worldGenWorkersPerCore.Value}");
+            if (flags.worldGenWorkersPerCoreInitial.HasValue)
+                Console.WriteLine($"Set worldGenWorkersPerCoreInitial: {flags.worldGenWorkersPerCoreInitial.Value}");
             if (flags.meshRenderWorkersPerCore.HasValue)
                 Console.WriteLine($"Set meshRenderWorkersPerCore: {flags.meshRenderWorkersPerCore.Value}");
+            if (flags.meshRenderWorkersPerCoreInitial.HasValue)
+                Console.WriteLine($"Set meshRenderWorkersPerCoreInitial: {flags.meshRenderWorkersPerCoreInitial.Value}");
             if (flags.renderStreamingIfAllowed.HasValue)
                 Console.WriteLine($"Set renderStreamingIfAllowed: {flags.renderStreamingIfAllowed.Value}");
             if (flags.GCConcurrent.HasValue)

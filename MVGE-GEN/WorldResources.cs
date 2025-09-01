@@ -29,8 +29,10 @@ namespace MVGE_GEN
         // Track chunks that have been cancelled (scheduled then later deemed too far before gen/build)
         private readonly ConcurrentDictionary<(int cx, int cy, int cz), byte> cancelledChunks = new();
 
-        // Cancellation token for streaming operations
-        private CancellationTokenSource streamingCts;
+        // Cancellation token sources per pipeline (scheduling kept separate so we can recycle gen/build workers)
+        private CancellationTokenSource schedulingCts;          // drives scheduling worker lifetime
+        private CancellationTokenSource generationCts;          // drives current generation worker set
+        private CancellationTokenSource meshBuildCts;           // drives current mesh build worker set
 
         // Cache heightmaps for (baseX, baseZ) columns across vertical stacks
         private readonly ConcurrentDictionary<(int baseX, int baseZ), float[,]> heightmapCache = new();
@@ -42,14 +44,14 @@ namespace MVGE_GEN
         private int chunkScheduleWorkerCount = 1; 
         private Task[] schedulingWorkers;
 
-        // Asynchronous generation pipeline
-        private int generationWorkerCount;
+        // Asynchronous generation pipeline (current active workers)
+        private int generationWorkerCount; // current (may change after staged init)
         private Task[] generationWorkers;
         private BlockingCollection<Vector3> chunkPositionQueue; // gen tasks
         private readonly ConcurrentDictionary<(int cx, int cy, int cz), byte> chunkGenSchedule = new(); // track enqueued but not yet generated
 
         // Asynchronous mesh build pipeline
-        private int meshBuildWorkerCount;
+        private int meshBuildWorkerCount; // current (may change after staged init)
         private Task[] meshBuildWorkers;
         private BlockingCollection<(int cx,int cy,int cz)> meshBuildQueue; // build tasks
         private readonly ConcurrentDictionary<(int cx, int cy, int cz), byte> meshBuildSchedule = new(); // track chunks scheduled for build
@@ -69,16 +71,16 @@ namespace MVGE_GEN
             Console.WriteLine("World manager initializing.");
 
             float proc = Environment.ProcessorCount;
-            if (FlagManager.flags.worldGenWorkersPerCore is not null)
-            {
-                generationWorkerCount = (int)(FlagManager.flags.worldGenWorkersPerCore.Value * proc);
-            }
-            else throw new InvalidOperationException("World generation workers per core flag is not set.");
-            if (FlagManager.flags.meshRenderWorkersPerCore is not null)
-            {
-                meshBuildWorkerCount = (int)(FlagManager.flags.meshRenderWorkersPerCore.Value * proc);
-            }
-            else throw new InvalidOperationException("Mesh render workers per core flag is not set.");
+            // Final (steady-state) worker counts must be present
+            if (FlagManager.flags.worldGenWorkersPerCore is null)
+                throw new InvalidOperationException("World generation workers per core flag is not set.");
+            if (FlagManager.flags.meshRenderWorkersPerCore is null)
+                throw new InvalidOperationException("Mesh render workers per core flag is not set.");
+            // Initial counts may be null (default to final)
+            if (FlagManager.flags.worldGenWorkersPerCoreInitial is null)
+                Console.WriteLine("Warning: worldGenWorkersPerCoreInitial flag is not set or invalid. Defaulting to worldGenWorkersPerCore");
+            if (FlagManager.flags.meshRenderWorkersPerCoreInitial is null)
+                Console.WriteLine("Warning: meshRenderWorkersPerCoreInitial flag is not set or invalid. Defaulting to worldGenWorkersPerCore");
 
             loader = new WorldLoader();
             loader.ChooseWorld();
@@ -87,24 +89,111 @@ namespace MVGE_GEN
             worldBlockAccessor = GetBlock;
             chunkPositionQueue = new BlockingCollection<Vector3>(new ConcurrentQueue<Vector3>());
             meshBuildQueue = new BlockingCollection<(int cx, int cy, int cz)>(new ConcurrentQueue<(int, int, int)>());
-            streamingCts = new CancellationTokenSource();
+            schedulingCts = new CancellationTokenSource();
             Console.WriteLine("World resources initialized.");
 
-            bool streamGeneration = false;
-            if (FlagManager.flags.renderStreamingIfAllowed is null)
-            {
-               throw new InvalidOperationException("Render streaming flag is not set.");
-            } else streamGeneration = FlagManager.flags.renderStreamingIfAllowed.Value;
+            bool streamGeneration = FlagManager.flags.renderStreamingIfAllowed ?? throw new InvalidOperationException("Render streaming flag is not set.");
 
+            // Always start scheduling first
             InitializeScheduling();
 
-            InitializeGeneration();
-            if(streamGeneration == false) WaitForInitialChunkGeneration();
+            if (!streamGeneration)
+            {
+                // --- Staged non-streaming load ---
+                int initialGen = (int)((FlagManager.flags.worldGenWorkersPerCoreInitial ?? FlagManager.flags.worldGenWorkersPerCore!.Value) * proc);
+                int initialMesh = (int)((FlagManager.flags.meshRenderWorkersPerCoreInitial ?? FlagManager.flags.meshRenderWorkersPerCore!.Value) * proc);
+                int finalGen = (int)(FlagManager.flags.worldGenWorkersPerCore.Value * proc);
+                int finalMesh = (int)(FlagManager.flags.meshRenderWorkersPerCore.Value * proc);
 
-            InitializeBuilding();
-            if (streamGeneration == false) WaitForInitialChunkRenderBuild();
+                // 1. Initial world generation workers
+                StartGenerationWorkers(initialGen);
+                EnqueueInitialChunkPositions();
+                WaitForInitialChunkGeneration();
+                StopGenerationWorkers();
+
+                // 2. Initial mesh build workers (after gen complete)
+                StartMeshBuildWorkers(initialMesh);
+                // Chunks were already enqueued for build during generation
+                WaitForInitialChunkRenderBuild();
+                StopMeshBuildWorkers();
+
+                // 3. Start steady-state workers (may be same counts; restart for clarity per spec)
+                StartGenerationWorkers(finalGen);
+                StartMeshBuildWorkers(finalMesh);
+            }
+            else
+            {
+                // Streaming mode: single steady-state startup with final counts.
+                int finalGen = (int)(FlagManager.flags.worldGenWorkersPerCore.Value * proc);
+                int finalMesh = (int)(FlagManager.flags.meshRenderWorkersPerCore.Value * proc);
+                StartGenerationWorkers(finalGen);
+                StartMeshBuildWorkers(finalMesh);
+                EnqueueInitialChunkPositions();
+            }
         }
 
+        // -------------------- Worker lifecycle helpers --------------------
+        private void StartGenerationWorkers(int count)
+        {
+            if (count <= 0) return;
+            generationCts = new CancellationTokenSource();
+            generationWorkerCount = count;
+            generationWorkers = new Task[generationWorkerCount];
+            Console.WriteLine($"[World] Starting {generationWorkerCount} generation workers.");
+            for (int i = 0; i < generationWorkerCount; i++)
+            {
+                generationWorkers[i] = Task.Run(() => ChunkGenerationWorker(generationCts.Token));
+            }
+        }
+        private void StopGenerationWorkers()
+        {
+            if (generationCts == null) return;
+            try
+            {
+                generationCts.Cancel();
+                Task.WaitAll(generationWorkers, TimeSpan.FromSeconds(2));
+            }
+            catch { }
+            finally
+            {
+                generationCts.Dispose();
+                generationCts = null;
+                generationWorkers = Array.Empty<Task>();
+                Console.WriteLine("[World] Generation workers stopped.");
+            }
+        }
+
+        private void StartMeshBuildWorkers(int count)
+        {
+            if (count <= 0) return;
+            meshBuildCts = new CancellationTokenSource();
+            meshBuildWorkerCount = count;
+            meshBuildWorkers = new Task[meshBuildWorkerCount];
+            Console.WriteLine($"[World] Starting {meshBuildWorkerCount} mesh build workers.");
+            for (int i = 0; i < meshBuildWorkerCount; i++)
+            {
+                meshBuildWorkers[i] = Task.Run(() => MeshBuildWorker(meshBuildCts.Token));
+            }
+        }
+        private void StopMeshBuildWorkers()
+        {
+            if (meshBuildCts == null) return;
+            try
+            {
+                meshBuildCts.Cancel();
+                Task.WaitAll(meshBuildWorkers, TimeSpan.FromSeconds(2));
+            }
+            catch { }
+            finally
+            {
+                meshBuildCts.Dispose();
+                meshBuildCts = null;
+                meshBuildWorkers = Array.Empty<Task>();
+                Console.WriteLine("[World] Mesh build workers stopped.");
+            }
+        }
+
+        // -------------------- Existing waits (unchanged logic) --------------------
         private void WaitForInitialChunkGeneration()
         {
             Console.WriteLine("[World] Waiting for initial chunk generation...");
@@ -136,7 +225,6 @@ namespace MVGE_GEN
                 int remaining = unbuiltChunks.Count;
                 int built = initialTotal - remaining;
                 Console.WriteLine($"[World] Chunk mesh build: {built}/{initialTotal}, remaining: {remaining}");
-                    
                 Thread.Sleep(500);
             }
             sw.Stop();
@@ -151,38 +239,12 @@ namespace MVGE_GEN
         private void InitializeScheduling()
         {
             Console.WriteLine($"[World] Initializing scheduling workers...");
-
-            EnqueueInitialChunkPositions();
-
             schedulingWorkers = new Task[chunkScheduleWorkerCount];
             for (int i = 0; i < chunkScheduleWorkerCount; i++)
             {
-                schedulingWorkers[i] = Task.Run(() => ChunkSchedulingWorker(streamingCts.Token));
+                schedulingWorkers[i] = Task.Run(() => ChunkSchedulingWorker(schedulingCts.Token));
             }
-            Console.WriteLine($"[World] Initialized {schedulingWorkers.Count()} scheduling workers.");
-        }
-
-        private void InitializeGeneration()
-        {
-            Console.WriteLine("[World] Initializing world generation workers...");
-            int proc = Environment.ProcessorCount;
-            generationWorkers = new Task[generationWorkerCount];
-            for (int i = 0; i < generationWorkerCount; i++)
-            {
-                generationWorkers[i] = Task.Run(() => ChunkGenerationWorker(streamingCts.Token));
-            }
-            Console.WriteLine($"[World] Initialized {generationWorkers.Count()} world generation workers.");
-        }
-
-        private void InitializeBuilding()
-        {
-            Console.WriteLine("[World] Initializing mesh build workers...");
-            meshBuildWorkers = new Task[meshBuildWorkerCount];
-            for (int i = 0; i < meshBuildWorkerCount; i++)
-            {
-                meshBuildWorkers[i] = Task.Run(() => MeshBuildWorker(streamingCts.Token));
-            }
-            Console.WriteLine($"[World] Initialized {meshBuildWorkers.Count()} mesh build workers.");
+            Console.WriteLine($"[World] Initialized {schedulingWorkers.Length} scheduling workers.");
         }
 
         private void EnqueueInitialChunkPositions()
@@ -592,7 +654,9 @@ namespace MVGE_GEN
         {
             try
             {
-                streamingCts?.Cancel();
+                schedulingCts?.Cancel();
+                generationCts?.Cancel();
+                meshBuildCts?.Cancel();
                 chunkPositionQueue?.CompleteAdding();
                 meshBuildQueue?.CompleteAdding();
                 if (generationWorkers != null)
@@ -611,7 +675,9 @@ namespace MVGE_GEN
             catch { }
             finally
             {
-                streamingCts?.Dispose();
+                schedulingCts?.Dispose();
+                generationCts?.Dispose();
+                meshBuildCts?.Dispose();
                 chunkPositionQueue?.Dispose();
                 meshBuildQueue?.Dispose();
             }

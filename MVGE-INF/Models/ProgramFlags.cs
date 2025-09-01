@@ -52,7 +52,9 @@ namespace MVGE_INF.Models
         public bool? useFacePooling;
         public int? faceAmountToPool;
         public float? worldGenWorkersPerCore;
+        public float? worldGenWorkersPerCoreInitial;
         public float? meshRenderWorkersPerCore;
+        public float? meshRenderWorkersPerCoreInitial;
         public bool? renderStreamingIfAllowed;
 
         // GC settings
