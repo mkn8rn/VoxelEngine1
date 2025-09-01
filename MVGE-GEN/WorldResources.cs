@@ -301,6 +301,12 @@ namespace MVGE_GEN
         private void EnqueueChunkPosition(int worldX, int worldY, int worldZ, bool force = false)
         {
             var key = ChunkIndexKey(worldX, worldY, worldZ);
+            // Region boundary check (inclusive): disallow if any chunk coordinate magnitude exceeds regionWidthInChunks
+            long regionLimit = GameManager.settings.regionWidthInChunks; // allowed range: -regionLimit .. +regionLimit
+            if (Math.Abs(key.cx) > regionLimit || Math.Abs(key.cy) > regionLimit || Math.Abs(key.cz) > regionLimit)
+            {
+                return; // outside configured world region
+            }
             if (!force)
             {
                 if (unbuiltChunks.ContainsKey(key) || activeChunks.ContainsKey(key)) return; // already generated or built
@@ -330,6 +336,14 @@ namespace MVGE_GEN
                     int cy = (int)Math.Floor(pos.Y / sizeY);
                     int cz = (int)Math.Floor(pos.Z / sizeZ);
                     var key = (cx, cy, cz);
+
+                    long regionLimit = GameManager.settings.regionWidthInChunks;
+                    if (Math.Abs(cx) > regionLimit || Math.Abs(cy) > regionLimit || Math.Abs(cz) > regionLimit)
+                    {
+                        chunkGenSchedule.TryRemove(key, out _); // outside region
+                        continue;
+                    }
+
                     int lodDist = GameManager.settings.lod1RenderDistance;
                     int verticalRange = lodDist; // symmetric
                     if (cancelledChunks.ContainsKey(key) || Math.Abs(cx - playerChunkX) >= lodDist || Math.Abs(cz - playerChunkZ) >= lodDist || Math.Abs(cy - playerChunkY) > verticalRange)
