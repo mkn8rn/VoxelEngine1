@@ -102,7 +102,8 @@ namespace MVGE_GEN.Terrain
 
         private bool candidateFullyBuried; // heightmap suggested burial; confirmed after face solidity scan
 
-        public Chunk(Vector3 chunkPosition, long seed, string chunkDataDirectory, float[,] precomputedHeightmap = null)
+        // constructor allowing the caller to skip auto generation (used by disk load path)
+        internal Chunk(Vector3 chunkPosition, long seed, string chunkDataDirectory, float[,] precomputedHeightmap, bool autoGenerate)
         {
             position = chunkPosition;
             saveDirectory = chunkDataDirectory;
@@ -122,12 +123,19 @@ namespace MVGE_GEN.Terrain
                 humidity = 0
             };
 
-            // Select biome deterministically
+            // Select biome deterministically (needed for both generated & loaded chunks)
             biome = BiomeManager.SelectBiomeForChunk(seed, (int)position.X, (int)position.Z);
 
             InitializeSectionGrid();
-            InitializeChunkData(); // implemented in ChunkGenerator partial
+            if (autoGenerate)
+            {
+                InitializeChunkData(); // triggers GenerateInitialChunkData
+            }
         }
+
+        // Public constructor retains previous behaviour (auto-generate)
+        public Chunk(Vector3 chunkPosition, long seed, string chunkDataDirectory, float[,] precomputedHeightmap = null)
+            : this(chunkPosition, seed, chunkDataDirectory, precomputedHeightmap, true) { }
 
         public void InitializeSectionGrid()
         {

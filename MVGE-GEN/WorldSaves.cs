@@ -396,7 +396,7 @@ namespace MVGE_GEN
                 int baseY = fileCy * GameManager.settings.chunkMaxY;
                 int baseZ = fileCz * GameManager.settings.chunkMaxZ;
                 Chunk chunk;
-                try { chunk = new Chunk(new Vector3(baseX, baseY, baseZ), loader.seed, loader.currentWorldSaveDirectory, null); }
+                try { chunk = new Chunk(new Vector3(baseX, baseY, baseZ), loader.seed, loader.currentWorldSaveDirectory, null, autoGenerate: false); }
                 catch (Exception ctorEx)
                 {
                     Console.WriteLine($"[World] Chunk ctor failed ({cx},{cy},{cz}) phase={phase}: {ctorEx.Message}");
