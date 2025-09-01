@@ -387,55 +387,52 @@ namespace MVGE_GEN.Utils
         {
             if (sec == null) return;
 
-            // Early fast-paths when there is no scratch attached: avoid creating scratch and unnecessary escalations.
+            // Clamp slice once (defensive: caller already valid)
+            if ((uint)lyStart > 15u) lyStart = lyStart < 0 ? 0 : 15;
+            if ((uint)lyEnd > 15u) lyEnd = lyEnd < 0 ? 0 : 15;
+            if (lyEnd < lyStart) return;
+
+            // --- Scratch-free early paths -------------------------------------------------
             var existingScratch = sec.BuildScratch as SectionBuildScratch;
             if (existingScratch == null)
             {
-                // If the replacement covers the full vertical range of the section, we can do some safe in-place substitutions
-                // without converting to scratch.
                 if (fullCover)
                 {
-                    // Uniform section -> change the uniform block id directly if predicate matches.
+                    // Uniform section
                     if (sec.Kind == ChunkSection.RepresentationKind.Uniform)
                     {
-                        ushort currentId = sec.UniformBlockId;
-                        if (currentId != replacementId)
+                        ushort cur = sec.UniformBlockId;
+                        if (cur != replacementId)
                         {
-                            var bt = baseTypeGetter(currentId);
-                            if (predicate(currentId, bt))
+                            var bt = baseTypeGetter(cur);
+                            if (predicate(cur, bt))
                             {
                                 sec.UniformBlockId = replacementId;
-                                // metadata (counts, exposure) unaffected by id change
-                                // keep MetadataBuilt true
                                 return;
                             }
                         }
                         return;
                     }
 
-                    // Packed section with palette [AIR, id] (single non-air id). We can change the id in the palette
-                    // without modifying occupancy bitsets or allocating scratch, provided replacementId is non-air.
-                    if (sec.Kind == ChunkSection.RepresentationKind.Packed && sec.Palette != null && sec.Palette.Count == 2 && sec.Palette[0] == ChunkSection.AIR)
+                    // Single non-air palette packed: [AIR, id]
+                    if (sec.Kind == ChunkSection.RepresentationKind.Packed &&
+                        sec.Palette != null &&
+                        sec.Palette.Count == 2 &&
+                        sec.Palette[0] == ChunkSection.AIR)
                     {
                         ushort oldId = sec.Palette[1];
-                        if (oldId != replacementId)
+                        if (oldId != replacementId && replacementId != ChunkSection.AIR)
                         {
-                            // Only handle non-air replacement here; replacing to AIR would require clearing occupancy.
-                            if (replacementId != ChunkSection.AIR)
+                            var bt = baseTypeGetter(oldId);
+                            if (predicate(oldId, bt))
                             {
-                                var bt = baseTypeGetter(oldId);
-                                if (predicate(oldId, bt))
+                                // Palette swap
+                                sec.Palette[1] = replacementId;
+                                if (sec.PaletteLookup != null)
                                 {
-                                    // Update palette and lookup safely.
-                                    sec.Palette[1] = replacementId;
-                                    if (sec.PaletteLookup != null)
-                                    {
-                                        // Remove old mapping if present, and set new mapping to index 1.
-                                        if (sec.PaletteLookup.ContainsKey(oldId)) sec.PaletteLookup.Remove(oldId);
-                                        sec.PaletteLookup[replacementId] = 1;
-                                    }
-                                    // Other metadata (OccupancyBits, NonAirCount, InternalExposure, Face masks) remain valid.
-                                    return;
+                                    if (sec.PaletteLookup.TryGetValue(oldId, out _))
+                                        sec.PaletteLookup.Remove(oldId);
+                                    sec.PaletteLookup[replacementId] = 1;
                                 }
                             }
                         }
@@ -444,50 +441,56 @@ namespace MVGE_GEN.Utils
                 }
             }
 
-            // Fallback: use scratch-based replacement logic.
+            // --- Scratch path -------------------------------------------------------------
             var scratch = GetScratch(sec);
             int distinctCount = scratch.DistinctCount;
             if (distinctCount == 0) return;
 
-            Span<ushort> ids = stackalloc ushort[distinctCount];
-            Span<bool> targeted = stackalloc bool[distinctCount];
-            bool anyTarget = false;
+            // Build compact list of target ids (≤8)
+            Span<ushort> targetIds = stackalloc ushort[distinctCount];
+            int targetCount = 0;
 
-            // Build targeted map from distinct list.
             for (int i = 0; i < distinctCount; i++)
             {
                 ushort id = scratch.Distinct[i];
-                ids[i] = id;
-                if (id == replacementId)
-                {
-                    targeted[i] = false; // avoid self replacement
-                    continue;
-                }
+                if (id == replacementId || id == AIR) continue;
                 var bt = baseTypeGetter(id);
-                bool shouldReplace = predicate(id, bt);
-                targeted[i] = shouldReplace;
-                if (shouldReplace) anyTarget = true;
+                if (predicate(id, bt))
+                {
+                    targetIds[targetCount++] = id;
+                }
             }
-            if (!anyTarget) return; // nothing qualifies
+            if (targetCount == 0) return;
 
+            // Unrolled match (critical inner loop); JIT prunes unused cases based on targetCount constant range
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            static bool IdMatches(ushort id, Span<ushort> idsLocal, Span<bool> targetedLocal)
+            static bool IsTarget(ushort id, Span<ushort> t, int count)
             {
-                for (int i = 0; i < idsLocal.Length; i++)
-                    if (idsLocal[i] == id) return targetedLocal[i];
-                return false;
+                switch (count)
+                {
+                    case 1:  return id == t[0];
+                    case 2:  return id == t[0] || id == t[1];
+                    case 3:  return id == t[0] || id == t[1] || id == t[2];
+                    case 4:  return id == t[0] || id == t[1] || id == t[2] || id == t[3];
+                    case 5:  return id == t[0] || id == t[1] || id == t[2] || id == t[3] || id == t[4];
+                    case 6:  return id == t[0] || id == t[1] || id == t[2] || id == t[3] || id == t[4] || id == t[5];
+                    case 7:  return id == t[0] || id == t[1] || id == t[2] || id == t[3] || id == t[4] || id == t[5] || id == t[6];
+                    case 8:  return id == t[0] || id == t[1] || id == t[2] || id == t[3] || id == t[4] || id == t[5] || id == t[6] || id == t[7];
+                    default: return false;
+                }
             }
 
             bool anyChange = false;
 
-            // Full vertical cover: attempt in‑place run id substitution.
             if (fullCover)
             {
+                // Full vertical coverage: replace run ids or per-voxel escalated entries directly
                 for (int z = 0; z < S; z++)
                 {
+                    int zBase = z * S;
                     for (int x = 0; x < S; x++)
                     {
-                        ref var col = ref scratch.GetWritableColumn(z * S + x);
+                        ref var col = ref scratch.GetWritableColumn(zBase + x);
                         byte rc = col.RunCount;
                         if (rc == 0) continue;
 
@@ -498,7 +501,7 @@ namespace MVGE_GEN.Utils
                             {
                                 ushort id = arr[y];
                                 if (id == AIR || id == replacementId) continue;
-                                if (IdMatches(id, ids, targeted))
+                                if (IsTarget(id, targetIds, targetCount))
                                 {
                                     arr[y] = replacementId;
                                     anyChange = true;
@@ -506,28 +509,64 @@ namespace MVGE_GEN.Utils
                             }
                             continue;
                         }
-                        if (rc >= 1 && col.Id0 != replacementId && IdMatches(col.Id0, ids, targeted))
+
+                        if (rc >= 1 && col.Id0 != replacementId && IsTarget(col.Id0, targetIds, targetCount))
                         {
                             col.Id0 = replacementId;
                             anyChange = true;
                         }
-                        if (rc == 2 && col.Id1 != replacementId && IdMatches(col.Id1, ids, targeted))
+                        if (rc == 2 && col.Id1 != replacementId && IsTarget(col.Id1, targetIds, targetCount))
                         {
                             col.Id1 = replacementId;
                             anyChange = true;
                         }
                     }
                 }
-                if (anyChange) scratch.DistinctDirty = true;
+                if (anyChange)
+                {
+                    // Optimization: since fullCover guarantees every occurrence of targeted ids was replaced,
+                    // we can update the distinct list in-place instead of forcing a DistinctDirty rebuild.
+                    // Only safe when replacementId is non-air. If replacementId is AIR we fall back to dirty flag
+                    // because NonAir counts and potential empty section classification require finalize path.
+                    if (replacementId != AIR)
+                    {
+                        bool replacementPresent = false;
+                        int write = 0;
+                        int originalCount = scratch.DistinctCount;
+                        for (int i = 0; i < originalCount; i++)
+                        {
+                            ushort id = scratch.Distinct[i];
+                            if (IsTarget(id, targetIds, targetCount))
+                                continue; // fully removed
+                            if (id == replacementId) replacementPresent = true;
+                            scratch.Distinct[write++] = id;
+                        }
+                        if (!replacementPresent)
+                        {
+                            // add replacement id if room (there must be room because at least one target removed)
+                            if (write < scratch.Distinct.Length)
+                                scratch.Distinct[write++] = replacementId;
+                        }
+                        // Clear any trailing old entries (optional)
+                        for (int i = write; i < originalCount; i++) scratch.Distinct[i] = 0;
+                        scratch.DistinctCount = write;
+                        // DistinctDirty not needed; list already consistent
+                    }
+                    else
+                    {
+                        scratch.DistinctDirty = true; // need full rebuild for AIR removals
+                    }
+                }
                 return;
             }
 
-            // Partial vertical slice: only escalate columns that require editing a subset of a run.
+            // Partial slice
             for (int z = 0; z < S; z++)
             {
+                int zBase = z * S;
                 for (int x = 0; x < S; x++)
                 {
-                    ref var col = ref scratch.GetWritableColumn(z * S + x);
+                    ref var col = ref scratch.GetWritableColumn(zBase + x);
                     byte rc = col.RunCount;
                     if (rc == 0) continue;
 
@@ -539,7 +578,7 @@ namespace MVGE_GEN.Utils
                         {
                             ushort id = arr[y];
                             if (id == AIR || id == replacementId) continue;
-                            if (IdMatches(id, ids, targeted))
+                            if (IsTarget(id, targetIds, targetCount))
                             {
                                 arr[y] = replacementId;
                                 anyChange = true;
@@ -548,13 +587,15 @@ namespace MVGE_GEN.Utils
                         continue;
                     }
 
-                    // First run overlap.
-                    if (rc >= 1 && RangesOverlap(col.Y0Start, col.Y0End, lyStart, lyEnd) && col.Id0 != replacementId && IdMatches(col.Id0, ids, targeted))
+                    // First run
+                    if (rc >= 1 && col.Id0 != replacementId &&
+                        RangesOverlap(col.Y0Start, col.Y0End, lyStart, lyEnd) &&
+                        IsTarget(col.Id0, targetIds, targetCount))
                     {
-                        bool runContained = lyStart <= col.Y0Start && lyEnd >= col.Y0End;
-                        if (runContained)
+                        bool contained = lyStart <= col.Y0Start && lyEnd >= col.Y0End;
+                        if (contained)
                         {
-                            col.Id0 = replacementId; // whole run replaced
+                            col.Id0 = replacementId;
                             anyChange = true;
                         }
                         else
@@ -572,18 +613,20 @@ namespace MVGE_GEN.Utils
                             for (int y = ys; y <= ye; y++) arr[y] = replacementId;
                             col.Escalated = arr;
                             col.RunCount = 255;
-                            // Reuse previous occupancy / adjacency (unchanged by id swap)
                             col.OccMask = prevMask; col.NonAir = prevNonAir; col.AdjY = prevAdj;
                             anyChange = true;
-                            continue; // move to next column
+                            // continue to next column (second run logic skipped because now escalated)
+                            continue;
                         }
                     }
 
-                    // Second run overlap.
-                    if (rc == 2 && RangesOverlap(col.Y1Start, col.Y1End, lyStart, lyEnd) && col.Id1 != replacementId && IdMatches(col.Id1, ids, targeted))
+                    // Second run
+                    if (rc == 2 && col.Id1 != replacementId &&
+                        RangesOverlap(col.Y1Start, col.Y1End, lyStart, lyEnd) &&
+                        IsTarget(col.Id1, targetIds, targetCount))
                     {
-                        bool runContained = lyStart <= col.Y1Start && lyEnd >= col.Y1End;
-                        if (runContained)
+                        bool contained = lyStart <= col.Y1Start && lyEnd >= col.Y1End;
+                        if (contained)
                         {
                             col.Id1 = replacementId;
                             anyChange = true;
@@ -610,7 +653,7 @@ namespace MVGE_GEN.Utils
             }
 
             if (anyChange)
-                scratch.DistinctDirty = true; // distinct set must be recomputed at finalize
+                scratch.DistinctDirty = true; // partial slice cannot guarantee full removal; mark dirty
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
