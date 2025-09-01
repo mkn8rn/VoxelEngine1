@@ -16,5 +16,10 @@ namespace MVGE_INF.Models.Generation
         public required int soilMaxDepth { get; set; }
         public required List<MicrobiomeJSON> microbiomes { get; set; }
         public required List<SimpleReplacementRule> simpleReplacements { get; set; }
+
+        // --- Added precompiled rule data (immutable once built) ---------------------------------
+        public CompiledSimpleReplacementRule[] compiledSimpleReplacementRules { get; internal set; } = System.Array.Empty<CompiledSimpleReplacementRule>();
+        // Bucketed by section Y index (for 16-high sections). Each entry holds indices into compiledSimpleReplacementRules.
+        public int[][] sectionYRuleBuckets { get; internal set; } = System.Array.Empty<int[]>();
     }
 }

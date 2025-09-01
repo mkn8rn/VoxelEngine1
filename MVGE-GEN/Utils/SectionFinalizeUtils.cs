@@ -1,4 +1,4 @@
-﻿using MVGE_GEN.Models;
+﻿using MVGE_INF.Generation.Models;
 using System;
 using System.Collections.Generic;
 using System.Linq;

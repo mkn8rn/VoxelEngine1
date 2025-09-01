@@ -1,5 +1,5 @@
-﻿using MVGE_GEN.Models;
-using MVGE_GFX.Terrain;
+﻿using MVGE_GFX.Terrain;
+using MVGE_INF.Generation.Models;
 using MVGE_INF.Models.Generation;
 using MVGE_INF.Models.Terrain;
 using System;

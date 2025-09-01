@@ -155,6 +155,9 @@ namespace MVGE_INF.Managers
                     simpleReplacements = simpleReplacementRules
                 };
 
+                // --- Precompile simple replacement rules & vertical buckets -----------------------
+                BuildCompiledSimpleReplacementRules(runtimeBiome);
+
                 _biomes[biomeFolderName] = runtimeBiome;
 
                 Console.WriteLine($"[Biome] Loaded biome id={runtimeBiome.id} folder='{biomeFolderName}' name='{runtimeBiome.name}' (microbiomes: {microbiomesMap.Count}, simpleRules: {simpleReplacementRules.Count})");
@@ -164,6 +167,86 @@ namespace MVGE_INF.Managers
             _biomes.Keys.CopyTo(_biomeOrder, 0);
             Array.Sort(_biomeOrder, StringComparer.OrdinalIgnoreCase);
             Console.WriteLine($"Total biomes loaded: {_biomes.Count}");
+        }
+
+        private static void BuildCompiledSimpleReplacementRules(Biome biome)
+        {
+            var list = biome.simpleReplacements;
+            if (list == null || list.Count == 0)
+            {
+                biome.compiledSimpleReplacementRules = Array.Empty<CompiledSimpleReplacementRule>();
+                biome.sectionYRuleBuckets = Array.Empty<int[]>();
+                return;
+            }
+
+            var compiled = new List<CompiledSimpleReplacementRule>(list.Count);
+            foreach (var r in list)
+            {
+                // Build specific id array
+                var idList = new List<ushort>();
+                if (r.blocks_to_replace != null)
+                {
+                    foreach (var bt in r.blocks_to_replace)
+                    {
+                        if (bt != null) idList.Add(bt.ID);
+                    }
+                }
+                idList.Sort();
+                // Build base type mask
+                uint mask = 0u;
+                if (r.base_blocks_to_replace != null)
+                {
+                    foreach (var bb in r.base_blocks_to_replace)
+                    {
+                        mask |= 1u << (int)bb;
+                    }
+                }
+                int minY = r.absoluteMinYlevel ?? int.MinValue;
+                int maxY = r.absoluteMaxYlevel ?? int.MaxValue;
+                var compiledRule = new CompiledSimpleReplacementRule(
+                    r.block_type.ID,
+                    idList.ToArray(),
+                    mask,
+                    minY,
+                    maxY,
+                    r.microbiomeId,
+                    r.priority);
+                compiled.Add(compiledRule);
+            }
+            // Already sorted by original simpleReplacements ordering (which was by priority). Ensure stable ascending.
+            compiled.Sort((a,b)=> a.Priority.CompareTo(b.Priority));
+            biome.compiledSimpleReplacementRules = compiled.ToArray();
+
+            // Vertical bucketing by section Y (assuming fixed 16-high sections). Determine vertical span using game settings.
+            int chunkMaxY = GameManager.settings.chunkMaxY; // world vertical size per chunk
+            int sectionSize = ChunkSection.SECTION_SIZE;
+            int sectionCountY = chunkMaxY / sectionSize;
+            var buckets = new int[sectionCountY][]; // fill lazily
+            var tempLists = new List<int>[sectionCountY];
+            for (int i=0;i<sectionCountY;i++) tempLists[i] = new List<int>();
+            for (int ri=0; ri<compiled.Count; ri++)
+            {
+                var cr = compiled[ri];
+                // compute intersecting section indices
+                int firstSection = Math.Max(0, cr.MinY == int.MinValue ? 0 : cr.MinY / sectionSize);
+                int lastSection = cr.MaxY == int.MaxValue ? sectionCountY - 1 : cr.MaxY / sectionSize;
+                if (lastSection >= sectionCountY) lastSection = sectionCountY - 1;
+                if (firstSection >= sectionCountY || lastSection < 0) continue;
+                if (firstSection < 0) firstSection = 0;
+                for (int sy = firstSection; sy <= lastSection; sy++)
+                {
+                    // verify actual overlap (section world bounds)
+                    int secY0 = sy * sectionSize;
+                    int secY1 = secY0 + sectionSize - 1;
+                    if (!(cr.MaxY < secY0 || cr.MinY > secY1))
+                        tempLists[sy].Add(ri);
+                }
+            }
+            for (int sy=0; sy<sectionCountY; sy++)
+            {
+                buckets[sy] = tempLists[sy].Count == 0 ? Array.Empty<int>() : tempLists[sy].ToArray();
+            }
+            biome.sectionYRuleBuckets = buckets;
         }
 
         public static Biome SelectBiomeForChunk(long worldSeed, int chunkX, int chunkZ)

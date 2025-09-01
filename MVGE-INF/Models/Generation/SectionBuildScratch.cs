@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Runtime.CompilerServices;
 
-namespace MVGE_GEN.Models
+namespace MVGE_INF.Generation.Models
 {
     // Scratch structures for two-phase build
     public sealed class SectionBuildScratch
@@ -48,7 +48,7 @@ namespace MVGE_GEN.Models
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal ref ColumnData GetWritableColumn(int columnIndex)
+        public ref ColumnData GetWritableColumn(int columnIndex)
         {
             if (_columnStamps[columnIndex] != ActiveStamp)
             {
@@ -64,7 +64,7 @@ namespace MVGE_GEN.Models
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal ref ColumnData GetReadonlyColumn(int columnIndex)
+        public ref ColumnData GetReadonlyColumn(int columnIndex)
         {
             if (_columnStamps[columnIndex] != ActiveStamp)
             {

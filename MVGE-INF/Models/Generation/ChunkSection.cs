@@ -1,8 +1,7 @@
-using MVGE_GEN.Utils;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 
-namespace MVGE_GEN.Models
+namespace MVGE_INF.Generation.Models
 {
     public sealed class ChunkSection
     {
@@ -67,6 +66,6 @@ namespace MVGE_GEN.Models
         public int AdjPairsX, AdjPairsY, AdjPairsZ;   // incremental adjacency counters (unused after refactor)
 
         // Strongly-typed two-phase build scratch (internal use by SectionUtils)
-        internal SectionBuildScratch BuildScratch;
+        public SectionBuildScratch BuildScratch;
     }
 }

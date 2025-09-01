@@ -6,7 +6,6 @@ using MVGE_Tools.Noise;
 using MVGE_GEN.Utils;
 using MVGE_INF.Models.Generation;
 using MVGE_INF.Loaders;
-using MVGE_GEN.Models;
 
 namespace MVGE_GEN.Terrain
 {
@@ -17,72 +16,32 @@ namespace MVGE_GEN.Terrain
             var rules = biome.simpleReplacements;
             if (rules == null || rules.Count == 0) return;
 
-            int S2 = ChunkSection.SECTION_SIZE;
-            for (int sx=0; sx<sectionsX; sx++)
+            if (biome.compiledSimpleReplacementRules.Length > 0 && biome.sectionYRuleBuckets.Length == sectionsY)
             {
-                for (int sy=0; sy<sectionsY; sy++)
+                BatchApplySimpleReplacementRules(chunkBaseY);
+                return;
+            }
+        }
+
+        private void BatchApplySimpleReplacementRules(int chunkBaseY)
+        {
+            // Batched strategy: for each section Y fetch bucket indices, build a folded mapping once per section, apply
+            int sectionSize = ChunkSection.SECTION_SIZE;
+            var compiled = biome.compiledSimpleReplacementRules;
+            var buckets = biome.sectionYRuleBuckets;
+            for (int sy=0; sy<sectionsY; sy++)
+            {
+                var bucket = buckets[sy];
+                if (bucket == null || bucket.Length == 0) continue;
+                int sectionWorldY0 = chunkBaseY + sy * sectionSize;
+                int sectionWorldY1 = sectionWorldY0 + sectionSize - 1;
+                for (int sx=0; sx<sectionsX; sx++)
                 {
-                    int sectionY0 = chunkBaseY + sy * S2;
-                    int sectionY1 = sectionY0 + S2 - 1;
                     for (int sz=0; sz<sectionsZ; sz++)
                     {
                         var sec = sections[sx,sy,sz]; if (sec==null) continue;
-                        // Iterate rules
-                        foreach (var r in rules)
-                        {
-                            if (r.microbiomeId.HasValue) continue; // not handled here
-                            if (SectionOutside(sectionY0, sectionY1, r.absoluteMinYlevel, r.absoluteMaxYlevel)) continue;
-                            bool fullCover = SectionFullyInside(sectionY0, sectionY1, r.absoluteMinYlevel, r.absoluteMaxYlevel);
-                            int yMin = r.absoluteMinYlevel.HasValue ? Math.Max(sectionY0, r.absoluteMinYlevel.Value) : sectionY0;
-                            int yMax = r.absoluteMaxYlevel.HasValue ? Math.Min(sectionY1, r.absoluteMaxYlevel.Value) : sectionY1;
-                            if (yMax < yMin) continue;
-                            int lyStart = yMin - sectionY0; int lyEnd = yMax - sectionY0;
-
-                            // Quick prefilter: if the section has no build scratch and is packed/sparse,
-                            // check palette/sparse blocks cheaply to avoid converting to scratch unnecessarily.
-                            if (sec.BuildScratch == null)
-                            {
-                                bool maybeTarget = true; // default allow
-                                if (sec.Kind == ChunkSection.RepresentationKind.Packed && sec.Palette != null)
-                                {
-                                    maybeTarget = false;
-                                    foreach (var pid in sec.Palette)
-                                    {
-                                        if (pid == ChunkSection.AIR) continue;
-                                        var baseType = GetBaseTypeFast(pid);
-                                        if (RuleTargetsBlock(r, pid, baseType))
-                                        {
-                                            maybeTarget = true;
-                                            break;
-                                        }
-                                    }
-                                }
-                                else if (sec.Kind == ChunkSection.RepresentationKind.Sparse && sec.SparseBlocks != null)
-                                {
-                                    maybeTarget = false;
-                                    foreach (var pid in sec.SparseBlocks)
-                                    {
-                                        if (pid == ChunkSection.AIR) continue;
-                                        var baseType = GetBaseTypeFast(pid);
-                                        if (RuleTargetsBlock(r, pid, baseType))
-                                        {
-                                            maybeTarget = true;
-                                            break;
-                                        }
-                                    }
-                                }
-                                if (!maybeTarget) continue; // skip rule for this section — no palette/sparse id targets
-                            }
-
-                            // Predicate wrap - now call replacement (unchanged)
-                            SectionUtils.ApplyReplacement(
-                                sec,
-                                lyStart, lyEnd,
-                                fullCover,
-                                GetBaseTypeFast,
-                                (bid, bt) => RuleTargetsBlock(r, bid, bt),
-                                r.block_type.ID);
-                        }
+                        // Build folding arrays from current distinct ids if scratch exists; else attempt light fast-path
+                        SectionUtils.BatchApplyCompiledSimpleReplacementRules(sec, sectionWorldY0, sectionWorldY1, compiled, bucket, GetBaseTypeFast);
                     }
                 }
             }
