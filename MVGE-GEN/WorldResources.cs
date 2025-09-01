@@ -18,6 +18,8 @@ namespace MVGE_GEN
 {
     public partial class WorldResources : IDisposable
     {
+        public Guid ID { get; private set; }
+        public Guid RegionID { get; private set; }
         public WorldLoader loader { get; private set; }
 
         private readonly ConcurrentDictionary<(int cx, int cy, int cz), Chunk> activeChunks = new(); // track ready to render chunks
@@ -84,6 +86,8 @@ namespace MVGE_GEN
 
             loader = new WorldLoader();
             loader.ChooseWorld();
+            ID = loader.ID;
+            RegionID = loader.RegionID;
             Console.WriteLine("World data loaded.");
 
             worldBlockAccessor = GetBlock;
@@ -93,6 +97,8 @@ namespace MVGE_GEN
             Console.WriteLine("World resources initialized.");
 
             bool streamGeneration = FlagManager.flags.renderStreamingIfAllowed ?? throw new InvalidOperationException("Render streaming flag is not set.");
+
+            Console.WriteLine($"Initializing region: {RegionID}");
 
             // Always start scheduling first
             InitializeScheduling();
@@ -361,6 +367,9 @@ namespace MVGE_GEN
 
                     var chunk = new Chunk(pos, loader.seed, Path.Combine(loader.currentWorldSaveDirectory, loader.currentWorldSavedChunksSubDirectory), heightmap);
                     unbuiltChunks[key] = chunk;
+
+                    // Persist immediately after generation
+                    SaveChunkToFile(chunk);
 
                     chunkGenSchedule.TryRemove(key, out _);
 

@@ -10,6 +10,7 @@ namespace MVGE_INF.Loaders
     public class WorldLoader
     {
         public Guid ID;
+        public Guid RegionID;
         public string worldName;
         public int seed;
         public string currentWorldSaveDirectory;
@@ -77,62 +78,74 @@ namespace MVGE_INF.Loaders
             {
                 ID = Guid.NewGuid();
             }
-
-            Console.WriteLine($"Generating world {worldName} with seed: {seed}, id: {ID}");
-
-            currentWorldSaveDirectory = Path.Combine(GameManager.settings.savesWorldDirectory, ID.ToString());
-            Directory.CreateDirectory(currentWorldSaveDirectory);
-
-            string worldDataPath = Path.Combine(currentWorldSaveDirectory, currentWorldDataFile);
-            using (StreamWriter writer = new StreamWriter(worldDataPath))
+            if (RegionID == Guid.Empty)
             {
+                RegionID = Guid.NewGuid();
+            }
+
+            Console.WriteLine($"Generating world {worldName} with seed: {seed}, id: {ID}, region: {RegionID}");
+
+            // World root directory (by world ID)
+            var worldRoot = Path.Combine(GameManager.settings.savesWorldDirectory, ID.ToString());
+            Directory.CreateDirectory(worldRoot);
+            currentWorldSaveDirectory = worldRoot; // keep root (region-specific paths built later)
+
+            string worldDataPath = Path.Combine(worldRoot, currentWorldDataFile);
+            using (var writer = new StreamWriter(worldDataPath))
+            {
+                // New format (4 lines): ID, RegionID, worldName, seed
                 writer.WriteLine(ID.ToString());
+                writer.WriteLine(RegionID.ToString());
                 writer.WriteLine(worldName);
                 writer.WriteLine(seed);
             }
 
-            string chunkSaveFolderPath = Path.Combine(currentWorldSaveDirectory, currentWorldSavedChunksSubDirectory);
+            // Ensure region folder + chunks subfolder now
+            string regionFolder = Path.Combine(worldRoot, RegionID.ToString());
+            Directory.CreateDirectory(regionFolder);
+            string chunkSaveFolderPath = Path.Combine(regionFolder, currentWorldSavedChunksSubDirectory);
             Directory.CreateDirectory(chunkSaveFolderPath);
         }
 
         public void DetectWorldSaves()
         {
-            string[] directories = Directory.GetDirectories(GameManager.settings.savesWorldDirectory);
-            foreach (string directory in directories)
+            string[] worldRootDirs = Directory.GetDirectories(GameManager.settings.savesWorldDirectory);
+            foreach (string worldRoot in worldRootDirs)
             {
-                string[] files = Directory.GetFiles(directory);
-                foreach (string file in files)
+                string worldDataPath = Path.Combine(worldRoot, currentWorldDataFile);
+                if (!System.IO.File.Exists(worldDataPath)) continue;
+                try
                 {
-                    if (file.Contains(currentWorldDataFile))
+                    string[] lines = File.ReadAllLines(worldDataPath);
+                    var id = Guid.Parse(lines[0]);
+                    var worldNameLocal = lines[2];
+                    if (!worldSaves.ContainsKey(id))
                     {
-                        string[] lines = File.ReadAllLines(file);
-                        if (lines.Length >= 2)
-                        {
-                            var id = Guid.Parse(lines[0]);
-                            var wn = lines[1];
-                            if (!worldSaves.ContainsKey(id))
-                            {
-                                worldSaves.Add(id, wn);
-                                Console.WriteLine("Detected world save: " + wn + ", id: " + id);
-                            }
-                        }
+                        worldSaves.Add(id, worldNameLocal);
+                        Console.WriteLine($"Detected world save: {worldNameLocal}, id: {id}");
                     }
                 }
+                catch { }
             }
         }
 
         public void LoadWorldSave(Guid id)
         {
             ID = id;
-            currentWorldSaveDirectory = Path.Combine(GameManager.settings.savesWorldDirectory, id.ToString());
-            string worldDataPath = Path.Combine(currentWorldSaveDirectory, currentWorldDataFile);
+            var worldRoot = Path.Combine(GameManager.settings.savesWorldDirectory, id.ToString());
+            currentWorldSaveDirectory = worldRoot; // root, region subfolders below
+            string worldDataPath = Path.Combine(worldRoot, currentWorldDataFile);
             string[] lines = File.ReadAllLines(worldDataPath);
 
-            if (lines.Length >= 3)
-            {
-                worldName = lines[1];
-                seed = int.Parse(lines[2]);
-            }
+            RegionID = Guid.Parse(lines[1]);
+            worldName = lines[2];
+            seed = int.Parse(lines[3]);
+
+            // Ensure region directories exist
+            string regionFolder = Path.Combine(worldRoot, RegionID.ToString());
+            Directory.CreateDirectory(regionFolder);
+            string chunkSaveFolderPath = Path.Combine(regionFolder, currentWorldSavedChunksSubDirectory);
+            Directory.CreateDirectory(chunkSaveFolderPath);
 
             Console.WriteLine($"Loaded world save: {worldName}, id: {id}, seed: {seed}");
         }

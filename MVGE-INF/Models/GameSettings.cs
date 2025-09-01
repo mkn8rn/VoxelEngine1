@@ -32,8 +32,8 @@ namespace MVGE_INF.Models
         public required int chunkGenerationBufferInitial { get; set; }
 
         // Directories (required in JSON except those computed at runtime)
-        public string gamesDirectory { get; set; } = string.Empty;          // set by GameManager (not required in JSON)
-        public string loadedGameDirectory { get; set; } = string.Empty;      // set by GameManager (not required in JSON)
+        public string gamesDirectory { get; set; } = string.Empty;
+        public string loadedGameDirectory { get; set; } = string.Empty;
         public required string loadedGameSettingsDirectory { get; set; }
         public required string assetsBaseBlockTexturesDirectory { get; set; }
         public required string assetsBlockTexturesDirectory { get; set; }
