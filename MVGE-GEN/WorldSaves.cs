@@ -4,6 +4,8 @@ using MVGE_INF.Managers;
 using MVGE_GEN.Terrain;
 using MVGE_INF.Generation.Models;
 using System.Runtime.InteropServices;
+using System.Collections.Generic;
+using OpenTK.Mathematics;
 
 namespace MVGE_GEN
 {
@@ -216,6 +218,176 @@ namespace MVGE_GEN
             catch (Exception ex)
             {
                 Console.WriteLine($"[World] Failed to save chunk: {ex.Message}");
+            }
+        }
+
+        private string GetChunkFilePath(int cx, int cy, int cz)
+        {
+            var settings = GameManager.settings;
+            string worldRoot = Path.Combine(settings.savesWorldDirectory, loader.ID.ToString());
+            string regionRoot = Path.Combine(worldRoot, loader.RegionID.ToString());
+            string chunksDir = Path.Combine(regionRoot, loader.currentWorldSavedChunksSubDirectory);
+            Directory.CreateDirectory(chunksDir);
+            return Path.Combine(chunksDir, $"chunk{cx}x{cy}y{cz}z.bin");
+        }
+
+        private Chunk LoadChunkFromFile(int cx, int cy, int cz)
+        {
+            string path = GetChunkFilePath(cx, cy, cz);
+            if (!File.Exists(path)) return null;
+            try
+            {
+                using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, FileOptions.SequentialScan);
+                using var br = new BinaryReader(fs);
+                var magic = br.ReadBytes(4);
+                if (magic.Length != 4 || magic[0] != CHUNK_MAGIC[0] || magic[1] != CHUNK_MAGIC[1] || magic[2] != CHUNK_MAGIC[2] || magic[3] != CHUNK_MAGIC[3])
+                    return null; // invalid
+                ushort ver = br.ReadUInt16();
+                br.ReadUInt16(); // padding
+                int fileCx = br.ReadInt32();
+                int fileCy = br.ReadInt32();
+                int fileCz = br.ReadInt32();
+                int sxCount = br.ReadInt32();
+                int syCount = br.ReadInt32();
+                int szCount = br.ReadInt32();
+                int sectionCount = br.ReadInt32();
+                if (sectionCount != sxCount * syCount * szCount) return null;
+
+                // Read offsets
+                uint[] offsets = new uint[sectionCount];
+                for (int i = 0; i < sectionCount; i++) offsets[i] = br.ReadUInt32();
+
+                // Construct chunk at world position (convert chunk indices back to world base coords)
+                int baseX = fileCx * GameManager.settings.chunkMaxX;
+                int baseY = fileCy * GameManager.settings.chunkMaxY;
+                int baseZ = fileCz * GameManager.settings.chunkMaxZ;
+                var chunk = new Chunk(new Vector3(baseX, baseY, baseZ), loader.seed, loader.currentWorldSaveDirectory, null);
+                // Ensure section grid
+                if (chunk.sections == null || chunk.sections.GetLength(0) != sxCount || chunk.sections.GetLength(1) != syCount || chunk.sections.GetLength(2) != szCount)
+                {
+                    chunk.sections = new ChunkSection[sxCount, syCount, szCount];
+                }
+
+                int linear = 0;
+                for (int sx = 0; sx < sxCount; sx++)
+                {
+                    for (int sy = 0; sy < syCount; sy++)
+                    {
+                        for (int sz = 0; sz < szCount; sz++, linear++)
+                        {
+                            uint off = offsets[linear];
+                            if (off == 0 || off >= fs.Length) { chunk.sections[sx, sy, sz] = new ChunkSection(); continue; }
+                            fs.Position = off;
+                            byte kindByte = br.ReadByte();
+                            ChunkSection.RepresentationKind kind = (ChunkSection.RepresentationKind)kindByte;
+                            ushort payloadLen = br.ReadUInt16();
+                            if (payloadLen > fs.Length - fs.Position) payloadLen = (ushort)(fs.Length - fs.Position);
+                            byte[] payload = br.ReadBytes(payloadLen);
+                            var sec = new ChunkSection();
+                            sec.Kind = kind;
+                            sec.VoxelCount = ChunkSection.SECTION_SIZE * ChunkSection.SECTION_SIZE * ChunkSection.SECTION_SIZE;
+                            using var ms = new MemoryStream(payload);
+                            using var prs = new BinaryReader(ms);
+                            if (payloadLen >= 7) // minimum metadata length
+                            {
+                                sec.NonAirCount = prs.ReadUInt16();
+                                sec.InternalExposure = prs.ReadInt32();
+                                byte metaFlags = prs.ReadByte();
+                                bool hasBounds = (metaFlags & 1) != 0;
+                                bool hasOcc = (metaFlags & 2) != 0;
+                                if (hasBounds && ms.Position + 6 <= ms.Length)
+                                {
+                                    sec.HasBounds = true;
+                                    sec.MinLX = prs.ReadByte();
+                                    sec.MinLY = prs.ReadByte();
+                                    sec.MinLZ = prs.ReadByte();
+                                    sec.MaxLX = prs.ReadByte();
+                                    sec.MaxLY = prs.ReadByte();
+                                    sec.MaxLZ = prs.ReadByte();
+                                }
+                                if (hasOcc)
+                                {
+                                    ulong[] ReadOcc()
+                                    {
+                                        if (ms.Position >= ms.Length) return null;
+                                        int len = prs.ReadByte();
+                                        if (len <= 0 || ms.Position + len * 8 > ms.Length) return null;
+                                        var arr = new ulong[len];
+                                        for (int i = 0; i < len; i++) arr[i] = prs.ReadUInt64();
+                                        return arr;
+                                    }
+                                    sec.OccupancyBits = ReadOcc();
+                                    sec.FaceNegXBits = ReadOcc();
+                                    sec.FacePosXBits = ReadOcc();
+                                    sec.FaceNegYBits = ReadOcc();
+                                    sec.FacePosYBits = ReadOcc();
+                                    sec.FaceNegZBits = ReadOcc();
+                                    sec.FacePosZBits = ReadOcc();
+                                }
+                            }
+                            // Representation specific
+                            switch (kind)
+                            {
+                                case ChunkSection.RepresentationKind.Empty:
+                                    sec.IsAllAir = true;
+                                    break;
+                                case ChunkSection.RepresentationKind.Uniform:
+                                    if (ms.Position + 2 <= ms.Length) sec.UniformBlockId = prs.ReadUInt16();
+                                    sec.IsAllAir = (sec.NonAirCount == 0);
+                                    break;
+                                case ChunkSection.RepresentationKind.Sparse:
+                                    if (ms.Position + 2 <= ms.Length)
+                                    {
+                                        int scount = prs.ReadUInt16();
+                                        sec.SparseIndices = new int[scount];
+                                        sec.SparseBlocks = new ushort[scount];
+                                        for (int i = 0; i < scount && ms.Position + 4 <= ms.Length; i++)
+                                        {
+                                            sec.SparseIndices[i] = prs.ReadUInt16();
+                                            sec.SparseBlocks[i] = prs.ReadUInt16();
+                                        }
+                                    }
+                                    break;
+                                case ChunkSection.RepresentationKind.DenseExpanded:
+                                    int expectedBytes = sec.VoxelCount * 2;
+                                    sec.ExpandedDense = new ushort[sec.VoxelCount];
+                                    int toRead = Math.Min(expectedBytes, (int)(ms.Length - ms.Position));
+                                    byte[] dense = prs.ReadBytes(toRead);
+                                    MemoryMarshal.Cast<byte, ushort>(dense).CopyTo(sec.ExpandedDense.AsSpan());
+                                    break;
+                                case ChunkSection.RepresentationKind.Packed:
+                                    if (ms.Position < ms.Length)
+                                    {
+                                        sec.BitsPerIndex = prs.ReadByte();
+                                        if (ms.Position + 2 <= ms.Length)
+                                        {
+                                            int paletteCount = prs.ReadUInt16();
+                                            sec.Palette = new List<ushort>(paletteCount);
+                                            for (int i = 0; i < paletteCount && ms.Position + 2 <= ms.Length; i++)
+                                                sec.Palette.Add(prs.ReadUInt16());
+                                            if (ms.Position + 4 <= ms.Length)
+                                            {
+                                                int wordCount = prs.ReadInt32();
+                                                if (wordCount > 0 && ms.Position + wordCount * 4 <= ms.Length)
+                                                {
+                                                    sec.BitData = new uint[wordCount];
+                                                    for (int i = 0; i < wordCount; i++) sec.BitData[i] = prs.ReadUInt32();
+                                                }
+                                            }
+                                        }
+                                    }
+                                    break;
+                            }
+                            chunk.sections[sx, sy, sz] = sec;
+                        }
+                    }
+                }
+                return chunk;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[World] Failed to load chunk ({cx},{cy},{cz}): {ex.Message}");
+                return null;
             }
         }
     }

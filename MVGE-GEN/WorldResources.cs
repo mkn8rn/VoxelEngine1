@@ -359,6 +359,17 @@ namespace MVGE_GEN
                         continue; // skip generation
                     }
 
+                    // Attempt load from disk first
+                    var existing = LoadChunkFromFile(cx, cy, cz);
+                    if (existing != null)
+                    {
+                        unbuiltChunks[key] = existing;
+                        chunkGenSchedule.TryRemove(key, out _);
+                        EnqueueMeshBuild(key, markDirty:false);
+                        MarkNeighborsDirty(key, existing);
+                        continue; // skip generation
+                    }
+
                     // Heightmap reuse per (x,z) across vertical stack
                     int baseX = (int)pos.X;
                     int baseZ = (int)pos.Z;
