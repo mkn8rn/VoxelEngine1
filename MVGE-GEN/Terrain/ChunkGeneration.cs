@@ -203,12 +203,12 @@ namespace MVGE_GEN.Terrain
             }
             if (possibleStone)
             {
-                AllStoneChunk = true; IsEmpty=false; CreateUniformSections((ushort)BaseBlockType.Stone);
+                AllStoneChunk = true; AllAirChunk=false; CreateUniformSections((ushort)BaseBlockType.Stone);
                 FaceSolidNegX=FaceSolidPosX=FaceSolidNegY=FaceSolidPosY=FaceSolidNegZ=FaceSolidPosZ=true; return;
             }
             if (possibleSoil)
             {
-                AllSoilChunk = true; IsEmpty=false; CreateUniformSections((ushort)BaseBlockType.Soil);
+                AllSoilChunk = true; AllAirChunk = false; CreateUniformSections((ushort)BaseBlockType.Soil);
                 FaceSolidNegX=FaceSolidPosX=FaceSolidNegY=FaceSolidPosY=FaceSolidNegZ=FaceSolidPosZ=true; return;
             }
         }
@@ -233,7 +233,7 @@ namespace MVGE_GEN.Terrain
                 for (int z=0; z<maxZ; z++) { int surface=(int)heightmap[x,z]; if (surface>maxSurface) maxSurface=surface; }
             }
             if (allBuried) candidateFullyBuried = true;
-            if (chunkBaseY > maxSurface){ AllAirChunk=true; IsEmpty=true; precomputedHeightmap=null; return; }
+            if (chunkBaseY > maxSurface){ AllAirChunk=true; precomputedHeightmap=null; return; }
             DetectAllStoneOrSoil(heightmap, chunkBaseY, topOfChunk);
             if (!AllStoneChunk && !AllSoilChunk)
             {
