@@ -41,7 +41,7 @@ namespace MVGE_GEN.Terrain
                     {
                         var sec = sections[sx,sy,sz]; if (sec==null) continue;
                         // Build folding arrays from current distinct ids if scratch exists; else attempt light fast-path
-                        SectionUtils.BatchApplyCompiledSimpleReplacementRules(sec, sectionWorldY0, sectionWorldY1, compiled, bucket, GetBaseTypeFast);
+                        SectionUtils.SectionApplySimpleReplacementRules(sec, sectionWorldY0, sectionWorldY1, compiled, bucket, GetBaseTypeFast);
                     }
                 }
             }

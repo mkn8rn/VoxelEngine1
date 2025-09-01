@@ -18,6 +18,10 @@ namespace MVGE_INF.Generation.Models
         public bool AnyNonAir;
         public bool DistinctDirty; // when true rebuild distinct list at finalize
 
+        // Per-id column membership bitsets (DistinctCount <=8). Each row = 256 bits -> 4 ulongs.
+        // A bit set means the column *currently* (prior to replacement batch) contains that id in at least one run/voxel.
+        public ulong[,] IdColumnBits = new ulong[8,4];
+
         // Global rolling stamp (ushort wrap). Managed externally via SectionUtils when renting.
         internal static ushort GlobalStamp; // not thread-safe increment; we accept rare collision (wrap) => fallback to full clear
 
@@ -28,6 +32,8 @@ namespace MVGE_INF.Generation.Models
             if (DistinctCount > 0)
                 Array.Clear(Distinct, 0, DistinctCount);
             DistinctCount = 0; AnyEscalated = false; AnyNonAir = false; DistinctDirty = false;
+            // Clear bitsets
+            Array.Clear(IdColumnBits, 0, IdColumnBits.Length);
             // Advance stamp; on wrap we perform a full manual clear of stamps + columns to re-sync.
             ushort next = (ushort)(GlobalStamp + 1);
             GlobalStamp = next;
