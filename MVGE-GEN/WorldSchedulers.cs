@@ -68,25 +68,38 @@ namespace MVGE_GEN
             int sizeY = GameManager.settings.chunkMaxY;
             int sizeZ = GameManager.settings.chunkMaxZ;
             int verticalRows = GameManager.settings.lod1RenderDistance; // reuse vertical range heuristic
-            int count = 0;
-            for (int radius = lodDist; radius <= maxRadius; radius++)
+            int scheduled = 0;
+            // Non-blocking: perform scheduling work on a background task so constructor / caller continues.
+            Task.Run(() =>
             {
-                int min = -radius; int max = radius;
-                for (int x = min; x <= max; x++)
+                for (int radius = lodDist; radius <= maxRadius; radius++)
                 {
-                    for (int z = min; z <= max; z++)
+                    int min = -radius; int max = radius;
+                    for (int x = min; x <= max; x++)
                     {
-                        if (Math.Abs(x) != radius && Math.Abs(z) != radius) continue; // perimeter
-                        for (int vy = 0; vy < verticalRows; vy++)
+                        for (int z = min; z <= max; z++)
                         {
-                            EnqueueBufferChunkPosition(x * sizeX, vy * sizeY, z * sizeZ);
-                            count++;
+                            if (Math.Abs(x) != radius && Math.Abs(z) != radius) continue; // perimeter
+                            for (int vy = 0; vy < verticalRows; vy++)
+                            {
+                                int wx = x * sizeX;
+                                int wy = vy * sizeY;
+                                int wz = z * sizeZ;
+                                var key = ChunkIndexKey(wx, wy, wz);
+                                if (unbuiltChunks.ContainsKey(key) || activeChunks.ContainsKey(key)) continue;
+                                if (chunkGenSchedule.ContainsKey(key)) continue;
+                                if (bufferGenSchedule.ContainsKey(key)) continue;
+                                if (ChunkFileExists(key.cx, key.cy, key.cz)) continue; // already on disk
+                                if (!bufferGenSchedule.TryAdd(key, 0)) continue;
+                                bufferChunkPositionQueue.Add(new Vector3(wx, wy, wz));
+                                scheduled++;
+                            }
                         }
                     }
                 }
-            }
-            if (count > 0)
-                Console.WriteLine($"[World] Scheduled {count} initial buffer pregen chunks (radius {lodDist}..{maxRadius}).");
+                if (scheduled > 0)
+                    Console.WriteLine($"[World] Scheduled {scheduled} initial buffer pregen chunks (radius {lodDist}..{maxRadius}) (async).");
+            });
         }
 
         private void EnqueueRuntimeBufferChunkPositions()
@@ -101,25 +114,37 @@ namespace MVGE_GEN
             int sizeY = GameManager.settings.chunkMaxY;
             int sizeZ = GameManager.settings.chunkMaxZ;
             int verticalRows = GameManager.settings.lod1RenderDistance;
-            int count = 0;
-            for (int radius = startRadius; radius <= maxRadius; radius++)
+            int scheduled = 0;
+            Task.Run(() =>
             {
-                int min = -radius; int max = radius;
-                for (int x = min; x <= max; x++)
+                for (int radius = startRadius; radius <= maxRadius; radius++)
                 {
-                    for (int z = min; z <= max; z++)
+                    int min = -radius; int max = radius;
+                    for (int x = min; x <= max; x++)
                     {
-                        if (Math.Abs(x) != radius && Math.Abs(z) != radius) continue;
-                        for (int vy = 0; vy < verticalRows; vy++)
+                        for (int z = min; z <= max; z++)
                         {
-                            EnqueueBufferChunkPosition(x * sizeX, vy * sizeY, z * sizeZ);
-                            count++;
+                            if (Math.Abs(x) != radius && Math.Abs(z) != radius) continue;
+                            for (int vy = 0; vy < verticalRows; vy++)
+                            {
+                                int wx = x * sizeX;
+                                int wy = vy * sizeY;
+                                int wz = z * sizeZ;
+                                var key = ChunkIndexKey(wx, wy, wz);
+                                if (unbuiltChunks.ContainsKey(key) || activeChunks.ContainsKey(key)) continue;
+                                if (chunkGenSchedule.ContainsKey(key)) continue;
+                                if (bufferGenSchedule.ContainsKey(key)) continue;
+                                if (ChunkFileExists(key.cx, key.cy, key.cz)) continue; // already on disk
+                                if (!bufferGenSchedule.TryAdd(key, 0)) continue;
+                                bufferChunkPositionQueue.Add(new Vector3(wx, wy, wz));
+                                scheduled++;
+                            }
                         }
                     }
                 }
-            }
-            if (count > 0)
-                Console.WriteLine($"[World] Scheduled {count} runtime buffer pregen chunks (radius {startRadius}..{maxRadius}).");
+                if (scheduled > 0)
+                    Console.WriteLine($"[World] Scheduled {scheduled} runtime buffer pregen chunks (radius {startRadius}..{maxRadius}) (async).");
+            });
         }
 
         private void EnqueueUnbuiltChunksForBuild()
@@ -161,7 +186,9 @@ namespace MVGE_GEN
             // Avoid scheduling if already present or scheduled for active generation
             if (unbuiltChunks.ContainsKey(key) || activeChunks.ContainsKey(key)) return;
             if (chunkGenSchedule.ContainsKey(key)) return;
-            if (!bufferGenSchedule.TryAdd(key, 0)) return; // already queued
+            if (bufferGenSchedule.ContainsKey(key)) return;
+            if (ChunkFileExists(key.cx, key.cy, key.cz)) return; // already saved; no need to queue
+            if (!bufferGenSchedule.TryAdd(key, 0)) return;
             bufferChunkPositionQueue.Add(new Vector3(worldX, worldY, worldZ));
         }
 

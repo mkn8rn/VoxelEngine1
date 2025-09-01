@@ -15,6 +15,15 @@ namespace MVGE_GEN
         private static readonly byte[] CHUNK_MAGIC = new byte[] { (byte)'M', (byte)'V', (byte)'C', (byte)'H' }; // "MVCH" (MVGE Chunk)
         private static readonly byte[] CHUNK_FOOTER_MAGIC = new byte[] { (byte)'C', (byte)'M', (byte)'D'}; // Chunk Meta Data (NOTE: currently 3 bytes written; loader adjusted accordingly)
 
+        // Lightweight existence probe (does NOT create directories)
+        private bool ChunkFileExists(int cx, int cy, int cz)
+        {
+            var settings = GameManager.settings;
+            string chunksDir = Path.Combine(settings.savesWorldDirectory, loader.ID.ToString(), loader.RegionID.ToString(), loader.currentWorldSavedChunksSubDirectory);
+            string path = Path.Combine(chunksDir, $"chunk{cx}x{cy}y{cz}z.bin");
+            return File.Exists(path);
+        }
+
         // File Layout (little endian)
         // Header:
         //  0  : 4  bytes  Magic "MVCH"
