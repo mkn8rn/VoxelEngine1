@@ -474,7 +474,7 @@ namespace MVGE_GEN
                     {
                         int lodDist = GameManager.settings.lod1RenderDistance;
                         int verticalRange = lodDist; // symmetric
-                        if (cancelledChunks.ContainsKey(key) || Math.Abs(cx - playerChunkX) >= lodDist || Math.Abs(cz - playerChunkZ) >= lodDist || Math.Abs(cy - playerChunkY) > verticalRange)
+                        if (cancelledChunks.ContainsKey(key) || Math.Abs(cx - playerChunkX) > lodDist || Math.Abs(cz - playerChunkZ) > lodDist || Math.Abs(cy - playerChunkY) > verticalRange)
                         {
                             chunkGenSchedule.TryRemove(key, out _);
                             cancelledChunks.TryRemove(key, out _);
@@ -631,7 +631,7 @@ namespace MVGE_GEN
                     // distance cull before building
                     int lodDist = GameManager.settings.lod1RenderDistance;
                     int verticalRange = lodDist;
-                    if (Math.Abs(key.cx - playerChunkX) >= lodDist || Math.Abs(key.cz - playerChunkZ) >= lodDist || Math.Abs(key.cy - playerChunkY) > verticalRange)
+                    if (Math.Abs(key.cx - playerChunkX) > lodDist || Math.Abs(key.cz - playerChunkZ) > lodDist || Math.Abs(key.cy - playerChunkY) > verticalRange)
                     {
                         // remove any stale data
                         unbuiltChunks.TryRemove(key, out _);
@@ -790,8 +790,8 @@ namespace MVGE_GEN
 
             // Compute symmetric vertical window around player chunk Y
             if (verticalRows < 1) verticalRows = 1;
-            // we expand vertical range to full offset (lodDist-1) in both directions.
-            int maxVerticalOffset = lodDist - 1; // same inclusive max delta as horizontal rings
+            // we expand vertical range to full offset in both directions.
+            int maxVerticalOffset = lodDist;
             int vMinLayer = centerCy - maxVerticalOffset;
             int vMaxLayer = centerCy + maxVerticalOffset;
             // Clamp to region vertical limits
@@ -799,7 +799,7 @@ namespace MVGE_GEN
             if (vMaxLayer > regionLimit) vMaxLayer = (int)regionLimit;
 
             // Active generation rings (LoD1)
-            for (int radius = 0; radius < lodDist; radius++)
+            for (int radius = 0; radius <= lodDist; radius++)
             {
                 if (radius == 0)
                 {
@@ -830,7 +830,7 @@ namespace MVGE_GEN
             if (bufferRadius > lodDist)
             {
                 int maxRuntimeRadius = (int)Math.Min(bufferRadius, GameManager.settings.regionWidthInChunks);
-                for (int radius = lodDist; radius <= maxRuntimeRadius; radius++)
+                for (int radius = lodDist + 1; radius <= maxRuntimeRadius; radius++) // start just beyond inclusive active radius
                 {
                     int min = -radius; int max = radius;
                     for (int dx = min; dx <= max; dx++)
@@ -860,7 +860,7 @@ namespace MVGE_GEN
             // Active chunks
             foreach (var key in activeChunks.Keys.ToArray())
             {
-                if (Math.Abs(key.cx - centerCx) >= lodDist || Math.Abs(key.cz - centerCz) >= lodDist || Math.Abs(key.cy - centerCy) > verticalRange)
+                if (Math.Abs(key.cx - centerCx) > lodDist || Math.Abs(key.cz - centerCz) > lodDist || Math.Abs(key.cy - centerCy) > verticalRange)
                 {
                     if (activeChunks.TryRemove(key, out var chunk))
                     {
@@ -873,7 +873,7 @@ namespace MVGE_GEN
             // Unbuilt chunks (cancel generation / building if far)
             foreach (var key in unbuiltChunks.Keys.ToArray())
             {
-                if (Math.Abs(key.cx - centerCx) >= lodDist || Math.Abs(key.cz - centerCz) >= lodDist || Math.Abs(key.cy - centerCy) > verticalRange)
+                if (Math.Abs(key.cx - centerCx) > lodDist || Math.Abs(key.cz - centerCz) > lodDist || Math.Abs(key.cy - centerCy) > verticalRange)
                 {
                     if (unbuiltChunks.TryRemove(key, out _))
                     {
