@@ -16,14 +16,95 @@ namespace MVGE_GEN.Terrain
             var rules = biome.simpleReplacements;
             if (rules == null || rules.Count == 0) return;
 
+            // Early chunk-level uniform short-circuit moved to helper for maintainability.
+            if (TryChunkLevelUniformReplacement(chunkBaseY, topOfChunk)) return; // helper applied full-chunk mapping
+
             if (biome.compiledSimpleReplacementRules.Length > 0 && biome.sectionYRuleBuckets.Length == sectionsY)
             {
-                BatchApplySimpleReplacementRules(chunkBaseY);
+                ApplySimpleReplacementRules(chunkBaseY);
                 return;
             }
         }
 
-        private void BatchApplySimpleReplacementRules(int chunkBaseY)
+        // --------------------------------------------------------------------------------------------
+        // TryChunkLevelUniformReplacement:
+        // Early chunk-level uniform short-circuit: if the entire chunk was generated as all stone or all soil
+        // and every rule that targets that base type either fully covers the chunk vertically (or none exist),
+        // producing a single final replacement id for the whole vertical span, we can apply the mapping once
+        // to every uniform section and skip per-section rule processing entirely.
+        // Conditions for safe shortcut:
+        //   * AllStoneChunk or AllSoilChunk already established (all sections created uniform with that id)
+        //   * No partially-overlapping (vertical slice) rule targeting the base type exists (would create non-uniform)
+        //   * Folding the ordered full-cover rules yields a single final id (could be unchanged) for the base type
+        // This avoids: iterating buckets per section + per-section finalize later.
+        // --------------------------------------------------------------------------------------------
+        private bool TryChunkLevelUniformReplacement(int chunkBaseY, int topOfChunk)
+        {
+            if (!(AllStoneChunk || AllSoilChunk)) return false;
+            if (biome.compiledSimpleReplacementRules.Length == 0) return false;
+
+            var compiledAll = biome.compiledSimpleReplacementRules;
+            // Chunk vertical span
+            int chunkY0 = chunkBaseY;
+            int chunkY1 = topOfChunk;
+            BaseBlockType baseType = AllStoneChunk ? BaseBlockType.Stone : BaseBlockType.Soil;
+            ushort originalId = (ushort)(AllStoneChunk ? BaseBlockType.Stone : BaseBlockType.Soil);
+            ushort currentId = originalId;
+            bool abort = false; // abort shortcut if any partial range rule applies
+            bool anyTargetingRule = false;
+            // Iterate rules in their precompiled priority order
+            for (int i = 0; i < compiledAll.Length; i++)
+            {
+                var cr = compiledAll[i];
+                // Check if rule targets this base type (base type bit or specific ids list containing original/current id)
+                bool targets = ((cr.BaseTypeBitMask >> (int)baseType) & 1u) != 0u;
+                if (!targets && cr.SpecificIdsSorted.Length > 0)
+                {
+                    // We only care if it lists either the original uniform id or any subsequent mapped id
+                    // Because after replacement currentId can change; keep it dynamic.
+                    if (Array.BinarySearch(cr.SpecificIdsSorted, currentId) >= 0)
+                        targets = true;
+                }
+                if (!targets) continue;
+                // Rule targets the uniform id / base type. If it doesn't intersect vertically skip.
+                if (cr.MaxY < chunkY0 || cr.MinY > chunkY1) continue;
+                anyTargetingRule = true;
+                // If it intersects but does not fully cover entire chunk span -> cannot shortcut.
+                if (!(cr.MinY <= chunkY0 && cr.MaxY >= chunkY1)) { abort = true; break; }
+                // Full cover: apply mapping (in priority order later rules override earlier ones)
+                if (cr.Matches(currentId, baseType))
+                {
+                    currentId = cr.ReplacementId;
+                }
+            }
+            if (abort) return false; // need per-section processing
+
+            // No partial vertical slicing rules for this base type => safe uniform mapping
+            // (even if no rule matched we still mark uniform fast path to skip per-section pass)
+            // Update each uniform section's id only if changed.
+            if (currentId != originalId || anyTargetingRule)
+            {
+                for (int sx = 0; sx < sectionsX; sx++)
+                    for (int sy = 0; sy < sectionsY; sy++)
+                        for (int sz = 0; sz < sectionsZ; sz++)
+                        {
+                            var sec = sections[sx, sy, sz];
+                            if (sec == null) continue;
+                            if (sec.Kind == ChunkSection.RepresentationKind.Uniform)
+                            {
+                                sec.UniformBlockId = currentId;
+                                sec.IdMapDirty = false; // occupancy unchanged, keep metadata
+                                sec.StructuralDirty = false;
+                                sec.MetadataBuilt = true;
+                            }
+                        }
+                AllOneBlockChunk = true;
+                AllOneBlockBlockId = currentId;
+            }
+            return true; // shortcut executed
+        }
+
+        private void ApplySimpleReplacementRules(int chunkBaseY)
         {
             // Batched strategy: for each section Y fetch bucket indices, build a folded mapping once per section, apply
             int sectionSize = ChunkSection.SECTION_SIZE;
@@ -206,10 +287,55 @@ namespace MVGE_GEN.Terrain
                 }
             }
             ApplySimpleReplacementRules(chunkBaseY, topOfChunk);
-            for (int sx=0; sx<sectionsX; sx++)
-            for (int sy=0; sy<sectionsY; sy++)
-            for (int sz=0; sz<sectionsZ; sz++)
-            { var sec = sections[sx,sy,sz]; if (sec==null) continue; SectionUtils.FinalizeSection(sec); }
+
+            // Chunk-level aggregate short-circuit:
+            // After applying replacements, if every populated section is a Uniform section with the same non-air id
+            // we can mark AllOneBlockChunk and skip per-section finalization (metadata already valid for uniforms
+            // except for pending IdMapDirty which we clear).
+            if (!AllAirChunk)
+            {
+                bool allUniformSame = true;
+                ushort uniformId = 0;
+                for (int sx=0; sx<sectionsX && allUniformSame; sx++)
+                {
+                    for (int sy=0; sy<sectionsY && allUniformSame; sy++)
+                    {
+                        for (int sz=0; sz<sectionsZ && allUniformSame; sz++)
+                        {
+                            var sec = sections[sx,sy,sz]; if (sec==null) continue; // treat null as empty air
+                            if (sec.Kind != ChunkSection.RepresentationKind.Uniform || sec.UniformBlockId == ChunkSection.AIR)
+                            {
+                                allUniformSame = false; break;
+                            }
+                            if (uniformId == 0) uniformId = sec.UniformBlockId; else if (sec.UniformBlockId != uniformId) { allUniformSame = false; break; }
+                        }
+                    }
+                }
+                if (allUniformSame && uniformId != 0)
+                {
+                    AllOneBlockChunk = true;
+                    AllOneBlockBlockId = uniformId;
+                    // Clear dirty flags; no need to finalize each section.
+                    for (int sx=0; sx<sectionsX; sx++)
+                        for (int sy=0; sy<sectionsY; sy++)
+                            for (int sz=0; sz<sectionsZ; sz++)
+                            {
+                                var sec = sections[sx,sy,sz]; if (sec==null) continue;
+                                if (sec.Kind == ChunkSection.RepresentationKind.Uniform)
+                                {
+                                    sec.IdMapDirty = false; sec.StructuralDirty = false; sec.MetadataBuilt = true; // metadata for uniform stays valid
+                                }
+                            }
+                }
+            }
+
+            if (!AllOneBlockChunk)
+            {
+                for (int sx=0; sx<sectionsX; sx++)
+                for (int sy=0; sy<sectionsY; sy++)
+                for (int sz=0; sz<sectionsZ; sz++)
+                { var sec = sections[sx,sy,sz]; if (sec==null) continue; SectionUtils.FinalizeSection(sec); }
+            }
 
             precomputedHeightmap = null;
             BuildAllBoundaryPlanesInitial();
