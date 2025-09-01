@@ -481,7 +481,8 @@ namespace MVGE_GEN.Utils
                         }
                         else
                         {
-                            // Partial run edit forces escalation.
+                            // Partial run edit forces escalation. Preserve existing occupancy metadata (only IDs change).
+                            ushort prevMask = col.OccMask; byte prevNonAir = col.NonAir; byte prevAdj = col.AdjY;
                             var arr = col.Escalated ?? new ushort[S];
                             if (col.Escalated == null)
                             {
@@ -493,21 +494,8 @@ namespace MVGE_GEN.Utils
                             for (int y = ys; y <= ye; y++) arr[y] = replacementId;
                             col.Escalated = arr;
                             col.RunCount = 255;
-
-                            // Rebuild fast metadata (16 iterations).
-                            ushort mask = 0; byte nonAir = 0; byte adj = 0; ushort prevBit = 0;
-                            for (int y = 0; y < S; y++)
-                            {
-                                if (arr[y] != AIR)
-                                {
-                                    mask |= (ushort)(1 << y);
-                                    nonAir++;
-                                    if (prevBit == 1) adj++;
-                                    prevBit = 1;
-                                }
-                                else prevBit = 0;
-                            }
-                            col.OccMask = mask; col.NonAir = nonAir; col.AdjY = adj;
+                            // Reuse previous occupancy / adjacency (unchanged by id swap)
+                            col.OccMask = prevMask; col.NonAir = prevNonAir; col.AdjY = prevAdj;
                             anyChange = true;
                             continue; // move to next column
                         }
@@ -524,6 +512,7 @@ namespace MVGE_GEN.Utils
                         }
                         else
                         {
+                            ushort prevMask = col.OccMask; byte prevNonAir = col.NonAir; byte prevAdj = col.AdjY;
                             var arr = col.Escalated ?? new ushort[S];
                             if (col.Escalated == null)
                             {
@@ -535,21 +524,7 @@ namespace MVGE_GEN.Utils
                             for (int y = ys; y <= ye; y++) arr[y] = replacementId;
                             col.Escalated = arr;
                             col.RunCount = 255;
-
-                            // Rebuild fast metadata (16 iterations).
-                            ushort mask = 0; byte nonAir = 0; byte adj = 0; ushort prevBit = 0;
-                            for (int y = 0; y < S; y++)
-                            {
-                                if (arr[y] != AIR)
-                                {
-                                    mask |= (ushort)(1 << y);
-                                    nonAir++;
-                                    if (prevBit == 1) adj++;
-                                    prevBit = 1;
-                                }
-                                else prevBit = 0;
-                            }
-                            col.OccMask = mask; col.NonAir = nonAir; col.AdjY = adj;
+                            col.OccMask = prevMask; col.NonAir = prevNonAir; col.AdjY = prevAdj;
                             anyChange = true;
                         }
                     }
