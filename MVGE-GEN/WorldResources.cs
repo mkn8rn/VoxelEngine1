@@ -745,6 +745,7 @@ namespace MVGE_GEN
                     {
                         ScheduleChunksAroundPlayer(pcx, pcy, pcz);
                         UnloadFarChunks(pcx, pcy, pcz);
+                        PruneOutOfRangeBufferChunks(pcx, pcy, pcz);
                     }
                     catch (Exception ex)
                     {
@@ -755,6 +756,28 @@ namespace MVGE_GEN
             }
         }
 
+        private void PruneOutOfRangeBufferChunks(int playerCx, int playerCy, int playerCz)
+        {
+            int lodDist = GameManager.settings.lod1RenderDistance; // vertical heuristic
+            int verticalRange = lodDist; // keep consistent with scheduling
+            int bufferRadius = currentBufferRadius;
+            if (bufferRadius <= 0) return;
+            foreach (var key in bufferGenSchedule.Keys.ToArray())
+            {
+                // If chunk already promoted to active scheduling, skip (it will be removed elsewhere)
+                if (chunkGenSchedule.ContainsKey(key) || unbuiltChunks.ContainsKey(key) || activeChunks.ContainsKey(key))
+                {
+                    // Ensure it is not still marked as buffer
+                    bufferGenSchedule.TryRemove(key, out _);
+                    continue;
+                }
+                // Cull when outside current buffer horizon or vertical range
+                if (Math.Abs(key.cx - playerCx) > bufferRadius || Math.Abs(key.cz - playerCz) > bufferRadius || Math.Abs(key.cy - playerCy) > verticalRange)
+                {
+                    bufferGenSchedule.TryRemove(key, out _); // generation worker will skip dequeued stale entries
+                }
+            }
+        }
         private void ScheduleChunksAroundPlayer(int centerCx, int centerCy, int centerCz)
         {
             int lodDist = GameManager.settings.lod1RenderDistance;
@@ -762,18 +785,26 @@ namespace MVGE_GEN
             int sizeX = GameManager.settings.chunkMaxX;
             int sizeY = GameManager.settings.chunkMaxY;
             int sizeZ = GameManager.settings.chunkMaxZ;
-            int verticalRows = lodDist; // permitted vertical layers count (same heuristic as initial load)
-            int vMinLayer = 0;                // enforce non-negative vertical layers (matches initial pregen behavior)
-            int vMaxLayer = Math.Max(0, verticalRows - 1);
+            int verticalRows = lodDist; // number of vertical layers to consider
+            long regionLimit = GameManager.settings.regionWidthInChunks; // vertical clamp as well
+
+            // Compute symmetric vertical window around player chunk Y
+            if (verticalRows < 1) verticalRows = 1;
+            // we expand vertical range to full offset (lodDist-1) in both directions.
+            int maxVerticalOffset = lodDist - 1; // same inclusive max delta as horizontal rings
+            int vMinLayer = centerCy - maxVerticalOffset;
+            int vMaxLayer = centerCy + maxVerticalOffset;
+            // Clamp to region vertical limits
+            if (vMinLayer < -regionLimit) vMinLayer = (int)-regionLimit;
+            if (vMaxLayer > regionLimit) vMaxLayer = (int)regionLimit;
 
             // Active generation rings (LoD1)
             for (int radius = 0; radius < lodDist; radius++)
             {
                 if (radius == 0)
                 {
-                    for (int vy = vMinLayer; vy <= vMaxLayer; vy++)
+                    for (int cy = vMinLayer; cy <= vMaxLayer; cy++)
                     {
-                        int cy = vy; // absolute layer index (ignore player vertical for now)
                         EnqueueChunkPosition(centerCx * sizeX, cy * sizeY, centerCz * sizeZ);
                     }
                     continue;
@@ -784,9 +815,8 @@ namespace MVGE_GEN
                     for (int dz = min; dz <= max; dz++)
                     {
                         if (Math.Abs(dx) != radius && Math.Abs(dz) != radius) continue; // ring perimeter
-                        for (int vy = vMinLayer; vy <= vMaxLayer; vy++)
+                        for (int cy = vMinLayer; cy <= vMaxLayer; cy++)
                         {
-                            int cy = vy;
                             int wx = (centerCx + dx) * sizeX;
                             int wy = cy * sizeY;
                             int wz = (centerCz + dz) * sizeZ;
@@ -808,9 +838,8 @@ namespace MVGE_GEN
                         for (int dz = min; dz <= max; dz++)
                         {
                             if (Math.Abs(dx) != radius && Math.Abs(dz) != radius) continue;
-                            for (int vy = vMinLayer; vy <= vMaxLayer; vy++)
+                            for (int cy = vMinLayer; cy <= vMaxLayer; cy++)
                             {
-                                int cy = vy;
                                 int wx = (centerCx + dx) * sizeX;
                                 int wy = cy * sizeY;
                                 int wz = (centerCz + dz) * sizeZ;

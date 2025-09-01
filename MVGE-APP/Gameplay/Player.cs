@@ -6,8 +6,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
-using MVGE_GEN; // access WorldResources
-using MVGE_INF.Managers; // for GameManager settings
+using MVGE_INF.Managers;
 
 namespace MVGE_GEN.Gameplay
 {
