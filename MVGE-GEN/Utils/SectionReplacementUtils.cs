@@ -52,6 +52,7 @@ namespace MVGE_GEN.Utils
                             if (cur != cr.ReplacementId)
                             {
                                 sec.UniformBlockId = cr.ReplacementId;
+                                sec.IdMapDirty = true; // only id changed
                             }
                             cur = sec.UniformBlockId;
                             bt = baseTypeGetter(cur);
@@ -84,6 +85,7 @@ namespace MVGE_GEN.Utils
                             sec.PaletteLookup.Remove(cur);
                             sec.PaletteLookup[final] = 1;
                         }
+                        sec.IdMapDirty = true; // occupancy unchanged
                     }
                     return;
                 }
@@ -176,6 +178,8 @@ namespace MVGE_GEN.Utils
                 return; // no id changed at all
             }
 
+            bool onlyFullCoverChanges = !anyPartial;
+
             // Fast exit: all changes are full cover, no partial slices
             bool allChangedFullCover = true;
             for (int i = 0; i < d; i++)
@@ -187,41 +191,62 @@ namespace MVGE_GEN.Utils
                 }
             }
 
-            // Early multi-id uniformization opportunity: if all changed ids full cover and all map to the same replacement
-            if (allChangedFullCover)
+            // Early multi-id uniformization or direct distinct mutate when all full-cover
+            if (allChangedFullCover && onlyFullCoverChanges)
             {
-                ushort firstFinal = 0;
-                bool sameFinal = true;
+                // Build a compact mapping of original -> final for changed ids
+                Span<ushort> mapFrom = stackalloc ushort[d];
+                Span<ushort> mapTo = stackalloc ushort[d];
+                int mapCount = 0;
                 for (int i = 0; i < d; i++)
                 {
-                    if (!changedSpan[i] || !isFullCoverSpan[i]) continue;
-                    if (firstFinal == 0) firstFinal = finalIdSpan[i];
-                    else if (finalIdSpan[i] != firstFinal) { sameFinal = false; break; }
-                }
-                if (sameFinal && firstFinal != 0)
-                {
-                    // If single resulting id fills all solids we can turn uniform directly when representation simple
-                    if (sec.Kind == ChunkSection.RepresentationKind.Uniform)
+                    if (changedSpan[i])
                     {
-                        sec.UniformBlockId = firstFinal;
-                        return;
+                        mapFrom[mapCount] = originalSpan[i];
+                        mapTo[mapCount] = finalIdSpan[i];
+                        scratch.Distinct[i] = finalIdSpan[i]; // mutate distinct list in place
+                        mapCount++;
                     }
-                    // For packed single-id palette (AIR + oldId) we can just change palette[1]
-                    if (sec.Kind == ChunkSection.RepresentationKind.Packed && sec.Palette != null && sec.Palette.Count == 2 && sec.Palette[0] == ChunkSection.AIR)
+                }
+
+                // Rewrite column run ids so later finalize builds correct palette
+                if (mapCount > 0)
+                {
+                    for (int ci = 0; ci < COLUMN_COUNT; ci++)
                     {
-                        if (sec.Palette[1] != firstFinal)
+                        ref var col = ref scratch.GetWritableColumn(ci);
+                        byte rc = col.RunCount;
+                        if (rc == 0) continue;
+                        if (rc == 255)
                         {
-                            ushort old = sec.Palette[1];
-                            sec.Palette[1] = firstFinal;
-                            if (sec.PaletteLookup != null)
+                            var arr = col.Escalated;
+                            if (arr != null)
                             {
-                                sec.PaletteLookup.Remove(old);
-                                sec.PaletteLookup[firstFinal] = 1;
+                                for (int y = 0; y < S; y++)
+                                {
+                                    ushort id = arr[y];
+                                    if (id == 0) continue;
+                                    for (int m = 0; m < mapCount; m++) if (id == mapFrom[m]) { arr[y] = mapTo[m]; break; }
+                                }
                             }
                         }
-                        return;
+                        else
+                        {
+                            if (rc >= 1)
+                            {
+                                for (int m = 0; m < mapCount; m++) if (col.Id0 == mapFrom[m]) { col.Id0 = mapTo[m]; break; }
+                            }
+                            if (rc == 2)
+                            {
+                                for (int m = 0; m < mapCount; m++) if (col.Id1 == mapFrom[m]) { col.Id1 = mapTo[m]; break; }
+                            }
+                        }
                     }
                 }
+
+                scratch.DistinctDirty = false; // avoid rebuild later
+                sec.IdMapDirty = true;          // ids changed but geometry did not
+                return;
             }
 
             // Phase 2 (refactored): per-id iteration over membership bitsets.

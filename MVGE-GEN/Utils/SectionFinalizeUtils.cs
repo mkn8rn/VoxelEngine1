@@ -45,6 +45,32 @@ namespace MVGE_GEN.Utils
                 return;
             }
 
+            // Cheap fast-path: only ids changed (palette/uniform swap) and structure intact.
+            if (!sec.StructuralDirty && sec.IdMapDirty && sec.BuildScratch == null)
+            {
+                // If uniform, nothing else to recompute beyond ensuring metadata flagged built.
+                if (sec.Kind == ChunkSection.RepresentationKind.Uniform)
+                {
+                    sec.MetadataBuilt = true; // exposure/bounds remain valid
+                    sec.IdMapDirty = false;
+                    return;
+                }
+                // Packed single-id palette (AIR + id) also keeps same occupancy/exposure.
+                if (sec.Kind == ChunkSection.RepresentationKind.Packed && sec.Palette != null && sec.Palette.Count <= 2)
+                {
+                    sec.MetadataBuilt = true;
+                    sec.IdMapDirty = false;
+                    return;
+                }
+                // Other forms (Sparse, DenseExpanded) would only have full-cover changes in our biome rules -> exposure unchanged.
+                if (sec.Kind == ChunkSection.RepresentationKind.Sparse || sec.Kind == ChunkSection.RepresentationKind.DenseExpanded)
+                {
+                    sec.MetadataBuilt = true;
+                    sec.IdMapDirty = false;
+                    return;
+                }
+            }
+
             // FAST GUARD: If there is no build scratch, the section was already finalized / materialized.
             // Previous logic incorrectly reclassified such sections (including valid Uniform ones) as Empty.
             // We only rebuild metadata if it is explicitly marked not built.
@@ -332,22 +358,31 @@ namespace MVGE_GEN.Utils
                 byte minZ = 0;
                 byte maxZ = 0;
 
-                Span<ushort> prevRowOccMask = stackalloc ushort[16];
-                prevRowOccMask.Clear();
+                // Double buffering for Z adjacency (eliminates second fetch pass)
+                Span<ushort> prevRowOcc = stackalloc ushort[16];
+                Span<ushort> curRowOcc = stackalloc ushort[16];
+                prevRowOcc.Clear();
+                curRowOcc.Clear();
 
                 bool rebuildDistinct = scratch.DistinctDirty;
                 Span<ushort> tmpDistinct = stackalloc ushort[8];
                 int tmpDistinctCount = rebuildDistinct ? 0 : scratch.DistinctCount;
+                Span<int> tmpDistinctVoxelCounts = stackalloc int[8]; // track voxel counts per id when rebuilding
+                bool earlyUniformShortCircuit = false;
+                ushort earlyUniformId = 0;
+
+                // Record non-empty columns for later representation materialization
+                Span<int> activeColumns = stackalloc int[COLUMN_COUNT];
+                int activeColumnCount = 0;
 
                 // Opportunistic single-id tracking
                 bool singleIdPossible = !rebuildDistinct ? (scratch.DistinctCount == 1) : true; // optimistic if rebuilding
                 ushort firstId = 0;
 
-                // NOTE: Removed occSingle allocation to avoid later copy; we will rebuild occupancy only if needed per representation.
-                ulong[] occSingle = null; // kept for sparse path compatibility (not used for packed heavy fill now)
-
                 for (int z = 0; z < S; z++)
                 {
+                    // build current row occupancy while iterating x
+                    for (int x = 0; x < S; x++) curRowOcc[x] = 0; // clear
                     ushort prevOccInRow = 0;
 
                     for (int x = 0; x < S; x++)
@@ -357,9 +392,11 @@ namespace MVGE_GEN.Utils
 
                         if (col.RunCount == 0 || col.NonAir == 0)
                         {
-                            prevOccInRow = col.OccMask;
+                            prevOccInRow = col.OccMask; // zero in practice
                             continue;
                         }
+
+                        activeColumns[activeColumnCount++] = ci;
 
                         if (singleIdPossible)
                         {
@@ -445,61 +482,45 @@ namespace MVGE_GEN.Utils
                         }
 
                         ushort occ = col.OccMask;
+                        curRowOcc[x] = occ;
 
                         if (x > 0 && prevOccInRow != 0 && occ != 0)
                         {
                             adjX += BitOperations.PopCount((uint)(occ & prevOccInRow));
                         }
-
                         prevOccInRow = occ;
-
-                        ushort prevZOcc = prevRowOccMask[x];
-
-                        if (z > 0 && prevZOcc != 0 && occ != 0)
-                        {
-                            adjZ += BitOperations.PopCount((uint)(occ & prevZOcc));
-                        }
 
                         if (rebuildDistinct)
                         {
+                            // We treat Id0 / Id1 as potential distinct ids; counts aggregated by column NonAir allocation across runs
                             if (col.RunCount >= 1 && col.Id0 != AIR)
                             {
-                                bool found = false;
-
+                                bool found = false; int foundIndex = -1;
                                 for (int i = 0; i < tmpDistinctCount; i++)
                                 {
-                                    if (tmpDistinct[i] == col.Id0)
-                                    {
-                                        found = true;
-                                        break;
-                                    }
+                                    if (tmpDistinct[i] == col.Id0) { found = true; foundIndex = i; break; }
                                 }
-
                                 if (!found && tmpDistinctCount < 8)
                                 {
+                                    foundIndex = tmpDistinctCount;
                                     tmpDistinct[tmpDistinctCount++] = col.Id0;
                                 }
+                                if (foundIndex >= 0) { tmpDistinctVoxelCounts[foundIndex] += col.NonAir; if (!earlyUniformShortCircuit && tmpDistinctVoxelCounts[foundIndex] == 4096) { earlyUniformShortCircuit = true; earlyUniformId = col.Id0; } }
                             }
-
                             if (col.RunCount == 2 && col.Id1 != AIR)
                             {
-                                bool found = false;
-
+                                bool found = false; int foundIndex = -1;
                                 for (int i = 0; i < tmpDistinctCount; i++)
                                 {
-                                    if (tmpDistinct[i] == col.Id1)
-                                    {
-                                        found = true;
-                                        break;
-                                    }
+                                    if (tmpDistinct[i] == col.Id1) { found = true; foundIndex = i; break; }
                                 }
-
                                 if (!found && tmpDistinctCount < 8)
                                 {
+                                    foundIndex = tmpDistinctCount;
                                     tmpDistinct[tmpDistinctCount++] = col.Id1;
                                 }
+                                if (foundIndex >= 0) { tmpDistinctVoxelCounts[foundIndex] += col.NonAir; if (!earlyUniformShortCircuit && tmpDistinctVoxelCounts[foundIndex] == 4096) { earlyUniformShortCircuit = true; earlyUniformId = col.Id1; } }
                             }
-
                             if (singleIdPossible && tmpDistinctCount > 1)
                             {
                                 singleIdPossible = false;
@@ -507,30 +528,58 @@ namespace MVGE_GEN.Utils
                         }
                     }
 
-                    // store current row occ masks for next z layer comparison
-                    for (int x = 0; x < S; x++)
+                    // Z adjacency for this row vs previous row
+                    if (z > 0)
                     {
-                        prevRowOccMask[x] = scratch.GetReadonlyColumn(z * S + x).OccMask;
+                        for (int x = 0; x < S; x++)
+                        {
+                            ushort a = curRowOcc[x];
+                            ushort b = prevRowOcc[x];
+                            if (a != 0 && b != 0)
+                            {
+                                adjZ += BitOperations.PopCount((uint)(a & b));
+                            }
+                        }
                     }
+
+                    // swap buffers
+                    for (int x = 0; x < S; x++) prevRowOcc[x] = curRowOcc[x];
+
+                    if (earlyUniformShortCircuit)
+                    {
+                        // No need to continue scanning; break outer loop
+                        break;
+                    }
+                }
+
+                if (earlyUniformShortCircuit && earlyUniformId != 0)
+                {
+                    // Uniform section established early
+                    sec.Kind = ChunkSection.RepresentationKind.Uniform;
+                    sec.UniformBlockId = earlyUniformId;
+                    sec.IsAllAir = false;
+                    sec.NonAirCount = sec.VoxelCount = S * S * S;
+                    sec.CompletelyFull = true;
+                    // Exposure for full cube
+                    int len = S;
+                    long lenL = len;
+                    long internalAdj = (lenL - 1) * lenL * lenL + lenL * (lenL - 1) * lenL + lenL * lenL * (lenL - 1);
+                    sec.InternalExposure = (int)(6L * 4096 - 2L * internalAdj);
+                    sec.HasBounds = true; sec.MinLX = sec.MinLY = sec.MinLZ = 0; sec.MaxLX = sec.MaxLY = sec.MaxLZ = 15;
+                    sec.MetadataBuilt = true;
+                    sec.BuildScratch = null;
+                    ReturnScratch(scratch);
+                    return;
                 }
 
                 if (rebuildDistinct)
                 {
                     scratch.DistinctCount = tmpDistinctCount;
-
                     for (int i = 0; i < tmpDistinctCount; i++)
                     {
                         scratch.Distinct[i] = tmpDistinct[i];
                     }
-
                     scratch.DistinctDirty = false;
-                }
-
-                // If during traversal singleIdPossible became false but we allocated occSingle, return pool copy.
-                if (!singleIdPossible && occSingle != null)
-                {
-                    ReturnOccupancy(occSingle);
-                    occSingle = null;
                 }
 
                 bool finalSingleId = singleIdPossible && scratch.DistinctCount == 1 && scratch.Distinct[0] == firstId && firstId != 0;
@@ -539,12 +588,6 @@ namespace MVGE_GEN.Utils
 
                 if (!boundsInit || nonAir == 0)
                 {
-                    // All air after aggregation.
-                    if (occSingle != null)
-                    {
-                        ReturnOccupancy(occSingle);
-                    }
-
                     sec.Kind = ChunkSection.RepresentationKind.Empty;
                     sec.IsAllAir = true;
                     sec.MetadataBuilt = true;
@@ -565,15 +608,10 @@ namespace MVGE_GEN.Utils
                 sec.InternalExposure = 6 * nonAir - 2 * (adjX + adjY + adjZ);
 
                 // -----------------------------------------------------------------------------------------
-                // Representation selection heuristics (unchanged logic, using updated DistinctCount).
+                // Representation selection heuristics (using updated DistinctCount and recorded columns).
                 // -----------------------------------------------------------------------------------------
                 if (nonAir == S * S * S && scratch.DistinctCount == 1)
                 {
-                    if (occSingle != null)
-                    {
-                        ReturnOccupancy(occSingle); // uniform path won't use it
-                    }
-
                     sec.Kind = ChunkSection.RepresentationKind.Uniform;
                     sec.UniformBlockId = scratch.Distinct[0];
                     sec.IsAllAir = false;
@@ -588,56 +626,20 @@ namespace MVGE_GEN.Utils
                     int p = 0;
                     ushort singleId = scratch.DistinctCount == 1 ? scratch.Distinct[0] : (ushort)0;
 
-                    for (int ci = 0; ci < COLUMN_COUNT; ci++)
+                    for (int i = 0; i < activeColumnCount; i++)
                     {
+                        int ci = activeColumns[i];
                         ref var col = ref scratch.GetReadonlyColumn(ci);
-                        byte rc = col.RunCount;
-
-                        if (rc == 0)
-                        {
-                            continue;
-                        }
-
                         int baseLi = ci << 4;
-
-                        if (rc >= 1)
+                        if (col.RunCount >= 1)
                         {
-                            if (singleId != 0)
-                            {
-                                for (int y = col.Y0Start; y <= col.Y0End; y++)
-                                {
-                                    idxArr[p] = baseLi + y;
-                                    blkArr[p++] = singleId;
-                                }
-                            }
-                            else
-                            {
-                                for (int y = col.Y0Start; y <= col.Y0End; y++)
-                                {
-                                    idxArr[p] = baseLi + y;
-                                    blkArr[p++] = col.Id0;
-                                }
-                            }
+                            ushort id0 = singleId != 0 ? singleId : col.Id0;
+                            for (int y = col.Y0Start; y <= col.Y0End; y++) { idxArr[p] = baseLi + y; blkArr[p++] = id0; }
                         }
-
-                        if (rc == 2)
+                        if (col.RunCount == 2)
                         {
-                            if (singleId != 0)
-                            {
-                                for (int y = col.Y1Start; y <= col.Y1End; y++)
-                                {
-                                    idxArr[p] = baseLi + y;
-                                    blkArr[p++] = singleId;
-                                }
-                            }
-                            else
-                            {
-                                for (int y = col.Y1Start; y <= col.Y1End; y++)
-                                {
-                                    idxArr[p] = baseLi + y;
-                                    blkArr[p++] = col.Id1;
-                                }
-                            }
+                            ushort id1 = singleId != 0 ? singleId : col.Id1;
+                            for (int y = col.Y1Start; y <= col.Y1End; y++) { idxArr[p] = baseLi + y; blkArr[p++] = id1; }
                         }
                     }
 
@@ -649,50 +651,35 @@ namespace MVGE_GEN.Utils
                     if (count >= SPARSE_MASK_BUILD_MIN && count <= 128)
                     {
                         var occSparse = RentOccupancy();
-
                         for (int i = 0; i < idxArr.Length; i++)
                         {
                             int li = idxArr[i];
                             occSparse[li >> 6] |= 1UL << (li & 63);
                         }
-
                         sec.OccupancyBits = occSparse;
                         BuildFaceMasks(sec, occSparse);
                     }
                 }
                 else
                 {
-                    // Heavier fill. Distinguish single id vs multiple ids.
                     if (scratch.DistinctCount == 1)
                     {
-                        // Optimized single-id packed path: build occupancy + BitData in one pass; no intermediate copy.
+                        // Optimized single-id packed path: build occupancy + BitData using only active columns.
                         sec.Kind = ChunkSection.RepresentationKind.Packed;
                         sec.Palette = new List<ushort> { AIR, scratch.Distinct[0] };
                         sec.PaletteLookup = new Dictionary<ushort, int> { { AIR, 0 }, { scratch.Distinct[0], 1 } };
                         sec.BitsPerIndex = 1;
                         sec.BitData = RentBitData(128);
                         Array.Clear(sec.BitData, 0, 128);
-
                         var occ = RentOccupancy();
-
-                        for (int ci = 0; ci < COLUMN_COUNT; ci++)
+                        for (int i = 0; i < activeColumnCount; i++)
                         {
+                            int ci = activeColumns[i];
                             ref var col = ref scratch.GetReadonlyColumn(ci);
-
-                            if (col.RunCount == 0)
-                            {
-                                continue;
-                            }
-
-                            if (col.OccMask == 0)
-                            {
-                                continue;
-                            }
-
+                            if (col.OccMask == 0) continue;
                             WriteColumnMask(occ, ci, col.OccMask);
                             WriteColumnMaskToBitData(sec.BitData, ci, col.OccMask);
                         }
-
                         sec.OccupancyBits = occ;
                         sec.IsAllAir = false;
                         BuildFaceMasks(sec, occ);
@@ -702,20 +689,12 @@ namespace MVGE_GEN.Utils
                         sec.Kind = ChunkSection.RepresentationKind.DenseExpanded;
                         var dense = RentDense();
                         var occDense = RentOccupancy();
-
-                        for (int ci = 0; ci < COLUMN_COUNT; ci++)
+                        for (int i = 0; i < activeColumnCount; i++)
                         {
+                            int ci = activeColumns[i];
                             ref var col = ref scratch.GetReadonlyColumn(ci);
-                            byte rc = col.RunCount;
-
-                            if (rc == 0)
-                            {
-                                continue;
-                            }
-
                             int baseLi = ci << 4;
-
-                            if (rc >= 1)
+                            if (col.RunCount >= 1)
                             {
                                 for (int y = col.Y0Start; y <= col.Y0End; y++)
                                 {
@@ -724,8 +703,7 @@ namespace MVGE_GEN.Utils
                                     occDense[li >> 6] |= 1UL << (li & 63);
                                 }
                             }
-
-                            if (rc == 2)
+                            if (col.RunCount == 2)
                             {
                                 for (int y = col.Y1Start; y <= col.Y1End; y++)
                                 {
@@ -735,7 +713,6 @@ namespace MVGE_GEN.Utils
                                 }
                             }
                         }
-
                         sec.ExpandedDense = dense;
                         sec.OccupancyBits = occDense;
                         sec.IsAllAir = false;

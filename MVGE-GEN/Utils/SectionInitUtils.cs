@@ -220,6 +220,7 @@ namespace MVGE_GEN.Utils
 
             var scratch = GetScratch(sec);
             scratch.AnyNonAir = true;
+            sec.StructuralDirty = true; // any added run changes occupancy / geometry
 
             int ci = localZ * S + localX;
             ref var col = ref scratch.GetWritableColumn(ci);

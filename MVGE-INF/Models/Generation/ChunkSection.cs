@@ -67,5 +67,9 @@ namespace MVGE_INF.Generation.Models
 
         // Strongly-typed two-phase build scratch (internal use by SectionUtils)
         public SectionBuildScratch BuildScratch;
+
+        public bool BoundingBoxDirty; // legacy (unused currently)
+        public bool StructuralDirty;   // geometry / occupancy changed (requires full finalize)
+        public bool IdMapDirty;        // only ids changed (same occupancy) -> cheap finalize path
     }
 }
