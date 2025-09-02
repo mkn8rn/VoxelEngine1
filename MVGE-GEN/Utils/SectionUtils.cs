@@ -16,7 +16,7 @@ namespace MVGE_GEN.Utils
         public const int SPARSE_THRESHOLD = 512; // currently unused in classification (optimization gate only)
         private const int SECTION_SIZE = ChunkSection.SECTION_SIZE;
         private const int VOXELS_PER_SECTION = SECTION_SIZE * SECTION_SIZE * SECTION_SIZE; // 4096
-        private const int PACKED_MULTI_ID_MAX = 8; // max distinct ids (including AIR) to qualify for MultiPacked finalize path
+        private const int PACKED_MULTI_ID_MAX = 64; // max distinct ids (including AIR) to qualify for MultiPacked finalize path
 
 
         // ---------------------------------------------------------------------

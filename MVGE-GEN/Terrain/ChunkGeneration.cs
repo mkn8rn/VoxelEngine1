@@ -66,12 +66,20 @@ namespace MVGE_GEN.Terrain
                         targets = true;
                 }
                 if (!targets) continue;
-                // Rule targets the uniform id / base type. If it doesn't intersect vertically skip.
-                if (cr.MaxY < chunkY0 || cr.MinY > chunkY1) continue;
+                if (cr.MaxY < chunkY0 || cr.MinY > chunkY1) continue; // no vertical intersection
                 anyTargetingRule = true;
-                // If it intersects but does not fully cover entire chunk span -> cannot shortcut.
-                if (!(cr.MinY <= chunkY0 && cr.MaxY >= chunkY1)) { abort = true; break; }
-                // Full cover: apply mapping (in priority order later rules override earlier ones)
+                bool fullCover = (cr.MinY <= chunkY0 && cr.MaxY >= chunkY1);
+                if (!fullCover)
+                {
+                    // Partial slice: only matters if it would actually change the id under its vertical range
+                    if (cr.Matches(currentId, baseType) && cr.ReplacementId != currentId)
+                    {
+                        abort = true; // would introduce non-uniform slice
+                        break;
+                    }
+                    // else ignore harmless partial (either no match or replacement same id)
+                    continue;
+                }
                 if (cr.Matches(currentId, baseType))
                 {
                     currentId = cr.ReplacementId;
@@ -152,6 +160,52 @@ namespace MVGE_GEN.Terrain
             }
         }
 
+        // --------------------------------------------------------------------------------------------
+        // FoldFullCoverUniformId:
+        // Utility used during early detection (before sections are allocated) to fold a base uniform id through
+        // any sequence of fully-covering simple replacement rules that target the base type or evolving id.
+        // If a partially-covering (vertical slice) rule intersects the chunk span, partialConflict is set true
+        // and the folding is aborted (caller must fall back to normal per-section path).
+        // --------------------------------------------------------------------------------------------
+        private ushort FoldFullCoverUniformId(ushort baseId, int chunkY0, int chunkY1, out bool partialConflict, out bool anyTargetingRule)
+        {
+            partialConflict = false; anyTargetingRule = false;
+            if (biome.compiledSimpleReplacementRules == null || biome.compiledSimpleReplacementRules.Length == 0)
+                return baseId;
+            ushort current = baseId;
+            BaseBlockType baseType = (BaseBlockType)baseId;
+            var compiled = biome.compiledSimpleReplacementRules;
+            for (int i = 0; i < compiled.Length; i++)
+            {
+                var cr = compiled[i];
+                bool targets = ((cr.BaseTypeBitMask >> (int)baseType) & 1u) != 0u;
+                if (!targets && cr.SpecificIdsSorted.Length > 0)
+                {
+                    if (Array.BinarySearch(cr.SpecificIdsSorted, current) >= 0)
+                        targets = true;
+                }
+                if (!targets) continue;
+                if (cr.MaxY < chunkY0 || cr.MinY > chunkY1) continue; // no vertical overlap
+                anyTargetingRule = true;
+                bool fullCover = (cr.MinY <= chunkY0 && cr.MaxY >= chunkY1);
+                if (!fullCover)
+                {
+                    // Only flag conflict if this slice would actually change the id (producing non-uniform result)
+                    if (cr.Matches(current, baseType) && cr.ReplacementId != current)
+                    {
+                        partialConflict = true;
+                        break;
+                    }
+                    continue; // harmless partial slice
+                }
+                if (cr.Matches(current, baseType))
+                {
+                    current = cr.ReplacementId;
+                }
+            }
+            return current;
+        }
+
         private void DetectAllStoneOrSoil(float[,] heightmap, int chunkBaseY, int topOfChunk)
         {
             int maxX = dimX; int maxZ = dimZ;
@@ -203,11 +257,27 @@ namespace MVGE_GEN.Terrain
             }
             if (possibleStone)
             {
+                // Early fold stone uniform through full-cover rules before allocating sections.
+                bool partial; bool anyRule;
+                ushort finalId = FoldFullCoverUniformId((ushort)BaseBlockType.Stone, chunkBaseY, topOfChunk, out partial, out anyRule);
+                if (!partial)
+                {
+                    AllStoneChunk = true; AllAirChunk=false; AllOneBlockChunk = true; AllOneBlockBlockId = finalId; CreateUniformSections(finalId);
+                    FaceSolidNegX=FaceSolidPosX=FaceSolidNegY=FaceSolidPosY=FaceSolidNegZ=FaceSolidPosZ=true; return;
+                }
+                // Partial rules exist; fall back to original stone uniform sections (pre-replacement) path.
                 AllStoneChunk = true; AllAirChunk=false; CreateUniformSections((ushort)BaseBlockType.Stone);
                 FaceSolidNegX=FaceSolidPosX=FaceSolidNegY=FaceSolidPosY=FaceSolidNegZ=FaceSolidPosZ=true; return;
             }
             if (possibleSoil)
             {
+                bool partial; bool anyRule;
+                ushort finalId = FoldFullCoverUniformId((ushort)BaseBlockType.Soil, chunkBaseY, topOfChunk, out partial, out anyRule);
+                if (!partial)
+                {
+                    AllSoilChunk = true; AllAirChunk = false; AllOneBlockChunk = true; AllOneBlockBlockId = finalId; CreateUniformSections(finalId);
+                    FaceSolidNegX=FaceSolidPosX=FaceSolidNegY=FaceSolidPosY=FaceSolidNegZ=FaceSolidPosZ=true; return;
+                }
                 AllSoilChunk = true; AllAirChunk = false; CreateUniformSections((ushort)BaseBlockType.Soil);
                 FaceSolidNegX=FaceSolidPosX=FaceSolidNegY=FaceSolidPosY=FaceSolidNegZ=FaceSolidPosZ=true; return;
             }
@@ -254,7 +324,7 @@ namespace MVGE_GEN.Terrain
                         int localStoneStart = (stoneBandStartWorld) - chunkBaseY; int localStoneEnd = finalStoneTopWorld - chunkBaseY;
                         if (stoneDepth>0 && localStoneEnd >=0 && localStoneStart < maxY)
                         {
-                            if (localStoneStart <0) localStoneStart=0; if (localStoneEnd >= maxY) localStoneEnd = maxY-1;
+                            if (localStoneStart<0) localStoneStart=0; if (localStoneEnd >= maxY) localStoneEnd = maxY-1;
                             int syStart = localStoneStart >> SECTION_SHIFT; int syEnd = localStoneEnd >> SECTION_SHIFT;
                             int ox = x & SECTION_MASK; int oz = z & SECTION_MASK; int sx = x >> SECTION_SHIFT; int sz = z >> SECTION_SHIFT;
                             for (int sy=syStart; sy<=syEnd; sy++)
