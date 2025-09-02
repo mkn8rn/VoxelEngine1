@@ -277,6 +277,7 @@ namespace MVGE_GEN
         private void ChunkGenerationWorker(CancellationToken token)
         {
             string chunkSaveDirectory = Path.Combine(loader.currentWorldSaveDirectory, loader.currentWorldSavedChunksSubDirectory);
+            Vector3 lastPos = default;
             try
             {
                 var queues = new[] { chunkPositionQueue, bufferChunkPositionQueue };
@@ -285,114 +286,120 @@ namespace MVGE_GEN
                     int taken = BlockingCollection<Vector3>.TryTakeFromAny(queues, out var pos, 100, token);
                     if (taken < 0)
                     {
-                        // timeout; continue loop (allows cancellation checks)
-                        continue;
+                        continue; // timeout; loop again (allows cancellation)
                     }
-                    bool isBuffer = (taken == 1); // index 1 = buffer queue
+                    lastPos = pos;
+                    try
+                    {
+                        bool isBuffer = (taken == 1); // index 1 = buffer queue
 
                     // If we pulled a buffer task but there is still active generation queued, requeue buffer to favor near chunks
-                    if (isBuffer && !chunkPositionQueue.IsCompleted && chunkGenSchedule.Count > 0)
-                    {
-                        // push back (best-effort) and service active first
-                        bufferChunkPositionQueue.Add(pos, token);
-                        continue;
-                    }
+                        if (isBuffer && !chunkPositionQueue.IsCompleted && chunkGenSchedule.Count > 0)
+                        {
+                            bufferChunkPositionQueue.Add(pos, token); // favor active queue
+                            continue;
+                        }
 
-                    int sizeX = GameManager.settings.chunkMaxX;
-                    int sizeY = GameManager.settings.chunkMaxY;
-                    int sizeZ = GameManager.settings.chunkMaxZ;
-                    int cx = (int)Math.Floor(pos.X / sizeX);
-                    int cy = (int)Math.Floor(pos.Y / sizeY);
-                    int cz = (int)Math.Floor(pos.Z / sizeZ);
-                    var key = (cx, cy, cz);
+                        int sizeX = GameManager.settings.chunkMaxX;
+                        int sizeY = GameManager.settings.chunkMaxY;
+                        int sizeZ = GameManager.settings.chunkMaxZ;
+                        int cx = (int)Math.Floor(pos.X / sizeX);
+                        int cy = (int)Math.Floor(pos.Y / sizeY);
+                        int cz = (int)Math.Floor(pos.Z / sizeZ);
+                        var key = (cx, cy, cz);
 
                     // Skip stale buffer entry that was promoted to active (its schedule entry removed earlier)
-                    if (isBuffer && !bufferGenSchedule.ContainsKey(key))
-                        continue;
+                        if (isBuffer && !bufferGenSchedule.ContainsKey(key))
+                            continue; // stale buffer entry
 
-                    long regionLimit = GameManager.settings.regionWidthInChunks;
-                    if (Math.Abs(cx) > regionLimit || Math.Abs(cy) > regionLimit || Math.Abs(cz) > regionLimit)
-                    {
-                        if (isBuffer) bufferGenSchedule.TryRemove(key, out _); else chunkGenSchedule.TryRemove(key, out _);
-                        continue;
-                    }
+                        long regionLimit = GameManager.settings.regionWidthInChunks;
+                        if (Math.Abs(cx) > regionLimit || Math.Abs(cy) > regionLimit || Math.Abs(cz) > regionLimit)
+                        {
+                            if (isBuffer) bufferGenSchedule.TryRemove(key, out _); else chunkGenSchedule.TryRemove(key, out _);
+                            continue;
+                        }
 
                     // Distance cull only for active (LoD1) generation; buffer queue already distance filtered at scheduling.
-                    if (!isBuffer)
-                    {
-                        int lodDist = GameManager.settings.lod1RenderDistance;
-                        int verticalRange = lodDist; // symmetric
-                        if (cancelledChunks.ContainsKey(key) || Math.Abs(cx - playerChunkX) > lodDist || Math.Abs(cz - playerChunkZ) > lodDist || Math.Abs(cy - playerChunkY) > verticalRange)
+                        if (!isBuffer)
                         {
-                            chunkGenSchedule.TryRemove(key, out _);
-                            cancelledChunks.TryRemove(key, out _);
+                            int lodDist = GameManager.settings.lod1RenderDistance;
+                        int verticalRange = lodDist; // symmetric
+                            if (cancelledChunks.ContainsKey(key) || Math.Abs(cx - playerChunkX) > lodDist || Math.Abs(cz - playerChunkZ) > lodDist || Math.Abs(cy - playerChunkY) > verticalRange)
+                            {
+                                chunkGenSchedule.TryRemove(key, out _);
+                                cancelledChunks.TryRemove(key, out _);
                             continue; // skip generation
+                            }
                         }
-                    }
 
                     // Only attempt to load existing chunk files for active (LoD1) generation.
                     // For buffer pregen we skip deserialization (older save formats, out-of-date dimensions etc.)
                     // and simply regenerate procedural data if needed.
-                    if (!isBuffer)
-                    {
-                        var existing = LoadChunkFromFile(cx, cy, cz);
-                        if (existing != null)
+                        if (!isBuffer)
                         {
-                            unbuiltChunks[key] = existing;
-                            chunkGenSchedule.TryRemove(key, out _);
-                            EnqueueMeshBuild(key, markDirty:false);
-                            MarkNeighborsDirty(key, existing);
-                            continue;
+                            var existing = LoadChunkFromFile(cx, cy, cz);
+                            if (existing != null)
+                            {
+                                unbuiltChunks[key] = existing;
+                                chunkGenSchedule.TryRemove(key, out _);
+                                EnqueueMeshBuild(key, markDirty: false);
+                                MarkNeighborsDirty(key, existing);
+                                continue;
+                            }
                         }
-                    }
-                    else
-                    {
+                        else
+                        {
                         // If a buffer file already exists we consider it satisfied and skip re-generation.
                         // This avoids noisy load failures and redundant work.
                         // Build the expected path cheaply (mirrors GetChunkFilePath logic) to test existence.
                         string worldRoot = Path.Combine(loader.currentWorldSaveDirectory, loader.ID.ToString()); // loader.ID already set
                         // NOTE: chunks are stored under worldRoot/RegionID/chunks
-                        string regionRoot = Path.Combine(GameManager.settings.savesWorldDirectory, loader.ID.ToString(), loader.RegionID.ToString());
-                        string chunksDir = Path.Combine(regionRoot, loader.currentWorldSavedChunksSubDirectory);
-                        string bufferFile = Path.Combine(chunksDir, $"chunk{cx}x{cy}y{cz}z.bin");
-                        if (File.Exists(bufferFile))
-                        {
-                            bufferGenSchedule.TryRemove(key, out _);
-                            continue;
+                            string regionRoot = Path.Combine(GameManager.settings.savesWorldDirectory, loader.ID.ToString(), loader.RegionID.ToString());
+                            string chunksDir = Path.Combine(regionRoot, loader.currentWorldSavedChunksSubDirectory);
+                            string bufferFile = Path.Combine(chunksDir, $"chunk{cx}x{cy}y{cz}z.bin");
+                            if (File.Exists(bufferFile))
+                            {
+                                bufferGenSchedule.TryRemove(key, out _);
+                                continue;
+                            }
                         }
-                    }
 
-                    // Heightmap reuse per (x,z) across vertical stack
-                    int baseX = (int)pos.X;
-                    int baseZ = (int)pos.Z;
-                    var hmKey = (baseX, baseZ);
-                    float[,] heightmap = heightmapCache.GetOrAdd(hmKey, _ => Chunk.GenerateHeightMap(loader.seed, baseX, baseZ));
+                        // Heightmap reuse per (x,z) across vertical stack
+                        int baseX = (int)pos.X;
+                        int baseZ = (int)pos.Z;
+                        var hmKey = (baseX, baseZ);
+                        float[,] heightmap = heightmapCache.GetOrAdd(hmKey, _ => Chunk.GenerateHeightMap(loader.seed, baseX, baseZ));
 
-                    var chunk = new Chunk(pos, loader.seed, Path.Combine(loader.currentWorldSaveDirectory, loader.currentWorldSavedChunksSubDirectory), heightmap);
+                        var chunk = new Chunk(pos, loader.seed, Path.Combine(loader.currentWorldSaveDirectory, loader.currentWorldSavedChunksSubDirectory), heightmap);
 
-                    // Persist immediately after generation
-                    SaveChunkToFile(chunk);
+                        SaveChunkToFile(chunk); // persist immediately
 
-                    if (isBuffer)
-                    {
-                        bufferGenSchedule.TryRemove(key, out _); // do not retain in memory
-                    }
-                    else
-                    {
-                        unbuiltChunks[key] = chunk;
-                        chunkGenSchedule.TryRemove(key, out _);
+                        if (isBuffer)
+                        {
+                            bufferGenSchedule.TryRemove(key, out _); // release memory (buffer chunks not retained)
+                        }
+                        else
+                        {
+                            unbuiltChunks[key] = chunk;
+                            chunkGenSchedule.TryRemove(key, out _);
 
                         // Enqueue self for initial mesh build
                         EnqueueMeshBuild(key, markDirty:false);
                         // Mark neighbors so they can rebuild to hide now occluded faces (only if boundary overlap has solids)
-                        MarkNeighborsDirty(key, chunk);
+                            MarkNeighborsDirty(key, chunk);
+                        }
+                    }
+                    catch (Exception exIter)
+                    {
+                        // Log rich diagnostics for the offending chunk and continue with next tasks
+                        Console.WriteLine($"Chunk generation iteration error at pos={lastPos} (world) -> chunk indices ({(int)(lastPos.X / GameManager.settings.chunkMaxX)}, {(int)(lastPos.Y / GameManager.settings.chunkMaxY)}, {(int)(lastPos.Z / GameManager.settings.chunkMaxZ)}): {exIter}");
                     }
                 }
             }
             catch (OperationCanceledException) { }
             catch (Exception ex)
             {
-                Console.WriteLine("Chunk generation worker error: " + ex.Message);
+                Console.WriteLine($"Chunk generation worker fatal error (lastPos={lastPos}): {ex}");
             }
         }
 
