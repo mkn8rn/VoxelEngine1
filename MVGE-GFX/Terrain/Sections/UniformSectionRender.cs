@@ -60,6 +60,31 @@ namespace MVGE_GFX.Terrain.Sections
                 return false;
             }
 
+            // NEW: Fast per-boundary-voxel occlusion test leveraging neighbor face bitsets or occupancy
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            static bool NeighborFaceBit(ref SectionPrerenderDesc n, int whichFaceArray /*0 NX,1 PX,2 NY,3 PY,4 NZ,5 PZ*/, int planeIndex)
+            {
+                ulong[] arr = whichFaceArray switch
+                {
+                    0 => n.FaceNegXBits,
+                    1 => n.FacePosXBits,
+                    2 => n.FaceNegYBits,
+                    3 => n.FacePosYBits,
+                    4 => n.FaceNegZBits,
+                    5 => n.FacePosZBits,
+                    _ => null
+                };
+                if (arr == null) return false;
+                int w = planeIndex >> 6; int b = planeIndex & 63; if (w >= arr.Length) return false; return (arr[w] & (1UL << b)) != 0UL;
+            }
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            static bool NeighborVoxelOccupied(ref SectionPrerenderDesc n, int lx, int ly, int lz)
+            {
+                if (n.OccupancyBits == null) return false;
+                int li = ((lz * 16 + lx) * 16) + ly;
+                return (n.OccupancyBits[li >> 6] & (1UL << (li & 63))) != 0UL;
+            }
+
             // LEFT
             if (sx == 0)
             {
@@ -87,15 +112,26 @@ namespace MVGE_GFX.Terrain.Sections
                     bool fullOcclude = NeighborFullySolid(ref n);
                     if (!fullOcclude)
                     {
-                        // per-voxel test
+                        // Fast mask-based iteration: use neighbor's +X face (FacePosXBits) else fallback to occupancy
+                        ulong[] mask = n.FacePosXBits;
                         for (int z = 0; z < S; z++)
                         {
                             int wz = baseZ + z; if (wz >= maxZ) break;
                             for (int y = 0; y < S; y++)
                             {
                                 int wy = baseY + y; if (wy >= maxY) break;
-                                ushort nb = GetBlock(baseX - 1, wy, wz);
-                                if (nb == 0) EmitFaceInstance(block, 0, baseX, wy, wz, offsetList, tileIndexList, faceDirList);
+                                bool occluded;
+                                if (mask != null)
+                                {
+                                    int planeIndex = z * 16 + y; int w = planeIndex >> 6; int b = planeIndex & 63;
+                                    occluded = (mask[w] & (1UL << b)) != 0UL;
+                                }
+                                else
+                                {
+                                    // occupancy test at neighbor local (x=15,y,z)
+                                    occluded = NeighborVoxelOccupied(ref n, 15, y, z);
+                                }
+                                if (!occluded) EmitFaceInstance(block, 0, baseX, wy, wz, offsetList, tileIndexList, faceDirList);
                             }
                         }
                     }
@@ -128,14 +164,23 @@ namespace MVGE_GFX.Terrain.Sections
                     bool fullOcclude = NeighborFullySolid(ref n);
                     if (!fullOcclude)
                     {
+                        ulong[] mask = n.FaceNegXBits; // neighbor -X face
                         for (int z = 0; z < S; z++)
                         {
                             int wz = baseZ + z; if (wz >= maxZ) break;
                             for (int y = 0; y < S; y++)
                             {
                                 int wy = baseY + y; if (wy >= maxY) break;
-                                ushort nb = GetBlock(wxRight + 1, wy, wz);
-                                if (nb == 0) EmitFaceInstance(block, 1, wxRight, wy, wz, offsetList, tileIndexList, faceDirList);
+                                bool occluded;
+                                if (mask != null)
+                                {
+                                    int planeIndex = z * 16 + y; int w = planeIndex >> 6; int b = planeIndex & 63; occluded = (mask[w] & (1UL << b)) != 0UL;
+                                }
+                                else
+                                {
+                                    occluded = NeighborVoxelOccupied(ref n, 0, y, z);
+                                }
+                                if (!occluded) EmitFaceInstance(block, 1, wxRight, wy, wz, offsetList, tileIndexList, faceDirList);
                             }
                         }
                     }
@@ -161,14 +206,23 @@ namespace MVGE_GFX.Terrain.Sections
                 bool fullOcclude = NeighborFullySolid(ref n);
                 if (!fullOcclude)
                 {
+                    ulong[] mask = n.FacePosYBits; // neighbor +Y face
                     for (int x = 0; x < S; x++)
                     {
                         int wx = baseX + x; if (wx >= maxX) break;
                         for (int z = 0; z < S; z++)
                         {
                             int wz = baseZ + z; if (wz >= maxZ) break;
-                            ushort nb = GetBlock(wx, baseY - 1, wz);
-                            if (nb == 0) EmitFaceInstance(block, 2, wx, baseY, wz, offsetList, tileIndexList, faceDirList);
+                            bool occluded;
+                            if (mask != null)
+                            {
+                                int planeIndex = x * 16 + z; int w = planeIndex >> 6; int b = planeIndex & 63; occluded = (mask[w] & (1UL << b)) != 0UL;
+                            }
+                            else
+                            {
+                                occluded = NeighborVoxelOccupied(ref n, x, 15, z);
+                            }
+                            if (!occluded) EmitFaceInstance(block, 2, wx, baseY, wz, offsetList, tileIndexList, faceDirList);
                         }
                     }
                 }
@@ -194,14 +248,23 @@ namespace MVGE_GFX.Terrain.Sections
                 bool fullOcclude = NeighborFullySolid(ref n);
                 if (!fullOcclude)
                 {
+                    ulong[] mask = n.FaceNegYBits; // neighbor -Y face
                     for (int x = 0; x < S; x++)
                     {
                         int wx = baseX + x; if (wx >= maxX) break;
                         for (int z = 0; z < S; z++)
                         {
                             int wz = baseZ + z; if (wz >= maxZ) break;
-                            ushort nb = GetBlock(wx, wyTop + 1, wz);
-                            if (nb == 0) EmitFaceInstance(block, 3, wx, wyTop, wz, offsetList, tileIndexList, faceDirList);
+                            bool occluded;
+                            if (mask != null)
+                            {
+                                int planeIndex = x * 16 + z; int w = planeIndex >> 6; int b = planeIndex & 63; occluded = (mask[w] & (1UL << b)) != 0UL;
+                            }
+                            else
+                            {
+                                occluded = NeighborVoxelOccupied(ref n, x, 0, z);
+                            }
+                            if (!occluded) EmitFaceInstance(block, 3, wx, wyTop, wz, offsetList, tileIndexList, faceDirList);
                         }
                     }
                 }
@@ -225,14 +288,23 @@ namespace MVGE_GFX.Terrain.Sections
                 ref var n = ref Neighbor(sx, sy, sz - 1); bool fullOcclude = NeighborFullySolid(ref n);
                 if (!fullOcclude)
                 {
+                    ulong[] mask = n.FacePosZBits; // neighbor +Z face
                     for (int x = 0; x < S; x++)
                     {
                         int wx = baseX + x; if (wx >= maxX) break;
                         for (int y = 0; y < S; y++)
                         {
                             int wy = baseY + y; if (wy >= maxY) break;
-                            ushort nb = GetBlock(wx, wy, baseZ - 1);
-                            if (nb == 0) EmitFaceInstance(block, 4, wx, wy, baseZ, offsetList, tileIndexList, faceDirList);
+                            bool occluded;
+                            if (mask != null)
+                            {
+                                int planeIndex = x * 16 + y; int w = planeIndex >> 6; int b = planeIndex & 63; occluded = (mask[w] & (1UL << b)) != 0UL;
+                            }
+                            else
+                            {
+                                occluded = NeighborVoxelOccupied(ref n, x, y, 15);
+                            }
+                            if (!occluded) EmitFaceInstance(block, 4, wx, wy, baseZ, offsetList, tileIndexList, faceDirList);
                         }
                     }
                 }
@@ -257,14 +329,23 @@ namespace MVGE_GFX.Terrain.Sections
                 ref var n = ref Neighbor(sx, sy, sz + 1); bool fullOcclude = NeighborFullySolid(ref n);
                 if (!fullOcclude)
                 {
+                    ulong[] mask = n.FaceNegZBits; // neighbor -Z face
                     for (int x = 0; x < S; x++)
                     {
                         int wx = baseX + x; if (wx >= maxX) break;
                         for (int y = 0; y < S; y++)
                         {
                             int wy = baseY + y; if (wy >= maxY) break;
-                            ushort nb = GetBlock(wx, wy, wzFront + 1);
-                            if (nb == 0) EmitFaceInstance(block, 5, wx, wy, wzFront, offsetList, tileIndexList, faceDirList);
+                            bool occluded;
+                            if (mask != null)
+                            {
+                                int planeIndex = x * 16 + y; int w = planeIndex >> 6; int b = planeIndex & 63; occluded = (mask[w] & (1UL << b)) != 0UL;
+                            }
+                            else
+                            {
+                                occluded = NeighborVoxelOccupied(ref n, x, y, 0);
+                            }
+                            if (!occluded) EmitFaceInstance(block, 5, wx, wy, wzFront, offsetList, tileIndexList, faceDirList);
                         }
                     }
                 }
