@@ -11,131 +11,6 @@ namespace MVGE_GEN.Terrain
 {
     public partial class Chunk
     {
-        private void ApplySimpleReplacementRules(int chunkBaseY, int topOfChunk)
-        {
-            var rules = biome.simpleReplacements;
-            if (rules == null || rules.Count == 0) return;
-
-            // Early chunk-level uniform short-circuit moved to helper for maintainability.
-            if (TryChunkLevelUniformReplacement(chunkBaseY, topOfChunk)) return; // helper applied full-chunk mapping
-
-            if (biome.compiledSimpleReplacementRules.Length > 0 && biome.sectionYRuleBuckets.Length == sectionsY)
-            {
-                ApplySimpleReplacementRules(chunkBaseY);
-                return;
-            }
-        }
-
-        // --------------------------------------------------------------------------------------------
-        // TryChunkLevelUniformReplacement:
-        // Early chunk-level uniform short-circuit: if the entire chunk was generated as all stone or all soil
-        // and every rule that targets that base type either fully covers the chunk vertically (or none exist),
-        // producing a single final replacement id for the whole vertical span, we can apply the mapping once
-        // to every uniform section and skip per-section rule processing entirely.
-        // Conditions for safe shortcut:
-        //   * AllStoneChunk or AllSoilChunk already established (all sections created uniform with that id)
-        //   * No partially-overlapping (vertical slice) rule targeting the base type exists (would create non-uniform)
-        //   * Folding the ordered full-cover rules yields a single final id (could be unchanged) for the base type
-        // This avoids: iterating buckets per section + per-section finalize later.
-        // --------------------------------------------------------------------------------------------
-        private bool TryChunkLevelUniformReplacement(int chunkBaseY, int topOfChunk)
-        {
-            if (!(AllStoneChunk || AllSoilChunk)) return false;
-            if (biome.compiledSimpleReplacementRules.Length == 0) return false;
-
-            var compiledAll = biome.compiledSimpleReplacementRules;
-            // Chunk vertical span
-            int chunkY0 = chunkBaseY;
-            int chunkY1 = topOfChunk;
-            BaseBlockType baseType = AllStoneChunk ? BaseBlockType.Stone : BaseBlockType.Soil;
-            ushort originalId = (ushort)(AllStoneChunk ? BaseBlockType.Stone : BaseBlockType.Soil);
-            ushort currentId = originalId;
-            bool abort = false; // abort shortcut if any partial range rule applies
-            bool anyTargetingRule = false;
-            // Iterate rules in their precompiled priority order
-            for (int i = 0; i < compiledAll.Length; i++)
-            {
-                var cr = compiledAll[i];
-                // Check if rule targets this base type (base type bit or specific ids list containing original/current id)
-                bool targets = ((cr.BaseTypeBitMask >> (int)baseType) & 1u) != 0u;
-                if (!targets && cr.SpecificIdsSorted.Length > 0)
-                {
-                    // We only care if it lists either the original uniform id or any subsequent mapped id
-                    // Because after replacement currentId can change; keep it dynamic.
-                    if (Array.BinarySearch(cr.SpecificIdsSorted, currentId) >= 0)
-                        targets = true;
-                }
-                if (!targets) continue;
-                if (cr.MaxY < chunkY0 || cr.MinY > chunkY1) continue; // no vertical intersection
-                anyTargetingRule = true;
-                bool fullCover = (cr.MinY <= chunkY0 && cr.MaxY >= chunkY1);
-                if (!fullCover)
-                {
-                    // Partial slice: only matters if it would actually change the id under its vertical range
-                    if (cr.Matches(currentId, baseType) && cr.ReplacementId != currentId)
-                    {
-                        abort = true; // would introduce non-uniform slice
-                        break;
-                    }
-                    // else ignore harmless partial (either no match or replacement same id)
-                    continue;
-                }
-                if (cr.Matches(currentId, baseType))
-                {
-                    currentId = cr.ReplacementId;
-                }
-            }
-            if (abort) return false; // need per-section processing
-
-            // No partial vertical slicing rules for this base type => safe uniform mapping
-            // (even if no rule matched we still mark uniform fast path to skip per-section pass)
-            // Update each uniform section's id only if changed.
-            if (currentId != originalId || anyTargetingRule)
-            {
-                for (int sx = 0; sx < sectionsX; sx++)
-                    for (int sy = 0; sy < sectionsY; sy++)
-                        for (int sz = 0; sz < sectionsZ; sz++)
-                        {
-                            var sec = sections[sx, sy, sz];
-                            if (sec == null) continue;
-                            if (sec.Kind == ChunkSection.RepresentationKind.Uniform)
-                            {
-                                sec.UniformBlockId = currentId;
-                                sec.IdMapDirty = false; // occupancy unchanged, keep metadata
-                                sec.StructuralDirty = false;
-                                sec.MetadataBuilt = true;
-                            }
-                        }
-                AllOneBlockChunk = true;
-                AllOneBlockBlockId = currentId;
-            }
-            return true; // shortcut executed
-        }
-
-        private void ApplySimpleReplacementRules(int chunkBaseY)
-        {
-            // Batched strategy: for each section Y fetch bucket indices, build a folded mapping once per section, apply
-            int sectionSize = ChunkSection.SECTION_SIZE;
-            var compiled = biome.compiledSimpleReplacementRules;
-            var buckets = biome.sectionYRuleBuckets;
-            for (int sy=0; sy<sectionsY; sy++)
-            {
-                var bucket = buckets[sy];
-                if (bucket == null || bucket.Length == 0) continue;
-                int sectionWorldY0 = chunkBaseY + sy * sectionSize;
-                int sectionWorldY1 = sectionWorldY0 + sectionSize - 1;
-                for (int sx=0; sx<sectionsX; sx++)
-                {
-                    for (int sz=0; sz<sectionsZ; sz++)
-                    {
-                        var sec = sections[sx,sy,sz]; if (sec==null) continue;
-                        // Build folding arrays from current distinct ids if scratch exists; else attempt light fast-path
-                        SectionUtils.SectionApplySimpleReplacementRules(sec, sectionWorldY0, sectionWorldY1, compiled, bucket, GetBaseTypeFast);
-                    }
-                }
-            }
-        }
-
         private void CreateUniformSections(ushort blockId)
         {
             int S = ChunkSection.SECTION_SIZE;
@@ -158,52 +33,6 @@ namespace MVGE_GEN.Terrain
                 };
                 sections[sx, sy, sz] = sec;
             }
-        }
-
-        // --------------------------------------------------------------------------------------------
-        // FoldFullCoverUniformId:
-        // Utility used during early detection (before sections are allocated) to fold a base uniform id through
-        // any sequence of fully-covering simple replacement rules that target the base type or evolving id.
-        // If a partially-covering (vertical slice) rule intersects the chunk span, partialConflict is set true
-        // and the folding is aborted (caller must fall back to normal per-section path).
-        // --------------------------------------------------------------------------------------------
-        private ushort FoldFullCoverUniformId(ushort baseId, int chunkY0, int chunkY1, out bool partialConflict, out bool anyTargetingRule)
-        {
-            partialConflict = false; anyTargetingRule = false;
-            if (biome.compiledSimpleReplacementRules == null || biome.compiledSimpleReplacementRules.Length == 0)
-                return baseId;
-            ushort current = baseId;
-            BaseBlockType baseType = (BaseBlockType)baseId;
-            var compiled = biome.compiledSimpleReplacementRules;
-            for (int i = 0; i < compiled.Length; i++)
-            {
-                var cr = compiled[i];
-                bool targets = ((cr.BaseTypeBitMask >> (int)baseType) & 1u) != 0u;
-                if (!targets && cr.SpecificIdsSorted.Length > 0)
-                {
-                    if (Array.BinarySearch(cr.SpecificIdsSorted, current) >= 0)
-                        targets = true;
-                }
-                if (!targets) continue;
-                if (cr.MaxY < chunkY0 || cr.MinY > chunkY1) continue; // no vertical overlap
-                anyTargetingRule = true;
-                bool fullCover = (cr.MinY <= chunkY0 && cr.MaxY >= chunkY1);
-                if (!fullCover)
-                {
-                    // Only flag conflict if this slice would actually change the id (producing non-uniform result)
-                    if (cr.Matches(current, baseType) && cr.ReplacementId != current)
-                    {
-                        partialConflict = true;
-                        break;
-                    }
-                    continue; // harmless partial slice
-                }
-                if (cr.Matches(current, baseType))
-                {
-                    current = cr.ReplacementId;
-                }
-            }
-            return current;
         }
 
         private void DetectAllStoneOrSoil(float[,] heightmap, int chunkBaseY, int topOfChunk)
@@ -254,32 +83,6 @@ namespace MVGE_GEN.Terrain
                         if (chunkBaseY < soilStartWorld || topOfChunk > soilEndWorld || chunkBaseY <= finalStoneTopWorld) possibleSoil = false;
                     }
                 }
-            }
-            if (possibleStone)
-            {
-                // Early fold stone uniform through full-cover rules before allocating sections.
-                bool partial; bool anyRule;
-                ushort finalId = FoldFullCoverUniformId((ushort)BaseBlockType.Stone, chunkBaseY, topOfChunk, out partial, out anyRule);
-                if (!partial)
-                {
-                    AllStoneChunk = true; AllAirChunk=false; AllOneBlockChunk = true; AllOneBlockBlockId = finalId; CreateUniformSections(finalId);
-                    FaceSolidNegX=FaceSolidPosX=FaceSolidNegY=FaceSolidPosY=FaceSolidNegZ=FaceSolidPosZ=true; return;
-                }
-                // Partial rules exist; fall back to original stone uniform sections (pre-replacement) path.
-                AllStoneChunk = true; AllAirChunk=false; CreateUniformSections((ushort)BaseBlockType.Stone);
-                FaceSolidNegX=FaceSolidPosX=FaceSolidNegY=FaceSolidPosY=FaceSolidNegZ=FaceSolidPosZ=true; return;
-            }
-            if (possibleSoil)
-            {
-                bool partial; bool anyRule;
-                ushort finalId = FoldFullCoverUniformId((ushort)BaseBlockType.Soil, chunkBaseY, topOfChunk, out partial, out anyRule);
-                if (!partial)
-                {
-                    AllSoilChunk = true; AllAirChunk = false; AllOneBlockChunk = true; AllOneBlockBlockId = finalId; CreateUniformSections(finalId);
-                    FaceSolidNegX=FaceSolidPosX=FaceSolidNegY=FaceSolidPosY=FaceSolidNegZ=FaceSolidPosZ=true; return;
-                }
-                AllSoilChunk = true; AllAirChunk = false; CreateUniformSections((ushort)BaseBlockType.Soil);
-                FaceSolidNegX=FaceSolidPosX=FaceSolidNegY=FaceSolidPosY=FaceSolidNegZ=FaceSolidPosZ=true; return;
             }
         }
 
@@ -356,7 +159,6 @@ namespace MVGE_GEN.Terrain
                     }
                 }
             }
-            ApplySimpleReplacementRules(chunkBaseY, topOfChunk);
 
             // Chunk-level aggregate short-circuit:
             // After applying replacements, if every populated section is a Uniform section with the same non-air id
