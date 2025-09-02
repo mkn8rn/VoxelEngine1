@@ -98,7 +98,7 @@ namespace MVGE_GFX.Terrain.Sections
             _faceVertexInit = true;
         }
 
-        private bool EmitPackedSectionInstances(
+        private bool EmitSinglePackedSectionInstances(
             ref SectionPrerenderDesc desc,
             int sx, int sy, int sz, int S,
             List<byte> offsetList,
@@ -281,7 +281,7 @@ namespace MVGE_GFX.Terrain.Sections
                 int w = index >> 6; int b = index & 63; return w < plane.Length && (plane[w] & (1UL << b)) != 0UL;
             }
 
-            // Fallback neighbor voxel test when masks missing
+            // Fallback neighbor voxel test when masks missing. MultiPacked (Kind==5) handled identically to Packed (Kind==4).
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             static bool NeighborVoxelSolidFallback(ref SectionPrerenderDesc n, int lx, int ly, int lz)
             {
@@ -304,7 +304,8 @@ namespace MVGE_GFX.Terrain.Sections
                             return n.ExpandedDense[liD] != 0;
                         }
                         return false;
-                    case 4: // Packed (multi-id or we lack face masks) use occupancy bits if present
+                    case 4: // Packed single-id or multi-id fallback occupancy check
+                    case 5: // MultiPacked
                         if (n.OccupancyBits != null)
                         {
                             int li = ((lz * 16 + lx) * 16) + ly;

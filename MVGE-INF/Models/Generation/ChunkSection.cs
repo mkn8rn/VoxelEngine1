@@ -16,7 +16,8 @@ namespace MVGE_INF.Generation.Models
             Uniform = 1,        // Single non-air block fills all voxels (uniformBlockId)
             Sparse = 2,         // Few voxels: sparse indices list with associated block ids
             DenseExpanded = 3,  // Expanded per-voxel block ids (ushort[] expandedDense)
-            Packed = 4          // Legacy bit-packed palette indices (BitData / Palette)
+            Packed = 4,         // Legacy single-id packed (also used for 1-bit partial fill)
+            MultiPacked = 5     // Multi-id low-entropy packed (palette + variable bits per index)
         }
 
         public RepresentationKind Kind = RepresentationKind.Empty; // default

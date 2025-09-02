@@ -64,8 +64,11 @@ namespace MVGE_GFX.Terrain.Sections
                             case 3: // DenseExpanded
                                 specializedHandled = EmitDenseExpandedSectionInstances(ref desc, sx, sy, sz, S, offsetList, tileIndexList, faceDirList);
                                 break;
-                            case 4: // Packed (may have multiple ids but we still try a packed fast path)
-                                specializedHandled = EmitPackedSectionInstances(ref desc, sx, sy, sz, S, offsetList, tileIndexList, faceDirList);
+                            case 4: // Packed (single-id)
+                                specializedHandled = EmitSinglePackedSectionInstances(ref desc, sx, sy, sz, S, offsetList, tileIndexList, faceDirList);
+                                break;
+                            case 5: // MultiPacked (multi-id packed)
+                                specializedHandled = EmitMultiPackedSectionInstances(ref desc, sx, sy, sz, S, offsetList, tileIndexList, faceDirList);
                                 break;
                         }
                         if (!specializedHandled)
@@ -166,14 +169,20 @@ namespace MVGE_GFX.Terrain.Sections
             int index = ((sx * data.sectionsY) + sy) * data.sectionsZ + sz; ref var desc = ref data.SectionDescs[index];
             switch (desc.Kind)
             {
-                case 0: return 0;
-                case 1: return desc.UniformBlockId;
-                case 2:
-                    if (desc.SparseIndices == null) return 0; int lid = ((localZ << 4) + localX) << 4 | localY; var idxArr = desc.SparseIndices; var blkArr = desc.SparseBlocks; for (int i = 0; i < idxArr.Length; i++) if (idxArr[i] == lid) return blkArr[i]; return 0;
-                case 3:
+                case 0: return 0;                           // Empty
+                case 1: return desc.UniformBlockId;          // Uniform
+                case 2:                                     // Sparse
+                    if (desc.SparseIndices == null) return 0;
+                    int lid = ((localZ << 4) + localX) << 4 | localY;
+                    var idxArr = desc.SparseIndices; var blkArr = desc.SparseBlocks;
+                    for (int i = 0; i < idxArr.Length; i++) if (idxArr[i] == lid) return blkArr[i];
+                    return 0;
+                case 3:                                     // DenseExpanded
                     return desc.ExpandedDense == null ? (ushort)0 : desc.ExpandedDense[((localZ << 4) + localX) << 4 | localY];
-                case 4:
-                    if (desc.PackedBitData == null || desc.Palette == null) return 0; return DecodePacked(ref desc, localX, localY, localZ);
+                case 4:                                     // Packed (single-id)
+                case 5:                                     // MultiPacked (multi-id)
+                    if (desc.PackedBitData == null || desc.Palette == null) return 0;
+                    return DecodePacked(ref desc, localX, localY, localZ);
                 default: return 0;
             }
         }

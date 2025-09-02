@@ -16,6 +16,7 @@ namespace MVGE_GEN.Utils
         public const int SPARSE_THRESHOLD = 512; // currently unused in classification (optimization gate only)
         private const int SECTION_SIZE = ChunkSection.SECTION_SIZE;
         private const int VOXELS_PER_SECTION = SECTION_SIZE * SECTION_SIZE * SECTION_SIZE; // 4096
+        private const int PACKED_MULTI_ID_MAX = 8; // max distinct ids (including AIR) to qualify for MultiPacked finalize path
 
 
         // ---------------------------------------------------------------------
@@ -53,6 +54,7 @@ namespace MVGE_GEN.Utils
                     BuildMetadataDense(sec);
                     break;
                 case ChunkSection.RepresentationKind.Packed:
+                case ChunkSection.RepresentationKind.MultiPacked: // treat MultiPacked same for metadata rebuild
                 default:
                     BuildMetadataPacked(sec);
                     break;
@@ -79,6 +81,7 @@ namespace MVGE_GEN.Utils
                     }
                     return ChunkSection.AIR;
                 case ChunkSection.RepresentationKind.Packed:
+                case ChunkSection.RepresentationKind.MultiPacked:
                 default:
                     int paletteIndex = ReadBits(sec, linear); return sec.Palette[paletteIndex];
             }
@@ -94,7 +97,7 @@ namespace MVGE_GEN.Utils
             {
                 EnsurePacked(sec); // convert uniform to packed to allow mutation
             }
-            if (sec.Kind != ChunkSection.RepresentationKind.Packed && sec.Kind != ChunkSection.RepresentationKind.Empty)
+            if (sec.Kind != ChunkSection.RepresentationKind.Packed && sec.Kind != ChunkSection.RepresentationKind.MultiPacked && sec.Kind != ChunkSection.RepresentationKind.Empty)
             {
                 EnsurePacked(sec);
             }
@@ -120,7 +123,7 @@ namespace MVGE_GEN.Utils
             if (sec.IsAllAir)
             {
                 Initialize(sec);
-                sec.Kind = ChunkSection.RepresentationKind.Packed;
+                sec.Kind = ChunkSection.RepresentationKind.Packed; // start as packed (may later promote to MultiPacked)
             }
 
             int existingPaletteIndex = ReadBits(sec, linear);
@@ -184,8 +187,18 @@ namespace MVGE_GEN.Utils
             int distinctNonAir = (sec.Palette?.Count ?? 0) - 1; // exclude air
             if (distinctNonAir > 1)
             {
-                ExpandToDense(sec);
-                BuildMetadataDense(sec);
+                // If still within multi-packed limit choose MultiPacked else DenseExpanded
+                if (distinctNonAir + 1 /*include AIR*/ <= PACKED_MULTI_ID_MAX)
+                {
+                    // Keep as general packed form (MultiPacked) – metadata builder identical
+                    sec.Kind = ChunkSection.RepresentationKind.MultiPacked;
+                    BuildMetadataPacked(sec);
+                }
+                else
+                {
+                    ExpandToDense(sec);
+                    BuildMetadataDense(sec);
+                }
                 return;
             }
 
@@ -563,7 +576,7 @@ namespace MVGE_GEN.Utils
 
         private static void EnsurePacked(ChunkSection sec)
         {
-            if (sec.Kind == ChunkSection.RepresentationKind.Packed) return;
+            if (sec.Kind == ChunkSection.RepresentationKind.Packed || sec.Kind == ChunkSection.RepresentationKind.MultiPacked) return;
             if (sec.Kind == ChunkSection.RepresentationKind.Empty)
             {
                 sec.IsAllAir = true; sec.Palette = null; sec.PaletteLookup = null; sec.BitData = null; sec.BitsPerIndex = 0; sec.NonAirCount = 0; sec.CompletelyFull = false; return;

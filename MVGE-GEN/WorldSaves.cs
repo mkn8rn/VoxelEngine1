@@ -52,8 +52,8 @@ namespace MVGE_GEN
         //              Uniform: blockId (ushort)
         //              Sparse: count (ushort) then count * (index ushort, blockId ushort)
         //              DenseExpanded: 4096 * 2 bytes raw voxel ids
-        //              Packed: bitsPerIndex (byte), paletteCount (ushort), palette ids (ushort*count), bitDataWordCount (int), bitData words (uint*wordCount)
-        //                      (version >=2) palette lookup mapping present flag (byte 0/1) then if 1: ushort mappingCount then mappingCount*(blockId ushort, index ushort)
+        //              Packed / MultiPacked: bitsPerIndex (byte), paletteCount (ushort), palette ids (ushort*count), bitDataWordCount (int), bitData words (uint*wordCount)
+        //                                    palette lookup mapping present flag (byte 0/1) then if 1: ushort mappingCount then mappingCount*(blockId ushort, index ushort)
         // Footer (version >=2 only, appended AFTER all section payloads & after offset table has been backfilled):
         //  0  : 4 bytes CHUNK_FOOTER_MAGIC (CMD2)
         //  4  : float temperature
@@ -215,6 +215,7 @@ namespace MVGE_GEN
                                         }
                                         break;
                                     case ChunkSection.RepresentationKind.Packed when sec != null:
+                                    case ChunkSection.RepresentationKind.MultiPacked when sec != null:
                                         ps.Write((byte)sec.BitsPerIndex);
                                         ushort paletteCount = (ushort)(sec.Palette?.Count ?? 0);
                                         ps.Write(paletteCount);
@@ -566,6 +567,7 @@ namespace MVGE_GEN
                                         }
                                         break;
                                     case ChunkSection.RepresentationKind.Packed:
+                                    case ChunkSection.RepresentationKind.MultiPacked:
                                         if (ms.Position >= ms.Length) break;
                                         sec.BitsPerIndex = prs.ReadByte();
                                         if (ms.Position + 2 > ms.Length) { Console.WriteLine($"[World] Packed palette header truncated c=({cx},{cy},{cz}) {sectionTag}."); break; }
@@ -603,7 +605,7 @@ namespace MVGE_GEN
                                         }
                                         break;
                                 }
-                                if (sec.Kind == ChunkSection.RepresentationKind.Packed && sec.Palette != null && sec.PaletteLookup == null)
+                                if ((sec.Kind == ChunkSection.RepresentationKind.Packed || sec.Kind == ChunkSection.RepresentationKind.MultiPacked) && sec.Palette != null && sec.PaletteLookup == null)
                                 {
                                     sec.PaletteLookup = new Dictionary<ushort, int>(sec.Palette.Count);
                                     for (int i = 0; i < sec.Palette.Count; i++) sec.PaletteLookup[sec.Palette[i]] = i;

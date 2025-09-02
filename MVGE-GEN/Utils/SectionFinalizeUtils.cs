@@ -56,14 +56,14 @@ namespace MVGE_GEN.Utils
                     return;
                 }
                 // Packed single-id palette (AIR + id) also keeps same occupancy/exposure.
-                if (sec.Kind == ChunkSection.RepresentationKind.Packed && sec.Palette != null && sec.Palette.Count <= 2)
+                if ((sec.Kind == ChunkSection.RepresentationKind.Packed || sec.Kind == ChunkSection.RepresentationKind.MultiPacked) && sec.Palette != null && sec.Palette.Count <= 2)
                 {
                     sec.MetadataBuilt = true;
                     sec.IdMapDirty = false;
                     return;
                 }
-                // Other forms (Sparse, DenseExpanded) would only have full-cover changes in our biome rules -> exposure unchanged.
-                if (sec.Kind == ChunkSection.RepresentationKind.Sparse || sec.Kind == ChunkSection.RepresentationKind.DenseExpanded)
+                // Other forms (Sparse, DenseExpanded, MultiPacked general) would only have full-cover changes in our biome rules -> exposure unchanged.
+                if (sec.Kind == ChunkSection.RepresentationKind.Sparse || sec.Kind == ChunkSection.RepresentationKind.DenseExpanded || sec.Kind == ChunkSection.RepresentationKind.MultiPacked)
                 {
                     sec.MetadataBuilt = true;
                     sec.IdMapDirty = false;
@@ -105,6 +105,7 @@ namespace MVGE_GEN.Utils
                         return;
 
                     case ChunkSection.RepresentationKind.Packed:
+                    case ChunkSection.RepresentationKind.MultiPacked:
                     default:
                         BuildMetadataPacked(sec);
                         return;
@@ -609,6 +610,7 @@ namespace MVGE_GEN.Utils
 
                 // -----------------------------------------------------------------------------------------
                 // Representation selection heuristics (using updated DistinctCount and recorded columns).
+                // Added MultiPacked path (multi-id low entropy packed) before DenseExpanded.
                 // -----------------------------------------------------------------------------------------
                 if (nonAir == S * S * S && scratch.DistinctCount == 1)
                 {
@@ -686,37 +688,107 @@ namespace MVGE_GEN.Utils
                     }
                     else
                     {
-                        sec.Kind = ChunkSection.RepresentationKind.DenseExpanded;
-                        var dense = RentDense();
-                        var occDense = RentOccupancy();
-                        for (int i = 0; i < activeColumnCount; i++)
+                        // MULTI-PACKED decision: use palette packing when distinct ids small.
+                        int distinctCount = scratch.DistinctCount; // non-air distinct (<=8 by design)
+                        int paletteCount = distinctCount + 1; // include AIR at index 0
+                        int bitsPerIndex = paletteCount <= 1 ? 1 : (int)BitOperations.Log2((uint)(paletteCount - 1)) + 1;
+                        int packedBytes = (int)(((long)bitsPerIndex * 4096 + 7) / 8);
+                        int denseBytes = 4096 * sizeof(ushort);
+                        bool chooseMultiPacked = paletteCount <= 64 && (packedBytes + paletteCount * 2) < denseBytes; // simple heuristic
+                        if (chooseMultiPacked)
                         {
-                            int ci = activeColumns[i];
-                            ref var col = ref scratch.GetReadonlyColumn(ci);
-                            int baseLi = ci << 4;
-                            if (col.RunCount >= 1)
+                            sec.Kind = ChunkSection.RepresentationKind.MultiPacked;
+                            // Build palette AIR + distinct ids encountered
+                            sec.Palette = new List<ushort>(paletteCount) { AIR };
+                            sec.PaletteLookup = new Dictionary<ushort, int>(paletteCount) { { AIR, 0 } };
+                            for (int i = 0; i < distinctCount; i++)
                             {
-                                for (int y = col.Y0Start; y <= col.Y0End; y++)
+                                ushort id = scratch.Distinct[i];
+                                if (!sec.PaletteLookup.ContainsKey(id))
                                 {
-                                    int li = baseLi + y;
-                                    dense[li] = col.Id0;
-                                    occDense[li >> 6] |= 1UL << (li & 63);
+                                    sec.PaletteLookup[id] = sec.Palette.Count;
+                                    sec.Palette.Add(id);
                                 }
                             }
-                            if (col.RunCount == 2)
+                            // recompute bitsPerIndex from final palette
+                            int pcMinusOne = sec.Palette.Count - 1;
+                            sec.BitsPerIndex = pcMinusOne <= 0 ? 1 : (int)BitOperations.Log2((uint)pcMinusOne) + 1;
+                            long totalBits = (long)sec.BitsPerIndex * 4096;
+                            int uintCount = (int)((totalBits + 31) / 32);
+                            sec.BitData = RentBitData(uintCount);
+                            Array.Clear(sec.BitData, 0, uintCount);
+                            var occ = RentOccupancy();
+                            // Build palette lookup if missing (should exist)
+                            if (sec.PaletteLookup == null)
                             {
-                                for (int y = col.Y1Start; y <= col.Y1End; y++)
+                                sec.PaletteLookup = new Dictionary<ushort, int>(sec.Palette.Count);
+                                for (int i = 0; i < sec.Palette.Count; i++) sec.PaletteLookup[sec.Palette[i]] = i;
+                            }
+                            // Emit runs into bitdata
+                            for (int i = 0; i < activeColumnCount; i++)
+                            {
+                                int ci = activeColumns[i];
+                                ref var col = ref scratch.GetReadonlyColumn(ci);
+                                int baseLi = ci << 4;
+                                if (col.RunCount >= 1)
                                 {
-                                    int li = baseLi + y;
-                                    dense[li] = col.Id1;
-                                    occDense[li >> 6] |= 1UL << (li & 63);
+                                    int pi0 = sec.PaletteLookup[col.Id0];
+                                    for (int y = col.Y0Start; y <= col.Y0End; y++)
+                                    {
+                                        int li = baseLi + y;
+                                        WriteBits(sec, li, pi0);
+                                        occ[li >> 6] |= 1UL << (li & 63);
+                                    }
+                                }
+                                if (col.RunCount == 2)
+                                {
+                                    int pi1 = sec.PaletteLookup[col.Id1];
+                                    for (int y = col.Y1Start; y <= col.Y1End; y++)
+                                    {
+                                        int li = baseLi + y;
+                                        WriteBits(sec, li, pi1);
+                                        occ[li >> 6] |= 1UL << (li & 63);
+                                    }
                                 }
                             }
+                            sec.OccupancyBits = occ;
+                            sec.IsAllAir = false;
+                            BuildFaceMasks(sec, occ);
                         }
-                        sec.ExpandedDense = dense;
-                        sec.OccupancyBits = occDense;
-                        sec.IsAllAir = false;
-                        BuildFaceMasks(sec, occDense);
+                        else
+                        {
+                            sec.Kind = ChunkSection.RepresentationKind.DenseExpanded;
+                            var dense = RentDense();
+                            var occDense = RentOccupancy();
+                            for (int i = 0; i < activeColumnCount; i++)
+                            {
+                                int ci = activeColumns[i];
+                                ref var col = ref scratch.GetReadonlyColumn(ci);
+                                int baseLi = ci << 4;
+                                if (col.RunCount >= 1)
+                                {
+                                    for (int y = col.Y0Start; y <= col.Y0End; y++)
+                                    {
+                                        int li = baseLi + y;
+                                        dense[li] = col.Id0;
+                                        occDense[li >> 6] |= 1UL << (li & 63);
+                                    }
+                                }
+                                if (col.RunCount == 2)
+                                {
+                                    for (int y = col.Y1Start; y <= col.Y1End; y++)
+                                    {
+                                        int li = baseLi + y;
+                                        dense[li] = col.Id1;
+                                        occDense[li >> 6] |= 1UL << (li & 63);
+                                    }
+                                }
+                            }
+                            sec.ExpandedDense = dense;
+                            sec.OccupancyBits = occDense;
+                            sec.IsAllAir = false;
+                            BuildFaceMasks(sec, occDense);
+                        }
                     }
                 }
 

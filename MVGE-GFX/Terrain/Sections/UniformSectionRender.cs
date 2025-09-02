@@ -50,6 +50,16 @@ namespace MVGE_GFX.Terrain.Sections
                 return ref data.SectionDescs[idx];
             }
 
+            // Helper: treat neighbor as fully solid if it is uniform non-air OR a single-id packed (Kind 4) fully filled OR a multi-packed (Kind 5) with palette indicating full occupancy (NonAirCount==4096).
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            static bool NeighborFullySolid(ref SectionPrerenderDesc n)
+            {
+                if (n.Kind == 1 && n.UniformBlockId != 0) return true; // uniform solid
+                // Multi/Single packed cannot guarantee full fill without occupancy; rely on NonAirCount==4096 heuristic if metadata kept.
+                if ((n.Kind == 4 || n.Kind == 5) && n.NonAirCount == 4096) return true;
+                return false;
+            }
+
             // LEFT
             if (sx == 0)
             {
@@ -74,10 +84,10 @@ namespace MVGE_GFX.Terrain.Sections
                 }
                 else
                 {
-                    bool fullOcclude = (n.Kind == 1 && n.UniformBlockId != 0);
+                    bool fullOcclude = NeighborFullySolid(ref n);
                     if (!fullOcclude)
                     {
-                        // Need per-voxel test (sparse/dense). Simpler: iterate plane and test neighbor blocks directly.
+                        // per-voxel test
                         for (int z = 0; z < S; z++)
                         {
                             int wz = baseZ + z; if (wz >= maxZ) break;
@@ -89,7 +99,6 @@ namespace MVGE_GFX.Terrain.Sections
                             }
                         }
                     }
-                    else if (fullOcclude) { /* all hidden */ }
                 }
             }
             // RIGHT
@@ -116,7 +125,7 @@ namespace MVGE_GFX.Terrain.Sections
                 }
                 else
                 {
-                    bool fullOcclude = (n.Kind == 1 && n.UniformBlockId != 0);
+                    bool fullOcclude = NeighborFullySolid(ref n);
                     if (!fullOcclude)
                     {
                         for (int z = 0; z < S; z++)
@@ -149,7 +158,7 @@ namespace MVGE_GFX.Terrain.Sections
             else
             {
                 ref var n = ref Neighbor(sx, sy - 1, sz);
-                bool fullOcclude = (n.Kind == 1 && n.UniformBlockId != 0);
+                bool fullOcclude = NeighborFullySolid(ref n);
                 if (!fullOcclude)
                 {
                     for (int x = 0; x < S; x++)
@@ -182,7 +191,7 @@ namespace MVGE_GFX.Terrain.Sections
             else
             {
                 ref var n = ref Neighbor(sx, sy + 1, sz);
-                bool fullOcclude = (n.Kind == 1 && n.UniformBlockId != 0);
+                bool fullOcclude = NeighborFullySolid(ref n);
                 if (!fullOcclude)
                 {
                     for (int x = 0; x < S; x++)
@@ -213,7 +222,7 @@ namespace MVGE_GFX.Terrain.Sections
             }
             else
             {
-                ref var n = ref Neighbor(sx, sy, sz - 1); bool fullOcclude = (n.Kind == 1 && n.UniformBlockId != 0);
+                ref var n = ref Neighbor(sx, sy, sz - 1); bool fullOcclude = NeighborFullySolid(ref n);
                 if (!fullOcclude)
                 {
                     for (int x = 0; x < S; x++)
@@ -245,7 +254,7 @@ namespace MVGE_GFX.Terrain.Sections
             }
             else
             {
-                ref var n = ref Neighbor(sx, sy, sz + 1); bool fullOcclude = (n.Kind == 1 && n.UniformBlockId != 0);
+                ref var n = ref Neighbor(sx, sy, sz + 1); bool fullOcclude = NeighborFullySolid(ref n);
                 if (!fullOcclude)
                 {
                     for (int x = 0; x < S; x++)
