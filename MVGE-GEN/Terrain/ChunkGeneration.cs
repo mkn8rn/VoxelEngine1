@@ -39,12 +39,12 @@ namespace MVGE_GEN.Terrain
         private void DetectAllStoneOrSoil(float[,] heightmap, int chunkBaseY, int topOfChunk)
         {
             int maxX = dimX; int maxZ = dimZ;
-            bool possibleStone = true;
+            bool possibleStone = true; // remains true only if ENTIRE chunk volume lies wholly inside a valid stone span with no soil/air
             int stoneMinY = biome.stoneMinYLevel; int stoneMaxY = biome.stoneMaxYLevel;
             int soilMinY = biome.soilMinYLevel; int soilMaxY = biome.soilMaxYLevel;
             int soilMinDepthSpec = biome.soilMinDepth; int soilMaxDepthSpec = biome.soilMaxDepth;
             int stoneMinDepthSpec = biome.stoneMinDepth; int stoneMaxDepthSpec = biome.stoneMaxDepth;
-            bool possibleSoil = (topOfChunk >= soilMinY) && (chunkBaseY <= soilMaxY);
+            bool possibleSoil = (topOfChunk >= soilMinY) && (chunkBaseY <= soilMaxY); // remains true only if ENTIRE chunk volume is soil (no stone / air)
             for (int x = 0; x < maxX && (possibleStone || possibleSoil); x++)
             {
                 for (int z = 0; z < maxZ && (possibleStone || possibleSoil); z++)
@@ -72,7 +72,7 @@ namespace MVGE_GEN.Terrain
                     if (possibleSoil)
                     {
                         int soilStartWorld = finalStoneTopWorld + 1;
-                        if (finalStoneTopWorld < stoneBandStartWorld) soilStartWorld = stoneBandStartWorld;
+                        if (finalStoneTopWorld < stoneBandStartWorld) soilStartWorld = stoneBandStartWorld; // no stone actually placed
                         if (soilStartWorld < soilMinY) soilStartWorld = soilMinY;
                         if (soilStartWorld > soilMaxY){ possibleSoil=false; continue; }
                         int soilBandCapWorld = Math.Min(soilMaxY, columnHeight);
@@ -85,6 +85,20 @@ namespace MVGE_GEN.Terrain
                     }
                 }
             }
+
+            // FAST PATH: if after scanning all columns the chunk is guaranteed fully stone or fully soil,
+            // set flags, synthesize uniform sections immediately and skip the heavier span machinery.
+            // (Comments kept; augmented to reflect new early-out behavior.)
+            if (possibleStone && !possibleSoil && !AllStoneChunk)
+            {
+                AllStoneChunk = true;
+                CreateUniformSections((ushort)BaseBlockType.Stone);
+            }
+            else if (possibleSoil && !possibleStone && !AllSoilChunk)
+            {
+                AllSoilChunk = true;
+                CreateUniformSections((ushort)BaseBlockType.Soil);
+            }
         }
 
         public void GenerateInitialChunkData()
@@ -95,7 +109,6 @@ namespace MVGE_GEN.Terrain
             const int LocalBurialMargin = 2;
             bool allBuried = true; int maxSurface = int.MinValue;
             // Single pass over heightmap columns: compute maxSurface and burial flag simultaneously.
-            // Removed previous two-pass approach (first short-circuit + second full scan) to reduce cache misses.
             for (int x = 0; x < maxX; x++)
             {
                 for (int z = 0; z < maxZ; z++)
@@ -110,15 +123,31 @@ namespace MVGE_GEN.Terrain
             }
             if (allBuried) candidateFullyBuried = true;
             if (chunkBaseY > maxSurface){ AllAirChunk=true; precomputedHeightmap=null; return; }
+
+            // Detect fully uniform stone or soil chunk BEFORE performing span derivation.
+            // (If flags set, we build boundary planes & burial classification and return early.)
             DetectAllStoneOrSoil(heightmap, chunkBaseY, topOfChunk);
+            if (AllStoneChunk || AllSoilChunk)
+            {
+                // All sections were synthesized in DetectAllStoneOrSoil via CreateUniformSections.
+                // Build boundary planes & final burial confirmation just like normal path.
+                precomputedHeightmap = null; // heightmap no longer needed
+                BuildAllBoundaryPlanesInitial();
+                if (candidateFullyBuried && FaceSolidNegX && FaceSolidPosX && FaceSolidNegY && FaceSolidPosY && FaceSolidNegZ && FaceSolidPosZ)
+                {
+                    SetFullyBuried();
+                }
+                return; // EARLY EXIT: heavy mixed-span logic skipped.
+            }
 
             // --------------------------------------------------------------
             // Section-level preclassification & consolidated AddRun reduction
+            // (Executed only when chunk is NOT trivially all stone or all soil.)
             // --------------------------------------------------------------
             if (!AllStoneChunk && !AllSoilChunk)
             {
                 // Precompute per-column stone / soil spans in chunk-local Y coordinates.
-                // -1 indicates absence.
+                // -1 indicates absence;
 
 
                 int sectionSize = ChunkSection.SECTION_SIZE; // 16
