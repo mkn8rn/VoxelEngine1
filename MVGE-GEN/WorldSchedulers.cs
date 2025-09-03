@@ -344,7 +344,15 @@ namespace MVGE_GEN
             int lodDist = GameManager.settings.lod1RenderDistance;
             int verticalRange = lodDist;
 
-            // Active chunks
+            // Track which batches might become empty
+            var candidateBatches = new HashSet<(int bx,int bz)>();
+
+            void TrackBatch((int cx,int cy,int cz) key)
+            {
+                var (bx,bz) = Batch.GetBatchIndices(key.cx, key.cz);
+                candidateBatches.Add((bx,bz));
+            }
+
             foreach (var key in activeChunks.Keys.ToArray())
             {
                 if (Math.Abs(key.cx - centerCx) > lodDist || Math.Abs(key.cz - centerCz) > lodDist || Math.Abs(key.cy - centerCy) > verticalRange)
@@ -354,6 +362,7 @@ namespace MVGE_GEN
                         chunk.chunkRender?.ScheduleDelete();
                         dirtyChunks.TryRemove(key, out _);
                         meshBuildSchedule.TryRemove(key, out _);
+                        TrackBatch(key);
                     }
                 }
             }
@@ -364,10 +373,11 @@ namespace MVGE_GEN
                 {
                     if (unbuiltChunks.TryRemove(key, out _))
                     {
-                        cancelledChunks[key] = 0; // mark so generation worker discards if not yet processed
+                        cancelledChunks[key] = 0;
                         chunkGenSchedule.TryRemove(key, out _);
                         meshBuildSchedule.TryRemove(key, out _);
                         dirtyChunks.TryRemove(key, out _);
+                        TrackBatch(key);
                     }
                 }
             }
@@ -376,20 +386,23 @@ namespace MVGE_GEN
             {
                 if (Math.Abs(key.cx - centerCx) > lodDist + 1 || Math.Abs(key.cz - centerCz) > lodDist + 1 || Math.Abs(key.cy - centerCy) > verticalRange)
                 {
-                    passiveChunks.TryRemove(key, out _);
+                    if (passiveChunks.TryRemove(key, out _)) TrackBatch(key);
                 }
-                else
+                // Promotion if moved into LoD1 vertical + horizontal bounds
+                else if (Math.Abs(key.cx - centerCx) <= lodDist && Math.Abs(key.cz - centerCz) <= lodDist && Math.Abs(key.cy - centerCy) <= verticalRange)
                 {
-                    // Promotion if moved into LoD1 vertical + horizontal bounds
-                    if (Math.Abs(key.cx - centerCx) <= lodDist && Math.Abs(key.cz - centerCz) <= lodDist && Math.Abs(key.cy - centerCy) <= verticalRange)
+                    if (passiveChunks.TryRemove(key, out var promoted))
                     {
-                        if (passiveChunks.TryRemove(key, out var promoted))
-                        {
-                            unbuiltChunks[key] = promoted;
-                            EnqueueMeshBuild(key, markDirty:false);
-                        }
+                        unbuiltChunks[key] = promoted;
+                        EnqueueMeshBuild(key, markDirty:false);
                     }
                 }
+            }
+
+            // After removals, attempt to save & remove empty batches
+            foreach (var (bx,bz) in candidateBatches)
+            {
+                TrySaveAndRemoveBatch(bx,bz);
             }
             // Buffer-generated chunks are never retained in-memory, so no unload needed for those.
         }

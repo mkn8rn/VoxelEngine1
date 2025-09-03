@@ -437,15 +437,14 @@ namespace MVGE_GEN
                                         var chunk = new Chunk(worldPos, loader.seed, chunkSaveDirectory, heightmap);
                                         bool insideLod1 = Math.Abs(gcx - playerCxSnapshot) <= lodDist && Math.Abs(gcz - playerCzSnapshot) <= lodDist && Math.Abs(gcy - playerCySnapshot) <= verticalRange;
                                         if (insideLod1) unbuiltChunks[chunkKey] = chunk; else passiveChunks[chunkKey] = chunk;
-                                        batch.AddOrReplaceChunk(chunk, gcx, gcy, gcz);
+                                        batch.AddOrReplaceChunk(chunk, gcx, gcy, gcz); // sets Dirty
                                         chunkGenSchedule.TryRemove(chunkKey, out _);
                                         bufferGenSchedule.TryRemove(chunkKey, out _);
                                     }
                                 }
                             }
-                            SaveBatch(bx, bz); // initial flush
+                            // DO NOT save here; defer until batch unload / periodic / manual / exit
                             ScheduleVisibleChunksInBatch(bx, bz);
-                            batch.Dirty = false;
                         }
                         else
                         {
@@ -664,6 +663,8 @@ namespace MVGE_GEN
                         Console.WriteLine($"[World] Chunk scheduling error: {ex.Message}");
                     }
                 }
+                // Periodic save check (lightweight)
+                MaybePeriodicSave();
                 Thread.Sleep(sleepMs);
             }
         }
@@ -694,6 +695,8 @@ namespace MVGE_GEN
             catch { }
             finally
             {
+                // Force save all dirty batches on shutdown
+                SaveAllBatches(force:true);
                 schedulingCts?.Dispose();
                 generationCts?.Dispose();
                 meshBuildCts?.Dispose();
@@ -701,6 +704,16 @@ namespace MVGE_GEN
                 bufferChunkPositionQueue?.Dispose();
                 meshBuildQueue?.Dispose();
             }
+        }
+
+        // Manual save entry point
+        public void ManualSaveWorld() => SaveAllBatches(force:true);
+
+        // Periodic save tick
+        private void MaybePeriodicSave()
+        {
+            if (DateTime.UtcNow - lastFullWorldSave < TimeSpan.FromMinutes(worldSaveIntervalMinutes)) return;
+            SaveAllBatches(force:false);
         }
 
         public ushort GetBlock(int wx, int wy, int wz)

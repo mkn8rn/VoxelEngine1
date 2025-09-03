@@ -6,6 +6,7 @@ using MVGE_INF.Generation.Models;
 using System.Runtime.InteropServices;
 using System.Collections.Generic;
 using OpenTK.Mathematics;
+using System.Security.Cryptography.X509Certificates;
 
 namespace MVGE_GEN
 {
@@ -83,6 +84,9 @@ namespace MVGE_GEN
 
         private const ushort BATCH_FILE_VERSION = 1;
         private static readonly byte[] BATCH_MAGIC = new byte[] { (byte)'M', (byte)'V', (byte)'B', (byte)'H' }; // "MVBH" batch header
+
+        private DateTime lastFullWorldSave = DateTime.UtcNow;
+        private int worldSaveIntervalMinutes = 12;
 
         // --------------------- Batch File Path Helpers ---------------------
         private string GetBatchFilePath(int bx, int bz)
@@ -635,6 +639,63 @@ namespace MVGE_GEN
                 Console.WriteLine($"[World] Section payload parse error kind={kind}: {ex.Message}");
                 return new ChunkSection();
             }
+        }
+
+        internal void SaveAllBatches()
+        {
+            bool any = false;
+            foreach (var kv in loadedBatches)
+            {
+                var (bx,bz) = kv.Key;
+                var batch = kv.Value;
+                if (batch == null) continue;
+                if (!batch.Dirty) continue;
+                SaveBatch(bx,bz);
+                batch.Dirty = false;
+                any = true;
+            }
+            if (any)
+            {
+                lastFullWorldSave = DateTime.UtcNow;
+                Console.WriteLine("[World] Saved dirty batches.");
+            }
+        }
+
+        // when force==true save ALL batches regardless of Dirty flag.
+        private void SaveAllBatches(bool force)
+        {
+            if (!force)
+            {
+                SaveAllBatches();
+                return;
+            }
+            bool any = false;
+            foreach (var kv in loadedBatches)
+            {
+                var (bx,bz) = kv.Key;
+                var batch = kv.Value;
+                if (batch == null) continue;
+                SaveBatch(bx,bz);
+                batch.Dirty = false;
+                any = true;
+            }
+            if (any)
+            {
+                lastFullWorldSave = DateTime.UtcNow;
+                Console.WriteLine("[World] Forced world save completed.");
+            }
+        }
+
+        internal void TrySaveAndRemoveBatch(int bx, int bz)
+        {
+            if (!loadedBatches.TryGetValue((bx,bz), out var batch)) return;
+            if (!batch.IsEmpty) return; // still has chunks
+            if (batch.Dirty)
+            {
+                SaveBatch(bx,bz);
+                batch.Dirty = false;
+            }
+            loadedBatches.TryRemove((bx,bz), out _);
         }
     }
 }
