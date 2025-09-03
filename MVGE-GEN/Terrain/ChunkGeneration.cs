@@ -94,17 +94,19 @@ namespace MVGE_GEN.Terrain
             int chunkBaseY = (int)position.Y; int topOfChunk = chunkBaseY + maxY - 1;
             const int LocalBurialMargin = 2;
             bool allBuried = true; int maxSurface = int.MinValue;
-            for (int x=0; x<maxX && allBuried; x++)
+            // Single pass over heightmap columns: compute maxSurface and burial flag simultaneously.
+            // Removed previous two-pass approach (first short-circuit + second full scan) to reduce cache misses.
+            for (int x = 0; x < maxX; x++)
             {
-                for (int z=0; z<maxZ; z++)
+                for (int z = 0; z < maxZ; z++)
                 {
-                    int surface = (int)heightmap[x,z]; if (surface>maxSurface) maxSurface=surface; if (topOfChunk >= surface - LocalBurialMargin){ allBuried=false; break; }
+                    int surface = (int)heightmap[x, z];
+                    if (surface > maxSurface) maxSurface = surface;
+                    if (allBuried && topOfChunk >= surface - LocalBurialMargin)
+                    {
+                        allBuried = false; // still continue scanning to finish maxSurface aggregation
+                    }
                 }
-            }
-            if (!allBuried)
-            {
-                for (int x=0; x<maxX; x++)
-                for (int z=0; z<maxZ; z++) { int surface=(int)heightmap[x,z]; if (surface>maxSurface) maxSurface=surface; }
             }
             if (allBuried) candidateFullyBuried = true;
             if (chunkBaseY > maxSurface){ AllAirChunk=true; precomputedHeightmap=null; return; }
@@ -289,7 +291,9 @@ namespace MVGE_GEN.Terrain
                     // --- Decide uniform sections ---
                     for (int sy = globalMinSectionY; sy <= globalMaxSectionY; sy++)
                     {
-                        if (stoneFullCoverCount[sy] == columnCount)
+                        bool stoneUniform = stoneFullCoverCount[sy] == columnCount;
+                        bool soilUniform = !stoneUniform && soilFullCoverCount[sy] == columnCount; // mutually exclusive in generation model
+                        if (stoneUniform)
                         {
                             sectionUniformStone[sy] = true;
                             // build uniform stone section if not already present
@@ -317,7 +321,7 @@ namespace MVGE_GEN.Terrain
                             }
                             continue;
                         }
-                        if (soilFullCoverCount[sy] == columnCount)
+                        if (soilUniform)
                         {
                             sectionUniformSoil[sy] = true;
                             for (int sx = 0; sx < sectionsX; sx++)
