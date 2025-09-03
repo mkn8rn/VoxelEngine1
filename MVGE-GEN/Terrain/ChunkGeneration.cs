@@ -6,6 +6,7 @@ using MVGE_Tools.Noise;
 using MVGE_GEN.Utils;
 using MVGE_INF.Models.Generation;
 using MVGE_INF.Loaders;
+using System.Buffers;
 
 namespace MVGE_GEN.Terrain
 {
@@ -108,56 +109,288 @@ namespace MVGE_GEN.Terrain
             if (allBuried) candidateFullyBuried = true;
             if (chunkBaseY > maxSurface){ AllAirChunk=true; precomputedHeightmap=null; return; }
             DetectAllStoneOrSoil(heightmap, chunkBaseY, topOfChunk);
+
+            // --------------------------------------------------------------
+            // Section-level preclassification & consolidated AddRun reduction
+            // --------------------------------------------------------------
             if (!AllStoneChunk && !AllSoilChunk)
             {
-                int stoneMinY = biome.stoneMinYLevel; int stoneMaxY = biome.stoneMaxYLevel;
-                int soilMinY = biome.soilMinYLevel; int soilMaxY = biome.soilMaxYLevel;
-                for (int x=0; x<maxX; x++)
+                // Precompute per-column stone / soil spans in chunk-local Y coordinates.
+                // -1 indicates absence.
+
+
+                int sectionSize = ChunkSection.SECTION_SIZE; // 16
+                int sectionMask = sectionSize - 1;
+                int sectionsYLocal = sectionsY;
+                int columnCount = maxX * maxZ;
+
+                // Stackalloc coverage counters (sectionsY is small — dimensions are multiples of 16)
+                Span<int> stoneFullCoverCount = stackalloc int[sectionsYLocal]; stoneFullCoverCount.Clear();
+                Span<int> soilFullCoverCount = stackalloc int[sectionsYLocal]; soilFullCoverCount.Clear();
+                Span<bool> sectionUniformStone = stackalloc bool[sectionsYLocal]; sectionUniformStone.Clear();
+                Span<bool> sectionUniformSoil = stackalloc bool[sectionsYLocal]; sectionUniformSoil.Clear();
+
+                // Flattened pooled arrays for start/end spans (-1 = absent)
+                var pool = ArrayPool<int>.Shared;
+                int flatLen = columnCount;
+                int[] stoneStart = pool.Rent(flatLen);
+                int[] stoneEnd   = pool.Rent(flatLen);
+                int[] soilStart  = pool.Rent(flatLen);
+                int[] soilEnd    = pool.Rent(flatLen);
+                int[] stoneFirstSection = pool.Rent(flatLen); // first section index intersected by stone span, -1 if none
+                int[] stoneLastSection  = pool.Rent(flatLen); // last section index intersected by stone span
+                int[] soilFirstSection  = pool.Rent(flatLen);
+                int[] soilLastSection   = pool.Rent(flatLen);
+
+                // Initialize arrays
+                for (int i = 0; i < flatLen; i++)
                 {
-                    for (int z=0; z<maxZ; z++)
+                    stoneStart[i] = stoneEnd[i] = -1;
+                    soilStart[i] = soilEnd[i] = -1;
+                    stoneFirstSection[i] = stoneLastSection[i] = -1;
+                    soilFirstSection[i] = soilLastSection[i] = -1;
+                }
+
+                // --- Column span derivation & section coverage accumulation (single pass) ---
+                for (int x = 0; x < maxX; x++)
+                {
+                    int colBase = x; // used for index calc inside z loop
+                    for (int z = 0; z < maxZ; z++)
                     {
-                        int columnHeight = (int)heightmap[x,z]; if (columnHeight < chunkBaseY) continue;
-                        int stoneBandStartWorld = Math.Max(stoneMinY,0); int stoneBandEndWorld = Math.Min(stoneMaxY, columnHeight);
-                        int available = stoneBandEndWorld - stoneBandStartWorld + 1; int finalStoneTopWorld = stoneBandStartWorld -1; int stoneDepth=0;
+                        int colIndex = z * maxX + colBase;
+                        int columnHeight = (int)heightmap[x,z];
+                        if (columnHeight < chunkBaseY) continue; // column entirely below chunk -> all air
+
+                        // --- Stone band ---
+                        int stoneBandStartWorld = Math.Max(biome.stoneMinYLevel, 0);
+                        int stoneBandEndWorld = Math.Min(biome.stoneMaxYLevel, columnHeight);
+                        int available = stoneBandEndWorld - stoneBandStartWorld + 1;
+                        int finalStoneTopWorld = stoneBandStartWorld - 1;
+                        int stoneDepth = 0;
                         if (available > 0)
                         {
-                            int soilMinReserve = Math.Clamp(biome.soilMinDepth,0,available); int rawStoneDepth = available - soilMinReserve;
-                            stoneDepth = Math.Min(biome.stoneMaxDepth, Math.Max(biome.stoneMinDepth, rawStoneDepth)); if (stoneDepth>available) stoneDepth=available; if (stoneDepth>0) finalStoneTopWorld = stoneBandStartWorld + stoneDepth -1;
+                            int soilMinReserve = Math.Clamp(biome.soilMinDepth, 0, available);
+                            int rawStoneDepth = available - soilMinReserve;
+                            stoneDepth = Math.Min(biome.stoneMaxDepth, Math.Max(biome.stoneMinDepth, rawStoneDepth));
+                            if (stoneDepth > available) stoneDepth = available;
+                            if (stoneDepth > 0) finalStoneTopWorld = stoneBandStartWorld + stoneDepth - 1;
                         }
-                        int localStoneStart = (stoneBandStartWorld) - chunkBaseY; int localStoneEnd = finalStoneTopWorld - chunkBaseY;
-                        if (stoneDepth>0 && localStoneEnd >=0 && localStoneStart < maxY)
+
+                        if (stoneDepth > 0)
                         {
-                            if (localStoneStart<0) localStoneStart=0; if (localStoneEnd >= maxY) localStoneEnd = maxY-1;
-                            int syStart = localStoneStart >> SECTION_SHIFT; int syEnd = localStoneEnd >> SECTION_SHIFT;
-                            int ox = x & SECTION_MASK; int oz = z & SECTION_MASK; int sx = x >> SECTION_SHIFT; int sz = z >> SECTION_SHIFT;
-                            for (int sy=syStart; sy<=syEnd; sy++)
+                            int localStoneStart = stoneBandStartWorld - chunkBaseY;
+                            int localStoneEnd = finalStoneTopWorld - chunkBaseY;
+                            if (localStoneEnd >= 0 && localStoneStart < maxY)
                             {
-                                var sec = sections[sx,sy,sz]; if (sec==null){ sec=new ChunkSection(); sections[sx,sy,sz]=sec; }
-                                int yStartInSection = (sy==syStart)? (localStoneStart & SECTION_MASK):0;
-                                int yEndInSection = (sy==syEnd)? (localStoneEnd & SECTION_MASK): (ChunkSection.SECTION_SIZE-1);
-                                SectionUtils.AddRun(sec, ox, oz, yStartInSection, yEndInSection, (ushort)BaseBlockType.Stone);
+                                if (localStoneStart < 0) localStoneStart = 0;
+                                if (localStoneEnd >= maxY) localStoneEnd = maxY - 1;
+                                if (localStoneStart <= localStoneEnd)
+                                {
+                                    stoneStart[colIndex] = localStoneStart;
+                                    stoneEnd[colIndex] = localStoneEnd;
+                                    // record section range
+                                    stoneFirstSection[colIndex] = localStoneStart / sectionSize;
+                                    stoneLastSection[colIndex] = localStoneEnd / sectionSize;
+                                }
                             }
                         }
-                        int soilStartWorld = (stoneDepth>0? (finalStoneTopWorld+1): stoneBandStartWorld); if (soilStartWorld < soilMinY) soilStartWorld = soilMinY; if (soilStartWorld > soilMaxY) continue;
-                        int soilBandCapWorld = Math.Min(soilMaxY, columnHeight); if (soilBandCapWorld < soilStartWorld) continue;
-                        int soilAvailable = soilBandCapWorld - soilStartWorld +1; if (soilAvailable <=0) continue;
-                        int soilDepth = Math.Min(biome.soilMaxDepth, soilAvailable); int soilEndWorld = soilStartWorld + soilDepth -1;
-                        int localSoilStart = soilStartWorld - chunkBaseY; int localSoilEnd = soilEndWorld - chunkBaseY;
-                        if (soilDepth>0 && localSoilEnd >=0 && localSoilStart < maxY)
+
+                        // --- Soil band (above stone) ---
+                        int soilStartWorldLocal = (stoneDepth > 0 ? (finalStoneTopWorld + 1) : stoneBandStartWorld);
+                        if (soilStartWorldLocal < biome.soilMinYLevel) soilStartWorldLocal = biome.soilMinYLevel;
+                        if (soilStartWorldLocal <= biome.soilMaxYLevel)
                         {
-                            if (localSoilStart <0) localSoilStart=0; if (localSoilEnd >= maxY) localSoilEnd = maxY-1;
-                            int syStart = localSoilStart >> SECTION_SHIFT; int syEnd = localSoilEnd >> SECTION_SHIFT;
-                            int ox = x & SECTION_MASK; int oz = z & SECTION_MASK; int sx = x >> SECTION_SHIFT; int sz = z >> SECTION_SHIFT;
-                            for (int sy=syStart; sy<=syEnd; sy++)
+                            int soilBandCapWorld = Math.Min(biome.soilMaxYLevel, columnHeight);
+                            if (soilBandCapWorld >= soilStartWorldLocal)
                             {
-                                var sec = sections[sx,sy,sz]; if (sec==null){ sec=new ChunkSection(); sections[sx,sy,sz]=sec; }
-                                int yStartInSection = (sy==syStart)? (localSoilStart & SECTION_MASK):0;
-                                int yEndInSection = (sy==syEnd)? (localSoilEnd & SECTION_MASK): (ChunkSection.SECTION_SIZE-1);
-                                SectionUtils.AddRun(sec, ox, oz, yStartInSection, yEndInSection, (ushort)BaseBlockType.Soil);
+                                int soilAvailable = soilBandCapWorld - soilStartWorldLocal + 1;
+                                if (soilAvailable > 0)
+                                {
+                                    int soilDepth = Math.Min(biome.soilMaxDepth, soilAvailable);
+                                    int soilEndWorldLocal = soilStartWorldLocal + soilDepth - 1;
+                                    int localSoilStart = soilStartWorldLocal - chunkBaseY;
+                                    int localSoilEnd = soilEndWorldLocal - chunkBaseY;
+                                    if (localSoilEnd >= 0 && localSoilStart < maxY)
+                                    {
+                                        if (localSoilStart < 0) localSoilStart = 0;
+                                        if (localSoilEnd >= maxY) localSoilEnd = maxY - 1;
+                                        if (localSoilStart <= localSoilEnd)
+                                        {
+                                            soilStart[colIndex] = localSoilStart;
+                                            soilEnd[colIndex] = localSoilEnd;
+                                            soilFirstSection[colIndex] = localSoilStart / sectionSize;
+                                            soilLastSection[colIndex] = localSoilEnd / sectionSize;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // After we know both spans we can accumulate per-section full coverage stats.
+                        int sStart = stoneStart[colIndex]; int sEnd = stoneEnd[colIndex];
+                        int soStart = soilStart[colIndex]; int soEnd = soilEnd[colIndex];
+                        if (sStart >= 0)
+                        {
+                            int firstSec = sStart / sectionSize;
+                            int lastSec = sEnd / sectionSize;
+                            for (int sy = firstSec; sy <= lastSec && sy < sectionsYLocal; sy++)
+                            {
+                                int sectionBaseY = sy * sectionSize;
+                                int sectionEndY = sectionBaseY + sectionMask;
+                                // Must fully cover section and soil must not overlap this section
+                                bool fullCover = sStart <= sectionBaseY && sEnd >= sectionEndY && !(soStart >= 0 && !(soEnd < sectionBaseY || soStart > sectionEndY));
+                                if (fullCover) stoneFullCoverCount[sy]++;
+                            }
+                        }
+                        if (soStart >= 0)
+                        {
+                            int firstSec = soStart / sectionSize;
+                            int lastSec = soEnd / sectionSize;
+                            for (int sy = firstSec; sy <= lastSec && sy < sectionsYLocal; sy++)
+                            {
+                                int sectionBaseY = sy * sectionSize;
+                                int sectionEndY = sectionBaseY + sectionMask;
+                                bool fullCover = soStart <= sectionBaseY && soEnd >= sectionEndY && !(sStart >= 0 && !(sEnd < sectionBaseY || sStart > sectionEndY));
+                                if (fullCover) soilFullCoverCount[sy]++;
                             }
                         }
                     }
                 }
+
+                // --- Decide uniform sections ---
+                for (int sy = 0; sy < sectionsYLocal; sy++)
+                {
+                    if (stoneFullCoverCount[sy] == columnCount)
+                    {
+                        sectionUniformStone[sy] = true;
+                        // build uniform stone section if not already present
+                        for (int sx = 0; sx < sectionsX; sx++)
+                        for (int sz = 0; sz < sectionsZ; sz++)
+                        {
+                            if (sections[sx, sy, sz] == null)
+                            {
+                                sections[sx, sy, sz] = new ChunkSection
+                                {
+                                    IsAllAir = false,
+                                    Kind = ChunkSection.RepresentationKind.Uniform,
+                                    UniformBlockId = (ushort)BaseBlockType.Stone,
+                                    NonAirCount = sectionSize * sectionSize * sectionSize,
+                                    VoxelCount = sectionSize * sectionSize * sectionSize,
+                                    CompletelyFull = true,
+                                    MetadataBuilt = true,
+                                    HasBounds = true,
+                                    MinLX = 0, MinLY = 0, MinLZ = 0,
+                                    MaxLX = 15, MaxLY = 15, MaxLZ = 15,
+                                    StructuralDirty = false,
+                                    IdMapDirty = false
+                                };
+                            }
+                        }
+                        continue;
+                    }
+                    if (soilFullCoverCount[sy] == columnCount)
+                    {
+                        sectionUniformSoil[sy] = true;
+                        for (int sx = 0; sx < sectionsX; sx++)
+                        for (int sz = 0; sz < sectionsZ; sz++)
+                        {
+                            if (sections[sx, sy, sz] == null)
+                            {
+                                sections[sx, sy, sz] = new ChunkSection
+                                {
+                                    IsAllAir = false,
+                                    Kind = ChunkSection.RepresentationKind.Uniform,
+                                    UniformBlockId = (ushort)BaseBlockType.Soil,
+                                    NonAirCount = sectionSize * sectionSize * sectionSize,
+                                    VoxelCount = sectionSize * sectionSize * sectionSize,
+                                    CompletelyFull = true,
+                                    MetadataBuilt = true,
+                                    HasBounds = true,
+                                    MinLX = 0, MinLY = 0, MinLZ = 0,
+                                    MaxLX = 15, MaxLY = 15, MaxLZ = 15,
+                                    StructuralDirty = false,
+                                    IdMapDirty = false
+                                };
+                            }
+                        }
+                    }
+                }
+
+                // --- Mixed section emission (only over ranges actually intersecting spans) ---
+                for (int x = 0; x < maxX; x++)
+                {
+                    for (int z = 0; z < maxZ; z++)
+                    {
+                        int colIndex = z * maxX + x;
+                        int ss = stoneStart[colIndex]; int se = stoneEnd[colIndex];
+                        int sols = soilStart[colIndex]; int sole = soilEnd[colIndex];
+                        if (ss < 0 && sols < 0) continue; // empty column
+
+                        int sxIndex = x >> SECTION_SHIFT; int ox = x & sectionMask;
+                        int szIndex = z >> SECTION_SHIFT; int oz = z & sectionMask;
+
+                        // Stone span -> iterate intersecting sections only
+                        if (ss >= 0)
+                        {
+                            int firstSec = stoneFirstSection[colIndex];
+                            int lastSec = stoneLastSection[colIndex];
+                            for (int sy = firstSec; sy <= lastSec && sy < sectionsYLocal; sy++)
+                            {
+                                if (sectionUniformStone[sy] || sectionUniformSoil[sy]) continue; // skip uniform sections
+                                int sectionBaseY = sy * sectionSize;
+                                int sectionEndY = sectionBaseY + sectionMask;
+                                if (se < sectionBaseY || ss > sectionEndY) continue; // no overlap (safety)
+                                int clippedStart = ss < sectionBaseY ? sectionBaseY : ss;
+                                int clippedEnd = se > sectionEndY ? sectionEndY : se;
+                                int localStart = clippedStart - sectionBaseY;
+                                int localEnd = clippedEnd - sectionBaseY;
+                                if (localStart > localEnd) continue;
+                                ChunkSection secRef = sections[sxIndex, sy, szIndex];
+                                if (secRef == null)
+                                {
+                                    secRef = new ChunkSection();
+                                    sections[sxIndex, sy, szIndex] = secRef;
+                                }
+                                SectionUtils.AddRun(secRef, ox, oz, localStart, localEnd, (ushort)BaseBlockType.Stone);
+                            }
+                        }
+                        // Soil span
+                        if (sols >= 0)
+                        {
+                            int firstSec = soilFirstSection[colIndex];
+                            int lastSec = soilLastSection[colIndex];
+                            for (int sy = firstSec; sy <= lastSec && sy < sectionsYLocal; sy++)
+                            {
+                                if (sectionUniformStone[sy] || sectionUniformSoil[sy]) continue;
+                                int sectionBaseY = sy * sectionSize;
+                                int sectionEndY = sectionBaseY + sectionMask;
+                                if (sole < sectionBaseY || sols > sectionEndY) continue;
+                                int clippedStart = sols < sectionBaseY ? sectionBaseY : sols;
+                                int clippedEnd = sole > sectionEndY ? sectionEndY : sole;
+                                int localStart = clippedStart - sectionBaseY;
+                                int localEnd = clippedEnd - sectionBaseY;
+                                if (localStart > localEnd) continue;
+                                ChunkSection secRef = sections[sxIndex, sy, szIndex];
+                                if (secRef == null)
+                                {
+                                    secRef = new ChunkSection();
+                                    sections[sxIndex, sy, szIndex] = secRef;
+                                }
+                                SectionUtils.AddRun(secRef, ox, oz, localStart, localEnd, (ushort)BaseBlockType.Soil);
+                            }
+                        }
+                    }
+                }
+
+                // Return pooled arrays
+                pool.Return(stoneStart, clearArray: true);
+                pool.Return(stoneEnd, clearArray: true);
+                pool.Return(soilStart, clearArray: true);
+                pool.Return(soilEnd, clearArray: true);
+                pool.Return(stoneFirstSection, clearArray: true);
+                pool.Return(stoneLastSection, clearArray: true);
+                pool.Return(soilFirstSection, clearArray: true);
+                pool.Return(soilLastSection, clearArray: true);
             }
 
             // Chunk-level aggregate short-circuit:
