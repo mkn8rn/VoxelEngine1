@@ -12,10 +12,12 @@ namespace MVGE_INF.Models.Generation
     {
         // Required
         public required GenerationType generation_type { get; set; }
-        public required List<ushort> blocks_to_replace { get; set; }
         public required List<ushort> base_blocks_to_replace { get; set; }
         public required ushort block_type_id { get; set; }
         public required int priority { get; set; }
+
+        // Target blocks (for after inline rules)
+        public List<ushort>? blocks_to_replace { get; set; }
 
         // Biome parameters
         public int? microbiome_id { get; set; }

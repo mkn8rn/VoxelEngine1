@@ -319,5 +319,13 @@ namespace MVGE_GEN.Terrain
             return true;
         }
 
+        // helper to get chunk indices without recomputing in multiple systems.
+        public (int cx,int cy,int cz) GetChunkIndices()
+        {
+            int sizeX = GameManager.settings.chunkMaxX;
+            int sizeY = GameManager.settings.chunkMaxY;
+            int sizeZ = GameManager.settings.chunkMaxZ;
+            return ((int)Math.Floor(position.X / sizeX), (int)Math.Floor(position.Y / sizeY), (int)Math.Floor(position.Z / sizeZ));
+        }
     }
 }

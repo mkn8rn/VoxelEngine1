@@ -8,7 +8,8 @@ namespace MVGE_INF.Models.Generation
 {
     public enum GenerationType
     {
-        SimpleReplacement = 1,
-        GeometricShapes = 2,
+        InlineReplacement = 1,
+        SimpleReplacement = 2,
+        GeometricReplacement = 3
     }
 }

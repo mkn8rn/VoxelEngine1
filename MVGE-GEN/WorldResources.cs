@@ -24,6 +24,8 @@ namespace MVGE_GEN
 
         private readonly ConcurrentDictionary<(int cx, int cy, int cz), Chunk> activeChunks = new(); // track ready to render chunks
         private readonly ConcurrentDictionary<(int cx, int cy, int cz), Chunk> unbuiltChunks = new(); // track generated but not yet built chunks
+        // passive chunks (generated but outside LoD1, e.g. +1 ring) kept resident but not scheduled for mesh build.
+        private readonly ConcurrentDictionary<(int cx, int cy, int cz), Chunk> passiveChunks = new();
 
         // Track chunks marked dirty (needing rebuild) so we can coalesce multiple requests before building
         private readonly ConcurrentDictionary<(int cx, int cy, int cz), byte> dirtyChunks = new();
@@ -225,33 +227,44 @@ namespace MVGE_GEN
             Console.WriteLine("[World] Waiting for initial chunk + buffer generation...");
             var sw = Stopwatch.StartNew();
 
-            int activeDone = unbuiltChunks.Count;
-            int remainingActive = chunkGenSchedule.Count;
-            int remainingBuffer = bufferGenSchedule.Count;
-            int total = chunkGenSchedule.Count + bufferGenSchedule.Count + activeDone; // activeDone counts only active-target generation
-
-            while (chunkGenSchedule.Count > 0 || bufferGenSchedule.Count > 0)
+            // Progress loop now also waits for any in‑flight batch (generatingBatches)
+            while (chunkGenSchedule.Count > 0 || bufferGenSchedule.Count > 0 || generatingBatches.Count > 0)
             {
-                activeDone = unbuiltChunks.Count; // number of lod1 chunks generated
-                remainingActive = chunkGenSchedule.Count;
-                remainingBuffer = bufferGenSchedule.Count;
-                Console.WriteLine($"[World] Initial generation progress: activeGenRemaining={remainingActive}, bufferGenRemaining={remainingBuffer}");
+                int remainingActive = chunkGenSchedule.Count;
+                int remainingBuffer = bufferGenSchedule.Count;
+                int inflightBatches = generatingBatches.Count;
+                int generatedChunks = unbuiltChunks.Count + activeChunks.Count; // passive excluded from initial LoD1 mesh requirement
+                Console.WriteLine($"[World] Initial generation progress: scheduledActive={remainingActive}, scheduledBuffer={remainingBuffer}, inFlightBatches={inflightBatches}, generatedChunks={generatedChunks}");
                 Thread.Sleep(500);
             }
             sw.Stop();
-            Console.WriteLine($"[World] Initial generation complete in {sw.ElapsedMilliseconds} ms. (Active chunks: {unbuiltChunks.Count})");
+            Console.WriteLine($"[World] Initial generation complete in {sw.ElapsedMilliseconds} ms. (Generated chunks: {unbuiltChunks.Count + activeChunks.Count})");
         }
 
         private void WaitForInitialChunkRenderBuild()
         {
             Console.WriteLine("[World] Building chunk meshes asynchronously...");
             var sw = Stopwatch.StartNew();
-            int initialTotal = unbuiltChunks.Count; // number of chunks scheduled for initial mesh builds
-            while (meshBuildSchedule.Count > 0 || unbuiltChunks.Count > 0) // wait until all scheduled builds complete
+            // Snapshot target set at start to avoid negative progress when late chunks arrive. (Only LoD1 unbuilt chunks considered)
+            var targetSet = new HashSet<(int cx,int cy,int cz)>(unbuiltChunks.Keys);
+            int initialTotal = targetSet.Count;
+            int lastLogRemaining = -1;
+            while (true)
             {
-                int remaining = unbuiltChunks.Count;
-                int built = initialTotal - remaining;
-                Console.WriteLine($"[World] Chunk mesh build: {built}/{initialTotal}, remaining: {remaining}");
+                int remaining = 0;
+                foreach (var key in targetSet)
+                {
+                    if (unbuiltChunks.ContainsKey(key)) remaining++;
+                }
+                // Exit once all initial targets either built (moved to active) or removed AND mesh build queue drained for those targets.
+                if (meshBuildSchedule.Count == 0 && remaining == 0)
+                    break;
+                if (remaining != lastLogRemaining)
+                {
+                    int built = initialTotal - remaining;
+                    Console.WriteLine($"[World] Chunk mesh build: {built}/{initialTotal}, remaining: {remaining}");
+                    lastLogRemaining = remaining;
+                }
                 Thread.Sleep(500);
             }
             sw.Stop();
@@ -274,6 +287,48 @@ namespace MVGE_GEN
             Console.WriteLine($"[World] Initialized {schedulingWorkers.Length} scheduling workers.");
         }
 
+        // Track batches currently being generated to prevent duplicate work across workers.
+        private readonly ConcurrentDictionary<(int bx,int bz), byte> generatingBatches = new();
+
+        // -------------------- Helper: generate a single (cx,cz) column across vertical range inside a batch (incremental fill). --------------------
+        private void GenerateColumnInBatch(Batch batch, int cx, int cz, int playerCxSnapshot, int playerCySnapshot, int playerCzSnapshot, int lodDist, int verticalRange, long regionLimit, string chunkSaveDirectory)
+        {
+            int sizeX = GameManager.settings.chunkMaxX;
+            int sizeY = GameManager.settings.chunkMaxY;
+            int sizeZ = GameManager.settings.chunkMaxZ;
+            // Horizontal culling: ensure within LoD1+1 ring for generation cost containment.
+            if (Math.Abs(cx - playerCxSnapshot) > lodDist + 1 || Math.Abs(cz - playerCzSnapshot) > lodDist + 1) return;
+            int baseX = cx * sizeX;
+            int baseZ = cz * sizeZ;
+            var hmKey = (baseX, baseZ);
+            float[,] heightmap = heightmapCache.GetOrAdd(hmKey, _ => Chunk.GenerateHeightMap(loader.seed, baseX, baseZ));
+            int vMin = playerCySnapshot - verticalRange;
+            int vMax = playerCySnapshot + verticalRange;
+            if (vMin < -regionLimit) vMin = (int)-regionLimit; if (vMax > regionLimit) vMax = (int)regionLimit;
+            for (int cy = vMin; cy <= vMax; cy++)
+            {
+                var key = (cx, cy, cz);
+                if (unbuiltChunks.ContainsKey(key) || activeChunks.ContainsKey(key) || passiveChunks.ContainsKey(key)) continue;
+                int baseY = cy * sizeY;
+                var worldPos = new Vector3(baseX, baseY, baseZ);
+                var chunk = new Chunk(worldPos, loader.seed, chunkSaveDirectory, heightmap);
+                bool insideLod1 = Math.Abs(cx - playerCxSnapshot) <= lodDist && Math.Abs(cz - playerCzSnapshot) <= lodDist && Math.Abs(cy - playerCySnapshot) <= verticalRange;
+                if (insideLod1)
+                {
+                    unbuiltChunks[key] = chunk;
+                }
+                else
+                {
+                    passiveChunks[key] = chunk;
+                }
+                batch.AddOrReplaceChunk(chunk, cx, cy, cz);
+                // Clear any stale schedule entries
+                chunkGenSchedule.TryRemove(key, out _);
+                bufferGenSchedule.TryRemove(key, out _);
+            }
+        }
+
+        // -------------------- (modified) Generation Worker: now batch-aware --------------------
         private void ChunkGenerationWorker(CancellationToken token)
         {
             string chunkSaveDirectory = Path.Combine(loader.currentWorldSaveDirectory, loader.currentWorldSavedChunksSubDirectory);
@@ -284,22 +339,16 @@ namespace MVGE_GEN
                 while (!token.IsCancellationRequested)
                 {
                     int taken = BlockingCollection<Vector3>.TryTakeFromAny(queues, out var pos, 100, token);
-                    if (taken < 0)
-                    {
-                        continue; // timeout; loop again (allows cancellation)
-                    }
+                    if (taken < 0) continue; // timeout
                     lastPos = pos;
                     try
                     {
                         bool isBuffer = (taken == 1); // index 1 = buffer queue
-
-                    // If we pulled a buffer task but there is still active generation queued, requeue buffer to favor near chunks
                         if (isBuffer && !chunkPositionQueue.IsCompleted && chunkGenSchedule.Count > 0)
                         {
                             bufferChunkPositionQueue.Add(pos, token); // favor active queue
                             continue;
                         }
-
                         int sizeX = GameManager.settings.chunkMaxX;
                         int sizeY = GameManager.settings.chunkMaxY;
                         int sizeZ = GameManager.settings.chunkMaxZ;
@@ -307,92 +356,122 @@ namespace MVGE_GEN
                         int cy = (int)Math.Floor(pos.Y / sizeY);
                         int cz = (int)Math.Floor(pos.Z / sizeZ);
                         var key = (cx, cy, cz);
-
-                    // Skip stale buffer entry that was promoted to active (its schedule entry removed earlier)
-                        if (isBuffer && !bufferGenSchedule.ContainsKey(key))
-                            continue; // stale buffer entry
-
                         long regionLimit = GameManager.settings.regionWidthInChunks;
                         if (Math.Abs(cx) > regionLimit || Math.Abs(cy) > regionLimit || Math.Abs(cz) > regionLimit)
                         {
                             if (isBuffer) bufferGenSchedule.TryRemove(key, out _); else chunkGenSchedule.TryRemove(key, out _);
                             continue;
                         }
-
-                    // Distance cull only for active (LoD1) generation; buffer queue already distance filtered at scheduling.
-                        if (!isBuffer)
+                        // Determine batch for this chunk
+                        var (bx, bz) = Batch.GetBatchIndices(cx, cz);
+                        bool batchExists = loadedBatches.TryGetValue((bx, bz), out var existingBatch);
+                        if (batchExists)
                         {
-                            int lodDist = GameManager.settings.lod1RenderDistance;
-                        int verticalRange = lodDist; // symmetric
-                            if (cancelledChunks.ContainsKey(key) || Math.Abs(cx - playerChunkX) > lodDist || Math.Abs(cz - playerChunkZ) > lodDist || Math.Abs(cy - playerChunkY) > verticalRange)
+                            // If target chunk already materialized, just clean schedule
+                            if ((existingBatch.TryGetChunk(cx, cy, cz, out _)) ||
+                                activeChunks.ContainsKey(key) || unbuiltChunks.ContainsKey(key) || passiveChunks.ContainsKey(key))
                             {
-                                chunkGenSchedule.TryRemove(key, out _);
-                                cancelledChunks.TryRemove(key, out _);
-                            continue; // skip generation
+                                if (isBuffer) bufferGenSchedule.TryRemove(key, out _); else chunkGenSchedule.TryRemove(key, out _);
+                                continue;
                             }
-                        }
-
-                    // Only attempt to load existing chunk files for active (LoD1) generation.
-                    // For buffer pregen we skip deserialization (older save formats, out-of-date dimensions etc.)
-                    // and simply regenerate procedural data if needed.
-                        if (!isBuffer)
-                        {
-                            var existing = LoadChunkFromFile(cx, cy, cz);
-                            if (existing != null)
+                            // If marked complete (future usage), skip.
+                            if (existingBatch.GenerationComplete)
                             {
-                                unbuiltChunks[key] = existing;
-                                chunkGenSchedule.TryRemove(key, out _);
-                                EnqueueMeshBuild(key, markDirty: false);
-                                MarkNeighborsDirty(key, existing);
+                                if (isBuffer) bufferGenSchedule.TryRemove(key, out _); else chunkGenSchedule.TryRemove(key, out _);
                                 continue;
                             }
                         }
-                        else
+                        // Attempt to claim batch generation (for either full or incremental)
+                        if (!generatingBatches.TryAdd((bx, bz), 0))
                         {
-                        // If a buffer file already exists we consider it satisfied and skip re-generation.
-                        // This avoids noisy load failures and redundant work.
-                        // Build the expected path cheaply (mirrors GetChunkFilePath logic) to test existence.
-                        string worldRoot = Path.Combine(loader.currentWorldSaveDirectory, loader.ID.ToString()); // loader.ID already set
-                        // NOTE: chunks are stored under worldRoot/RegionID/chunks
-                            string regionRoot = Path.Combine(GameManager.settings.savesWorldDirectory, loader.ID.ToString(), loader.RegionID.ToString());
-                            string chunksDir = Path.Combine(regionRoot, loader.currentWorldSavedChunksSubDirectory);
-                            string bufferFile = Path.Combine(chunksDir, $"chunk{cx}x{cy}y{cz}z.bin");
-                            if (File.Exists(bufferFile))
+                            // Another worker is generating this batch; requeue request (avoid starvation) unless already cancelled.
+                            if (!token.IsCancellationRequested)
                             {
-                                bufferGenSchedule.TryRemove(key, out _);
-                                continue;
+                                // keep schedule entry; small delay to prevent tight spin
+                                Task.Delay(5, token).ContinueWith(_ =>
+                                {
+                                    try { if (!token.IsCancellationRequested) chunkPositionQueue.Add(pos); } catch { }
+                                }, token, TaskContinuationOptions.OnlyOnRanToCompletion, TaskScheduler.Default);
                             }
+                            continue;
                         }
-
-                        // Heightmap reuse per (x,z) across vertical stack
-                        int baseX = (int)pos.X;
-                        int baseZ = (int)pos.Z;
-                        var hmKey = (baseX, baseZ);
-                        float[,] heightmap = heightmapCache.GetOrAdd(hmKey, _ => Chunk.GenerateHeightMap(loader.seed, baseX, baseZ));
-
-                        var chunk = new Chunk(pos, loader.seed, Path.Combine(loader.currentWorldSaveDirectory, loader.currentWorldSavedChunksSubDirectory), heightmap);
-
-                        SaveChunkToFile(chunk); // persist immediately
-
-                        if (isBuffer)
+                        int lodDist = GameManager.settings.lod1RenderDistance;
+                        int playerCxSnapshot = playerChunkX; int playerCySnapshot = playerChunkY; int playerCzSnapshot = playerChunkZ;
+                        int activeRadiusPlusOne = lodDist + 1;
+                        int batchMinCx = bx * Batch.BATCH_SIZE;
+                        int batchMinCz = bz * Batch.BATCH_SIZE;
+                        int batchMaxCx = batchMinCx + Batch.BATCH_SIZE - 1;
+                        int batchMaxCz = batchMinCz + Batch.BATCH_SIZE - 1;
+                        bool intersects = !(batchMaxCx < playerCxSnapshot - activeRadiusPlusOne || batchMinCx > playerCxSnapshot + activeRadiusPlusOne || batchMaxCz < playerCzSnapshot - activeRadiusPlusOne || batchMinCz > playerCzSnapshot + activeRadiusPlusOne);
+                        if (!intersects)
                         {
-                            bufferGenSchedule.TryRemove(key, out _); // release memory (buffer chunks not retained)
+                            generatingBatches.TryRemove((bx, bz), out _);
+                            if (isBuffer) bufferGenSchedule.TryRemove(key, out _); else chunkGenSchedule.TryRemove(key, out _);
+                            continue;
+                        }
+                        int verticalRange = lodDist;
+                        var batch = existingBatch ?? GetOrCreateBatch(bx, bz);
+                        bool initialFullFill = !batchExists || batch.IsEmpty;
+                        if (initialFullFill)
+                        {
+                            // Initial batch population (retain distance filters for perf)
+                            int vMin = playerCySnapshot - verticalRange;
+                            int vMax = playerCySnapshot + verticalRange;
+                            if (vMin < -regionLimit) vMin = (int)-regionLimit; if (vMax > regionLimit) vMax = (int)regionLimit;
+                            for (int gcx = batchMinCx; gcx <= batchMaxCx; gcx++)
+                            {
+                                if (Math.Abs(gcx - playerCxSnapshot) > activeRadiusPlusOne) continue;
+                                int baseX = gcx * sizeX;
+                                for (int gcz = batchMinCz; gcz <= batchMaxCz; gcz++)
+                                {
+                                    if (Math.Abs(gcz - playerCzSnapshot) > activeRadiusPlusOne) continue;
+                                    int baseZ = gcz * sizeZ;
+                                    var hmKey = (baseX, baseZ);
+                                    float[,] heightmap = heightmapCache.GetOrAdd(hmKey, _ => Chunk.GenerateHeightMap(loader.seed, baseX, baseZ));
+                                    for (int gcy = vMin; gcy <= vMax; gcy++)
+                                    {
+                                        var chunkKey = (gcx, gcy, gcz);
+                                        if (unbuiltChunks.ContainsKey(chunkKey) || activeChunks.ContainsKey(chunkKey) || passiveChunks.ContainsKey(chunkKey)) continue;
+                                        int baseY = gcy * sizeY;
+                                        var worldPos = new Vector3(baseX, baseY, baseZ);
+                                        var chunk = new Chunk(worldPos, loader.seed, chunkSaveDirectory, heightmap);
+                                        bool insideLod1 = Math.Abs(gcx - playerCxSnapshot) <= lodDist && Math.Abs(gcz - playerCzSnapshot) <= lodDist && Math.Abs(gcy - playerCySnapshot) <= verticalRange;
+                                        if (insideLod1) unbuiltChunks[chunkKey] = chunk; else passiveChunks[chunkKey] = chunk;
+                                        batch.AddOrReplaceChunk(chunk, gcx, gcy, gcz);
+                                        chunkGenSchedule.TryRemove(chunkKey, out _);
+                                        bufferGenSchedule.TryRemove(chunkKey, out _);
+                                    }
+                                }
+                            }
+                            SaveBatch(bx, bz); // initial flush
+                            ScheduleVisibleChunksInBatch(bx, bz);
+                            batch.Dirty = false;
                         }
                         else
                         {
-                            unbuiltChunks[key] = chunk;
-                            chunkGenSchedule.TryRemove(key, out _);
-
-                        // Enqueue self for initial mesh build
-                        EnqueueMeshBuild(key, markDirty:false);
-                        // Mark neighbors so they can rebuild to hide now occluded faces (only if boundary overlap has solids)
-                            MarkNeighborsDirty(key, chunk);
+                            // Incremental: fill ALL missing columns inside active +1 ring for this batch to avoid many requeues.
+                            for (int gcx = batchMinCx; gcx <= batchMaxCx; gcx++)
+                            {
+                                if (Math.Abs(gcx - playerCxSnapshot) > activeRadiusPlusOne) continue;
+                                for (int gcz = batchMinCz; gcz <= batchMaxCz; gcz++)
+                                {
+                                    if (Math.Abs(gcz - playerCzSnapshot) > activeRadiusPlusOne) continue;
+                                    // If column has any chunk already we skip unless the specific target column (ensures vertical expansion later if needed)
+                                    if (!batch.HasColumn(gcx, gcz) || (gcx == cx && gcz == cz))
+                                    {
+                                        GenerateColumnInBatch(batch, gcx, gcz, playerCxSnapshot, playerCySnapshot, playerCzSnapshot, lodDist, verticalRange, regionLimit, chunkSaveDirectory);
+                                    }
+                                }
+                            }
+                            // Mark dirty; decide saving policy later (could batch flush).
+                            ScheduleVisibleChunksInBatch(bx, bz);
                         }
+                        generatingBatches.TryRemove((bx, bz), out _);
+                        if (isBuffer) bufferGenSchedule.TryRemove(key, out _); else chunkGenSchedule.TryRemove(key, out _);
                     }
                     catch (Exception exIter)
                     {
-                        // Log rich diagnostics for the offending chunk and continue with next tasks
-                        Console.WriteLine($"Chunk generation iteration error at pos={lastPos} (world) -> chunk indices ({(int)(lastPos.X / GameManager.settings.chunkMaxX)}, {(int)(lastPos.Y / GameManager.settings.chunkMaxY)}, {(int)(lastPos.Z / GameManager.settings.chunkMaxZ)}): {exIter}");
+                        Console.WriteLine($"[World] Batch-oriented generation error at pos={lastPos}: {exIter}");
                     }
                 }
             }
@@ -400,6 +479,73 @@ namespace MVGE_GEN
             catch (Exception ex)
             {
                 Console.WriteLine($"Chunk generation worker fatal error (lastPos={lastPos}): {ex}");
+            }
+        }
+
+        private void MeshBuildWorker(CancellationToken token)
+        {
+            try
+            {
+                foreach (var key in meshBuildQueue.GetConsumingEnumerable(token))
+                {
+                    if (token.IsCancellationRequested) break;
+
+                    int lodDist = GameManager.settings.lod1RenderDistance;
+                    int verticalRange = lodDist;
+                    bool insideCore = Math.Abs(key.cx - playerChunkX) <= lodDist && Math.Abs(key.cz - playerChunkZ) <= lodDist && Math.Abs(key.cy - playerChunkY) <= verticalRange;
+                    bool insidePlusOne = Math.Abs(key.cx - playerChunkX) <= lodDist + 1 && Math.Abs(key.cz - playerChunkZ) <= lodDist + 1 && Math.Abs(key.cy - playerChunkY) <= verticalRange;
+                    if (!insidePlusOne)
+                    {
+                        // Fully out of interest -> discard
+                        unbuiltChunks.TryRemove(key, out _);
+                        meshBuildSchedule.TryRemove(key, out _);
+                        dirtyChunks.TryRemove(key, out _);
+                        continue;
+                    }
+
+                    meshBuildSchedule.TryRemove(key, out _);
+
+                    if (!unbuiltChunks.TryGetValue(key, out var ch))
+                    {
+                        if (!activeChunks.TryGetValue(key, out ch))
+                        {
+                            // If chunk is passive (in +1 ring) and got scheduled by race, skip quietly
+                            passiveChunks.TryGetValue(key, out ch);
+                            if (ch == null) continue;
+                        }
+                    }
+
+                    try
+                    {
+                        if (!insideCore)
+                        {
+                            // Demote to passive if we drifted out of core radius before build.
+                            if (unbuiltChunks.TryRemove(key, out var demote))
+                            {
+                                passiveChunks[key] = demote;
+                            }
+                            continue;
+                        }
+
+                        TryMarkBuriedByNeighbors(key, ch);
+                        PopulateNeighborFaceFlags(key, ch);
+                        ch.BuildRender(worldBlockAccessor);
+                        if (unbuiltChunks.TryRemove(key, out var builtChunk))
+                        {
+                            activeChunks[key] = builtChunk;
+                        }
+                        dirtyChunks.TryRemove(key, out _);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Mesh build error for chunk {key}: {ex.Message}");
+                    }
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Mesh build worker error: " + ex.Message);
             }
         }
 
@@ -440,63 +586,6 @@ namespace MVGE_GEN
                 return false;
             }
             return false;
-        }
-
-        private void MeshBuildWorker(CancellationToken token)
-        {
-            try
-            {
-                foreach (var key in meshBuildQueue.GetConsumingEnumerable(token))
-                {
-                    if (token.IsCancellationRequested) break;
-
-                    // distance cull before building
-                    int lodDist = GameManager.settings.lod1RenderDistance;
-                    int verticalRange = lodDist;
-                    if (Math.Abs(key.cx - playerChunkX) > lodDist || Math.Abs(key.cz - playerChunkZ) > lodDist || Math.Abs(key.cy - playerChunkY) > verticalRange)
-                    {
-                        // remove any stale data
-                        unbuiltChunks.TryRemove(key, out _);
-                        meshBuildSchedule.TryRemove(key, out _);
-                        dirtyChunks.TryRemove(key, out _);
-                        continue;
-                    }
-
-                    meshBuildSchedule.TryRemove(key, out _);
-
-                    // Acquire chunk from either dictionary
-                    if (!unbuiltChunks.TryGetValue(key, out var ch))
-                    {
-                        if (!activeChunks.TryGetValue(key, out ch)) continue; // disappeared
-                    }
-
-                    try
-                    {
-                        // attempt neighbor-based burial classification
-                        TryMarkBuriedByNeighbors(key, ch);
-                        PopulateNeighborFaceFlags(key, ch); // populate neighbor face flags
-                        ch.BuildRender(worldBlockAccessor);
-
-                        // If this was first-time build (in unbuilt), move to built dictionary
-                        if (unbuiltChunks.TryRemove(key, out var builtChunk))
-                        {
-                            activeChunks[key] = builtChunk;
-                        }
-
-                        // Clear dirty flag after successful build
-                        dirtyChunks.TryRemove(key, out _);
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"Mesh build error for chunk {key}: {ex.Message}");
-                    }
-                }
-            }
-            catch (OperationCanceledException) { }
-            catch (Exception ex)
-            {
-                Console.WriteLine("Mesh build worker error: " + ex.Message);
-            }
         }
 
         private void PopulateNeighborFaceFlags((int cx,int cy,int cz) key, Chunk ch)
@@ -545,6 +634,7 @@ namespace MVGE_GEN
         {
             if (activeChunks.TryGetValue(key, out chunk)) return true;
             if (unbuiltChunks.TryGetValue(key, out chunk)) return true;
+            if (passiveChunks.TryGetValue(key, out chunk)) return true;
             chunk = null; return false;
         }
 
@@ -628,7 +718,8 @@ namespace MVGE_GEN
             {
                 if (!activeChunks.TryGetValue(key, out chunk))
                 {
-                    return (ushort)BaseBlockType.Empty;
+                    if (!passiveChunks.TryGetValue(key, out chunk))
+                        return (ushort)BaseBlockType.Empty;
                 }
             }
 
@@ -657,15 +748,15 @@ namespace MVGE_GEN
         }
 
         // helper for neighbor-based chunk burial detection
-        private void TryMarkBuriedByNeighbors((int cx,int cy,int cz) key, Chunk ch)
+        private void TryMarkBuriedByNeighbors((int cx, int cy, int cz) key, Chunk ch)
         {
             // Only perform on initial build attempt; if chunk already active we skip.
             if (!unbuiltChunks.ContainsKey(key)) return;
 
             // We require all six neighbors to be present (either generated but unbuilt, or already active).
-            static bool GetChunk((int cx,int cy,int cz) k,
-                                 ConcurrentDictionary<(int,int,int), Chunk> active,
-                                 ConcurrentDictionary<(int,int,int), Chunk> pending,
+            static bool GetChunk((int cx, int cy, int cz) k,
+                                 ConcurrentDictionary<(int, int, int), Chunk> active,
+                                 ConcurrentDictionary<(int, int, int), Chunk> pending,
                                  out Chunk result)
             {
                 if (active.TryGetValue(k, out result)) return true;
@@ -673,18 +764,18 @@ namespace MVGE_GEN
                 result = null; return false;
             }
 
-            var leftKey  = (key.cx - 1, key.cy, key.cz);
+            var leftKey = (key.cx - 1, key.cy, key.cz);
             var rightKey = (key.cx + 1, key.cy, key.cz);
-            var downKey  = (key.cx, key.cy - 1, key.cz);
-            var upKey    = (key.cx, key.cy + 1, key.cz);
-            var backKey  = (key.cx, key.cy, key.cz - 1); // negative Z
+            var downKey = (key.cx, key.cy - 1, key.cz);
+            var upKey = (key.cx, key.cy + 1, key.cz);
+            var backKey = (key.cx, key.cy, key.cz - 1); // negative Z
             var frontKey = (key.cx, key.cy, key.cz + 1); // positive Z
 
-            if (!GetChunk(leftKey,  activeChunks, unbuiltChunks, out var left )) return;
+            if (!GetChunk(leftKey, activeChunks, unbuiltChunks, out var left)) return;
             if (!GetChunk(rightKey, activeChunks, unbuiltChunks, out var right)) return;
-            if (!GetChunk(downKey,  activeChunks, unbuiltChunks, out var down )) return;
-            if (!GetChunk(upKey,    activeChunks, unbuiltChunks, out var up   )) return;
-            if (!GetChunk(backKey,  activeChunks, unbuiltChunks, out var back )) return;
+            if (!GetChunk(downKey, activeChunks, unbuiltChunks, out var down)) return;
+            if (!GetChunk(upKey, activeChunks, unbuiltChunks, out var up)) return;
+            if (!GetChunk(backKey, activeChunks, unbuiltChunks, out var back)) return;
             if (!GetChunk(frontKey, activeChunks, unbuiltChunks, out var front)) return;
 
             // Opposing faces: our -X must be solid and neighbor's +X solid, etc.
@@ -695,6 +786,82 @@ namespace MVGE_GEN
                 back.FaceSolidPosZ && front.FaceSolidNegZ)
             {
                 ch.SetNeighborBuried();
+            }
+        }
+
+        // ---------------- NEW BATCH STORAGE (32x32 horizontal groups) ----------------
+        // A batch groups chunks for all vertical layers sharing a 32x32 (cx,cz) footprint.
+        // When any chunk in a batch is requested (load or generation), the whole batch
+        // is loaded (from batch file if present) or generated on-demand over time.
+        private readonly ConcurrentDictionary<(int bx, int bz), Batch> loadedBatches = new();
+
+        // Returns existing batch or creates placeholder (without populating chunks yet).
+        private Batch GetOrCreateBatch(int bx, int bz)
+        {
+            return loadedBatches.GetOrAdd((bx, bz), key => new Batch(key.bx, key.bz));
+        }
+
+        // Compute batch indices from chunk indices.
+        private static (int bx, int bz) BatchKeyFromChunk(int cx, int cz) => Batch.GetBatchIndices(cx, cz);
+
+        // Ensure the batch containing (cx,cz) is loaded from disk (if present) into memory.
+        // If already loaded, no-op. Returns true if target chunk present after call.
+        private bool EnsureBatchLoadedForChunk(int cx, int cy, int cz)
+        {
+            var (bx, bz) = BatchKeyFromChunk(cx, cz);
+            if (loadedBatches.ContainsKey((bx, bz)))
+            {
+                return activeChunks.ContainsKey((cx, cy, cz)) || unbuiltChunks.ContainsKey((cx, cy, cz)) || passiveChunks.ContainsKey((cx, cy, cz));
+            }
+            // Attempt to load batch file
+            var chunk = LoadBatchForChunk(cx, cy, cz); // will populate batch + dictionaries if file exists
+            return chunk != null;
+        }
+
+        // Schedules mesh builds for all chunks in a batch that fall inside the current active LoD radius.
+        private void ScheduleVisibleChunksInBatch(int bx, int bz)
+        {
+            int lodDist = GameManager.settings.lod1RenderDistance;
+            // Determine center (player) chunk
+            var (pcx, pcy, pcz) = PlayerChunkPosition;
+            // Iterate horizontal footprint
+            int baseCx = bx * Batch.BATCH_SIZE;
+            int baseCz = bz * Batch.BATCH_SIZE;
+            for (int lx = 0; lx < Batch.BATCH_SIZE; lx++)
+            {
+                int cx = baseCx + lx;
+                if (Math.Abs(cx - pcx) > lodDist + 1) continue; // +1 ring always kept in memory
+                for (int lz = 0; lz < Batch.BATCH_SIZE; lz++)
+                {
+                    int cz = baseCz + lz;
+                    if (Math.Abs(cz - pcz) > lodDist + 1) continue;
+                    // Iterate vertical rows inside LoD vertical window
+                    int verticalRange = lodDist; // reuse existing heuristic
+                    for (int cy = pcy - verticalRange; cy <= pcy + verticalRange; cy++)
+                    {
+                        var key = (cx, cy, cz);
+                        if (unbuiltChunks.ContainsKey(key) || activeChunks.ContainsKey(key))
+                        {
+                            // If chunk not yet scheduled for mesh build and inside LoD1 (not just +1 ring) schedule it.
+                            if (Math.Abs(cx - pcx) <= lodDist && Math.Abs(cz - pcz) <= lodDist && Math.Abs(cy - pcy) <= verticalRange)
+                            {
+                                EnqueueMeshBuild(key, markDirty: false);
+                            }
+                        }
+                        else if (passiveChunks.ContainsKey(key))
+                        {
+                            // Promotion condition: passive chunk is now inside LoD1
+                            if (Math.Abs(cx - pcx) <= lodDist && Math.Abs(cz - pcz) <= lodDist && Math.Abs(cy - pcy) <= verticalRange)
+                            {
+                                if (passiveChunks.TryRemove(key, out var promoted))
+                                {
+                                    unbuiltChunks[key] = promoted;
+                                    EnqueueMeshBuild(key, markDirty: false);
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

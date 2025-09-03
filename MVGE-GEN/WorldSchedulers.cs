@@ -86,7 +86,7 @@ namespace MVGE_GEN
                                 int wy = vy * sizeY;
                                 int wz = z * sizeZ;
                                 var key = ChunkIndexKey(wx, wy, wz);
-                                if (unbuiltChunks.ContainsKey(key) || activeChunks.ContainsKey(key)) continue;
+                                if (unbuiltChunks.ContainsKey(key) || activeChunks.ContainsKey(key) || passiveChunks.ContainsKey(key)) continue;
                                 if (chunkGenSchedule.ContainsKey(key)) continue;
                                 if (bufferGenSchedule.ContainsKey(key)) continue;
                                 if (ChunkFileExists(key.cx, key.cy, key.cz)) continue; // already on disk
@@ -131,9 +131,9 @@ namespace MVGE_GEN
                                 int wy = vy * sizeY;
                                 int wz = z * sizeZ;
                                 var key = ChunkIndexKey(wx, wy, wz);
-                                if (unbuiltChunks.ContainsKey(key) || activeChunks.ContainsKey(key)) continue;
+                                if (unbuiltChunks.ContainsKey(key) || activeChunks.ContainsKey(key) || passiveChunks.ContainsKey(key)) continue;
                                 if (chunkGenSchedule.ContainsKey(key)) continue;
-                                if (bufferGenSchedule.ContainsKey(key)) continue;
+                                if (bufferGenSchedule.ContainsKey(key) ) continue;
                                 if (ChunkFileExists(key.cx, key.cy, key.cz)) continue; // already on disk
                                 if (!bufferGenSchedule.TryAdd(key, 0)) continue;
                                 bufferChunkPositionQueue.Add(new Vector3(wx, wy, wz));
@@ -166,9 +166,24 @@ namespace MVGE_GEN
             }
             // If this chunk had previously been scheduled for buffer pre-generation, drop that request now.
             bufferGenSchedule.TryRemove(key, out _);
+            // Promotion: if currently passive and becomes force or inside LoD1 scheduling region, move to unbuilt and schedule build.
+            if (passiveChunks.TryGetValue(key, out var passive))
+            {
+                // Determine if inside LoD1 now
+                int lodDist = GameManager.settings.lod1RenderDistance;
+                if (Math.Abs(key.cx - playerChunkX) <= lodDist && Math.Abs(key.cz - playerChunkZ) <= lodDist && Math.Abs(key.cy - playerChunkY) <= lodDist)
+                {
+                    if (passiveChunks.TryRemove(key, out var promoted))
+                    {
+                        unbuiltChunks[key] = promoted;
+                        EnqueueMeshBuild(key, markDirty:false);
+                        return; // already promoted
+                    }
+                }
+            }
             if (!force)
             {
-                if (unbuiltChunks.ContainsKey(key) || activeChunks.ContainsKey(key)) return; // already generated or built
+                if (unbuiltChunks.ContainsKey(key) || activeChunks.ContainsKey(key) || passiveChunks.ContainsKey(key)) return; // already generated or built
                 if (!chunkGenSchedule.TryAdd(key, 0)) return; // already queued
             }
             else
@@ -184,7 +199,7 @@ namespace MVGE_GEN
             long regionLimit = GameManager.settings.regionWidthInChunks;
             if (Math.Abs(key.cx) > regionLimit || Math.Abs(key.cy) > regionLimit || Math.Abs(key.cz) > regionLimit) return;
             // Avoid scheduling if already present or scheduled for active generation
-            if (unbuiltChunks.ContainsKey(key) || activeChunks.ContainsKey(key)) return;
+            if (unbuiltChunks.ContainsKey(key) || activeChunks.ContainsKey(key) || passiveChunks.ContainsKey(key)) return;
             if (chunkGenSchedule.ContainsKey(key)) return;
             if (bufferGenSchedule.ContainsKey(key)) return;
             if (ChunkFileExists(key.cx, key.cy, key.cz)) return; // already saved; no need to queue
@@ -197,7 +212,7 @@ namespace MVGE_GEN
             foreach (var dir in NeighborDirs)
             {
                 var nk = (key.cx + dir.dx, key.cy + dir.dy, key.cz + dir.dz);
-                // Only consider already present neighbor chunks
+                // Only consider already present neighbor chunks (passive neighbors do not need rebuild until promoted)
                 bool neighborExists = unbuiltChunks.ContainsKey(nk) || activeChunks.ContainsKey(nk);
                 if (!neighborExists) continue;
 
@@ -234,7 +249,7 @@ namespace MVGE_GEN
             foreach (var key in bufferGenSchedule.Keys.ToArray())
             {
                 // If chunk already promoted to active scheduling, skip (it will be removed elsewhere)
-                if (chunkGenSchedule.ContainsKey(key) || unbuiltChunks.ContainsKey(key) || activeChunks.ContainsKey(key))
+                if (chunkGenSchedule.ContainsKey(key) || unbuiltChunks.ContainsKey(key) || activeChunks.ContainsKey(key) || passiveChunks.ContainsKey(key))
                 {
                     // Ensure it is not still marked as buffer
                     bufferGenSchedule.TryRemove(key, out _);
@@ -249,6 +264,9 @@ namespace MVGE_GEN
         }
         private void ScheduleChunksAroundPlayer(int centerCx, int centerCy, int centerCz)
         {
+            // Proactively ensure batches in active +1 ring are present (load from disk if exist)
+            EnsureBatchesForActiveArea(centerCx, centerCz);
+
             int lodDist = GameManager.settings.lod1RenderDistance;
             int bufferRadius = currentBufferRadius; // dynamic buffer radius
             int sizeX = GameManager.settings.chunkMaxX;
@@ -353,7 +371,55 @@ namespace MVGE_GEN
                     }
                 }
             }
+            // Passive chunks beyond +1 ring can be culled as well (outside lodDist+1)
+            foreach (var key in passiveChunks.Keys.ToArray())
+            {
+                if (Math.Abs(key.cx - centerCx) > lodDist + 1 || Math.Abs(key.cz - centerCz) > lodDist + 1 || Math.Abs(key.cy - centerCy) > verticalRange)
+                {
+                    passiveChunks.TryRemove(key, out _);
+                }
+                else
+                {
+                    // Promotion if moved into LoD1 vertical + horizontal bounds
+                    if (Math.Abs(key.cx - centerCx) <= lodDist && Math.Abs(key.cz - centerCz) <= lodDist && Math.Abs(key.cy - centerCy) <= verticalRange)
+                    {
+                        if (passiveChunks.TryRemove(key, out var promoted))
+                        {
+                            unbuiltChunks[key] = promoted;
+                            EnqueueMeshBuild(key, markDirty:false);
+                        }
+                    }
+                }
+            }
             // Buffer-generated chunks are never retained in-memory, so no unload needed for those.
+        }
+
+        // Extend scheduling: ensure LoD1 + 1 ring batches are loaded in memory.
+        private void EnsureBatchesForActiveArea(int centerCx,int centerCz)
+        {
+            int lodDist = GameManager.settings.lod1RenderDistance + 1; // +1 ring per new design
+            for (int dx = -lodDist; dx <= lodDist; dx++)
+            {
+                for (int dz = -lodDist; dz <= lodDist; dz++)
+                {
+                    int cx = centerCx + dx;
+                    int cz = centerCz + dz;
+                    var (bx,bz) = Batch.GetBatchIndices(cx, cz);
+                    // Touch batch (forces placeholder creation or load if file exists)
+                    if (!loadedBatches.ContainsKey((bx,bz)))
+                    {
+                        if (BatchFileExists(bx,bz))
+                        {
+                            LoadBatchForChunk(cx, centerCz, cz); // vertical index not needed for batch load
+                        }
+                        else
+                        {
+                            // If no batch file, will be populated lazily as chunks generate.
+                            GetOrCreateBatch(bx,bz);
+                        }
+                    }
+                }
+            }
         }
     }
 }
