@@ -1,12 +1,152 @@
 ﻿using MVGE_INF.Generation.Models;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 
 namespace MVGE_GEN.Utils
 {
     internal partial class SectionUtils
     {
+        // -------------------------------------------------------------------------------------------------
+        // WriteColumnMask
+        // Inserts a 16‑bit vertical occupancy mask for a single column into the 4096‑bit section
+        // occupancy bitset (occ). Layout is column‑major: each of the 256 columns (columnIndex 0..255)
+        // occupies a contiguous 16‑bit slice starting at linearBit = columnIndex * 16. Bit y in the
+        // 16‑bit mask corresponds to local Y level y (0..15) inside that column.
+        //
+        // Fast path:
+        //   * Computes the starting 64‑bit word (w0) and bit offset.
+        //   * ORs the shifted 16‑bit mask directly into occ[w0].
+        // Spill handling:
+        //   * If the 16 bits straddle a 64‑bit boundary (only when starting bit > 48),
+        //     the overflow (spill) upper bits are written into occ[w0 + 1].
+        //
+        // Notes:
+        //   * mask == 0 is an early exit (no occupancy).
+        //   * No clearing is performed; this is an additive population step.
+        //   * Used by packed / single‑id finalize paths to build the unified occupancy bitset
+        //     without per‑voxel loops.
+        // Complexity: O(1)
+        // -------------------------------------------------------------------------------------------------
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void WriteColumnMask(ulong[] occ, int columnIndex, ushort mask)
+        {
+            if (mask == 0) return;
+            int baseLi = columnIndex << 4; // 16 voxels per column
+            int w0 = baseLi >> 6;          // starting 64-bit word index
+            int bit = baseLi & 63;         // starting bit within word
+            ulong shifted = (ulong)mask << bit;
+            occ[w0] |= shifted;
+            int spill = bit + 16 - 64;    // how many bits overflow into next word (if any)
+            if (spill > 0)
+            {
+                occ[w0 + 1] |= (ulong)mask >> (16 - spill);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static ushort MaskRange(int ys, int ye) => _maskTable[ys, ye];
+
+        // -------------------------------------------------------------------------------------------------
+        // Array pooling: reduces allocation pressure for frequently reused temporary structures.
+        //   Occupancy: 4096 bits (64 * ulong) used when building face masks or packed/sparse data.
+        //   Dense:     4096 ushorts storing full per‑voxel ids (8 KB) for DenseExpanded or fallback.
+        // Objects are cleared before returning to pool to avoid leaking data across uses.
+        // -------------------------------------------------------------------------------------------------
+        private static readonly ConcurrentBag<ulong[]> _occupancyPool = new();
+        private static readonly ConcurrentBag<ushort[]> _densePool = new();
+        // Pool for escalated per-column 16-length voxel arrays
+        private static readonly ConcurrentBag<ushort[]> _escalatedColumnPool = new();
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static ushort[] RentEscalatedColumn()
+        {
+            if (_escalatedColumnPool.TryTake(out var a))
+            {
+                Array.Clear(a); // ensure clean (16 cells)
+                return a;
+            }
+            return new ushort[16];
+        }
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void ReturnEscalatedColumn(ushort[] arr)
+        {
+            if (arr == null || arr.Length != 16) return;
+            Array.Clear(arr);
+            _escalatedColumnPool.Add(arr);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static ulong[] RentOccupancy() => _occupancyPool.TryTake(out var a) ? a : new ulong[64];
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void ReturnOccupancy(ulong[] arr)
+        {
+            if (arr == null || arr.Length != 64) return;
+            Array.Clear(arr);            // ensure no stale bits leak
+            _occupancyPool.Add(arr);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static ushort[] RentDense() => _densePool.TryTake(out var a) ? a : new ushort[4096];
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void ReturnDense(ushort[] arr)
+        {
+            if (arr == null || arr.Length != 4096) return;
+            Array.Clear(arr);
+            _densePool.Add(arr);
+        }
+
+        // -------------------------------------------------------------------------------------------------
+        // Scratch pooling: Each in‑progress section maintains a SectionBuildScratch instance holding
+        // per‑column run data + small distinct id tracking. Pooling avoids churn when many sections
+        // are generated frame to frame.
+        // -------------------------------------------------------------------------------------------------
+        private static readonly ConcurrentBag<SectionBuildScratch> _scratchPool = new();
+
+        private static SectionBuildScratch RentScratch()
+        {
+            if (_scratchPool.TryTake(out var sc))
+            {
+                sc.Reset();
+                return sc;
+            }
+            var created = new SectionBuildScratch();
+            created.Reset();
+            return created;
+        }
+
+        private static void ReturnScratch(SectionBuildScratch sc)
+        {
+            if (sc == null) return;
+            _scratchPool.Add(sc);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static SectionBuildScratch GetScratch(ChunkSection sec)
+            => sec.BuildScratch as SectionBuildScratch ?? (SectionBuildScratch)(sec.BuildScratch = RentScratch());
+
+        // -------------------------------------------------------------------------------------------------
+        // Precomputed inclusive mask table for y ranges [ys,ye] (ys,ye in 0..15, ys<=ye). Saves bit shifts.
+        // -------------------------------------------------------------------------------------------------
+        private static readonly ushort[,] _maskTable = BuildMaskTable();
+        private static ushort[,] BuildMaskTable()
+        {
+            var tbl = new ushort[16, 16];
+            for (int ys = 0; ys < 16; ys++)
+            {
+                for (int ye = ys; ye < 16; ye++)
+                {
+                    int len = ye - ys + 1;
+                    tbl[ys, ye] = (ushort)(((1 << len) - 1) << ys);
+                }
+            }
+            return tbl;
+        }
+
         // ---------------------------------------------------------------------------------------------
         // WriteColumnMaskToBitData
         // Writes a 16‑bit occupancy column mask (one bit per Y level) directly into the packed BitData
