@@ -195,23 +195,31 @@ namespace MVGE_GEN.Utils
 
         // -------------------------------------------------------------------------------------------------
         // AddRun:
-        // Adds a contiguous vertical run [yStart, yEnd] with the provided blockId inside the column
-        // specified by (localX, localZ). Columns start empty (RunCount = 0).
-        // Representation transitions per column:
-        //   0 -> 1 run -> possibly 2 runs -> escalated (RunCount == 255) when fragmentation appears
-        // or partial overlaps make the compact form impractical.
-        // While runs are added we incrementally update:
-        //   - OccMask: 16 bits marking filled y positions
-        //   - NonAir:  count of set bits
-        //   - AdjY:    count of vertical adjacency pairs (set bits touching vertically)
-        // This incremental metadata allows finalization to compute exposure and counts quickly.
-        // Optimizations applied:
-        //   * Unified adjacency delta formula (internal pairs + bridging pairs) – removes localized recomputation loop.
-        //   * Same-id merge/extension preventing unnecessary escalation.
-        //   * Bridging collapse: when a new run fills the gap between two same-id runs they collapse into one.
-        //   * Escalated array pooling & full-column overwrite downgrade (can revert 255 -> 1 run).
-        //   * Precomputed mask table to avoid per-call shift math.
-        //   * Removed full 16-cell recompute loop after escalation; rely on incremental metadata.
+        // Inserts a vertical span [yStart, yEnd] (inclusive) with blockId into the column at (localX, localZ).
+        // The column can be in one of these states:
+        //   Empty  (RunCount == 0)
+        //   Single run (RunCount == 1)
+        //   Two runs (RunCount == 2)
+        //   Escalated per‑voxel (RunCount == 255)
+        // Flow:
+        //   1. Reject invalid / AIR input.
+        //   2. Acquire scratch column.
+        //   3. If full-height span:
+        //        * For empty / single / two-run columns build or replace a single full run.
+        //        * For escalated column: downgrade to single run overwriting data.
+        //   4. If escalated (per‑voxel) column (non full-height case): write ids directly into the 16‑entry array and update metadata bits.
+        //   5. If empty column: create first run and set metadata.
+        //   6. If single run:
+        //        * Same id and overlapping / touching → merge (simple boundary extension if purely above/below).
+        //        * Strictly above (disjoint) → become two runs.
+        //        * Overlap with different id → escalate to per‑voxel.
+        //   7. If two runs:
+        //        * Extend second run when contiguous.
+        //        * If inserting span that bridges two runs of same id producing a single contiguous run → collapse to one run.
+        //        * If after applying span both runs of same id become fully contiguous → collapse.
+        //        * Any overlap / fragmentation not handled by the above → escalate.
+        //   8. Escalation path: materialize/augment 16‑cell array, copy prior runs if first escalation, apply new span, update metadata.
+        //   Metadata per column (OccMask, NonAir, AdjY) is updated incrementally whenever new bits are added.
         // -------------------------------------------------------------------------------------------------
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void AddRun(ChunkSection sec, int localX, int localZ, int yStart, int yEnd, ushort blockId)
@@ -225,8 +233,8 @@ namespace MVGE_GEN.Utils
             int ci = localZ * S + localX;
             ref var col = ref scratch.GetWritableColumn(ci);
 
-            // Fast full-column insertion (and downgrade path from escalated/fragmented state)
-            if (yStart == 0 && yEnd == 15)
+            // Full-height span handling for non-escalated columns (RunCount <= 2)
+            if (yStart == 0 && yEnd == 15 && col.RunCount <= 2)
             {
                 if (col.RunCount == 0)
                 {
@@ -248,77 +256,117 @@ namespace MVGE_GEN.Utils
                     }
                     return;
                 }
-                if (col.RunCount == 255)
+                if (col.RunCount == 2)
                 {
-                    // Full overwrite allows downgrade from escalated to single run.
-                    if (col.Escalated != null)
-                    {
-                        ReturnEscalatedColumn(col.Escalated);
-                        col.Escalated = null;
-                    }
+                    // Overwrite both runs with a single full run
                     col.RunCount = 1;
                     col.Id0 = blockId;
                     col.Y0Start = 0; col.Y0End = 15;
                     col.OccMask = 0xFFFF; col.NonAir = 16; col.AdjY = 15;
                     TrackDistinct(scratch, blockId, ci);
+                    col.Id1 = 0; col.Y1Start = col.Y1End = 0;
                     return;
                 }
-                // Fragmented 2-run scenario covering full height after overwrite -> escalate fallback below.
             }
-
-            // Unified mask for this segment
-            ushort segMask = MaskRange(yStart, yEnd);
-
-            // Unified adjacency update helper (internal + bridging pairs)
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            static bool ApplyMask(ref ColumnData c, ushort segMask)
+            // Escalated full overwrite (separate so above guard can stay cheap)
+            if (yStart == 0 && yEnd == 15 && col.RunCount == 255)
             {
-                ushort prev = c.OccMask;
-                ushort added = (ushort)(segMask & ~prev);
-                if (added == 0) return false; // no new bits
-                c.OccMask = (ushort)(prev | segMask);
-                c.NonAir += (byte)BitOperations.PopCount(added);
-                // internal pairs wholly inside added bits
-                int internalPairs = BitOperations.PopCount((uint)(added & (added << 1)));
-                // bridging pairs (added adjacent to previous existing bits both directions)
-                int bridging = BitOperations.PopCount((uint)((added << 1) & prev)) + BitOperations.PopCount((uint)((added >> 1) & prev));
-                c.AdjY = (byte)(c.AdjY + internalPairs + bridging);
-                return true;
-            }
-
-            // Escalated path first (hot after replacements)
-            if (col.RunCount == 255)
-            {
-                var arr = col.Escalated ??= RentEscalatedColumn();
-                for (int y = yStart; y <= yEnd; y++) arr[y] = blockId; // overwrite segment
-                bool added = ApplyMask(ref col, segMask);
-                if (added) TrackDistinct(scratch, blockId, ci);
+                if (col.Escalated != null)
+                {
+                    ReturnEscalatedColumn(col.Escalated);
+                    col.Escalated = null;
+                }
+                col.RunCount = 1;
+                col.Id0 = blockId;
+                col.Y0Start = 0; col.Y0End = 15;
+                col.OccMask = 0xFFFF; col.NonAir = 16; col.AdjY = 15;
+                TrackDistinct(scratch, blockId, ci);
                 return;
             }
 
-            // Empty column
+            ushort segMask = MaskRange(yStart, yEnd);
+
+            // Escalated path (non full-height)
+            if (col.RunCount == 255)
+            {
+                var arr = col.Escalated ??= RentEscalatedColumn();
+                for (int y = yStart; y <= yEnd; y++) arr[y] = blockId;
+                // Inline mask update
+                ushort prev = col.OccMask;
+                ushort added = (ushort)(segMask & ~prev);
+                if (added != 0)
+                {
+                    col.OccMask = (ushort)(prev | segMask);
+                    col.NonAir += (byte)BitOperations.PopCount(added);
+                    int internalPairs = BitOperations.PopCount((uint)(added & (added << 1)));
+                    int bridging = BitOperations.PopCount((uint)((added << 1) & prev)) + BitOperations.PopCount((uint)((added >> 1) & prev));
+                    col.AdjY = (byte)(col.AdjY + internalPairs + bridging);
+                    TrackDistinct(scratch, blockId, ci);
+                }
+                else if (blockId != col.Id0 && blockId != col.Id1)
+                {
+                    TrackDistinct(scratch, blockId, ci);
+                }
+                return;
+            }
+
+            // Empty column fast path (occ mask still zero)
             if (col.RunCount == 0)
             {
                 col.RunCount = 1;
                 col.Id0 = blockId;
                 col.Y0Start = (byte)yStart; col.Y0End = (byte)yEnd;
-                ApplyMask(ref col, segMask);
+                // Direct metadata without popcount
+                int spanLen = yEnd - yStart + 1;
+                col.OccMask = segMask;
+                col.NonAir = (byte)spanLen;
+                col.AdjY = (byte)(spanLen - 1);
                 TrackDistinct(scratch, blockId, ci);
                 return;
             }
 
-            // Single run: attempt merge (overlap or touching) OR append as second run.
+            // Single-run modifications
             if (col.RunCount == 1)
             {
                 if (col.Id0 == blockId)
                 {
-                    // Overlap / touch => expand existing run bounds instead of escalating.
+                    // Contiguous pure top extension
+                    if (yStart == col.Y0End + 1)
+                    {
+                        int addLen = yEnd - yStart + 1;
+                        col.Y0End = (byte)yEnd;
+                        col.NonAir += (byte)addLen;
+                        col.AdjY += (byte)addLen; // (addLen-1 internal) + 1 bridging
+                        col.OccMask = MaskRange(col.Y0Start, col.Y0End);
+                        return;
+                    }
+                    // Contiguous pure bottom extension
+                    if (yEnd == col.Y0Start - 1)
+                    {
+                        int addLen = yEnd - yStart + 1;
+                        col.Y0Start = (byte)yStart;
+                        col.NonAir += (byte)addLen;
+                        col.AdjY += (byte)addLen; // (addLen-1 internal) + 1 bridging
+                        col.OccMask = MaskRange(col.Y0Start, col.Y0End);
+                        return;
+                    }
+                    // General overlap / touching merge
                     if (!(yEnd < col.Y0Start - 1 || yStart > col.Y0End + 1))
                     {
                         int newStart = Math.Min(col.Y0Start, yStart);
                         int newEnd = Math.Max(col.Y0End, yEnd);
                         ushort mergedMask = MaskRange(newStart, newEnd);
-                        ApplyMask(ref col, (ushort)(mergedMask)); // union already includes previous bits; added filter inside ApplyMask
+                        // Inline mask update
+                        ushort prev2 = col.OccMask;
+                        ushort added2 = (ushort)(mergedMask & ~prev2);
+                        if (added2 != 0)
+                        {
+                            col.OccMask = mergedMask;
+                            col.NonAir += (byte)BitOperations.PopCount(added2);
+                            int internalPairs = BitOperations.PopCount((uint)(added2 & (added2 << 1)));
+                            int bridging = BitOperations.PopCount((uint)((added2 << 1) & prev2)) + BitOperations.PopCount((uint)((added2 >> 1) & prev2));
+                            col.AdjY = (byte)(col.AdjY + internalPairs + bridging);
+                        }
                         col.Y0Start = (byte)newStart;
                         col.Y0End = (byte)newEnd;
                         return;
@@ -329,7 +377,18 @@ namespace MVGE_GEN.Utils
                     col.RunCount = 2;
                     col.Id1 = blockId;
                     col.Y1Start = (byte)yStart; col.Y1End = (byte)yEnd;
-                    ApplyMask(ref col, segMask);
+                    // Mask update (previous mask unchanged scenario)
+                    ushort prev = col.OccMask;
+                    ushort added = (ushort)(segMask & ~prev);
+                    if (added != 0)
+                    {
+                        col.OccMask = (ushort)(prev | segMask);
+                        col.NonAir += (byte)(yEnd - yStart + 1);
+                        // Internal + bridging pairs
+                        int internalPairs = (yEnd - yStart); // contiguous segment
+                        int bridging = BitOperations.PopCount((uint)((added << 1) & prev)) + BitOperations.PopCount((uint)((added >> 1) & prev));
+                        col.AdjY = (byte)(col.AdjY + internalPairs + bridging);
+                    }
                     TrackDistinct(scratch, blockId, ci);
                     return;
                 }
@@ -337,21 +396,32 @@ namespace MVGE_GEN.Utils
             }
             else if (col.RunCount == 2)
             {
-                // Extend second run
+                // Extend second run (contiguous top extension)
                 if (blockId == col.Id1 && yStart == col.Y1End + 1)
                 {
+                    int addLen = yEnd - yStart + 1;
                     col.Y1End = (byte)yEnd;
-                    ApplyMask(ref col, segMask);
+                    col.NonAir += (byte)addLen;
+                    col.AdjY += (byte)addLen;
+                    col.OccMask |= (ushort)(segMask); // segMask contiguous above existing second run
                     return;
                 }
                 // Bridging insertion between both runs with same id -> collapse to single run
                 if (col.Id0 == blockId && col.Id1 == blockId && yStart == col.Y0End + 1 && yEnd == col.Y1Start - 1)
                 {
-                    // Collapse into single merged run
                     int newStart = col.Y0Start;
                     int newEnd = col.Y1End;
                     ushort mergedMask = MaskRange(newStart, newEnd);
-                    ApplyMask(ref col, (ushort)(mergedMask));
+                    ushort prev = col.OccMask;
+                    ushort added = (ushort)(mergedMask & ~prev);
+                    if (added != 0)
+                    {
+                        col.OccMask = mergedMask;
+                        col.NonAir += (byte)BitOperations.PopCount(added);
+                        int internalPairs = BitOperations.PopCount((uint)(added & (added << 1)));
+                        int bridging = BitOperations.PopCount((uint)((added << 1) & prev)) + BitOperations.PopCount((uint)((added >> 1) & prev));
+                        col.AdjY = (byte)(col.AdjY + internalPairs + bridging);
+                    }
                     col.RunCount = 1;
                     col.Id0 = blockId;
                     col.Y0Start = (byte)newStart; col.Y0End = (byte)newEnd;
@@ -361,24 +431,30 @@ namespace MVGE_GEN.Utils
                 // Attempt bridging fill that makes combined mask contiguous & same id -> collapse
                 if (col.Id0 == blockId && col.Id1 == blockId)
                 {
-                    // After applying new segment, if occ mask becomes continuous from min start to max end we can collapse
                     int minStart = Math.Min(col.Y0Start, Math.Min(yStart, col.Y1Start));
                     int maxEnd = Math.Max(col.Y1End, Math.Max(yEnd, col.Y0End));
-                    // Build mask of full span and test contiguity after applying
                     ushort spanMask = MaskRange(minStart, maxEnd);
                     ushort futureOcc = (ushort)(col.OccMask | segMask);
                     if ((futureOcc & spanMask) == spanMask)
                     {
-                        // collapse
+                        ushort prev = col.OccMask;
+                        ushort added = (ushort)(spanMask & ~prev);
+                        if (added != 0)
+                        {
+                            col.OccMask = spanMask;
+                            col.NonAir += (byte)BitOperations.PopCount(added);
+                            int internalPairs = BitOperations.PopCount((uint)(added & (added << 1)));
+                            int bridging = BitOperations.PopCount((uint)((added << 1) & prev)) + BitOperations.PopCount((uint)((added >> 1) & prev));
+                            col.AdjY = (byte)(col.AdjY + internalPairs + bridging);
+                        }
                         col.RunCount = 1;
                         col.Id0 = blockId;
                         col.Y0Start = (byte)minStart; col.Y0End = (byte)maxEnd;
-                        ApplyMask(ref col, (ushort)(spanMask));
                         col.Id1 = 0; col.Y1Start = col.Y1End = 0;
                         return;
                     }
                 }
-                // Any overlap with either run or other fragmentation -> escalate.
+                // Any overlap with either run or fragmentation -> escalate
             }
 
             // Escalate (overlap / interior insertion / fragmentation)
@@ -387,7 +463,6 @@ namespace MVGE_GEN.Utils
 
             if (col.RunCount != 255 && col.Escalated == null)
             {
-                // Rehydrate existing runs into escalated storage
                 if (col.RunCount >= 1)
                 {
                     for (int y = col.Y0Start; y <= col.Y0End; y++) full[y] = col.Id0;
@@ -397,15 +472,25 @@ namespace MVGE_GEN.Utils
                     for (int y = col.Y1Start; y <= col.Y1End; y++) full[y] = col.Id1;
                 }
             }
-            // Write new segment
             for (int y = yStart; y <= yEnd; y++) full[y] = blockId;
             col.Escalated = full;
             col.RunCount = 255;
-            // Incremental metadata update (no full recompute loop)
-            bool addedBits = ApplyMask(ref col, segMask);
-            if (addedBits) TrackDistinct(scratch, blockId, ci);
-            else if (blockId == col.Id0 || blockId == col.Id1) { /* no new distinct needed */ }
-            else TrackDistinct(scratch, blockId, ci); // conservative fallback
+            // Inline mask update
+            {
+                ushort prev = col.OccMask;
+                ushort added = (ushort)(segMask & ~prev);
+                if (added != 0)
+                {
+                    col.OccMask = (ushort)(prev | segMask);
+                    col.NonAir += (byte)BitOperations.PopCount(added);
+                    int internalPairs = BitOperations.PopCount((uint)(added & (added << 1)));
+                    int bridging = BitOperations.PopCount((uint)((added << 1) & prev)) + BitOperations.PopCount((uint)((added >> 1) & prev));
+                    col.AdjY = (byte)(col.AdjY + internalPairs + bridging);
+                    TrackDistinct(scratch, blockId, ci);
+                }
+                else if (blockId == col.Id0 || blockId == col.Id1) { /* already tracked */ }
+                else TrackDistinct(scratch, blockId, ci);
+            }
         }
 
         // SetRunBits:
