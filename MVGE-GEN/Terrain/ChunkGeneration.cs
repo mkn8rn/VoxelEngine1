@@ -476,7 +476,7 @@ namespace MVGE_GEN.Terrain
                                     secRef = new ChunkSection();
                                     sections[sxIndex, sy, szIndex] = secRef;
                                 }
-                                SectionUtils.AddRun(secRef, ox, oz, localStart, localEnd, (ushort)BaseBlockType.Stone);
+                                SectionUtils.GenerationAddRun(secRef, ox, oz, localStart, localEnd, (ushort)BaseBlockType.Stone);
                             }
                         }
                             // Soil span
@@ -503,7 +503,7 @@ namespace MVGE_GEN.Terrain
                                     secRef = new ChunkSection();
                                     sections[sxIndex, sy, szIndex] = secRef;
                                 }
-                                SectionUtils.AddRun(secRef, ox, oz, localStart, localEnd, (ushort)BaseBlockType.Soil);
+                                SectionUtils.GenerationAddRun(secRef, ox, oz, localStart, localEnd, (ushort)BaseBlockType.Soil);
                             }
                         }
                     }
