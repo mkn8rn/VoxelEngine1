@@ -12,7 +12,7 @@ namespace MVGE_GEN.Utils
     internal partial class SectionUtils
     {
         // -------------------------------------------------------------------------------------------------
-        // AddRun:
+        // EscalatedAddRun:
         // Inserts a vertical span [yStart, yEnd] (inclusive) with blockId into the column at (localX, localZ).
         // The column can be in one of these states:
         //   Empty  (RunCount == 0)
@@ -40,7 +40,7 @@ namespace MVGE_GEN.Utils
         //   Metadata per column (OccMask, NonAir, AdjY) is updated incrementally whenever new bits are added.
         // -------------------------------------------------------------------------------------------------
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static void AddRun(ChunkSection sec, int localX, int localZ, int yStart, int yEnd, ushort blockId)
+        public static void EscalatedAddRun(ChunkSection sec, int localX, int localZ, int yStart, int yEnd, ushort blockId)
         {
             if (blockId == AIR || (uint)yStart > 15 || (uint)yEnd > 15 || yEnd < yStart) return;
 
@@ -310,5 +310,7 @@ namespace MVGE_GEN.Utils
                 else TrackDistinct(scratch, blockId, ci);
             }
         }
+
+
     }
 }

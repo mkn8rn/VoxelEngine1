@@ -566,7 +566,7 @@ namespace MVGE_GEN.Terrain
                 for (int sx=0; sx<sectionsX; sx++)
                 for (int sy=0; sy<sectionsY; sy++)
                 for (int sz=0; sz<sectionsZ; sz++)
-                { var sec = sections[sx,sy,sz]; if (sec==null) continue; SectionUtils.FinalizeSection(sec); }
+                { var sec = sections[sx,sy,sz]; if (sec==null) continue; SectionUtils.GenerationFinalizeSection(sec); }
             }
 
             precomputedHeightmap = null;
