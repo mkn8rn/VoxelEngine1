@@ -94,130 +94,194 @@ namespace MVGE_GEN.Utils
         }
 
         // -------------------------------------------------------------------------------------------------
-        // GenerationAddRun (fast path during initial world gen)
-        // Assumptions (current terrain generator):
-        //   * Runs are added in strictly non-overlapping, non-descending Y order per column.
-        //   * At most two runs per column today (stone then soil). Future design allows up to 8.
-        //   * No in-generation overwrites or partial overlaps.
-        // Behavior:
-        //   * Handles 0 -> 1 run, 1 -> 2 runs, and in-run extension (contiguous merge) cheaply.
-        //   * If a third disjoint run is ever encountered (future), we fall back to general AddRun().
-        //   * Never escalates to per-voxel unless forwarded to AddRun.
-        // Rationale:
-        //   * Avoids the heavier overlap / escalation logic in the general runtime AddRun path.
+        // GenerationAddRun
+        // Inserts a vertically inclusive span [yStart,yEnd] within 0..15 into a column under ordered
+        // non-overlapping generation assumptions. Per column we maintain up to two compact runs
+        // before escalating to per‑voxel storage. Metadata is updated incrementally: occupied mask,
+        // voxel count and vertical adjacency pairs. Distinct ids are tracked for later representation
+        // selection. All unexpected overlap / touching with different ids falls back to escalation.
         // -------------------------------------------------------------------------------------------------
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
         public static void GenerationAddRun(ChunkSection sec, int localX, int localZ, int yStart, int yEnd, ushort blockId)
         {
             if (sec == null || blockId == AIR || (uint)yStart > 15 || (uint)yEnd > 15 || yEnd < yStart)
                 return;
 
             var scratch = GetScratch(sec);
-            scratch.AnyNonAir = true;
-            sec.StructuralDirty = true;
 
-            int ci = localZ * S + localX;
+            int ci = (localZ << 4) | localX;            // column index (z * 16 + x)
             ref var col = ref scratch.GetWritableColumn(ci);
 
-            // Full-height single run shortcut
-            if (yStart == 0 && yEnd == 15)
+            // Fast path: empty column receiving full height span.
+            if (col.RunCount == 0 && yStart == 0 && yEnd == 15)
             {
-                if (col.RunCount == 0 ||
-                    (col.RunCount == 1 && col.Y0Start == 0 && col.Y0End == 15) ||
-                    (col.RunCount == 2 && col.Y0Start == 0 && col.Y0End == 15)) // (rare path)
-                {
-                    col.RunCount = 1;
-                    col.Id0 = blockId;
-                    col.Y0Start = 0; col.Y0End = 15;
-                    col.OccMask = 0xFFFF;
-                    col.NonAir = 16;
-                    col.AdjY = 15;
-                    col.Id1 = 0; col.Y1Start = col.Y1End = 0;
-                    TrackDistinct(scratch, blockId, ci);
-                    return;
-                }
-            }
-
-            ushort segMask = MaskRange(yStart, yEnd);
-
-            // Empty column
-            if (col.RunCount == 0)
-            {
+                scratch.AnyNonAir = true;
+                sec.StructuralDirty = true;
                 col.RunCount = 1;
                 col.Id0 = blockId;
-                col.Y0Start = (byte)yStart; col.Y0End = (byte)yEnd;
-                int spanLen = yEnd - yStart + 1;
-                col.OccMask = segMask;
-                col.NonAir = (byte)spanLen;
-                col.AdjY = (byte)(spanLen - 1);
+                col.Y0Start = 0; col.Y0End = 15;
+                col.OccMask = 0xFFFF;
+                col.NonAir = 16;
+                col.AdjY = 15;
                 TrackDistinct(scratch, blockId, ci);
                 return;
             }
 
-            // Single run present
-            if (col.RunCount == 1)
+            // Normal mutation marks (skipped above for already identical full case if early exited later).
+            scratch.AnyNonAir = true;
+            sec.StructuralDirty = true;
+
+            // Pre-compute span length once for branches that use it.
+            int spanLen = yEnd - yStart + 1;
+
+            // Dispatch based on current run state.
+            switch (col.RunCount)
             {
-                // Same id contiguous top
-                if (blockId == col.Id0 && yStart == col.Y0End + 1)
+                case 0: // First insertion, partial span
                 {
-                    int addLen = yEnd - yStart + 1;
-                    col.Y0End = (byte)yEnd;
-                    col.NonAir += (byte)addLen;
-                    col.AdjY += (byte)addLen; // (addLen-1 internal) + 1 bridging
-                    col.OccMask = MaskRange(col.Y0Start, col.Y0End);
-                    return;
-                }
-                // Same id contiguous bottom
-                if (blockId == col.Id0 && yEnd == col.Y0Start - 1)
-                {
-                    int addLen = yEnd - yStart + 1;
-                    col.Y0Start = (byte)yStart;
-                    col.NonAir += (byte)addLen;
-                    col.AdjY += (byte)addLen;
-                    col.OccMask = MaskRange(col.Y0Start, col.Y0End);
-                    return;
-                }
-                // Non-overlapping disjoint second run (expected stone->soil case)
-                if (yStart > col.Y0End + 1)
-                {
-                    col.RunCount = 2;
-                    col.Id1 = blockId;
-                    col.Y1Start = (byte)yStart; col.Y1End = (byte)yEnd;
-                    int spanLen = yEnd - yStart + 1;
-                    col.OccMask |= segMask;
-                    col.NonAir += (byte)spanLen;
-                    int internalPairs = spanLen - 1;
-                    int bridging = (yStart == col.Y0End + 1) ? 1 : 0;
-                    col.AdjY += (byte)(internalPairs + bridging);
+                    col.RunCount = 1;
+                    col.Id0 = blockId;
+                    col.Y0Start = (byte)yStart; col.Y0End = (byte)yEnd;
+                    col.OccMask = MaskRange(yStart, yEnd);
+                    col.NonAir = (byte)spanLen;
+                    col.AdjY = (byte)(spanLen - 1);
                     TrackDistinct(scratch, blockId, ci);
                     return;
                 }
 
-                // Overlap / unexpected pattern (future terrain complexity) -> defer to full logic
-                EscalatedAddRun(sec, localX, localZ, yStart, yEnd, blockId);
-                return;
-            }
-
-            // Two runs present (current generator never adds a third; future => fallback)
-            if (col.RunCount == 2)
-            {
-                // Attempt cheap contiguous extension of second run
-                if (blockId == col.Id1 && yStart == col.Y1End + 1)
+                case 1: // One existing run in the column
                 {
-                    int addLen = yEnd - yStart + 1;
-                    col.Y1End = (byte)yEnd;
-                    col.NonAir += (byte)addLen;
-                    col.AdjY += (byte)addLen;
-                    col.OccMask |= segMask;
-                    return;
+                    // Potential full-height overwrite (single or previously full first run). Placed early.
+                    if (yStart == 0 && yEnd == 15)
+                    {
+                        if (!(col.Y0Start == 0 && col.Y0End == 15 && col.Id0 == blockId))
+                        {
+                            col.Id0 = blockId; // overwrite (second run slot is not used here)
+                            col.Y0Start = 0; col.Y0End = 15;
+                            col.OccMask = 0xFFFF;
+                            col.NonAir = 16;
+                            col.AdjY = 15;
+                            col.Id1 = 0;
+                            TrackDistinct(scratch, blockId, ci);
+                        }
+                        return;
+                    }
+
+                    // Same id contiguous extension (only possible above under ordered emission).
+                    if (blockId == col.Id0)
+                    {
+                        int gap = yStart - col.Y0End; // gap==1 contiguous, gap>=2 disjoint, gap<=0 overlap
+                        if (gap == 1)
+                        {
+                            col.Y0End = (byte)yEnd;
+                            col.OccMask |= MaskRange(yStart, yEnd);
+                            byte add = (byte)spanLen;
+                            col.NonAir += add;
+                            col.AdjY += add; // internal + bridging equals added length
+                            return;
+                        }
+                        if (gap <= 0)
+                        {
+                            // Overlap or touching with same id not strictly above current end.
+                            goto Escalate;
+                        }
+                        // gap >= 2 falls through to second run creation below (still same id allowed as separate run under invariant)
+                    }
+
+                    // Disjoint above existing run (gap >= 2). Create second run.
+                    if (yStart > col.Y0End + 1)
+                    {
+                        col.RunCount = 2;
+                        col.Id1 = blockId;
+                        col.Y1Start = (byte)yStart; col.Y1End = (byte)yEnd;
+                        col.OccMask |= MaskRange(yStart, yEnd);
+                        col.NonAir += (byte)spanLen;
+                        col.AdjY += (byte)(spanLen - 1); // No bridging when gap >= 2
+                        TrackDistinct(scratch, blockId, ci);
+                        return;
+                    }
+
+                    // Contiguous but different id or any unexpected relation -> escalation.
+                    goto Escalate;
                 }
 
-                // No third-run support in fast path yet – fallback to general AddRun
-                EscalatedAddRun(sec, localX, localZ, yStart, yEnd, blockId);
-                return;
+                case 2: // Two compact runs present
+                {
+                    // Full-height overwrite allowed only if first run already full (0..15) optionally with second appended earlier.
+                    if (yStart == 0 && yEnd == 15 && col.Y0Start == 0 && col.Y0End == 15)
+                    {
+                        if (!(col.RunCount == 1 && col.Id0 == blockId))
+                        {
+                            col.RunCount = 1;
+                            col.Id0 = blockId;
+                            col.Y0Start = 0; col.Y0End = 15;
+                            col.OccMask = 0xFFFF;
+                            col.NonAir = 16;
+                            col.AdjY = 15;
+                            col.Id1 = 0;
+                            TrackDistinct(scratch, blockId, ci);
+                        }
+                        return;
+                    }
+
+                    // Extension of second run (same id, directly above current end).
+                    if (blockId == col.Id1)
+                    {
+                        int gap = yStart - col.Y1End; // gap == 1 contiguous, gap >= 2 disjoint, gap <=0 overlap
+                        if (gap == 1)
+                        {
+                            col.Y1End = (byte)yEnd;
+                            col.OccMask |= MaskRange(yStart, yEnd);
+                            byte add = (byte)spanLen;
+                            col.NonAir += add;
+                            col.AdjY += add;
+                            return;
+                        }
+                        if (gap <= 0) goto Escalate; // overlap / touch -> escalate
+                        // gap >= 2 -> escalate to per-voxel fast path below (ordered third disjoint run)
+                        if (gap >= 2)
+                        {
+                            // Convert in-place to escalated per-voxel representation reusing existing metadata where possible.
+                            var arr = col.Escalated ?? RentEscalatedColumn();
+                            if (col.RunCount != 255) // first escalation: materialize existing two runs
+                            {
+                                for (int y = col.Y0Start; y <= col.Y0End; y++) arr[y] = col.Id0;
+                                for (int y = col.Y1Start; y <= col.Y1End; y++) arr[y] = col.Id1;
+                            }
+                            for (int y = yStart; y <= yEnd; y++) arr[y] = blockId;
+                            col.Escalated = arr;
+
+                            ushort segMask = MaskRange(yStart, yEnd);
+                            ushort prevMask = col.OccMask;
+                            ushort added = (ushort)(segMask & ~prevMask);
+                            if (added != 0)
+                            {
+                                col.OccMask = (ushort)(prevMask | segMask);
+                                int addVoxelCount = BitOperations.PopCount(added);
+                                col.NonAir += (byte)addVoxelCount;
+                                int internalPairs = spanLen - 1; // Only internal vertical pairs (no bridging across gap >=2)
+                                col.AdjY += (byte)internalPairs;
+                                TrackDistinct(scratch, blockId, ci);
+                            }
+                            else if (blockId != col.Id0 && blockId != col.Id1)
+                            {
+                                TrackDistinct(scratch, blockId, ci);
+                            }
+                            col.RunCount = 255;
+                            scratch.AnyEscalated = true;
+                            return;
+                        }
+                    }
+
+                    // Different id contiguous or any unexpected pattern -> escalation.
+                    goto Escalate;
+                }
+
+                default: // Already escalated or unexpected marker -> general escalation path
+                    goto Escalate;
             }
 
-            // Any other (escalated or unexpected) -> use general path (should not occur in generation fast path)
+        Escalate:
             EscalatedAddRun(sec, localX, localZ, yStart, yEnd, blockId);
         }
 
@@ -250,7 +314,7 @@ namespace MVGE_GEN.Utils
                 {
                     sec.MetadataBuilt = true;
                     sec.IdMapDirty = false;
-                    sec.StructuralDirty = false;
+                    sec.StructuralDirty = false; // early uniform id remap
                     return;
                 }
 
