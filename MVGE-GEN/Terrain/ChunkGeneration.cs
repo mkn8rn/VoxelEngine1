@@ -13,345 +13,310 @@ namespace MVGE_GEN.Terrain
 {
     public partial class Chunk
     {
-        /// Packed per-column span info (array-of-struct).
-        /// Each column can have at most two vertical material spans in this terrain phase:
-        ///   1. Stone span (stoneStart..stoneEnd inclusive)
-        ///   2. Soil span  (soilStart..soilEnd inclusive) directly above stone when present
-        /// Section indices (first/last) are cached to avoid recomputing shifts during emission.
-        /// Absence of a span is marked ONLY by its presence bitset – struct numeric fields may hold default values that are ignored.
+        /// Per (x,z) column material spans inside this chunk's vertical slab.
+        /// Each column can contain at most one contiguous stone span and one contiguous soil span directly above it.
+        /// Section indices (first/last) are cached for emission & coverage calculations.
+        /// Presence is indicated via bitsets; default field values are ignored when the span is absent.
         private struct ColumnSpans
         {
-            public short stoneStart;   // inclusive local Y
-            public short stoneEnd;     // inclusive local Y
-            public short soilStart;    // inclusive local Y
-            public short soilEnd;      // inclusive local Y
-            public short stoneFirstSec; // first section touched by stone span
-            public short stoneLastSec;  // last section touched by stone span
-            public short soilFirstSec;  // first section touched by soil span
-            public short soilLastSec;   // last section touched by soil span
+            public short stoneStart;    // inclusive local Y
+            public short stoneEnd;      // inclusive local Y
+            public short soilStart;     // inclusive local Y
+            public short soilEnd;       // inclusive local Y
+            public short stoneFirstSec; // first vertical section touched by the stone span
+            public short stoneLastSec;  // last vertical section touched by the stone span
+            public short soilFirstSec;  // first vertical section touched by the soil span
+            public short soilLastSec;   // last vertical section touched by the soil span
         }
 
         /// Generates initial voxel data for the chunk.
-        /// Pipeline:
-        ///   1. Fused column pass across (x,z) computing: stone & soil spans, whole‑chunk uniform candidates,
-        ///      burial candidate, max surface, and fully‑covered section ranges (difference arrays) without emitting voxels.
-        ///      This pass now also records only columns that actually have material spans (bitsets) so later emission can be sparse.
-        ///   2. Prefix both difference arrays (single loop) to derive per‑section coverage counts -> classify section‑level uniformity.
-        ///   3. Whole‑chunk trivial classification (all air / all stone / all soil) with early exits.
-        ///   4. Run emission for non‑uniform sections only: enumerate union bitset (stone|soil) → per column, clip spans per section
-        ///      and write runs using GenerationAddRun. Uniform sections are skipped via a compact skip bitset.
-        ///   5. Whole‑chunk single block collapse check (all sections uniform with same non‑air id) → AllOneBlockChunk fast path.
-        ///   6. Finalize remaining non‑uniform sections (representation + metadata) & build chunk boundary planes; confirm burial.
+        /// Phases:
+        ///  1. Column pass (derivation): Using TerrainGeneration.DeriveStoneSoilSpans to obtain per‑column local spans.
+        ///     Accumulates fully‑covered section ranges via difference arrays (stoneDiff / soilDiff) and tracks which columns have material.
+        ///  2. Prefix phase: Convert difference arrays -> per‑section coverage counts for stone & soil.
+        ///  3. Whole chunk classification: detect AllAir / AllStone / AllSoil & early exit.
+        ///  4. Section emission: mark section‑uniform stone/soil, skip them during sparse run emission for remaining spans.
+        ///  5. Whole chunk single block collapse (AllOneBlockChunk) if all sections are uniform with the same id.
+        ///  6. Finalization: finalize non‑uniform sections (representation + metadata) and build boundary planes; confirm burial.
         public void GenerateInitialChunkData()
         {
-            // ---- Basic chunk & biome constants ----
+            // ------------------------------------------------------------------
+            // Basic chunk & biome constants
+            // ------------------------------------------------------------------
             int maxX = dimX, maxY = dimY, maxZ = dimZ;
             float[,] heightmap = precomputedHeightmap ?? GenerateHeightMap(generationSeed);
             int chunkBaseY = (int)position.Y;
-            int topOfChunk = chunkBaseY + maxY - 1;
+            int topOfChunk = chunkBaseY + maxY - 1; // inclusive local top
 
-            const int LocalBurialMargin = 2; // small offset near the top face to reject false burial positives
+            const int LocalBurialMargin = 2;                // vertical margin near chunk top to avoid premature burial flag
             int burialInvalidateThreshold = topOfChunk - LocalBurialMargin;
-
             const ushort StoneId = (ushort)BaseBlockType.Stone;
-            const ushort SoilId = (ushort)BaseBlockType.Soil;
+            const ushort SoilId  = (ushort)BaseBlockType.Soil;
 
-            int maxSurface = int.MinValue;        // highest surface encountered among columns (for all‑air fast path)
-            candidateFullyBuried = true;          // invalidated if any column surface reaches near the top of chunk
+            int maxSurface = int.MinValue;                  // track highest column surface (all‑air early rejection)
+            candidateFullyBuried = true;                    // invalidated if any surface approaches chunk top
 
-            // ---- Biome-configured vertical constraints / depth specs (hoisted) ----
+            // Biome vertical bands (used for early band overlap tests)
             int stoneMinY = biome.stoneMinYLevel; int stoneMaxY = biome.stoneMaxYLevel;
-            int soilMinY = biome.soilMinYLevel;   int soilMaxY = biome.soilMaxYLevel;
-            int soilMinDepthSpec = biome.soilMinDepth; int soilMaxDepthSpec = biome.soilMaxDepth;
-            int stoneMinDepthSpec = biome.stoneMinDepth; int stoneMaxDepthSpec = biome.stoneMaxDepth;
+            int soilMinY  = biome.soilMinYLevel;  int soilMaxY  = biome.soilMaxYLevel;
 
-            // Uniform candidate flags (bit0 = stone possible, bit1 = soil possible). 
-            // Soil candidate pre‑filtered by vertical overlap of chunk with soil biome band.
+            // Uniform candidate flags: bit0 -> stone, bit1 -> soil
             int uniformFlags = 0b11;
-            if (!(topOfChunk >= soilMinY && chunkBaseY <= soilMaxY)) uniformFlags &= ~0b10;
+            if (!(topOfChunk >= soilMinY && chunkBaseY <= soilMaxY))
+                uniformFlags &= ~0b10; // soil band does not overlap chunk at all
 
-            // ---- Whole-chunk early all-air short-circuit ----
+            // Whole chunk early all‑air (both bands entirely below the chunk slab)
             if (stoneMaxY < chunkBaseY && soilMaxY < chunkBaseY)
             {
-                AllAirChunk = true; precomputedHeightmap = null; return;
+                AllAirChunk = true;
+                precomputedHeightmap = null;
+                return;
             }
 
-            // ---- Section precomputation ----
-            int sectionSize = ChunkSection.SECTION_SIZE; // 16
+            // ------------------------------------------------------------------
+            // Section precomputation
+            // ------------------------------------------------------------------
+            int sectionSize = ChunkSection.SECTION_SIZE; // expected 16
             int sectionMask = sectionSize - 1;
             int sectionsYLocal = sectionsY;
-            int columnCount = maxX * maxZ; // number of vertical columns in this chunk
+            int columnCount = maxX * maxZ; // total vertical columns in this chunk
 
-            // Precompute base/end Y for each vertical section to avoid repeated shifts/masks.
             Span<int> sectionBaseYArr = stackalloc int[sectionsYLocal];
             Span<int> sectionEndYArr  = stackalloc int[sectionsYLocal];
             for (int sy = 0; sy < sectionsYLocal; sy++)
             {
-                int baseY = sy << SECTION_SHIFT; // sy * 16
+                int baseY = sy << SECTION_SHIFT; // faster than sy * 16
                 sectionBaseYArr[sy] = baseY;
-                sectionEndYArr[sy]  = baseY | (sectionSize - 1); // base + 15
+                sectionEndYArr[sy]  = baseY | (sectionSize - 1); // inclusive end
             }
 
-            // Per-section full coverage counts (derived from difference arrays later)
-            Span<int> stoneFullCoverCount   = stackalloc int[sectionsYLocal]; stoneFullCoverCount.Clear();
-            Span<int> soilFullCoverCount    = stackalloc int[sectionsYLocal]; soilFullCoverCount.Clear();
-            // Uniform classification flags per section
-            Span<bool> sectionUniformStone  = stackalloc bool[sectionsYLocal]; sectionUniformStone.Clear();
-            Span<bool> sectionUniformSoil   = stackalloc bool[sectionsYLocal]; sectionUniformSoil.Clear();
+            // Per‑section full coverage counts (after prefix) tell us how many columns fully cover a section.
+            Span<int> stoneFullCoverCount = stackalloc int[sectionsYLocal]; stoneFullCoverCount.Clear();
+            Span<int> soilFullCoverCount  = stackalloc int[sectionsYLocal]; soilFullCoverCount.Clear();
 
-            // ---- Span storage (AoS + presence via bitsets) ----
-            const int STACKALLOC_COLUMN_THRESHOLD = 512; // threshold to keep on stack for typical 16x16 = 256 grids
+            // Section uniform classification flags (stone preferred). True => section becomes uniform & skipped for emission.
+            Span<bool> sectionUniformStone = stackalloc bool[sectionsYLocal]; sectionUniformStone.Clear();
+            Span<bool> sectionUniformSoil  = stackalloc bool[sectionsYLocal]; sectionUniformSoil.Clear();
+
+            // Column span storage (AoS). Stack allocate if typical size, otherwise rent.
+            const int STACKALLOC_COLUMN_THRESHOLD = 512; // 16x16 = 256 < threshold -> stack path
             ColumnSpans[] pooledColumns = null;
             Span<ColumnSpans> columns = columnCount <= STACKALLOC_COLUMN_THRESHOLD
                 ? stackalloc ColumnSpans[columnCount]
                 : (pooledColumns = ArrayPool<ColumnSpans>.Shared.Rent(columnCount)).AsSpan(0, columnCount);
 
-            // Column presence bitsets (stone / soil). Union built later for sparse emission.
+            // Column presence bitsets for stone & soil (enable sparse emission over used columns only)
             int bitWordCount = (columnCount + 63) >> 6;
             Span<ulong> stonePresentBits = stackalloc ulong[bitWordCount]; stonePresentBits.Clear();
             Span<ulong> soilPresentBits  = stackalloc ulong[bitWordCount]; soilPresentBits.Clear();
 
-            // Track min/max vertical section indices touched by any span to restrict later loops.
+            // Track min/max section index touched (restrict later loops)
             int globalMinSectionY = int.MaxValue;
             int globalMaxSectionY = -1;
 
-            // Difference arrays for fully covered sections (range add technique):
-            //   For a fully covered inclusive section index range [a,b]: diff[a]++, diff[b+1]--.
-            // After prefix: value == number of columns fully covering that section.
+            // Difference arrays for fully‑covered sections. Length+1 for range end sentinel.
             Span<int> stoneDiff = stackalloc int[sectionsYLocal + 1]; stoneDiff.Clear();
             Span<int> soilDiff  = stackalloc int[sectionsYLocal + 1]; soilDiff.Clear();
 
-            static void SetBit(Span<ulong> bits, int index) => bits[index >> 6] |= 1UL << (index & 63);
+            // Helper to set a bit in the stone/soil presence bitsets
+            static void SetBit(Span<ulong> bits, int index)
+            {
+                bits[index >> 6] |= 1UL << (index & 63);
+            }
 
-            // =====================================================================
-            // 1. Fused column pass (row-major: z outer, x inner) – span derivation & coverage accumulation
-            // =====================================================================
+            // ------------------------------------------------------------------
+            // Phase 1: Column pass (span derivation + coverage accumulation)
+            // ------------------------------------------------------------------
             for (int z = 0; z < maxZ; z++)
             {
                 int rowOffset = z * maxX;
                 for (int x = 0; x < maxX; x++)
                 {
-                    int colIndex = rowOffset + x;           // linear column index
-                    int columnHeight = (int)heightmap[x, z]; // world surface height (float -> int)
+                    int colIndex = rowOffset + x;
+                    int surface = (int)heightmap[x, z]; // surface height (world)
 
-                    // Update max surface (used for all-air chunk detection)
-                    if (columnHeight > maxSurface) maxSurface = columnHeight;
-                    // Burial candidate invalidation early (single flag & condition)
-                    if (candidateFullyBuried & (columnHeight >= burialInvalidateThreshold)) candidateFullyBuried = false;
+                    // Track highest surface for later all‑air classification
+                    if (surface > maxSurface) maxSurface = surface;
 
-                    // Column lies entirely below chunk vertical range -> cannot contain material; invalidate both uniform flags.
-                    if (columnHeight < chunkBaseY)
-                    {
-                        uniformFlags = 0; // neither stone nor soil can be uniform
-                        continue;
-                    }
+                    // Burial candidate invalidation
+                    if (candidateFullyBuried & (surface >= burialInvalidateThreshold))
+                        candidateFullyBuried = false;
+
+                    // Derive local spans using shared helper (world -> chunk local)
+                    var res = TerrainGeneration.DeriveStoneSoilSpans(surface, chunkBaseY, maxY, topOfChunk, biome);
+
+                    // Update uniform candidates
+                    if (res.InvalidateStoneUniform) uniformFlags &= ~0b01;
+                    if (res.InvalidateSoilUniform)  uniformFlags &= ~0b10;
+
+                    // Skip empty column (no stone & no soil in this chunk slab)
+                    if (!res.HasStone && !res.HasSoil) continue;
 
                     ref ColumnSpans spanRef = ref columns[colIndex];
 
-                    // ---- Stone span derivation ----
-                    // Stone band is constrained by biome [stoneMinY, stoneMaxY] and actual column surface.
-                    int stoneBandStartWorld = stoneMinY > 0 ? stoneMinY : 0; // clamp floor to non-negative
-                    int stoneBandEndWorld   = stoneMaxY < columnHeight ? stoneMaxY : columnHeight;
-                    int available = stoneBandEndWorld - stoneBandStartWorld + 1; // inclusive vertical length of candidate band
-                    int stoneDepth = 0;
-                    if (available > 0)
+                    // Record stone span
+                    if (res.HasStone)
                     {
-                        // Reserve minimum soil depth above stone (bounded by available)
-                        int soilReserve = soilMinDepthSpec; if (soilReserve < 0) soilReserve = 0; if (soilReserve > available) soilReserve = available;
-                        int rawStone = available - soilReserve; // candidate stone thickness after reserving soil
-                        // Clamp to biome stone depth limits
-                        if (rawStone < stoneMinDepthSpec) rawStone = stoneMinDepthSpec;
-                        if (rawStone > stoneMaxDepthSpec) rawStone = stoneMaxDepthSpec;
-                        if (rawStone > available) rawStone = available;
-                        stoneDepth = rawStone > 0 ? rawStone : 0;
-                    }
-                    // finalStoneTopWorld inclusive; if no stone, set below start so that depth==0 test excludes it.
-                    int finalStoneTopWorld = stoneDepth > 0 ? (stoneBandStartWorld + stoneDepth - 1) : (stoneBandStartWorld - 1);
-
-                    // Whole-chunk uniform stone candidate invalidation using compressed flag bit.
-                    if ((uniformFlags & 0b01) != 0 && (available <= 0 || chunkBaseY < stoneBandStartWorld || topOfChunk > finalStoneTopWorld))
-                        uniformFlags &= ~0b01;
-
-                    // Record stone span (convert to local Y, clamp to chunk vertical bounds) only if non-empty.
-                    if (stoneDepth > 0)
-                    {
-                        int localStoneStart = stoneBandStartWorld - chunkBaseY;
-                        int localStoneEnd   = finalStoneTopWorld - chunkBaseY;
-                        if (localStoneEnd >= 0 && localStoneStart < maxY) // intersects chunk slab
-                        {
-                            if (localStoneStart < 0) localStoneStart = 0; if (localStoneEnd >= maxY) localStoneEnd = maxY - 1;
-                            if (localStoneStart <= localStoneEnd)
-                            {
-                                spanRef.stoneStart = (short)localStoneStart;
-                                spanRef.stoneEnd   = (short)localStoneEnd;
-                                short firstSecTmp = (short)(localStoneStart >> SECTION_SHIFT);
-                                short lastSecTmp  = (short)(localStoneEnd   >> SECTION_SHIFT);
-                                spanRef.stoneFirstSec = firstSecTmp; spanRef.stoneLastSec = lastSecTmp;
-                                SetBit(stonePresentBits, colIndex);
-                                if (firstSecTmp < globalMinSectionY) globalMinSectionY = firstSecTmp;
-                                if (lastSecTmp  > globalMaxSectionY) globalMaxSectionY = lastSecTmp;
-                            }
-                        }
+                        spanRef.stoneStart = res.StoneStart;
+                        spanRef.stoneEnd   = res.StoneEnd;
+                        short firstSec = (short)(res.StoneStart >> SECTION_SHIFT);
+                        short lastSec  = (short)(res.StoneEnd   >> SECTION_SHIFT);
+                        spanRef.stoneFirstSec = firstSec; spanRef.stoneLastSec = lastSec;
+                        SetBit(stonePresentBits, colIndex);
+                        if (firstSec < globalMinSectionY) globalMinSectionY = firstSec;
+                        if (lastSec  > globalMaxSectionY) globalMaxSectionY = lastSec;
                     }
 
-                    // ---- Soil span derivation ----
-                    // Soil sits above stone or starts at stone band base when no stone; constrained by biome & surface.
-                    int soilStartWorldLocal = stoneDepth > 0 ? (finalStoneTopWorld + 1) : stoneBandStartWorld;
-                    if (soilStartWorldLocal < soilMinY) soilStartWorldLocal = soilMinY;
-                    int soilEndWorldLocal = -1;
-                    if (soilStartWorldLocal <= soilMaxY && soilStartWorldLocal <= columnHeight)
+                    // Record soil span
+                    if (res.HasSoil)
                     {
-                        int soilBandCapWorld = soilMaxY < columnHeight ? soilMaxY : columnHeight;
-                        if (soilBandCapWorld >= soilStartWorldLocal)
-                        {
-                            int soilAvailable = soilBandCapWorld - soilStartWorldLocal + 1;
-                            if (soilAvailable > 0)
-                            {
-                                int soilDepth = soilAvailable < soilMaxDepthSpec ? soilAvailable : soilMaxDepthSpec;
-                                soilEndWorldLocal = soilStartWorldLocal + soilDepth - 1;
-                                int localSoilStart = soilStartWorldLocal - chunkBaseY;
-                                int localSoilEnd   = soilEndWorldLocal - chunkBaseY;
-                                if (localSoilEnd >= 0 && localSoilStart < maxY)
-                                {
-                                    if (localSoilStart < 0) localSoilStart = 0; if (localSoilEnd >= maxY) localSoilEnd = maxY - 1;
-                                    if (localSoilStart <= localSoilEnd)
-                                    {
-                                        spanRef.soilStart = (short)localSoilStart;
-                                        spanRef.soilEnd   = (short)localSoilEnd;
-                                        short firstSecTmp = (short)(localSoilStart >> SECTION_SHIFT);
-                                        short lastSecTmp  = (short)(localSoilEnd   >> SECTION_SHIFT);
-                                        spanRef.soilFirstSec = firstSecTmp; spanRef.soilLastSec = lastSecTmp;
-                                        SetBit(soilPresentBits, colIndex);
-                                        if (firstSecTmp < globalMinSectionY) globalMinSectionY = firstSecTmp;
-                                        if (lastSecTmp  > globalMaxSectionY) globalMaxSectionY = lastSecTmp;
-                                    }
-                                }
-                            }
-                        }
+                        spanRef.soilStart = res.SoilStart;
+                        spanRef.soilEnd   = res.SoilEnd;
+                        short firstSec = (short)(res.SoilStart >> SECTION_SHIFT);
+                        short lastSec  = (short)(res.SoilEnd   >> SECTION_SHIFT);
+                        spanRef.soilFirstSec = firstSec; spanRef.soilLastSec = lastSec;
+                        SetBit(soilPresentBits, colIndex);
+                        if (firstSec < globalMinSectionY) globalMinSectionY = firstSec;
+                        if (lastSec  > globalMaxSectionY) globalMaxSectionY = lastSec;
                     }
 
-                    // Whole-chunk uniform soil candidate invalidation
-                    if ((uniformFlags & 0b10) != 0)
-                    {
-                        int soilStartWorldCheck = soilStartWorldLocal;
-                        bool invalidSoil = soilStartWorldCheck > soilMaxY || soilEndWorldLocal < 0 ||
-                                           (chunkBaseY < soilStartWorldCheck || topOfChunk > soilEndWorldLocal ||
-                                            chunkBaseY <= (stoneDepth > 0 ? finalStoneTopWorld : (stoneBandStartWorld - 1)));
-                        if (invalidSoil) uniformFlags &= ~0b10;
-                    }
+                    bool stonePresent = res.HasStone;
+                    bool soilPresent  = res.HasSoil;
 
-                    // ---- Fully covered section accumulation ----
-                    // Criteria:
-                    //  * Stone section fully covered if stoneStart <= sectionBase && stoneEnd >= sectionEnd AND (no soil overlap intruding).
-                    //  * Soil  section fully covered if soilStart  <= sectionBase && soilEnd  >= sectionEnd AND (no stone overlap above).
-                    // Edge sections partially overlapped are excluded (we shrink first & last when partial coverage).
-                    int wStone = colIndex >> 6; ulong maskStone = 1UL << (colIndex & 63);
-                    bool stonePresent = (stonePresentBits[wStone] & maskStone) != 0UL;
-                    bool soilPresent  = (soilPresentBits[wStone]  & maskStone) != 0UL;
-
+                    // Fully covered section accumulation (stone)
                     if (stonePresent)
                     {
-                        int sStart = spanRef.stoneStart; int sEnd = spanRef.stoneEnd;
-                        int firstSec = spanRef.stoneFirstSec; int lastSec = spanRef.stoneLastSec;
-                        bool firstFull = sStart <= sectionBaseYArr[firstSec] && sEnd >= sectionEndYArr[firstSec];
-                        bool lastFull  = sStart <= sectionBaseYArr[lastSec]  && sEnd >= sectionEndYArr[lastSec];
-                        int fullStart = firstSec; int fullEnd = lastSec;
-                        if (!firstFull) fullStart = firstSec + 1;
-                        if (!lastFull)  fullEnd = lastSec - 1;
-                        if (firstSec == lastSec && !(firstFull && lastFull)) fullStart = fullEnd + 1; // invalidate span
+                        int sStart = spanRef.stoneStart;
+                        int sEnd   = spanRef.stoneEnd;
+                        int first  = spanRef.stoneFirstSec;
+                        int last   = spanRef.stoneLastSec;
+
+                        bool firstFull = sStart <= sectionBaseYArr[first] && sEnd >= sectionEndYArr[first];
+                        bool lastFull  = sStart <= sectionBaseYArr[last]  && sEnd >= sectionEndYArr[last];
+
+                        int fullStart = first;
+                        int fullEnd   = last;
+                        if (!firstFull) fullStart = first + 1;
+                        if (!lastFull)  fullEnd   = last - 1;
+                        if (first == last && !(firstFull && lastFull)) fullStart = fullEnd + 1; // invalidate single partial section
+
                         if (fullStart <= fullEnd)
                         {
-                            // Soil begins within covered range → truncate stone coverage so they do not overlap logically.
+                            // Truncate if soil intrudes within the covered range
                             if (soilPresent)
                             {
-                                int localSoilStart = spanRef.soilStart;
-                                int soilStartSec = localSoilStart >> SECTION_SHIFT;
+                                int soilStartLocal = spanRef.soilStart;
+                                int soilStartSec   = soilStartLocal >> SECTION_SHIFT;
                                 if (soilStartSec <= fullEnd) fullEnd = soilStartSec - 1;
                             }
                             if (fullStart <= fullEnd)
                             {
                                 stoneDiff[fullStart]++;
-                                int idx = fullEnd + 1; if (idx < stoneDiff.Length) stoneDiff[idx]--;
+                                int stop = fullEnd + 1; if (stop < stoneDiff.Length) stoneDiff[stop]--;
                             }
                         }
                     }
+
+                    // Fully covered section accumulation (soil)
                     if (soilPresent)
                     {
-                        int soStart = spanRef.soilStart; int soEnd = spanRef.soilEnd;
-                        int firstSec = spanRef.soilFirstSec; int lastSec = spanRef.soilLastSec;
-                        bool firstFull = soStart <= sectionBaseYArr[firstSec] && soEnd >= sectionEndYArr[firstSec];
-                        bool lastFull  = soStart <= sectionBaseYArr[lastSec]  && soEnd >= sectionEndYArr[lastSec];
-                        int fullStart = firstSec; int fullEnd = lastSec;
-                        if (!firstFull) fullStart = firstSec + 1;
-                        if (!lastFull)  fullEnd = lastSec - 1;
-                        if (firstSec == lastSec && !(firstFull && lastFull)) fullStart = fullEnd + 1;
+                        int soStart = spanRef.soilStart;
+                        int soEnd   = spanRef.soilEnd;
+                        int first   = spanRef.soilFirstSec;
+                        int last    = spanRef.soilLastSec;
+
+                        bool firstFull = soStart <= sectionBaseYArr[first] && soEnd >= sectionEndYArr[first];
+                        bool lastFull  = soStart <= sectionBaseYArr[last]  && soEnd >= sectionEndYArr[last];
+
+                        int fullStart = first;
+                        int fullEnd   = last;
+                        if (!firstFull) fullStart = first + 1;
+                        if (!lastFull)  fullEnd   = last - 1;
+                        if (first == last && !(firstFull && lastFull)) fullStart = fullEnd + 1;
+
                         if (fullStart <= fullEnd)
                         {
-                            // If stone overlaps from below bridging into soil region, shrink soil coverage start.
+                            // Shrink start if stone overlaps from below into soil region
                             if (stonePresent)
                             {
-                                int sEnd = spanRef.stoneEnd;
-                                int stoneOverlapSec = sEnd >> SECTION_SHIFT;
-                                if (stoneOverlapSec >= fullStart) fullStart = stoneOverlapSec + 1;
+                                int stoneEnd = spanRef.stoneEnd;
+                                int stoneEndSec = stoneEnd >> SECTION_SHIFT;
+                                if (stoneEndSec >= fullStart) fullStart = stoneEndSec + 1;
                             }
                             if (fullStart <= fullEnd)
                             {
                                 soilDiff[fullStart]++;
-                                int idx = fullEnd + 1; if (idx < soilDiff.Length) soilDiff[idx]--;
+                                int stop = fullEnd + 1; if (stop < soilDiff.Length) soilDiff[stop]--;
                             }
                         }
                     }
                 }
             }
 
-            // =====================================================================
-            // 2. Prefix classification (build per-section coverage counts)
-            // =====================================================================
+            // ------------------------------------------------------------------
+            // Phase 2: Prefix classification (convert difference arrays -> coverage counts)
+            // ------------------------------------------------------------------
             if (globalMaxSectionY >= 0)
             {
                 if (globalMinSectionY < 0) globalMinSectionY = 0;
                 if (globalMaxSectionY >= sectionsYLocal) globalMaxSectionY = sectionsYLocal - 1;
-                int runStone = 0, runSoil = 0;
+
+                int runStone = 0;
+                int runSoil  = 0;
                 for (int sy = globalMinSectionY; sy <= globalMaxSectionY; sy++)
                 {
                     runStone += stoneDiff[sy]; stoneFullCoverCount[sy] = runStone;
-                    runSoil  += soilDiff[sy]; soilFullCoverCount[sy] = runSoil;
+                    runSoil  += soilDiff[sy];  soilFullCoverCount[sy]  = runSoil;
                 }
             }
 
-            // =====================================================================
-            // 3. Whole-chunk trivial classification & early exits
-            // =====================================================================
-            if (chunkBaseY > maxSurface) // chunk lies completely above the highest surface across all columns
+            // ------------------------------------------------------------------
+            // Phase 3: Whole‑chunk trivial classification
+            // ------------------------------------------------------------------
+            if (chunkBaseY > maxSurface)
             {
-                AllAirChunk = true; precomputedHeightmap = null; if (pooledColumns != null) ArrayPool<ColumnSpans>.Shared.Return(pooledColumns, false); return;
+                AllAirChunk = true;
+                precomputedHeightmap = null;
+                if (pooledColumns != null) ArrayPool<ColumnSpans>.Shared.Return(pooledColumns, false);
+                return;
             }
-            if ((uniformFlags & 0b01) != 0 && (uniformFlags & 0b10) == 0) { AllStoneChunk = true; CreateUniformSections(StoneId); }
-            else if ((uniformFlags & 0b10) != 0 && (uniformFlags & 0b01) == 0) { AllSoilChunk = true; CreateUniformSections(SoilId); }
+            if ((uniformFlags & 0b01) != 0 && (uniformFlags & 0b10) == 0)
+            {
+                AllStoneChunk = true; CreateUniformSections(StoneId);
+            }
+            else if ((uniformFlags & 0b10) != 0 && (uniformFlags & 0b01) == 0)
+            {
+                AllSoilChunk = true; CreateUniformSections(SoilId);
+            }
             if (AllStoneChunk || AllSoilChunk)
             {
-                precomputedHeightmap = null; BuildAllBoundaryPlanesInitial();
-                if (candidateFullyBuried && FaceSolidNegX && FaceSolidPosX && FaceSolidNegY && FaceSolidPosY && FaceSolidNegZ && FaceSolidPosZ) SetFullyBuried();
+                precomputedHeightmap = null;
+                BuildAllBoundaryPlanesInitial();
+                if (candidateFullyBuried && FaceSolidNegX && FaceSolidPosX && FaceSolidNegY && FaceSolidPosY && FaceSolidNegZ && FaceSolidPosZ)
+                    SetFullyBuried();
                 if (pooledColumns != null) ArrayPool<ColumnSpans>.Shared.Return(pooledColumns, false);
                 return;
             }
 
-            // =====================================================================
-            // 4. Section uniform detection (stone preference) + sparse span emission
-            // =====================================================================
+            // ------------------------------------------------------------------
+            // Phase 4: Section uniform detection and sparse emission
+            // ------------------------------------------------------------------
             if (globalMaxSectionY >= 0)
             {
-                // Classify section uniformity from coverage counts
+                // (a) Classify per‑section uniform coverage
                 for (int sy = globalMinSectionY; sy <= globalMaxSectionY; sy++)
                 {
                     bool stoneUniform = stoneFullCoverCount[sy] == columnCount;
                     bool soilUniform  = !stoneUniform && soilFullCoverCount[sy] == columnCount;
+
                     if (stoneUniform)
                     {
                         sectionUniformStone[sy] = true;
                         for (int sx = 0; sx < sectionsX; sx++)
                         for (int sz = 0; sz < sectionsZ; sz++)
+                        {
                             if (sections[sx, sy, sz] == null)
+                            {
                                 sections[sx, sy, sz] = new ChunkSection
                                 {
                                     IsAllAir = false,
@@ -367,14 +332,18 @@ namespace MVGE_GEN.Terrain
                                     StructuralDirty = false,
                                     IdMapDirty = false
                                 };
-                        continue;
+                            }
+                        }
+                        continue; // soil never overrides stone when stone is uniform
                     }
                     if (soilUniform)
                     {
                         sectionUniformSoil[sy] = true;
                         for (int sx = 0; sx < sectionsX; sx++)
                         for (int sz = 0; sz < sectionsZ; sz++)
+                        {
                             if (sections[sx, sy, sz] == null)
+                            {
                                 sections[sx, sy, sz] = new ChunkSection
                                 {
                                     IsAllAir = false,
@@ -390,10 +359,12 @@ namespace MVGE_GEN.Terrain
                                     StructuralDirty = false,
                                     IdMapDirty = false
                                 };
+                            }
+                        }
                     }
                 }
 
-                // Build uniform skip bitset: 1 means this section is already uniform (skip emission entirely).
+                // (b) Build uniform skip bitset (1 => already uniform) for fast emission skip
                 int uniformWordCount = (sectionsYLocal + 63) >> 6;
                 Span<ulong> uniformSkipBits = stackalloc ulong[uniformWordCount];
                 for (int sy = 0; sy < sectionsYLocal; sy++)
@@ -404,17 +375,18 @@ namespace MVGE_GEN.Terrain
                     }
                 }
 
-                // Union bitset of columns with any span (stone OR soil). Enables sparse emission.
+                // (c) Build union bitset of any spans (stone OR soil) to iterate sparsely
                 Span<ulong> anySpanBits = stackalloc ulong[bitWordCount];
                 for (int w = 0; w < bitWordCount; w++) anySpanBits[w] = stonePresentBits[w] | soilPresentBits[w];
 
-                // Unified emission helper (local) – intentionally small for inlining
+                // Local emission helper (run-wise insertion)
                 static void EmitSpan(ChunkSection secRef, int ox, int oz, int localStart, int localEnd, ushort id)
                 {
-                    if (localStart <= localEnd) SectionUtils.GenerationAddRun(secRef, ox, oz, localStart, localEnd, id);
+                    if (localStart <= localEnd)
+                        SectionUtils.GenerationAddRun(secRef, ox, oz, localStart, localEnd, id);
                 }
 
-                // Enumerate populated columns using trailing zero iteration per 64‑bit word.
+                // (d) Iterate columns sparsely using trailing-zero bit scanning
                 for (int w = 0; w < bitWordCount; w++)
                 {
                     ulong word = anySpanBits[w];
@@ -422,53 +394,63 @@ namespace MVGE_GEN.Terrain
                     {
                         int tz = BitOperations.TrailingZeroCount(word);
                         int colIndex = (w << 6) + tz;
-                        word &= word - 1; // clear lowest set bit
-                        if (colIndex >= columnCount) break; // safety guard (partial final word)
+                        word &= word - 1; // clear processed bit
+                        if (colIndex >= columnCount) break; // safety (partial final word)
 
                         ref ColumnSpans spanRef = ref columns[colIndex];
                         ulong mask = 1UL << tz;
                         bool hasStone = (stonePresentBits[w] & mask) != 0UL;
                         bool hasSoil  = (soilPresentBits[w]  & mask) != 0UL;
-                        if (!hasStone && !hasSoil) continue; // defensive
+                        if (!hasStone && !hasSoil) continue; // defensive guard
 
-                        int x = colIndex % maxX; int z = colIndex / maxX;
+                        int x = colIndex % maxX;
+                        int z = colIndex / maxX;
                         int sxIndex = x >> SECTION_SHIFT; int ox = x & sectionMask;
                         int szIndex = z >> SECTION_SHIFT; int oz = z & sectionMask;
 
                         // Stone emission
                         if (hasStone)
                         {
-                            int firstSec = spanRef.stoneFirstSec; int lastSec = spanRef.stoneLastSec;
+                            int firstSec = spanRef.stoneFirstSec;
+                            int lastSec  = spanRef.stoneLastSec;
                             if (firstSec < globalMinSectionY) firstSec = globalMinSectionY;
                             if (lastSec  > globalMaxSectionY) lastSec  = globalMaxSectionY;
                             int ss = spanRef.stoneStart; int se = spanRef.stoneEnd;
+
                             for (int sy = firstSec; sy <= lastSec; sy++)
                             {
-                                int wSkip = sy >> 6; int bSkip = sy & 63; if ((uniformSkipBits[wSkip] & (1UL << bSkip)) != 0UL) continue;
-                                int sectionBase = sectionBaseYArr[sy]; int sectionEnd = sectionEndYArr[sy];
+                                int wSkip = sy >> 6; int bSkip = sy & 63;
+                                if ((uniformSkipBits[wSkip] & (1UL << bSkip)) != 0UL) continue; // already uniform
+                                int sectionBase = sectionBaseYArr[sy];
+                                int sectionEnd  = sectionEndYArr[sy];
                                 if (se < sectionBase || ss > sectionEnd) continue; // no overlap
                                 int clippedStart = ss < sectionBase ? sectionBase : ss;
                                 int clippedEnd   = se > sectionEnd ? sectionEnd : se;
-                                ChunkSection secRef = sections[sxIndex, sy, szIndex];
+                                var secRef = sections[sxIndex, sy, szIndex];
                                 if (secRef == null) { secRef = new ChunkSection(); sections[sxIndex, sy, szIndex] = secRef; }
                                 EmitSpan(secRef, ox, oz, clippedStart - sectionBase, clippedEnd - sectionBase, StoneId);
                             }
                         }
+
                         // Soil emission
                         if (hasSoil)
                         {
-                            int firstSec = spanRef.soilFirstSec; int lastSec = spanRef.soilLastSec;
+                            int firstSec = spanRef.soilFirstSec;
+                            int lastSec  = spanRef.soilLastSec;
                             if (firstSec < globalMinSectionY) firstSec = globalMinSectionY;
                             if (lastSec  > globalMaxSectionY) lastSec  = globalMaxSectionY;
                             int sols = spanRef.soilStart; int sole = spanRef.soilEnd;
+
                             for (int sy = firstSec; sy <= lastSec; sy++)
                             {
-                                int wSkip = sy >> 6; int bSkip = sy & 63; if ((uniformSkipBits[wSkip] & (1UL << bSkip)) != 0UL) continue;
-                                int sectionBase = sectionBaseYArr[sy]; int sectionEnd = sectionEndYArr[sy];
+                                int wSkip = sy >> 6; int bSkip = sy & 63;
+                                if ((uniformSkipBits[wSkip] & (1UL << bSkip)) != 0UL) continue;
+                                int sectionBase = sectionBaseYArr[sy];
+                                int sectionEnd  = sectionEndYArr[sy];
                                 if (sole < sectionBase || sols > sectionEnd) continue;
                                 int clippedStart = sols < sectionBase ? sectionBase : sols;
                                 int clippedEnd   = sole > sectionEnd ? sectionEnd : sole;
-                                ChunkSection secRef = sections[sxIndex, sy, szIndex];
+                                var secRef = sections[sxIndex, sy, szIndex];
                                 if (secRef == null) { secRef = new ChunkSection(); sections[sxIndex, sy, szIndex] = secRef; }
                                 EmitSpan(secRef, ox, oz, clippedStart - sectionBase, clippedEnd - sectionBase, SoilId);
                             }
@@ -476,54 +458,86 @@ namespace MVGE_GEN.Terrain
                     }
                 }
 
-                if (pooledColumns != null) ArrayPool<ColumnSpans>.Shared.Return(pooledColumns, false);
+                if (pooledColumns != null)
+                    ArrayPool<ColumnSpans>.Shared.Return(pooledColumns, false);
             }
-            else if (pooledColumns != null) ArrayPool<ColumnSpans>.Shared.Return(pooledColumns, false);
+            else if (pooledColumns != null)
+            {
+                ArrayPool<ColumnSpans>.Shared.Return(pooledColumns, false);
+            }
 
-            // =====================================================================
-            // 5. Whole-chunk single block collapse (post section creation)
-            // =====================================================================
+            // ------------------------------------------------------------------
+            // Phase 5: Whole‑chunk single block collapse (post section creation)
+            // ------------------------------------------------------------------
             if (!AllAirChunk)
             {
-                bool allUniformSame = true; ushort uniformId = 0;
+                bool allUniformSame = true;
+                ushort uniformId = 0;
+
                 for (int sx = 0; sx < sectionsX && allUniformSame; sx++)
                 for (int sy = 0; sy < sectionsY && allUniformSame; sy++)
                 for (int sz = 0; sz < sectionsZ && allUniformSame; sz++)
                 {
-                    var sec = sections[sx, sy, sz]; if (sec == null) continue;
-                    if (sec.Kind != ChunkSection.RepresentationKind.Uniform || sec.UniformBlockId == ChunkSection.AIR) { allUniformSame = false; break; }
-                    if (uniformId == 0) uniformId = sec.UniformBlockId; else if (sec.UniformBlockId != uniformId) { allUniformSame = false; break; }
+                    var sec = sections[sx, sy, sz];
+                    if (sec == null) continue; // air section
+                    if (sec.Kind != ChunkSection.RepresentationKind.Uniform || sec.UniformBlockId == ChunkSection.AIR)
+                    {
+                        allUniformSame = false; break;
+                    }
+                    if (uniformId == 0) uniformId = sec.UniformBlockId;
+                    else if (sec.UniformBlockId != uniformId) { allUniformSame = false; break; }
                 }
+
                 if (allUniformSame && uniformId != 0)
                 {
-                    AllOneBlockChunk = true; AllOneBlockBlockId = uniformId;
+                    AllOneBlockChunk = true;
+                    AllOneBlockBlockId = uniformId;
+                    // Mark uniform sections clean; metadata already sufficient
                     for (int sx = 0; sx < sectionsX; sx++)
                     for (int sy = 0; sy < sectionsY; sy++)
                     for (int sz = 0; sz < sectionsZ; sz++)
                     {
-                        var sec = sections[sx, sy, sz]; if (sec == null) continue;
+                        var sec = sections[sx, sy, sz];
+                        if (sec == null) continue;
                         if (sec.Kind == ChunkSection.RepresentationKind.Uniform)
-                        { sec.IdMapDirty = false; sec.StructuralDirty = false; sec.MetadataBuilt = true; }
+                        {
+                            sec.IdMapDirty = false;
+                            sec.StructuralDirty = false;
+                            sec.MetadataBuilt = true;
+                        }
                     }
                 }
             }
 
-            // =====================================================================
-            // 6. Finalize non-uniform sections & build boundary planes
-            // =====================================================================
+            // ------------------------------------------------------------------
+            // Phase 6: Finalize non‑uniform sections & build boundary planes
+            // ------------------------------------------------------------------
             if (!AllOneBlockChunk)
             {
                 for (int sx = 0; sx < sectionsX; sx++)
                 for (int sy = 0; sy < sectionsY; sy++)
                 for (int sz = 0; sz < sectionsZ; sz++)
-                { var sec = sections[sx, sy, sz]; if (sec == null) continue; SectionUtils.GenerationFinalizeSection(sec); }
+                {
+                    var sec = sections[sx, sy, sz];
+                    if (sec == null) continue; // empty (air) section
+                    SectionUtils.GenerationFinalizeSection(sec);
+                }
             }
 
-            precomputedHeightmap = null; // release heightmap reference (chunk now self-contained)
+            // Release heightmap reference (no longer needed after voxel data established)
+            precomputedHeightmap = null;
+
+            // Build initial boundary planes (using finalized section representations)
             BuildAllBoundaryPlanesInitial();
-            // Burial confirmation after verifying all six faces are fully solid
-            if (candidateFullyBuried && FaceSolidNegX && FaceSolidPosX && FaceSolidNegY && FaceSolidPosY && FaceSolidNegZ && FaceSolidPosZ)
+
+            // Confirm burial if faces are all solid and candidate still holds
+            if (candidateFullyBuried &&
+                FaceSolidNegX && FaceSolidPosX &&
+                FaceSolidNegY && FaceSolidPosY &&
+                FaceSolidNegZ && FaceSolidPosZ)
+            {
                 SetFullyBuried();
+            }
         }
     }
 }
