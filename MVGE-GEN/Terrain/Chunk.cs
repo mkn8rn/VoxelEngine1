@@ -16,6 +16,10 @@ namespace MVGE_GEN.Terrain
 {
     public partial class Chunk
     {
+        // Optional uniform override supplied by batch classification to skip normal span derivation path.
+        internal enum UniformOverride { None = 0, AllAir, AllStone, AllSoil }
+        private readonly UniformOverride _uniformOverride;
+
         public Vector3 position { get; set; }
         public ChunkRender chunkRender;
         public ChunkData chunkData;
@@ -102,13 +106,14 @@ namespace MVGE_GEN.Terrain
 
         private bool candidateFullyBuried; // heightmap suggested burial; confirmed after face solidity scan
 
-        // constructor allowing the caller to skip auto generation (used by disk load path)
-        internal Chunk(Vector3 chunkPosition, long seed, string chunkDataDirectory, float[,] precomputedHeightmap, bool autoGenerate)
+        // constructor allowing the caller to skip auto generation (used by disk load path) with optional uniform override.
+        internal Chunk(Vector3 chunkPosition, long seed, string chunkDataDirectory, float[,] precomputedHeightmap, bool autoGenerate, UniformOverride uniformOverride = UniformOverride.None)
         {
             position = chunkPosition;
             saveDirectory = chunkDataDirectory;
             generationSeed = seed;
             this.precomputedHeightmap = precomputedHeightmap;
+            _uniformOverride = uniformOverride;
 
             dimX = GameManager.settings.chunkMaxX;
             dimY = GameManager.settings.chunkMaxY;
@@ -129,13 +134,13 @@ namespace MVGE_GEN.Terrain
             InitializeSectionGrid();
             if (autoGenerate)
             {
-                InitializeChunkData(); // triggers GenerateInitialChunkData
+                InitializeChunkData(); // triggers GenerateInitialChunkData or uniform shortcut
             }
         }
 
         // Public constructor retains previous behaviour (auto-generate)
         public Chunk(Vector3 chunkPosition, long seed, string chunkDataDirectory, float[,] precomputedHeightmap = null)
-            : this(chunkPosition, seed, chunkDataDirectory, precomputedHeightmap, true) { }
+            : this(chunkPosition, seed, chunkDataDirectory, precomputedHeightmap, true, UniformOverride.None) { }
 
         public void InitializeSectionGrid()
         {
@@ -151,7 +156,33 @@ namespace MVGE_GEN.Terrain
             sections = new ChunkSection[sectionsX, sectionsY, sectionsZ];
         }
 
-        public void InitializeChunkData() => GenerateInitialChunkData();
+        public void InitializeChunkData()
+        {
+            // Uniform override short‑circuit path built from batch classification.
+            if (_uniformOverride != UniformOverride.None)
+            {
+                if (_uniformOverride == UniformOverride.AllAir)
+                {
+                    AllAirChunk = true;
+                }
+                else if (_uniformOverride == UniformOverride.AllStone)
+                {
+                    AllStoneChunk = true;
+                    CreateUniformSections((ushort)BaseBlockType.Stone);
+                }
+                else if (_uniformOverride == UniformOverride.AllSoil)
+                {
+                    AllSoilChunk = true;
+                    CreateUniformSections((ushort)BaseBlockType.Soil);
+                }
+                if (AllStoneChunk || AllSoilChunk)
+                {
+                    BuildAllBoundaryPlanesInitial();
+                }
+                return;
+            }
+            GenerateInitialChunkData();
+        }
 
         // NOTE: InitializeChunkData & all generation helpers are in ChunkGenerator partial file.
         public void Render(ShaderProgram shader) => chunkRender?.Render(shader);

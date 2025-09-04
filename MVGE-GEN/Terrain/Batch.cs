@@ -5,6 +5,17 @@ using OpenTK.Mathematics;
 
 namespace MVGE_GEN.Terrain
 {
+    // ColumnProfile captures world‑space vertical material extents for a single (chunkX,chunkZ) column footprint.
+    // surface     : highest surface/sample height used for quick all‑air rejection (chunks wholly above any surface become AllAir).
+    // stoneStart/stoneEnd : inclusive world Y span for stone material in this column ( -1 when absent )
+    // soilStart/soilEnd   : inclusive world Y span for soil material above stone ( -1 when absent )
+    internal struct ColumnProfile
+    {
+        public int Surface;
+        public int StoneStart, StoneEnd; // -1 if none
+        public int SoilStart, SoilEnd;   // -1 if none
+    }
+
     /// A Batch groups chunks in the horizontal plane in tiles of 32 x 32 chunk coordinates (cx,cz).
     /// All vertical layers (cy) for the horizontal footprint share the same batch object.
     /// Any request that causes one chunk of the batch to be generated or loaded brings the whole batch
@@ -28,6 +39,16 @@ namespace MVGE_GEN.Terrain
 
         // Simple lock for mutating structures (coarse – perf acceptable because operations are infrequent)
         private readonly object _lock = new();
+
+        // ---------------- Uniform classification cache ----------------
+        // Profiles are built once (on demand) for the batch footprint so vertical layer classification can be done
+        // without re‑deriving per‑column spans for every chunk in the stack.
+        private readonly ColumnProfile[,] _profiles = new ColumnProfile[BATCH_SIZE, BATCH_SIZE];
+        private volatile bool _profilesBuilt; // marked true once every footprint cell initialized
+        private readonly object _profileBuildLock = new();
+
+        // Classification result enumeration used by higher level chunk constructor to short‑circuit generation.
+        internal enum UniformKind { None = 0, AllAir = 1, AllStone = 2, AllSoil = 3 }
 
         public Batch(int batchX, int batchZ)
         {
@@ -97,5 +118,78 @@ namespace MVGE_GEN.Terrain
         // Indicates batch generation has completed for initial pass (all in-range vertical layers created).
         // NOTE: Hybrid incremental strategy: we do not currently set this, but retain for potential future use.
         public volatile bool GenerationComplete;
+
+        // ---------------- Profile building & classification API ----------------
+        // BuildProfiles is supplied with a delegate that returns per (cx,cz) column material spans in world space.
+        // The provider must return: (surface, stoneStart, stoneEnd, soilStart, soilEnd) with -1 for absent spans.
+        public void BuildProfiles(Func<int,int,(int surface,int stoneStart,int stoneEnd,int soilStart,int soilEnd)> provider)
+        {
+            if (_profilesBuilt) return;
+            lock (_profileBuildLock)
+            {
+                if (_profilesBuilt) return;
+                for (int lx = 0; lx < BATCH_SIZE; lx++)
+                {
+                    for (int lz = 0; lz < BATCH_SIZE; lz++)
+                    {
+                        var (surface, stoneStart, stoneEnd, soilStart, soilEnd) = provider(batchX * BATCH_SIZE + lx, batchZ * BATCH_SIZE + lz);
+                        _profiles[lx, lz] = new ColumnProfile
+                        {
+                            Surface = surface,
+                            StoneStart = stoneStart,
+                            StoneEnd = stoneEnd,
+                            SoilStart = soilStart,
+                            SoilEnd = soilEnd
+                        };
+                    }
+                }
+                _profilesBuilt = true;
+            }
+        }
+
+        // Classify a vertical chunk layer at chunk index cy (chunk height sizeY) using cached profiles.
+        // Returns true when profiles are available and produces a UniformKind classification (or None when mixed).
+        public bool ClassifyVerticalChunk(int cy, int sizeY, out UniformKind kind)
+        {
+            kind = UniformKind.None;
+            if (!_profilesBuilt) return false;
+            int baseY = cy * sizeY;
+            int topY = baseY + sizeY - 1;
+
+            bool allAir = true;
+            bool allStone = true;
+            bool allSoil = true;
+
+            for (int lx = 0; lx < BATCH_SIZE; lx++)
+            {
+                for (int lz = 0; lz < BATCH_SIZE; lz++)
+                {
+                    ref readonly ColumnProfile p = ref _profiles[lx, lz];
+
+                    // AllAir: chunk slab lies strictly above surface.
+                    if (!(baseY > p.Surface)) allAir = false;
+
+                    // Stone coverage must exist and fully span [baseY,topY] with no soil intruding inside slab.
+                    bool stoneCovers = p.StoneStart >= 0 && p.StoneStart <= baseY && p.StoneEnd >= topY;
+                    if (!stoneCovers) allStone = false;
+
+                    // Soil coverage must exist and fully span [baseY,topY] and there must be no stone reaching into the slab.
+                    bool soilCovers = p.SoilStart >= 0 && p.SoilStart <= baseY && p.SoilEnd >= topY && !(p.StoneEnd >= baseY);
+                    if (!soilCovers) allSoil = false;
+
+                    if (!allAir && !allStone && !allSoil)
+                    {
+                        kind = UniformKind.None; // early exit
+                        return true;
+                    }
+                }
+            }
+
+            if (allAir) kind = UniformKind.AllAir;
+            else if (allStone) kind = UniformKind.AllStone;
+            else if (allSoil) kind = UniformKind.AllSoil;
+            else kind = UniformKind.None;
+            return true;
+        }
     }
 }
