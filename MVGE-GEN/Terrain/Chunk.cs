@@ -32,7 +32,6 @@ namespace MVGE_GEN.Terrain
         public int sectionsZ;
 
         public float[,] precomputedHeightmap;
-        public static readonly Dictionary<long, OpenSimplexNoise> noiseCache = new();
 
         public const int SECTION_SHIFT = 4;
         public const int SECTION_MASK = 0xF;
@@ -197,35 +196,6 @@ namespace MVGE_GEN.Terrain
             if (type == EMPTY && currentHeight < columnHeight + soilModifier)
                 type = (ushort)BaseBlockType.Soil;
             return type;
-        }
-
-        public float[,] GenerateHeightMap(long seed) => GenerateHeightMap(seed, (int)position.X, (int)position.Z);
-
-        public static float[,] GenerateHeightMap(long seed, int chunkBaseX, int chunkBaseZ)
-        {
-            if (!noiseCache.TryGetValue(seed, out var noise))
-            {
-                noise = new OpenSimplexNoise(seed);
-                noiseCache[seed] = noise;
-            }
-
-            int maxX = GameManager.settings.chunkMaxX;
-            int maxZ = GameManager.settings.chunkMaxZ;
-            float[,] heightmap = new float[maxX, maxZ];
-            float scale = 0.005f;
-            float minHeight = 1f;
-            float maxHeight = 1000f;
-
-            for (int x = 0; x < maxX; x++)
-            {
-                for (int z = 0; z < maxZ; z++)
-                {
-                    float noiseValue = (float)noise.Evaluate((x + chunkBaseX) * scale, (z + chunkBaseZ) * scale);
-                    float normalizedValue = noiseValue * 0.5f + 0.5f;
-                    heightmap[x, z] = normalizedValue * (maxHeight - minHeight) + minHeight;
-                }
-            }
-            return heightmap;
         }
 
         public ChunkSection GetOrCreateSection(int sx, int sy, int sz)

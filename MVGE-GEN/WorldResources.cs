@@ -38,9 +38,6 @@ namespace MVGE_GEN
         private CancellationTokenSource generationCts;          // drives current generation worker set
         private CancellationTokenSource meshBuildCts;           // drives current mesh build worker set
 
-        // Cache heightmaps for (baseX, baseZ) columns across vertical stacks
-        private readonly ConcurrentDictionary<(int baseX, int baseZ), float[,]> heightmapCache = new();
-
         // World block accessor delegates
         private Func<int, int, int, ushort> worldBlockAccessor;
 
@@ -306,44 +303,6 @@ namespace MVGE_GEN
             Console.WriteLine($"[World] Initialized {schedulingWorkers.Length} scheduling workers.");
         }
 
-        // -------------------- Helper: generate a single (cx,cz) column across vertical range inside a batch (incremental fill). --------------------
-        private void GenerateColumnInBatch(Batch batch, int cx, int cz, int playerCxSnapshot, int playerCySnapshot, int playerCzSnapshot, int lodDist, int verticalRange, long regionLimit, string chunkSaveDirectory)
-        {
-            int sizeX = GameManager.settings.chunkMaxX;
-            int sizeY = GameManager.settings.chunkMaxY;
-            int sizeZ = GameManager.settings.chunkMaxZ;
-            // Horizontal culling: ensure within LoD1+1 ring for generation cost containment.
-            if (Math.Abs(cx - playerCxSnapshot) > lodDist + 1 || Math.Abs(cz - playerCzSnapshot) > lodDist + 1) return;
-            int baseX = cx * sizeX;
-            int baseZ = cz * sizeZ;
-            var hmKey = (baseX, baseZ);
-            float[,] heightmap = heightmapCache.GetOrAdd(hmKey, _ => Chunk.GenerateHeightMap(loader.seed, baseX, baseZ));
-            int vMin = playerCySnapshot - verticalRange;
-            int vMax = playerCySnapshot + verticalRange;
-            if (vMin < -regionLimit) vMin = (int)-regionLimit; if (vMax > regionLimit) vMax = (int)regionLimit;
-            for (int cy = vMin; cy <= vMax; cy++)
-            {
-                var key = (cx, cy, cz);
-                if (unbuiltChunks.ContainsKey(key) || activeChunks.ContainsKey(key) || passiveChunks.ContainsKey(key)) continue;
-                int baseY = cy * sizeY;
-                var worldPos = new Vector3(baseX, baseY, baseZ);
-                var chunk = new Chunk(worldPos, loader.seed, chunkSaveDirectory, heightmap);
-                bool insideLod1 = Math.Abs(cx - playerCxSnapshot) <= lodDist && Math.Abs(cz - playerCzSnapshot) <= lodDist && Math.Abs(cy - playerCySnapshot) <= verticalRange;
-                if (insideLod1)
-                {
-                    unbuiltChunks[key] = chunk;
-                }
-                else
-                {
-                    passiveChunks[key] = chunk;
-                }
-                batch.AddOrReplaceChunk(chunk, cx, cy, cz);
-                // Clear any stale schedule entries
-                chunkGenSchedule.TryRemove(key, out _);
-                bufferGenSchedule.TryRemove(key, out _);
-            }
-        }
-
         // -------------------- Generation Worker --------------------
         private void ChunkGenerationWorker(CancellationToken token)
         {
@@ -375,20 +334,14 @@ namespace MVGE_GEN
                         var key = (cx, cy, cz);
                         long regionLimit = GameManager.settings.regionWidthInChunks;
                         if (Math.Abs(cx) > regionLimit || Math.Abs(cy) > regionLimit || Math.Abs(cz) > regionLimit)
-                        {
-                            if (isBuffer) bufferGenSchedule.TryRemove(key, out _); else chunkGenSchedule.TryRemove(key, out _);
-                            continue;
-                        }
-                        // Determine batch for this chunk
+                        { if (isBuffer) bufferGenSchedule.TryRemove(key, out _); else chunkGenSchedule.TryRemove(key, out _); continue; }
+
                         var (bx, bz) = Batch.GetBatchIndices(cx, cz);
                         bool batchExists = loadedBatches.TryGetValue((bx, bz), out var existingBatch);
 
                         // Quick skip if chunk already materialized
                         if (batchExists && (existingBatch.TryGetChunk(cx, cy, cz, out _) || activeChunks.ContainsKey(key) || unbuiltChunks.ContainsKey(key) || passiveChunks.ContainsKey(key)))
-                        {
-                            if (isBuffer) bufferGenSchedule.TryRemove(key, out _); else chunkGenSchedule.TryRemove(key, out _);
-                            continue;
-                        }
+                        { if (isBuffer) bufferGenSchedule.TryRemove(key, out _); else chunkGenSchedule.TryRemove(key, out _); continue; }
 
                         int lodDist = GameManager.settings.lod1RenderDistance;
                         int playerCxSnapshot = playerChunkX; int playerCySnapshot = playerChunkY; int playerCzSnapshot = playerChunkZ;
@@ -399,10 +352,7 @@ namespace MVGE_GEN
                         int batchMaxCz = batchMinCz + Batch.BATCH_SIZE - 1;
                         bool intersects = !(batchMaxCx < playerCxSnapshot - activeRadiusPlusOne || batchMinCx > playerCxSnapshot + activeRadiusPlusOne || batchMaxCz < playerCzSnapshot - activeRadiusPlusOne || batchMinCz > playerCzSnapshot + activeRadiusPlusOne);
                         if (!intersects)
-                        {
-                            if (isBuffer) bufferGenSchedule.TryRemove(key, out _); else chunkGenSchedule.TryRemove(key, out _);
-                            continue;
-                        }
+                        { if (isBuffer) bufferGenSchedule.TryRemove(key, out _); else chunkGenSchedule.TryRemove(key, out _); continue; }
 
                         // Acquire or create generation state for this batch
                         var state = generatingBatches.GetOrAdd((bx, bz), _ => new BatchGenerationState());
@@ -417,18 +367,10 @@ namespace MVGE_GEN
                                     int endCx = Math.Min(batchMaxCx, playerCxSnapshot + activeRadiusPlusOne);
                                     int startCz = Math.Max(batchMinCz, playerCzSnapshot - activeRadiusPlusOne);
                                     int endCz = Math.Min(batchMaxCz, playerCzSnapshot + activeRadiusPlusOne);
-
                                     int seeded = 0;
                                     for (int gcx = startCx; gcx <= endCx; gcx++)
-                                    {
-                                        for (int gcz = startCz; gcz <= endCz; gcz++)
-                                        {
-                                            state.Columns.Enqueue((gcx, gcz));
-                                            seeded++;
-                                        }
-                                    }
-                                    state.RemainingColumns = seeded;
-                                    state.Initialized = true;
+                                        for (int gcz = startCz; gcz <= endCz; gcz++) { state.Columns.Enqueue((gcx, gcz)); seeded++; }
+                                    state.RemainingColumns = seeded; state.Initialized = true;
                                 }
                             }
                         }
@@ -436,43 +378,42 @@ namespace MVGE_GEN
                         // Worker joins this batch: allocate / get batch object
                         var batch = existingBatch ?? GetOrCreateBatch(bx, bz);
 
-                        // Track active worker
+                        // New batch-centric generation: drain column queue invoking batch.GenerateOrLoadColumn
                         Interlocked.Increment(ref state.ActiveWorkers);
-
                         int verticalRange = lodDist; // reuse heuristic
 
-                        // Drain column queue
+                        Batch.ChunkRegistrar registrar = (chunkKey, chunkInstance, insideLod1) =>
+                        {
+                            // Skip if already recorded (race safety)
+                            if (activeChunks.ContainsKey(chunkKey) || unbuiltChunks.ContainsKey(chunkKey) || passiveChunks.ContainsKey(chunkKey)) return;
+                            if (insideLod1) unbuiltChunks[chunkKey] = chunkInstance; else passiveChunks[chunkKey] = chunkInstance;
+                            // Remove scheduling markers for this specific chunk if present
+                            chunkGenSchedule.TryRemove(chunkKey, out _);
+                            bufferGenSchedule.TryRemove(chunkKey, out _);
+                        };
+
                         while (!token.IsCancellationRequested && state.Columns.TryDequeue(out var column))
                         {
-                            int gcx = column.cx;
-                            int gcz = column.cz;
-                            // Skip if already sufficiently generated (all vertical layers exist) - cheap test via dictionary lookups
-                            GenerateColumnInBatch(batch, gcx, gcz, playerCxSnapshot, playerCySnapshot, playerCzSnapshot, lodDist, verticalRange, regionLimit, chunkSaveDirectory);
+                            batch.GenerateOrLoadColumn(column.cx, column.cz,
+                                playerCxSnapshot, playerCySnapshot, playerCzSnapshot,
+                                lodDist, verticalRange, regionLimit, loader.seed, chunkSaveDirectory,
+                                sizeX, sizeY, sizeZ,
+                                registrar);
                             Interlocked.Decrement(ref state.RemainingColumns);
                         }
 
-                        // Worker done
                         int remainingWorkers = Interlocked.Decrement(ref state.ActiveWorkers);
                         if (remainingWorkers == 0 && state.Columns.IsEmpty && state.RemainingColumns <= 0)
-                        {
-                            generatingBatches.TryRemove((bx, bz), out _);
-                            // After finishing batch generation schedule visible chunks for render build
-                            ScheduleVisibleChunksInBatch(bx, bz);
-                        }
+                        { generatingBatches.TryRemove((bx, bz), out _); ScheduleVisibleChunksInBatch(bx, bz); }
 
                         if (isBuffer) bufferGenSchedule.TryRemove(key, out _); else chunkGenSchedule.TryRemove(key, out _);
                     }
                     catch (Exception exIter)
-                    {
-                        Console.WriteLine($"[World] Batch-oriented generation error at pos={lastPos}: {exIter}");
-                    }
+                    { Console.WriteLine($"[World] Batch-oriented generation error at pos={lastPos}: {exIter}"); }
                 }
             }
             catch (OperationCanceledException) { }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Chunk generation worker fatal error (lastPos={lastPos}): {ex}");
-            }
+            catch (Exception ex) { Console.WriteLine($"Chunk generation worker fatal error (lastPos={lastPos}): {ex}"); }
         }
 
         private void MeshBuildWorker(CancellationToken token)
@@ -627,7 +568,7 @@ namespace MVGE_GEN
         {
             if (activeChunks.TryGetValue(key, out chunk)) return true;
             if (unbuiltChunks.TryGetValue(key, out chunk)) return true;
-            if (passiveChunks.TryGetValue(key, out chunk)) return true;
+            if (passiveChunks.TryGetValue(key, out chunk)) return true; // corrected capitalization
             chunk = null; return false;
         }
 

@@ -44,7 +44,8 @@ namespace MVGE_GEN.Terrain
             // Basic chunk & biome constants
             // ------------------------------------------------------------------
             int maxX = dimX, maxY = dimY, maxZ = dimZ;
-            float[,] heightmap = precomputedHeightmap ?? GenerateHeightMap(generationSeed);
+            // Heightmap now expected to be provided by Batch
+            float[,] heightmap = precomputedHeightmap ?? throw new Exception("Heightmap cannot be null.");
             int chunkBaseY = (int)position.Y;
             int topOfChunk = chunkBaseY + maxY - 1; // inclusive local top
 
