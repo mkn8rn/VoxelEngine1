@@ -110,6 +110,15 @@ namespace MVGE_GEN.Terrain
             int globalMinSectionY = int.MaxValue;
             int globalMaxSectionY = -1;
 
+            // ----------------------------------------------------------------------
+            // Difference (prefix) arrays for full coverage counting
+            // We accumulate ONLY ranges of fully covered sections using +1/-1 range adds:
+            //   stoneDiff[a]++, stoneDiff[b+1]--  (section indices inclusive a..b)
+            // After fused pass, prefix sum transforms into per-section coverage count.
+            // ----------------------------------------------------------------------
+            Span<int> stoneDiff = stackalloc int[sectionsYLocal + 1]; stoneDiff.Clear();
+            Span<int> soilDiff  = stackalloc int[sectionsYLocal + 1]; soilDiff.Clear();
+
             // ======================================================================
             // 1. Fused column pass: span derivation + coverage accumulation
             // ======================================================================
@@ -234,39 +243,98 @@ namespace MVGE_GEN.Terrain
                     }
 
                     // ---------------- Per-section coverage accumulation ----------------
-                    // Only iterate the section range touched by each span.
+                    // Computes contiguous fully covered ranges and apply range-add (+1/-1) to difference arrays.
+                    // Rules for full coverage:
+                    //  * Stone section fully covered if stoneStart <= sectionBaseY && stoneEnd >= sectionEndY AND (no soil overlaps section)
+                    //  * Soil  section fully covered if soilStart  <= sectionBaseY && soilEnd  >= sectionEndY AND (no stone overlaps section)
+                    // Edge (first/last) sections can be partial — we exclude them when not fully covered.
+
                     if (HasBit(stonePresentBits, colIndex))
                     {
                         int sStart = spanRef.stoneStart;
                         int sEnd   = spanRef.stoneEnd;
-                        int soStart = HasBit(soilPresentBits, colIndex) ? spanRef.soilStart : -1;
-                        int soEnd   = HasBit(soilPresentBits, colIndex) ? spanRef.soilEnd   : -1;
                         int firstSec = spanRef.stoneFirstSec;
                         int lastSec  = spanRef.stoneLastSec;
-                        for (int sy = firstSec; sy <= lastSec && sy < sectionsYLocal; sy++)
+                        // Determine if first / last sections are fully covered
+                        bool firstFull = sStart <= sectionBaseYArr[firstSec] && sEnd >= sectionEndYArr[firstSec];
+                        bool lastFull  = sStart <= sectionBaseYArr[lastSec]  && sEnd >= sectionEndYArr[lastSec];
+                        int fullStart = firstSec;
+                        int fullEnd   = lastSec;
+                        if (!firstFull) fullStart = firstSec + 1;
+                        if (!lastFull)  fullEnd   = lastSec - 1;
+                        if (firstSec == lastSec)
                         {
-                            int sectionBaseY = sectionBaseYArr[sy];
-                            int sectionEndY  = sectionEndYArr[sy];
-                            bool fullCover = sStart <= sectionBaseY && sEnd >= sectionEndY && !(soStart >= 0 && !(soEnd < sectionBaseY || soStart > sectionEndY));
-                            if (fullCover) stoneFullCoverCount[sy]++;
+                            // Single-section span; require full coverage
+                            if (!(firstFull && lastFull)) fullStart = fullEnd + 1; // invalidate
+                        }
+                        if (fullStart <= fullEnd)
+                        {
+                            // Soil overlap truncation: if soil present and begins within/at a fully covered section, cut range.
+                            if (HasBit(soilPresentBits, colIndex))
+                            {
+                                int localSoilStart = spanRef.soilStart; // local Y
+                                int soilStartSec = localSoilStart >> SECTION_SHIFT;
+                                // A section sy overlaps soil if sectionEndY >= soilStartLocal → all sections sy >= soilStartSec
+                                if (soilStartSec <= fullEnd)
+                                    fullEnd = soilStartSec - 1;
+                            }
+                            if (fullStart <= fullEnd)
+                            {
+                                stoneDiff[fullStart]++;
+                                if (fullEnd + 1 < stoneDiff.Length) stoneDiff[fullEnd + 1]--;
+                            }
                         }
                     }
                     if (HasBit(soilPresentBits, colIndex))
                     {
                         int soStart = spanRef.soilStart;
                         int soEnd   = spanRef.soilEnd;
-                        int sStart  = HasBit(stonePresentBits, colIndex) ? spanRef.stoneStart : -1;
-                        int sEnd    = HasBit(stonePresentBits, colIndex) ? spanRef.stoneEnd   : -1;
                         int firstSec = spanRef.soilFirstSec;
                         int lastSec  = spanRef.soilLastSec;
-                        for (int sy = firstSec; sy <= lastSec && sy < sectionsYLocal; sy++)
+                        bool firstFull = soStart <= sectionBaseYArr[firstSec] && soEnd >= sectionEndYArr[firstSec];
+                        bool lastFull  = soStart <= sectionBaseYArr[lastSec]  && soEnd >= sectionEndYArr[lastSec];
+                        int fullStart = firstSec;
+                        int fullEnd   = lastSec;
+                        if (!firstFull) fullStart = firstSec + 1;
+                        if (!lastFull)  fullEnd   = lastSec - 1;
+                        if (firstSec == lastSec)
                         {
-                            int sectionBaseY = sectionBaseYArr[sy];
-                            int sectionEndY  = sectionEndYArr[sy];
-                            bool fullCover = soStart <= sectionBaseY && soEnd >= sectionEndY && !(sStart >= 0 && !(sEnd < sectionBaseY || sStart > sectionEndY));
-                            if (fullCover) soilFullCoverCount[sy]++;
+                            if (!(firstFull && lastFull)) fullStart = fullEnd + 1;
+                        }
+                        if (fullStart <= fullEnd)
+                        {
+                            // Stone overlap truncation: stone span overlaps soil section if stoneEnd >= sectionBaseY
+                            if (HasBit(stonePresentBits, colIndex))
+                            {
+                                int sEnd   = spanRef.stoneEnd;
+                                int stoneOverlapSec = sEnd >> SECTION_SHIFT; // highest section whose baseY <= stoneEnd
+                                if (stoneOverlapSec >= fullStart)
+                                    fullStart = stoneOverlapSec + 1;
+                            }
+                            if (fullStart <= fullEnd)
+                            {
+                                soilDiff[fullStart]++;
+                                if (fullEnd + 1 < soilDiff.Length) soilDiff[fullEnd + 1]--;
+                            }
                         }
                     }
+                }
+            }
+
+            // Convert difference arrays to full coverage counts (prefix sums)
+            if (globalMaxSectionY >= 0)
+            {
+                int run = 0;
+                for (int sy = globalMinSectionY; sy <= globalMaxSectionY && sy < sectionsYLocal; sy++)
+                {
+                    run += stoneDiff[sy];
+                    stoneFullCoverCount[sy] = run;
+                }
+                run = 0;
+                for (int sy = globalMinSectionY; sy <= globalMaxSectionY && sy < sectionsYLocal; sy++)
+                {
+                    run += soilDiff[sy];
+                    soilFullCoverCount[sy] = run;
                 }
             }
 
