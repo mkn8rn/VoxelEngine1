@@ -25,6 +25,7 @@ namespace MVGE_GEN.Terrain
         // Full per-block column data. Length = chunkMaxX * chunkMaxZ.
         public BlockColumnProfile[] BlockColumns;
         public bool BlockColumnsBuilt; // true once BlockColumns array populated
+        public bool AggregatedBuilt;   // true once aggregated (Surface/Stone/Soil) values populated lazily
     }
 
     // Per single BLOCK (local x,z inside a chunk) vertical column absolute world extents.
@@ -76,8 +77,9 @@ namespace MVGE_GEN.Terrain
         // Column classification profiles & uniform slab inference
         // ------------------------------------------------------------
         private readonly ChunkColumnProfile[,] _profiles = new ChunkColumnProfile[QUAD_SIZE, QUAD_SIZE];
-        private volatile bool _profilesBuilt;                    // True once every profile cell initialized (aggregated data only)
-        private readonly object _profileBuildLock = new();       // Guards one‑time profile build
+        private volatile bool _profilesBuilt;                    // True once every profile cell initialized (aggregated data only) – now only set when all 256 have been lazily built
+        private readonly object _profileBuildLock = new();       // Guards aggregated profile initialization (per-column lazy path)
+        private int _aggregatedBuiltCount;                       // Count of aggregated column profiles built so far (when reaches QUAD_SIZE^2 -> _profilesBuilt=true)
 
         // ------------------------------------------------------------
         // Cached per-column block column span arrays
@@ -242,25 +244,60 @@ namespace MVGE_GEN.Terrain
                     for (int lz = 0; lz < QUAD_SIZE; lz++)
                     {
                         var (surface, stoneStart, stoneEnd, soilStart, soilEnd) = provider(quadX * QUAD_SIZE + lx, quadZ * QUAD_SIZE + lz);
-                        _profiles[lx, lz] = new ChunkColumnProfile
-                        {
-                            Surface = surface,
-                            StoneStart = stoneStart,
-                            StoneEnd = stoneEnd,
-                            SoilStart = soilStart,
-                            SoilEnd = soilEnd,
-                            BlockColumns = null,
-                            BlockColumnsBuilt = false
-                        };
+                        _profiles[lx, lz].Surface = surface;
+                        _profiles[lx, lz].StoneStart = stoneStart;
+                        _profiles[lx, lz].StoneEnd = stoneEnd;
+                        _profiles[lx, lz].SoilStart = soilStart;
+                        _profiles[lx, lz].SoilEnd = soilEnd;
+                        _profiles[lx, lz].AggregatedBuilt = true;
                     }
                 }
                 _profilesBuilt = true;
+                _aggregatedBuiltCount = QUAD_SIZE * QUAD_SIZE;
+            }
+        }
+
+        // Lazily ensure a single aggregated column profile (Surface / Stone / Soil extents) is built.
+        private void EnsureAggregatedProfile(int columnCx, int columnCz)
+        {
+            var (lx, lz) = LocalIndices(columnCx, columnCz);
+            ref var profile = ref _profiles[lx, lz];
+            if (profile.AggregatedBuilt) return;
+            lock (_profileBuildLock)
+            {
+                if (profile.AggregatedBuilt) return;
+                if (!_seedSet)
+                    throw new InvalidOperationException("Seed not set before building aggregated profile.");
+                if (Biome == null)
+                    throw new InvalidOperationException("Biome must be set before building aggregated profile.");
+
+                int sizeX = GameManager.settings.chunkMaxX;
+                int sizeZ = GameManager.settings.chunkMaxZ;
+                int baseWorldX = columnCx * sizeX;
+                int baseWorldZ = columnCz * sizeZ;
+                var hm = GetOrCreateHeightmap(_seed, baseWorldX, baseWorldZ);
+                int localX = (int)((uint)(columnCx % sizeX + sizeX) % sizeX);
+                int localZ = (int)((uint)(columnCz % sizeZ + sizeZ) % sizeZ);
+                int surface = (int)hm[localX, localZ];
+                var (stoneStart, stoneEnd, soilStart, soilEnd) = TerrainGeneration.DeriveWorldStoneSoilSpans(surface, Biome);
+                profile.Surface = surface;
+                profile.StoneStart = stoneStart;
+                profile.StoneEnd = stoneEnd;
+                profile.SoilStart = soilStart;
+                profile.SoilEnd = soilEnd;
+                profile.AggregatedBuilt = true;
+                _aggregatedBuiltCount++;
+                if (_aggregatedBuiltCount == QUAD_SIZE * QUAD_SIZE)
+                {
+                    _profilesBuilt = true; // all aggregated now
+                }
             }
         }
 
         // Ensure per-block column data exists for the specified chunk column (lazy build).
         private void EnsureBlockColumnsBuilt(int columnCx, int columnCz)
         {
+            EnsureAggregatedProfile(columnCx, columnCz); // aggregated must precede block-level build
             var (lx, lz) = LocalIndices(columnCx, columnCz);
             ref var profile = ref _profiles[lx, lz];
             if (profile.BlockColumnsBuilt)
@@ -304,13 +341,11 @@ namespace MVGE_GEN.Terrain
         // ------------------------------------------------------------
         private BlockColumnProfile[] GetOrBuildColumnSpanMap(int columnCx, int columnCz, int chunkSizeY, long regionLimit)
         {
-            if (!_profilesBuilt)
-                throw new InvalidOperationException("Profiles must be built before requesting span maps.");
+            // Aggregated profile for this column is ensured lazily; full quadrant aggregated build no longer required here.
 
             // clear cache if parameters change
             if (_spanCacheRegionLimit >= 0 && (_spanCacheRegionLimit != regionLimit || _spanCacheChunkHeight != chunkSizeY))
             {
-                // Conservative: clear entire cache (mixed configurations would be incorrect indexing).
                 _columnLocalSpanCache.Clear();
                 _spanCacheRegionLimit = -1;
             }
@@ -338,6 +373,7 @@ namespace MVGE_GEN.Terrain
         public bool ClassifyVerticalChunk(int cy, int sizeY, out UniformKind kind)
         {
             kind = UniformKind.None;
+            // If not all aggregated profiles built yet, uniform classification is deferred (return false) to avoid partial decisions.
             if (!_profilesBuilt)
             {
                 return false;
@@ -356,13 +392,19 @@ namespace MVGE_GEN.Terrain
                 {
                     ref readonly ChunkColumnProfile p = ref _profiles[lx, lz];
 
+                    // Aggregated profile must be built when _profilesBuilt is true; defensively skip if not.
+                    if (!p.AggregatedBuilt)
+                    {
+                        kind = UniformKind.None;
+                        return false;
+                    }
+
                     // --- All Air ---
                     if (!(baseY > p.Surface))
                     {
                         allAir = false;
                     }
 
-                    // Precompute stone / soil coverage & overlap
                     bool hasStoneSpan = p.StoneStart >= 0;
                     bool hasSoilSpan = p.SoilStart >= 0;
 
@@ -370,24 +412,19 @@ namespace MVGE_GEN.Terrain
                     bool soilCoversSlab = hasSoilSpan && p.SoilStart <= baseY && p.SoilEnd >= topY;
 
                     bool soilOverlapsSlab = hasSoilSpan && p.SoilStart <= topY && p.SoilEnd >= baseY; // any soil voxel inside slab
-                    bool stoneOverlapsSlab = hasStoneSpan && p.StoneStart <= topY && p.StoneEnd >= baseY; // any stone voxel inside slab
+                    // bool stoneOverlapsSlab = hasStoneSpan && p.StoneStart <= topY && p.StoneEnd >= baseY; // retained variable removed (not used)
 
-                    // --- All Stone ---
-                    // Must be fully stone covered & NO soil overlap with slab.
                     if (!(stoneCoversSlab && !soilOverlapsSlab))
                     {
                         allStone = false;
                     }
 
-                    // --- All Soil ---
-                    // Must be fully soil covered & stone does NOT intrude (stoneEnd < baseY or no stone span).
                     bool stoneIntrudes = hasStoneSpan && p.StoneEnd >= baseY; // any stone cell at/above baseY breaks pure soil
                     if (!(soilCoversSlab && !stoneIntrudes))
                     {
                         allSoil = false;
                     }
 
-                    // Early exit if impossible
                     if (!allAir && !allStone && !allSoil)
                     {
                         kind = UniformKind.None;
@@ -444,29 +481,22 @@ namespace MVGE_GEN.Terrain
                 _seedSet = true;
             }
 
-            BuildProfiles((colCx, colCz) =>
-            {
-                int baseWorldX = colCx * sizeX;
-                int baseWorldZ = colCz * sizeZ;
-                var hm = GetOrCreateHeightmap(seed, baseWorldX, baseWorldZ);
-                int localX = (int)((uint)(colCx % sizeX + sizeX) % sizeX);
-                int localZ = (int)((uint)(colCz % sizeZ + sizeZ) % sizeZ);
-                int surface = (int)hm[localX, localZ];
-                var (stoneStart, stoneEnd, soilStart, soilEnd) = TerrainGeneration.DeriveWorldStoneSoilSpans(surface, Biome);
-                return (surface, stoneStart, stoneEnd, soilStart, soilEnd);
-            });
+            // Lazily build aggregated profile only for this column (and its heightmap) – no eager full-grid build.
+            EnsureAggregatedProfile(cx, cz);
 
             int columnBaseX = cx * sizeX;
             int columnBaseZ = cz * sizeZ;
             var columnHeightmap = GetOrCreateHeightmap(seed, columnBaseX, columnBaseZ);
 
-            // Build & retain the span map for this (cx,cz) column; pass to every vertical chunk (now per-block column spans, no processing applied).
+            // Build & retain the span map for this (cx,cz) column; pass to every vertical chunk.
             var spanMap = GetOrBuildColumnSpanMap(cx, cz, sizeY, regionLimit);
 
             int vMin = playerCy - verticalRange;
             int vMax = playerCy + verticalRange;
             if (vMin < -regionLimit) vMin = (int)-regionLimit;
             if (vMax > regionLimit) vMax = (int)regionLimit;
+
+            bool canUniformClassify = _profilesBuilt; // only attempt uniform overrides once every column aggregated
 
             for (int cy = vMin; cy <= vMax; cy++)
             {
@@ -475,7 +505,7 @@ namespace MVGE_GEN.Terrain
 
                 UniformKind uniformKind = UniformKind.None;
                 Chunk.UniformOverride overrideKind = Chunk.UniformOverride.None;
-                if (ClassifyVerticalChunk(cy, sizeY, out var classified))
+                if (canUniformClassify && ClassifyVerticalChunk(cy, sizeY, out var classified))
                 {
                     uniformKind = classified;
                     if (uniformKind == UniformKind.AllAir) overrideKind = Chunk.UniformOverride.AllAir;
