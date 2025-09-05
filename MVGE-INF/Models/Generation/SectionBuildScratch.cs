@@ -18,6 +18,9 @@ namespace MVGE_INF.Generation.Models
         public bool AnyNonAir;
         public bool DistinctDirty; // when true rebuild distinct list at finalize
 
+        public ulong[] NonEmptyColumnBits = new ulong[4]; // 256 columns -> 4 words
+        public int NonEmptyCount;
+
         // Per-id column membership bitsets (DistinctCount <=8). Each row = 256 bits -> 4 ulongs.
         // A bit set means the column *currently* (prior to replacement batch) contains that id in at least one run/voxel.
         public ulong[,] IdColumnBits = new ulong[8,4];

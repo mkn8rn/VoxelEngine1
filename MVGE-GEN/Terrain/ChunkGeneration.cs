@@ -34,7 +34,7 @@ namespace MVGE_GEN.Terrain
         /// Phases:
         ///  1. Column pass: derive clipped stone / soil spans and accumulate per‑section full‑coverage bitsets.
         ///  2. Section uniform classification (stone precedence over soil) from full‑coverage bitsets.
-        ///  3. Emit partial (non-uniform) spans sparsely.
+        ///  3. Emit partial (non-uniform) spans sparsely. ( UPDATED: columns written directly with SectionUtils.DirectSetColumnRuns - avoids incremental GenerationAddRun state machine.)
         ///  4. Whole‑chunk single block collapse if all created sections are uniform with the same id.
         ///  5. Finalize non‑uniform sections & build boundary planes.
         internal void GenerateInitialChunkData(BlockColumnProfile[] columnSpanMap)
@@ -281,11 +281,6 @@ namespace MVGE_GEN.Terrain
             // ------------------------------------------------------------------
             if (globalMaxSectionY >= 0)
             {
-                static void EmitSpan(ChunkSection secRef, int ox, int oz, int localStart, int localEnd, ushort id)
-                {
-                    if (localStart <= localEnd) SectionUtils.GenerationAddRun(secRef, ox, oz, localStart, localEnd, id);
-                }
-
                 for (int w = 0; w < columnWordCount; w++)
                 {
                     ulong word = anySpanBits[w];
@@ -300,38 +295,101 @@ namespace MVGE_GEN.Terrain
                         int sxIndex = x >> SECTION_SHIFT; int ox = x & sectionMask;
                         int szIndex = z >> SECTION_SHIFT; int oz = z & sectionMask;
 
-                        if (hasStone)
+                        // Determine section range touched by either span.
+                        int earliestSec = int.MaxValue; int latestSec = -1;
+                        if (hasStone) { if (spanRef.stoneFirstSec < earliestSec) earliestSec = spanRef.stoneFirstSec; if (spanRef.stoneLastSec > latestSec) latestSec = spanRef.stoneLastSec; }
+                        if (hasSoil) { if (spanRef.soilFirstSec < earliestSec) earliestSec = spanRef.soilFirstSec; if (spanRef.soilLastSec > latestSec) latestSec = spanRef.soilLastSec; }
+                        if (earliestSec == int.MaxValue) continue;
+                        if (earliestSec < globalMinSectionY) earliestSec = globalMinSectionY;
+                        if (latestSec > globalMaxSectionY) latestSec = globalMaxSectionY;
+
+                        for (int sy = earliestSec; sy <= latestSec; sy++)
                         {
-                            int firstSec = spanRef.stoneFirstSec; int lastSec = spanRef.stoneLastSec;
-                            if (firstSec < globalMinSectionY) firstSec = globalMinSectionY;
-                            if (lastSec > globalMaxSectionY) lastSec = globalMaxSectionY;
-                            int ss = spanRef.stoneStart; int se = spanRef.stoneEnd;
-                            for (int sy = firstSec; sy <= lastSec; sy++)
+                            int wSkip = sy >> 6; int bSkip = sy & 63; if ((uniformSkipBits[wSkip] & (1UL << bSkip)) != 0UL) continue; // skip uniform
+                            int sectionBase = sectionBaseYArr[sy]; int sectionEnd = sectionEndYArr[sy];
+
+                            // Compute local stone segment inside this section if present.
+                            int localStoneStart = -1, localStoneEnd = -1;
+                            if (hasStone)
                             {
-                                int wSkip = sy >> 6; int bSkip = sy & 63; if ((uniformSkipBits[wSkip] & (1UL << bSkip)) != 0UL) continue;
-                                int sectionBase = sectionBaseYArr[sy]; int sectionEnd = sectionEndYArr[sy];
-                                if (se < sectionBase || ss > sectionEnd) continue;
-                                int clippedStart = ss < sectionBase ? sectionBase : ss;
-                                int clippedEnd = se > sectionEnd ? sectionEnd : se;
-                                var secRef = sections[sxIndex, sy, szIndex]; if (secRef == null) { secRef = new ChunkSection(); sections[sxIndex, sy, szIndex] = secRef; }
-                                EmitSpan(secRef, ox, oz, clippedStart - sectionBase, clippedEnd - sectionBase, StoneId);
+                                int ss = spanRef.stoneStart; int se = spanRef.stoneEnd;
+                                if (!(se < sectionBase || ss > sectionEnd))
+                                {
+                                    int clippedStart = ss < sectionBase ? sectionBase : ss;
+                                    int clippedEnd = se > sectionEnd ? sectionEnd : se;
+                                    localStoneStart = clippedStart - sectionBase;
+                                    localStoneEnd = clippedEnd - sectionBase;
+                                }
                             }
-                        }
-                        if (hasSoil)
-                        {
-                            int firstSec = spanRef.soilFirstSec; int lastSec = spanRef.soilLastSec;
-                            if (firstSec < globalMinSectionY) firstSec = globalMinSectionY;
-                            if (lastSec > globalMaxSectionY) lastSec = globalMaxSectionY;
-                            int sols = spanRef.soilStart; int sole = spanRef.soilEnd;
-                            for (int sy = firstSec; sy <= lastSec; sy++)
+
+                            // Compute local soil segment inside this section if present.
+                            int localSoilStart = -1, localSoilEnd = -1;
+                            if (hasSoil)
                             {
-                                int wSkip = sy >> 6; int bSkip = sy & 63; if ((uniformSkipBits[wSkip] & (1UL << bSkip)) != 0UL) continue;
-                                int sectionBase = sectionBaseYArr[sy]; int sectionEnd = sectionEndYArr[sy];
-                                if (sole < sectionBase || sols > sectionEnd) continue;
-                                int clippedStart = sols < sectionBase ? sectionBase : sols;
-                                int clippedEnd = sole > sectionEnd ? sectionEnd : sole;
-                                var secRef = sections[sxIndex, sy, szIndex]; if (secRef == null) { secRef = new ChunkSection(); sections[sxIndex, sy, szIndex] = secRef; }
-                                EmitSpan(secRef, ox, oz, clippedStart - sectionBase, clippedEnd - sectionBase, SoilId);
+                                int sols = spanRef.soilStart; int sole = spanRef.soilEnd;
+                                if (!(sole < sectionBase || sols > sectionEnd))
+                                {
+                                    int clippedStart = sols < sectionBase ? sectionBase : sols;
+                                    int clippedEnd = sole > sectionEnd ? sectionEnd : sole;
+                                    localSoilStart = clippedStart - sectionBase;
+                                    localSoilEnd = clippedEnd - sectionBase;
+                                }
+                            }
+
+                            // If neither span contributes to this section column, skip.
+                            if (localStoneStart < 0 && localSoilStart < 0) continue;
+
+                            var secRef = sections[sxIndex, sy, szIndex];
+                            if (secRef == null) { secRef = new ChunkSection(); sections[sxIndex, sy, szIndex] = secRef; }
+
+                            if (localStoneStart >= 0 && localSoilStart >= 0)
+                            {
+                                // Two runs (stone beneath soil). Ensure correct ordering by Y.
+                                if (localStoneEnd < localSoilStart)
+                                {
+                                    SectionUtils.DirectSetColumnRuns(secRef, ox, oz, StoneId, localStoneStart, localStoneEnd, SoilId, localSoilStart, localSoilEnd);
+                                }
+                                else if (localSoilEnd < localStoneStart)
+                                {
+                                    SectionUtils.DirectSetColumnRuns(secRef, ox, oz, SoilId, localSoilStart, localSoilEnd, StoneId, localStoneStart, localStoneEnd);
+                                }
+                                else
+                                {
+                                    // Overlap should not occur (generation guarantees stratified stone then soil). Merge preference: stone below, soil above.
+                                    if (localStoneStart <= localSoilStart)
+                                    {
+                                        // If overlapping, clamp stone up to soilStart-1.
+                                        int sEndAdj = Math.Min(localStoneEnd, localSoilStart - 1);
+                                        if (sEndAdj >= localStoneStart)
+                                        {
+                                            SectionUtils.DirectSetColumnRuns(secRef, ox, oz, StoneId, localStoneStart, sEndAdj, SoilId, localSoilStart, localSoilEnd);
+                                        }
+                                        else
+                                        {
+                                            SectionUtils.DirectSetColumnRuns(secRef, ox, oz, SoilId, localSoilStart, localSoilEnd);
+                                        }
+                                    }
+                                    else
+                                    {
+                                        int soilEndAdj = Math.Min(localSoilEnd, localStoneStart - 1);
+                                        if (soilEndAdj >= localSoilStart)
+                                        {
+                                            SectionUtils.DirectSetColumnRuns(secRef, ox, oz, SoilId, localSoilStart, soilEndAdj, StoneId, localStoneStart, localStoneEnd);
+                                        }
+                                        else
+                                        {
+                                            SectionUtils.DirectSetColumnRuns(secRef, ox, oz, StoneId, localStoneStart, localStoneEnd);
+                                        }
+                                    }
+                                }
+                            }
+                            else if (localStoneStart >= 0)
+                            {
+                                SectionUtils.DirectSetColumnRuns(secRef, ox, oz, StoneId, localStoneStart, localStoneEnd);
+                            }
+                            else // only soil
+                            {
+                                SectionUtils.DirectSetColumnRuns(secRef, ox, oz, SoilId, localSoilStart, localSoilEnd);
                             }
                         }
                     }
@@ -368,15 +426,12 @@ namespace MVGE_GEN.Terrain
             // ------------------------------------------------------------------
             // Phase 5: Finalize & boundary planes
             // ------------------------------------------------------------------
-            if (!AllOneBlockChunk)
-            {
-                for (int sx = 0; sx < sectionsX; sx++)
-                    for (int sy = 0; sy < sectionsY; sy++)
-                        for (int sz = 0; sz < sectionsZ; sz++)
-                        {
-                            var sec = sections[sx, sy, sz]; if (sec == null) continue; SectionUtils.GenerationFinalizeSection(sec);
-                        }
-            }
+            for (int sx = 0; sx < sectionsX; sx++)
+                for (int sy = 0; sy < sectionsY; sy++)
+                    for (int sz = 0; sz < sectionsZ; sz++)
+                    {
+                        var sec = sections[sx, sy, sz]; if (sec == null) continue; SectionUtils.GenerationFinalizeSection(sec);
+                    }
             BuildAllBoundaryPlanesInitial();
             // Burial classification removed here; can be determined later using neighbor context if required.
         }
