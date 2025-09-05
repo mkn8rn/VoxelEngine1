@@ -74,8 +74,6 @@ namespace MVGE_GEN.Terrain
             // Basic chunk & biome constants
             // ------------------------------------------------------------------
             int maxX = dimX, maxY = dimY, maxZ = dimZ;
-            // Heightmap now expected to be provided by Batch
-            float[,] heightmap = precomputedHeightmap ?? throw new Exception("Heightmap cannot be null.");
             int chunkBaseY = (int)position.Y;
             int topOfChunk = chunkBaseY + maxY - 1; // inclusive local top
 
@@ -91,17 +89,17 @@ namespace MVGE_GEN.Terrain
             int stoneMinY = biome.stoneMinYLevel; int stoneMaxY = biome.stoneMaxYLevel;
             int soilMinY  = biome.soilMinYLevel;  int soilMaxY  = biome.soilMaxYLevel;
 
-            // Uniform candidate flags: bit0 -> stone, bit1 -> soil
-            int uniformFlags = 0b11;
+            // ------------------------------------------------------------------
+            // Aggregated uniform classification candidates (replaces per-column uniformFlags invalidation logic)
+            // ------------------------------------------------------------------
+            // allStoneFullCandidate: remains true only if every column's stone span fully covers the chunk slab (and exists).
+            bool allStoneFullCandidate = true;
+            // allSoilFullCandidate: remains true only if every column's soil span fully covers the chunk slab AND stone does not intrude that slab in that column.
+            bool allSoilFullCandidate = true;
+            // If soil biome band does not overlap the chunk slab at all, soil uniform candidate impossible from the start.
             if (!(topOfChunk >= soilMinY && chunkBaseY <= soilMaxY))
-                uniformFlags &= ~0b10; // soil band does not overlap chunk at all
-
-            // Whole chunk early all‑air (both bands entirely below the chunk slab)
-            if (stoneMaxY < chunkBaseY && soilMaxY < chunkBaseY)
             {
-                AllAirChunk = true;
-                precomputedHeightmap = null;
-                return;
+                allSoilFullCandidate = false;
             }
 
             // ------------------------------------------------------------------
@@ -165,7 +163,7 @@ namespace MVGE_GEN.Terrain
                 for (int x = 0; x < maxX; x++)
                 {
                     int colIndex = rowOffset + x;
-                    int surface = (int)heightmap[x, z]; // surface height (world)
+                    int surface = columnSpanMap[colIndex].Surface;
 
                     // Track highest surface for later all‑air classification
                     if (surface > maxSurface) maxSurface = surface;
@@ -189,6 +187,21 @@ namespace MVGE_GEN.Terrain
 
                     bool hasStone = wStoneStart >= 0 && wStoneEnd >= wStoneStart && wStoneEnd >= chunkBaseY && wStoneStart <= topOfChunk;
                     bool hasSoil  = wSoilStart >= 0 && wSoilEnd >= wSoilStart && wSoilEnd >= chunkBaseY && wSoilStart <= topOfChunk;
+
+                    // Aggregated uniform classification candidate updates (replaces per-column uniformFlags logic)
+                    if (allStoneFullCandidate)
+                    {
+                        // stone span must exist and fully cover chunk slab
+                        if (!(hasStone && wStoneStart <= chunkBaseY && wStoneEnd >= topOfChunk))
+                            allStoneFullCandidate = false;
+                    }
+                    if (allSoilFullCandidate)
+                    {
+                        // soil span must exist and fully cover chunk slab and stone must not intrude (stoneEnd < baseY or no stone)
+                        bool stoneIntrudesSoil = hasStone && wStoneEnd >= chunkBaseY; // any stone voxel at/above base breaks pure soil
+                        if (!(hasSoil && wSoilStart <= chunkBaseY && wSoilEnd >= topOfChunk && !stoneIntrudesSoil))
+                            allSoilFullCandidate = false;
+                    }
 
                     // Clip to chunk slab & convert to local short indices
                     short localStoneStart = 0, localStoneEnd = 0;
@@ -222,21 +235,6 @@ namespace MVGE_GEN.Terrain
                             hasSoil = false;
                         }
                     }
-
-                    // Uniform invalidation logic mimicking earlier semantics
-                    bool invalidateStoneUniform = !hasStone || chunkBaseY < wStoneStart || topOfChunk > wStoneEnd;
-                    bool invalidateSoilUniform = true;
-                    if (hasSoil)
-                    {
-                        // soil uniform only if chunk slab fully inside soil span AND stone does not intrude slab bottom
-                        bool fullyInside = chunkBaseY >= wSoilStart && topOfChunk <= wSoilEnd;
-                        bool stoneIntrudes = hasStone && wStoneEnd >= chunkBaseY; // any stone voxel at/above base breaks pure soil slab uniform
-                        if (fullyInside && !stoneIntrudes)
-                            invalidateSoilUniform = false;
-                    }
-
-                    if (invalidateStoneUniform) uniformFlags &= ~0b01;
-                    if (invalidateSoilUniform)  uniformFlags &= ~0b10;
 
                     // Skip empty column (no stone & no soil in this chunk slab)
                     if (!hasStone && !hasSoil) continue;
@@ -365,21 +363,21 @@ namespace MVGE_GEN.Terrain
             if (chunkBaseY > maxSurface)
             {
                 AllAirChunk = true;
-                precomputedHeightmap = null;
                 if (pooledColumns != null) ArrayPool<ColumnSpans>.Shared.Return(pooledColumns, false);
                 return;
             }
-            if ((uniformFlags & 0b01) != 0 && (uniformFlags & 0b10) == 0)
+            // Stone chunk if stone spans fully cover and soil does NOT qualify as full-cover soil everywhere.
+            if (allStoneFullCandidate && !allSoilFullCandidate)
             {
                 AllStoneChunk = true; CreateUniformSections(StoneId);
             }
-            else if ((uniformFlags & 0b10) != 0 && (uniformFlags & 0b01) == 0)
+            // Soil chunk if soil spans fully cover and stone does NOT fully cover everywhere.
+            else if (allSoilFullCandidate && !allStoneFullCandidate)
             {
                 AllSoilChunk = true; CreateUniformSections(SoilId);
             }
             if (AllStoneChunk || AllSoilChunk)
             {
-                precomputedHeightmap = null;
                 BuildAllBoundaryPlanesInitial();
                 if (candidateFullyBuried && FaceSolidNegX && FaceSolidPosX && FaceSolidNegY && FaceSolidPosY && FaceSolidNegZ && FaceSolidPosZ)
                     SetFullyBuried();
@@ -612,9 +610,6 @@ namespace MVGE_GEN.Terrain
                     SectionUtils.GenerationFinalizeSection(sec);
                 }
             }
-
-            // Release heightmap reference (no longer needed after voxel data established)
-            precomputedHeightmap = null;
 
             // Build initial boundary planes (using finalized section representations)
             BuildAllBoundaryPlanesInitial();

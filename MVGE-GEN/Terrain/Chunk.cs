@@ -31,8 +31,6 @@ namespace MVGE_GEN.Terrain
         public int sectionsY;
         public int sectionsZ;
 
-        public float[,] precomputedHeightmap;
-
         public const int SECTION_SHIFT = 4;
         public const int SECTION_MASK = 0xF;
 
@@ -109,7 +107,6 @@ namespace MVGE_GEN.Terrain
         internal Chunk(Vector3 chunkPosition,
                        long seed,
                        string chunkDataDirectory,
-                       float[,] precomputedHeightmap,
                        bool autoGenerate,
                        UniformOverride uniformOverride = UniformOverride.None,
                        BlockColumnProfile[] columnSpanMap = null)
@@ -117,7 +114,6 @@ namespace MVGE_GEN.Terrain
             position = chunkPosition;
             saveDirectory = chunkDataDirectory;
             generationSeed = seed;
-            this.precomputedHeightmap = precomputedHeightmap;
             _uniformOverride = uniformOverride;
 
             dimX = GameManager.settings.chunkMaxX;

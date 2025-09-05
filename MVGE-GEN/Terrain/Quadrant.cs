@@ -520,7 +520,6 @@ namespace MVGE_GEN.Terrain
                     worldPos,
                     seed,
                     chunkSaveDirectory,
-                    hmRef,
                     autoGenerate: true,
                     uniformOverride: overrideKind,
                     columnSpanMap: spanMap);
