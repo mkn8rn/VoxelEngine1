@@ -349,7 +349,7 @@ namespace MVGE_GEN
 
             void TrackBatch((int cx,int cy,int cz) key)
             {
-                var (bx,bz) = Batch.GetBatchIndices(key.cx, key.cz);
+                var (bx,bz) = Quadrant.GetBatchIndices(key.cx, key.cz);
                 candidateBatches.Add((bx,bz));
             }
 
@@ -417,7 +417,7 @@ namespace MVGE_GEN
                 {
                     int cx = centerCx + dx;
                     int cz = centerCz + dz;
-                    var (bx,bz) = Batch.GetBatchIndices(cx, cz);
+                    var (bx,bz) = Quadrant.GetBatchIndices(cx, cz);
                     // Touch batch (forces placeholder creation or load if file exists)
                     if (!loadedBatches.ContainsKey((bx,bz)))
                     {

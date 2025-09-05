@@ -22,14 +22,16 @@ namespace MVGE_GEN.Terrain
         public int SoilEnd;   // -1 when no soil span
     }
 
-    internal sealed class Batch
+    // previously named Batch - you may see out of date comments referencing Batch.
+    internal sealed class Quadrant
     {
         // ------------------------------------------------------------
         // Configuration / identity
         // ------------------------------------------------------------
-        public const int BATCH_SIZE = 32;                                   // Horizontal footprint width in chunk units (X & Z)
-        public readonly int batchX;                                         // Batch index along X in chunk space (floor(cx/32))
-        public readonly int batchZ;                                         // Batch index along Z in chunk space (floor(cz/32))
+        // quad size was previously 32, but reduced to 16. You may see out of date comments referencing 32.
+        public const int QUAD_SIZE = 16;                                   // Horizontal footprint width in chunk units (X & Z)
+        public readonly int quadX;                                         // Batch index along X in chunk space (floor(cx/32))
+        public readonly int quadZ;                                         // Batch index along Z in chunk space (floor(cz/32))
 
         // ------------------------------------------------------------
         // Global caches (shared across all batches in process)
@@ -54,7 +56,7 @@ namespace MVGE_GEN.Terrain
         // ------------------------------------------------------------
         // Column classification profiles & uniform slab inference
         // ------------------------------------------------------------
-        private readonly ColumnProfile[,] _profiles = new ColumnProfile[BATCH_SIZE, BATCH_SIZE];
+        private readonly ColumnProfile[,] _profiles = new ColumnProfile[QUAD_SIZE, QUAD_SIZE];
         private volatile bool _profilesBuilt;                    // True once every profile cell initialized
         private readonly object _profileBuildLock = new();       // Guards one‑time profile build
 
@@ -78,10 +80,10 @@ namespace MVGE_GEN.Terrain
         // ------------------------------------------------------------
         // Public surface API
         // ------------------------------------------------------------
-        public Batch(int batchX, int batchZ)
+        public Quadrant(int batchX, int batchZ)
         {
-            this.batchX = batchX;
-            this.batchZ = batchZ;
+            this.quadX = batchX;
+            this.quadZ = batchZ;
         }
 
         public IEnumerable<Chunk> Chunks
@@ -138,13 +140,13 @@ namespace MVGE_GEN.Terrain
         public static (int bx, int bz) GetBatchIndices(int cx, int cz)
         {
             static int FloorDiv(int a, int b) => (int)Math.Floor((double)a / b);
-            return (FloorDiv(cx, BATCH_SIZE), FloorDiv(cz, BATCH_SIZE));
+            return (FloorDiv(cx, QUAD_SIZE), FloorDiv(cz, QUAD_SIZE));
         }
 
         public static (int localX, int localZ) LocalIndices(int cx, int cz)
         {
-            int localX = (int)((uint)(cx % BATCH_SIZE + BATCH_SIZE) % BATCH_SIZE);
-            int localZ = (int)((uint)(cz % BATCH_SIZE + BATCH_SIZE) % BATCH_SIZE);
+            int localX = (int)((uint)(cx % QUAD_SIZE + QUAD_SIZE) % QUAD_SIZE);
+            int localZ = (int)((uint)(cz % QUAD_SIZE + QUAD_SIZE) % QUAD_SIZE);
             return (localX, localZ);
         }
 
@@ -203,11 +205,11 @@ namespace MVGE_GEN.Terrain
                     return;
                 }
 
-                for (int lx = 0; lx < BATCH_SIZE; lx++)
+                for (int lx = 0; lx < QUAD_SIZE; lx++)
                 {
-                    for (int lz = 0; lz < BATCH_SIZE; lz++)
+                    for (int lz = 0; lz < QUAD_SIZE; lz++)
                     {
-                        var (surface, stoneStart, stoneEnd, soilStart, soilEnd) = provider(batchX * BATCH_SIZE + lx, batchZ * BATCH_SIZE + lz);
+                        var (surface, stoneStart, stoneEnd, soilStart, soilEnd) = provider(quadX * QUAD_SIZE + lx, quadZ * QUAD_SIZE + lz);
                         _profiles[lx, lz] = new ColumnProfile
                         {
                             Surface = surface,
@@ -240,9 +242,9 @@ namespace MVGE_GEN.Terrain
             bool allStone = true;
             bool allSoil = true;
 
-            for (int lx = 0; lx < BATCH_SIZE; lx++)
+            for (int lx = 0; lx < QUAD_SIZE; lx++)
             {
-                for (int lz = 0; lz < BATCH_SIZE; lz++)
+                for (int lz = 0; lz < QUAD_SIZE; lz++)
                 {
                     ref readonly ColumnProfile p = ref _profiles[lx, lz];
 

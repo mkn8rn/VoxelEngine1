@@ -90,7 +90,7 @@ namespace MVGE_GEN
         // A batch groups chunks for all vertical layers sharing a 32x32 (cx,cz) footprint.
         // When any chunk in a batch is requested (load or generation), the whole batch
         // is loaded (from batch file if present) or generated on-demand over time.
-        private readonly ConcurrentDictionary<(int bx, int bz), Batch> loadedBatches = new();
+        private readonly ConcurrentDictionary<(int bx, int bz), Quadrant> loadedBatches = new();
 
         // Track batches currently being generated. Value holds queue/state instead of a simple byte now.
         private readonly ConcurrentDictionary<(int bx,int bz), BatchGenerationState> generatingBatches = new();
@@ -336,7 +336,7 @@ namespace MVGE_GEN
                         if (Math.Abs(cx) > regionLimit || Math.Abs(cy) > regionLimit || Math.Abs(cz) > regionLimit)
                         { if (isBuffer) bufferGenSchedule.TryRemove(key, out _); else chunkGenSchedule.TryRemove(key, out _); continue; }
 
-                        var (bx, bz) = Batch.GetBatchIndices(cx, cz);
+                        var (bx, bz) = Quadrant.GetBatchIndices(cx, cz);
                         bool batchExists = loadedBatches.TryGetValue((bx, bz), out var existingBatch);
 
                         // Quick skip if chunk already materialized
@@ -346,10 +346,10 @@ namespace MVGE_GEN
                         int lodDist = GameManager.settings.lod1RenderDistance;
                         int playerCxSnapshot = playerChunkX; int playerCySnapshot = playerChunkY; int playerCzSnapshot = playerChunkZ;
                         int activeRadiusPlusOne = lodDist + 1;
-                        int batchMinCx = bx * Batch.BATCH_SIZE;
-                        int batchMinCz = bz * Batch.BATCH_SIZE;
-                        int batchMaxCx = batchMinCx + Batch.BATCH_SIZE - 1;
-                        int batchMaxCz = batchMinCz + Batch.BATCH_SIZE - 1;
+                        int batchMinCx = bx * Quadrant.QUAD_SIZE;
+                        int batchMinCz = bz * Quadrant.QUAD_SIZE;
+                        int batchMaxCx = batchMinCx + Quadrant.QUAD_SIZE - 1;
+                        int batchMaxCz = batchMinCz + Quadrant.QUAD_SIZE - 1;
                         bool intersects = !(batchMaxCx < playerCxSnapshot - activeRadiusPlusOne || batchMinCx > playerCxSnapshot + activeRadiusPlusOne || batchMaxCz < playerCzSnapshot - activeRadiusPlusOne || batchMinCz > playerCzSnapshot + activeRadiusPlusOne);
                         if (!intersects)
                         { if (isBuffer) bufferGenSchedule.TryRemove(key, out _); else chunkGenSchedule.TryRemove(key, out _); continue; }
@@ -382,7 +382,7 @@ namespace MVGE_GEN
                         Interlocked.Increment(ref state.ActiveWorkers);
                         int verticalRange = lodDist; // reuse heuristic
 
-                        Batch.ChunkRegistrar registrar = (chunkKey, chunkInstance, insideLod1) =>
+                        Quadrant.ChunkRegistrar registrar = (chunkKey, chunkInstance, insideLod1) =>
                         {
                             // Skip if already recorded (race safety)
                             if (activeChunks.ContainsKey(chunkKey) || unbuiltChunks.ContainsKey(chunkKey) || passiveChunks.ContainsKey(chunkKey)) return;
@@ -738,13 +738,13 @@ namespace MVGE_GEN
         }
 
         // Returns existing batch or creates placeholder (without populating chunks yet).
-        private Batch GetOrCreateBatch(int bx, int bz)
+        private Quadrant GetOrCreateBatch(int bx, int bz)
         {
-            return loadedBatches.GetOrAdd((bx, bz), key => new Batch(key.bx, key.bz));
+            return loadedBatches.GetOrAdd((bx, bz), key => new Quadrant(key.bx, key.bz));
         }
 
         // Compute batch indices from chunk indices.
-        private static (int bx, int bz) BatchKeyFromChunk(int cx, int cz) => Batch.GetBatchIndices(cx, cz);
+        private static (int bx, int bz) BatchKeyFromChunk(int cx, int cz) => Quadrant.GetBatchIndices(cx, cz);
 
         // Ensure the batch containing (cx,cz) is loaded from disk (if present) into memory.
         // If already loaded, no-op. Returns true if target chunk present after call.
@@ -767,13 +767,13 @@ namespace MVGE_GEN
             // Determine center (player) chunk
             var (pcx, pcy, pcz) = PlayerChunkPosition;
             // Iterate horizontal footprint
-            int baseCx = bx * Batch.BATCH_SIZE;
-            int baseCz = bz * Batch.BATCH_SIZE;
-            for (int lx = 0; lx < Batch.BATCH_SIZE; lx++)
+            int baseCx = bx * Quadrant.QUAD_SIZE;
+            int baseCz = bz * Quadrant.QUAD_SIZE;
+            for (int lx = 0; lx < Quadrant.QUAD_SIZE; lx++)
             {
                 int cx = baseCx + lx;
                 if (Math.Abs(cx - pcx) > lodDist + 1) continue; // +1 ring always kept in memory
-                for (int lz = 0; lz < Batch.BATCH_SIZE; lz++)
+                for (int lz = 0; lz < Quadrant.QUAD_SIZE; lz++)
                 {
                     int cz = baseCz + lz;
                     if (Math.Abs(cz - pcz) > lodDist + 1) continue;
