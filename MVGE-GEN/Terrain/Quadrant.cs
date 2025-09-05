@@ -38,6 +38,22 @@ namespace MVGE_GEN.Terrain
         public int SoilEnd;    // world soil span end (inclusive) or -1
     }
 
+    // Compact vertical band summary for a single (chunkX,chunkZ) column across ALL vertical chunks.
+    // Values are expressed in chunk layer indices (cy). These bounds allow early-out of generation for
+    // empty vertical layers (no non-air material) before chunk objects are created.
+    internal struct ColumnVerticalBands
+    {
+        public short topNonAirCy;     // highest cy containing any stone or soil voxel
+        public short bottomNonAirCy;  // lowest cy containing any stone or soil voxel
+        public short firstStoneCy;    // lowest cy containing stone (or -1 if absent)
+        public short lastStoneCy;     // highest cy containing stone (or -1 if absent)
+        public short firstSoilCy;     // lowest cy containing soil (or -1 if absent)
+        public short lastSoilCy;      // highest cy containing soil (or -1 if absent)
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+        public bool HasAnyNonAir() => bottomNonAirCy <= topNonAirCy;
+    }
+
     // previously named Batch - you may see out of date comments referencing Batch.
     internal sealed class Quadrant
     {
@@ -82,12 +98,14 @@ namespace MVGE_GEN.Terrain
         private int _aggregatedBuiltCount;                       // Count of aggregated column profiles built so far (when reaches QUAD_SIZE^2 -> _profilesBuilt=true)
 
         // ------------------------------------------------------------
-        // Cached per-column block column span arrays
+        // Cached per-column block column span arrays + vertical band summaries
         // ------------------------------------------------------------
         // Key: (columnCx, columnCz) in chunk coordinates.
         // Value: array sized (chunkMaxX * chunkMaxZ) of BlockColumnProfile mapping each local (x,z) block column inside the chunk.
         // Index convention: index = localX * chunkMaxZ + localZ.
         private readonly ConcurrentDictionary<(int cx, int cz), BlockColumnProfile[]> _columnLocalSpanCache = new();
+        // Column vertical bands (always produced when BlockColumns are built). Provides early-out vertical generation bounds.
+        private readonly ConcurrentDictionary<(int cx, int cz), ColumnVerticalBands> _columnVerticalBands = new();
 
         // Stores the regionLimit/vertical chunk count used when maps were built so we can detect incompatible requests (legacy: retained, no longer used for sizing).
         private long _spanCacheRegionLimit = -1; // -1 => uninitialized
@@ -97,7 +115,13 @@ namespace MVGE_GEN.Terrain
         // Batch state flags
         // ------------------------------------------------------------
         public volatile bool Dirty;                              // Marked when chunk additions/removals occur (world save grouping)
-        public volatile bool GenerationComplete;                 // Reserved flag for future full batch completion signaling
+
+        // ------------------------------------------------------------
+        // Precomputed quadrant-uniform stone vertical chunk layer range
+        // ------------------------------------------------------------
+        private bool _uniformStoneComputed;          // true once intersection across all columns processed
+        private int _uniformStoneFirstCy = int.MaxValue; // first cy inclusive for uniform stone (if any)
+        private int _uniformStoneLastCy = int.MinValue;  // last cy inclusive for uniform stone (if any)
 
         // ------------------------------------------------------------
         // Uniform classification kinds for vertical chunk slabs
@@ -172,8 +196,8 @@ namespace MVGE_GEN.Terrain
         // ------------------------------------------------------------
         public static (int bx, int bz) GetBatchIndices(int cx, int cz)
         {
-            static int FloorDiv(int a, int b) => (int)Math.Floor((double)a / b);
-            return (FloorDiv(cx, QUAD_SIZE), FloorDiv(cz, QUAD_SIZE));
+            static int FloorDivLocal(int a, int b) => (int)Math.Floor((double)a / b);
+            return (FloorDivLocal(cx, QUAD_SIZE), FloorDivLocal(cz, QUAD_SIZE));
         }
 
         public static (int localX, int localZ) LocalIndices(int cx, int cz)
@@ -182,6 +206,8 @@ namespace MVGE_GEN.Terrain
             int localZ = (int)((uint)(cz % QUAD_SIZE + QUAD_SIZE) % QUAD_SIZE);
             return (localX, localZ);
         }
+
+        private static int FloorDiv(int a, int b) => (int)Math.Floor((double)a / b);
 
         // ------------------------------------------------------------
         // Global noise + heightmap generation & retrieval
@@ -252,8 +278,9 @@ namespace MVGE_GEN.Terrain
                         _profiles[lx, lz].AggregatedBuilt = true;
                     }
                 }
-                _profilesBuilt = true;
                 _aggregatedBuiltCount = QUAD_SIZE * QUAD_SIZE;
+                _profilesBuilt = true;
+                ComputeUniformStoneRangeIfNeeded();
             }
         }
 
@@ -290,8 +317,68 @@ namespace MVGE_GEN.Terrain
                 if (_aggregatedBuiltCount == QUAD_SIZE * QUAD_SIZE)
                 {
                     _profilesBuilt = true; // all aggregated now
+                    ComputeUniformStoneRangeIfNeeded();
                 }
             }
+        }
+
+        // Computes the intersection of stone spans across all columns to derive a quadrant-wide uniform stone chunk layer range.
+        private void ComputeUniformStoneRangeIfNeeded()
+        {
+            if (_uniformStoneComputed || !_profilesBuilt) return;
+            int intersectStart = int.MinValue; // will become max of starts
+            int intersectEnd = int.MaxValue;   // will become min of ends
+            bool anyColumn = false;
+            for (int lx = 0; lx < QUAD_SIZE; lx++)
+            {
+                for (int lz = 0; lz < QUAD_SIZE; lz++)
+                {
+                    ref readonly var p = ref _profiles[lx, lz];
+                    if (!p.AggregatedBuilt)
+                    {
+                        _uniformStoneComputed = true; // defensive finalize
+                        return;
+                    }
+                    if (p.StoneStart < 0 || p.StoneEnd < p.StoneStart)
+                    {
+                        _uniformStoneComputed = true; // a column lacks stone -> no uniform stone range
+                        return;
+                    }
+                    anyColumn = true;
+                    if (p.StoneStart > intersectStart) intersectStart = p.StoneStart;
+                    if (p.StoneEnd < intersectEnd) intersectEnd = p.StoneEnd;
+                }
+            }
+            if (!anyColumn || intersectStart > intersectEnd)
+            {
+                _uniformStoneComputed = true;
+                return; // no overlap
+            }
+            // Remove soil intrusion: any column with soil starting inside overlap truncates top.
+            for (int lx = 0; lx < QUAD_SIZE; lx++)
+            {
+                for (int lz = 0; lz < QUAD_SIZE; lz++)
+                {
+                    ref readonly var p = ref _profiles[lx, lz];
+                    if (p.SoilStart >= 0 && p.SoilStart <= intersectEnd)
+                    {
+                        int newEnd = p.SoilStart - 1;
+                        if (newEnd < intersectEnd) intersectEnd = newEnd;
+                        if (intersectStart > intersectEnd)
+                        {
+                            _uniformStoneComputed = true;
+                            return; // truncated to empty
+                        }
+                    }
+                }
+            }
+            if (intersectStart <= intersectEnd)
+            {
+                int chunkSizeY = GameManager.settings.chunkMaxY;
+                _uniformStoneFirstCy = FloorDiv(intersectStart, chunkSizeY);
+                _uniformStoneLastCy = FloorDiv(intersectEnd, chunkSizeY);
+            }
+            _uniformStoneComputed = true;
         }
 
         // Ensure per-block column data exists for the specified chunk column (lazy build).
@@ -315,7 +402,12 @@ namespace MVGE_GEN.Terrain
             int baseWorldZ = columnCz * sizeZ;
             var hm = GetOrCreateHeightmap(_seed, baseWorldX, baseWorldZ);
 
-            // Build per-block columns.
+            int stoneFirstWorld = int.MaxValue;
+            int stoneLastWorld = int.MinValue;
+            int soilFirstWorld = int.MaxValue;
+            int soilLastWorld = int.MinValue;
+
+            // Build per-block columns and accumulate vertical band extremes.
             for (int x = 0; x < sizeX; x++)
             {
                 for (int z = 0; z < sizeZ; z++)
@@ -330,8 +422,59 @@ namespace MVGE_GEN.Terrain
                         SoilStart = soilStart,
                         SoilEnd = soilEnd
                     };
+
+                    if (stoneStart >= 0 && stoneEnd >= stoneStart)
+                    {
+                        if (stoneStart < stoneFirstWorld) stoneFirstWorld = stoneStart;
+                        if (stoneEnd > stoneLastWorld) stoneLastWorld = stoneEnd;
+                    }
+                    if (soilStart >= 0 && soilEnd >= soilStart)
+                    {
+                        if (soilStart < soilFirstWorld) soilFirstWorld = soilStart;
+                        if (soilEnd > soilLastWorld) soilLastWorld = soilEnd;
+                    }
                 }
             }
+
+            // Derive column vertical bands in chunk layer (cy) indices for early-out.
+            // If no material present, bottomNonAirCy > topNonAirCy (sentinel configuration).
+            ColumnVerticalBands bands;
+            if (stoneFirstWorld == int.MaxValue && soilFirstWorld == int.MaxValue)
+            {
+                bands.bottomNonAirCy = 1; // sentinel: empty range
+                bands.topNonAirCy = 0;
+                bands.firstStoneCy = -1;
+                bands.lastStoneCy = -1;
+                bands.firstSoilCy = -1;
+                bands.lastSoilCy = -1;
+            }
+            else
+            {
+                int sizeY = GameManager.settings.chunkMaxY; // chunk vertical span (world units per chunk layer)
+                // Convert world Y to chunk layer indices using floor division.
+                int bStoneCy = stoneFirstWorld == int.MaxValue ? int.MaxValue : FloorDiv(stoneFirstWorld, sizeY);
+                int tStoneCy = stoneLastWorld == int.MinValue ? int.MinValue : FloorDiv(stoneLastWorld, sizeY);
+                int bSoilCy = soilFirstWorld == int.MaxValue ? int.MaxValue : FloorDiv(soilFirstWorld, sizeY);
+                int tSoilCy = soilLastWorld == int.MinValue ? int.MinValue : FloorDiv(soilLastWorld, sizeY);
+
+                int bottom = Math.Min(bStoneCy, bSoilCy);
+                int top = Math.Max(tStoneCy, tSoilCy);
+                if (bottom == int.MaxValue && top == int.MinValue)
+                {
+                    bands.bottomNonAirCy = 1;
+                    bands.topNonAirCy = 0;
+                }
+                else
+                {
+                    bands.bottomNonAirCy = (short)bottom;
+                    bands.topNonAirCy = (short)top;
+                }
+                bands.firstStoneCy = stoneFirstWorld == int.MaxValue ? (short)-1 : (short)bStoneCy;
+                bands.lastStoneCy = stoneLastWorld == int.MinValue ? (short)-1 : (short)tStoneCy;
+                bands.firstSoilCy = soilFirstWorld == int.MaxValue ? (short)-1 : (short)bSoilCy;
+                bands.lastSoilCy = soilLastWorld == int.MinValue ? (short)-1 : (short)tSoilCy;
+            }
+            _columnVerticalBands[(columnCx, columnCz)] = bands;
 
             profile.BlockColumnsBuilt = true;
         }
@@ -365,6 +508,15 @@ namespace MVGE_GEN.Terrain
             var (lx, lz) = LocalIndices(columnCx, columnCz);
             ref readonly ChunkColumnProfile profile = ref _profiles[lx, lz];
             return profile.BlockColumns;
+        }
+
+        // Helper accessor for vertical bands (assumes EnsureBlockColumnsBuilt already called).
+        private ColumnVerticalBands GetColumnVerticalBands(int columnCx, int columnCz)
+        {
+            if (_columnVerticalBands.TryGetValue((columnCx, columnCz), out var b)) return b;
+            // Force build if missing (should not happen in normal flow).
+            EnsureBlockColumnsBuilt(columnCx, columnCz);
+            return _columnVerticalBands[(columnCx, columnCz)];
         }
 
         // ------------------------------------------------------------
@@ -412,7 +564,6 @@ namespace MVGE_GEN.Terrain
                     bool soilCoversSlab = hasSoilSpan && p.SoilStart <= baseY && p.SoilEnd >= topY;
 
                     bool soilOverlapsSlab = hasSoilSpan && p.SoilStart <= topY && p.SoilEnd >= baseY; // any soil voxel inside slab
-                    // bool stoneOverlapsSlab = hasStoneSpan && p.StoneStart <= topY && p.StoneEnd >= baseY; // retained variable removed (not used)
 
                     if (!(stoneCoversSlab && !soilOverlapsSlab))
                     {
@@ -447,8 +598,8 @@ namespace MVGE_GEN.Terrain
         // Column generation entry point
         // ------------------------------------------------------------
         // Generates (or loads) all vertical chunk layers inside a single column of the batch.
-        // Performs biome initialization (if unset), builds aggregated profiles (one‑time), classifies each slab for uniform overrides,
-        // creates chunk instances, and invokes the registrar for external indexing. Per-block column spans are built lazily in BuildSpanMapInternal.
+        // Performs biome initialization (if unset), builds aggregated profiles (one‑time), applies precomputed uniform stone overrides,
+        // classifies each remaining slab for uniform overrides, creates chunk instances, and invokes the registrar for external indexing.
         internal void GenerateOrLoadColumn(
             int cx,
             int cz,
@@ -481,41 +632,55 @@ namespace MVGE_GEN.Terrain
                 _seedSet = true;
             }
 
-            // Lazily build aggregated profile only for this column (and its heightmap) – no eager full-grid build.
+            // Build aggregated profile for this column.
             EnsureAggregatedProfile(cx, cz);
 
-            int columnBaseX = cx * sizeX;
-            int columnBaseZ = cz * sizeZ;
-            var columnHeightmap = GetOrCreateHeightmap(seed, columnBaseX, columnBaseZ);
+            bool canUniformClassify = _profilesBuilt; // aggregated grid complete
 
-            // Build & retain the span map for this (cx,cz) column; pass to every vertical chunk.
-            var spanMap = GetOrBuildColumnSpanMap(cx, cz, sizeY, regionLimit);
+            // Precomputed quadrant-uniform stone range may provide an immediate override without per-column block data.
+            bool haveUniformStoneRange = _uniformStoneComputed && _uniformStoneFirstCy <= _uniformStoneLastCy;
 
             int vMin = playerCy - verticalRange;
             int vMax = playerCy + verticalRange;
             if (vMin < -regionLimit) vMin = (int)-regionLimit;
             if (vMax > regionLimit) vMax = (int)regionLimit;
 
-            bool canUniformClassify = _profilesBuilt; // only attempt uniform overrides once every column aggregated
+            int columnBaseX = cx * sizeX;
+            int columnBaseZ = cz * sizeZ;
+            float[,] columnHeightmap = null; // created lazily only if a non pre-marked slab needs generation
+            BlockColumnProfile[] spanMap = null; // also built lazily
 
             for (int cy = vMin; cy <= vMax; cy++)
             {
                 if (TryGetChunk(cx, cy, cz, out _))
                     continue;
 
-                UniformKind uniformKind = UniformKind.None;
                 Chunk.UniformOverride overrideKind = Chunk.UniformOverride.None;
-                if (canUniformClassify && ClassifyVerticalChunk(cy, sizeY, out var classified))
+
+                // Pre-marked quadrant-wide uniform stone range.
+                if (haveUniformStoneRange && cy >= _uniformStoneFirstCy && cy <= _uniformStoneLastCy)
                 {
-                    uniformKind = classified;
-                    if (uniformKind == UniformKind.AllAir) overrideKind = Chunk.UniformOverride.AllAir;
-                    else if (uniformKind == UniformKind.AllStone) overrideKind = Chunk.UniformOverride.AllStone;
-                    else if (uniformKind == UniformKind.AllSoil) overrideKind = Chunk.UniformOverride.AllSoil;
+                    overrideKind = Chunk.UniformOverride.AllStone;
+                }
+                else if (canUniformClassify)
+                {
+                    // Fallback to full quadrant classification only when not covered by the precomputed stone range.
+                    if (ClassifyVerticalChunk(cy, sizeY, out var classified))
+                    {
+                        if (classified == UniformKind.AllAir) overrideKind = Chunk.UniformOverride.AllAir;
+                        else if (classified == UniformKind.AllStone) overrideKind = Chunk.UniformOverride.AllStone;
+                        else if (classified == UniformKind.AllSoil) overrideKind = Chunk.UniformOverride.AllSoil;
+                    }
+                }
+
+                // Build per-column span map only if needed for non-uniform generation path.
+                if (overrideKind == Chunk.UniformOverride.None)
+                {
+                    columnHeightmap ??= GetOrCreateHeightmap(seed, columnBaseX, columnBaseZ);
+                    spanMap ??= GetOrBuildColumnSpanMap(cx, cz, sizeY, regionLimit);
                 }
 
                 var worldPos = new Vector3(columnBaseX, cy * sizeY, columnBaseZ);
-                float[,] hmRef = columnHeightmap;
-
                 var chunk = new Chunk(
                     worldPos,
                     seed,
