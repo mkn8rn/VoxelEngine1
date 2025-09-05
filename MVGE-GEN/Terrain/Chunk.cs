@@ -33,10 +33,6 @@ namespace MVGE_GEN.Terrain
 
         public float[,] precomputedHeightmap;
 
-        // Cached per-vertical-chunk local span map for this (cx,cz) column (all vertical chunk layers).
-        // Passed in by Quadrant; currently unused by generation logic (reserved for future features).
-        internal BlockColumnProfile[] columnSpanMap;
-
         public const int SECTION_SHIFT = 4;
         public const int SECTION_MASK = 0xF;
 
@@ -123,7 +119,6 @@ namespace MVGE_GEN.Terrain
             generationSeed = seed;
             this.precomputedHeightmap = precomputedHeightmap;
             _uniformOverride = uniformOverride;
-            this.columnSpanMap = columnSpanMap; // may be null for uniform overrides or legacy callers
 
             dimX = GameManager.settings.chunkMaxX;
             dimY = GameManager.settings.chunkMaxY;
@@ -144,7 +139,7 @@ namespace MVGE_GEN.Terrain
             InitializeSectionGrid();
             if (autoGenerate)
             {
-                InitializeChunkData(); // triggers GenerateInitialChunkData or uniform shortcut
+                InitializeChunkData(columnSpanMap); // triggers GenerateInitialChunkData or uniform shortcut
             }
         }
 
@@ -162,7 +157,7 @@ namespace MVGE_GEN.Terrain
             sections = new ChunkSection[sectionsX, sectionsY, sectionsZ];
         }
 
-        public void InitializeChunkData()
+        internal void InitializeChunkData(BlockColumnProfile[] columnSpanMap)
         {
             // Uniform override short‑circuit path built from batch classification.
             if (_uniformOverride != UniformOverride.None)
@@ -187,7 +182,7 @@ namespace MVGE_GEN.Terrain
                 }
                 return;
             }
-            GenerateInitialChunkData();
+            GenerateInitialChunkData(columnSpanMap);
         }
 
         // NOTE: InitializeChunkData & all generation helpers are in ChunkGenerator partial file.

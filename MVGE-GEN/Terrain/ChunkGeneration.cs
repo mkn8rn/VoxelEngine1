@@ -13,6 +13,33 @@ namespace MVGE_GEN.Terrain
 {
     public partial class Chunk
     {
+        // Result container for per-column span derivation.
+        internal readonly struct LocalBlockColumnProfile
+        {
+            public readonly bool HasStone;
+            public readonly short StoneStart;
+            public readonly short StoneEnd;
+            public readonly bool HasSoil;
+            public readonly short SoilStart;
+            public readonly short SoilEnd;
+            public readonly bool InvalidateStoneUniform;
+            public readonly bool InvalidateSoilUniform;
+
+            public LocalBlockColumnProfile(bool hasStone, short stoneStart, short stoneEnd,
+                                        bool hasSoil, short soilStart, short soilEnd,
+                                        bool invalidateStoneUniform, bool invalidateSoilUniform)
+            {
+                HasStone = hasStone;
+                StoneStart = stoneStart;
+                StoneEnd = stoneEnd;
+                HasSoil = hasSoil;
+                SoilStart = soilStart;
+                SoilEnd = soilEnd;
+                InvalidateStoneUniform = invalidateStoneUniform;
+                InvalidateSoilUniform = invalidateSoilUniform;
+            }
+        }
+
         /// Per (x,z) column material spans inside this chunk's vertical slab.
         /// Each column can contain at most one contiguous stone span and one contiguous soil span directly above it.
         /// Section indices (first/last) are cached for emission & coverage calculations.
@@ -31,15 +58,18 @@ namespace MVGE_GEN.Terrain
 
         /// Generates initial voxel data for the chunk.
         /// Phases:
-        ///  1. Column pass (derivation): Using TerrainGeneration.DeriveStoneSoilSpans to obtain per‑column local spans.
+        ///  1. Column pass (derivation): Using precomputed world BlockColumnProfile spans (columnSpanMap) -> clip to chunk, format as LocalBlockColumnProfile.
         ///     Accumulates fully‑covered section ranges via difference arrays (stoneDiff / soilDiff) and tracks which columns have material.
         ///  2. Prefix phase: Convert difference arrays -> per‑section coverage counts for stone & soil.
         ///  3. Whole chunk classification: detect AllAir / AllStone / AllSoil & early exit.
         ///  4. Section emission: mark section‑uniform stone/soil, skip them during sparse run emission for remaining spans.
         ///  5. Whole chunk single block collapse (AllOneBlockChunk) if all sections are uniform with the same id.
         ///  6. Finalization: finalize non‑uniform sections (representation + metadata) and build boundary planes; confirm burial.
-        public void GenerateInitialChunkData()
+        internal void GenerateInitialChunkData(BlockColumnProfile[] columnSpanMap)
         {
+            if (columnSpanMap == null)
+                throw new InvalidOperationException("columnSpanMap must be provided for non-uniform chunk generation.");
+
             // ------------------------------------------------------------------
             // Basic chunk & biome constants
             // ------------------------------------------------------------------
@@ -128,6 +158,7 @@ namespace MVGE_GEN.Terrain
             // ------------------------------------------------------------------
             // Phase 1: Column pass (span derivation + coverage accumulation)
             // ------------------------------------------------------------------
+            // We now use the provided world-space BlockColumnProfile data instead of TerrainGeneration.DeriveStoneSoilSpans.
             for (int z = 0; z < maxZ; z++)
             {
                 int rowOffset = z * maxX;
@@ -143,25 +174,82 @@ namespace MVGE_GEN.Terrain
                     if (candidateFullyBuried & (surface >= burialInvalidateThreshold))
                         candidateFullyBuried = false;
 
-                    // Derive local spans using shared helper (world -> chunk local)
-                    var res = TerrainGeneration.DeriveStoneSoilSpans(surface, chunkBaseY, maxY, topOfChunk, biome);
+                    // World span index from per-block column map: index = localX * maxZ + localZ
+                    int spanIndex = x * maxZ + z;
+                    if ((uint)spanIndex >= (uint)columnSpanMap.Length)
+                        continue; // defensive
 
-                    // Update uniform candidates
-                    if (res.InvalidateStoneUniform) uniformFlags &= ~0b01;
-                    if (res.InvalidateSoilUniform)  uniformFlags &= ~0b10;
+                    ref readonly BlockColumnProfile worldCol = ref columnSpanMap[spanIndex];
+
+                    // Extract world spans
+                    int wStoneStart = worldCol.StoneStart;
+                    int wStoneEnd   = worldCol.StoneEnd;
+                    int wSoilStart  = worldCol.SoilStart;
+                    int wSoilEnd    = worldCol.SoilEnd;
+
+                    bool hasStone = wStoneStart >= 0 && wStoneEnd >= wStoneStart && wStoneEnd >= chunkBaseY && wStoneStart <= topOfChunk;
+                    bool hasSoil  = wSoilStart >= 0 && wSoilEnd >= wSoilStart && wSoilEnd >= chunkBaseY && wSoilStart <= topOfChunk;
+
+                    // Clip to chunk slab & convert to local short indices
+                    short localStoneStart = 0, localStoneEnd = 0;
+                    if (hasStone)
+                    {
+                        int cs = wStoneStart < chunkBaseY ? chunkBaseY : wStoneStart;
+                        int ce = wStoneEnd   > topOfChunk ? topOfChunk : wStoneEnd;
+                        if (cs <= ce)
+                        {
+                            localStoneStart = (short)(cs - chunkBaseY);
+                            localStoneEnd   = (short)(ce - chunkBaseY);
+                        }
+                        else
+                        {
+                            hasStone = false; // no overlap after clip
+                        }
+                    }
+
+                    short localSoilStart = 0, localSoilEnd = 0;
+                    if (hasSoil)
+                    {
+                        int cs = wSoilStart < chunkBaseY ? chunkBaseY : wSoilStart;
+                        int ce = wSoilEnd   > topOfChunk ? topOfChunk : wSoilEnd;
+                        if (cs <= ce)
+                        {
+                            localSoilStart = (short)(cs - chunkBaseY);
+                            localSoilEnd   = (short)(ce - chunkBaseY);
+                        }
+                        else
+                        {
+                            hasSoil = false;
+                        }
+                    }
+
+                    // Uniform invalidation logic mimicking earlier semantics
+                    bool invalidateStoneUniform = !hasStone || chunkBaseY < wStoneStart || topOfChunk > wStoneEnd;
+                    bool invalidateSoilUniform = true;
+                    if (hasSoil)
+                    {
+                        // soil uniform only if chunk slab fully inside soil span AND stone does not intrude slab bottom
+                        bool fullyInside = chunkBaseY >= wSoilStart && topOfChunk <= wSoilEnd;
+                        bool stoneIntrudes = hasStone && wStoneEnd >= chunkBaseY; // any stone voxel at/above base breaks pure soil slab uniform
+                        if (fullyInside && !stoneIntrudes)
+                            invalidateSoilUniform = false;
+                    }
+
+                    if (invalidateStoneUniform) uniformFlags &= ~0b01;
+                    if (invalidateSoilUniform)  uniformFlags &= ~0b10;
 
                     // Skip empty column (no stone & no soil in this chunk slab)
-                    if (!res.HasStone && !res.HasSoil) continue;
+                    if (!hasStone && !hasSoil) continue;
 
                     ref ColumnSpans spanRef = ref columns[colIndex];
 
                     // Record stone span
-                    if (res.HasStone)
+                    if (hasStone)
                     {
-                        spanRef.stoneStart = res.StoneStart;
-                        spanRef.stoneEnd   = res.StoneEnd;
-                        short firstSec = (short)(res.StoneStart >> SECTION_SHIFT);
-                        short lastSec  = (short)(res.StoneEnd   >> SECTION_SHIFT);
+                        spanRef.stoneStart = localStoneStart;
+                        spanRef.stoneEnd   = localStoneEnd;
+                        short firstSec = (short)(localStoneStart >> SECTION_SHIFT);
+                        short lastSec  = (short)(localStoneEnd   >> SECTION_SHIFT);
                         spanRef.stoneFirstSec = firstSec; spanRef.stoneLastSec = lastSec;
                         SetBit(stonePresentBits, colIndex);
                         if (firstSec < globalMinSectionY) globalMinSectionY = firstSec;
@@ -169,20 +257,20 @@ namespace MVGE_GEN.Terrain
                     }
 
                     // Record soil span
-                    if (res.HasSoil)
+                    if (hasSoil)
                     {
-                        spanRef.soilStart = res.SoilStart;
-                        spanRef.soilEnd   = res.SoilEnd;
-                        short firstSec = (short)(res.SoilStart >> SECTION_SHIFT);
-                        short lastSec  = (short)(res.SoilEnd   >> SECTION_SHIFT);
+                        spanRef.soilStart = localSoilStart;
+                        spanRef.soilEnd   = localSoilEnd;
+                        short firstSec = (short)(localSoilStart >> SECTION_SHIFT);
+                        short lastSec  = (short)(localSoilEnd   >> SECTION_SHIFT);
                         spanRef.soilFirstSec = firstSec; spanRef.soilLastSec = lastSec;
                         SetBit(soilPresentBits, colIndex);
                         if (firstSec < globalMinSectionY) globalMinSectionY = firstSec;
                         if (lastSec  > globalMaxSectionY) globalMaxSectionY = lastSec;
                     }
 
-                    bool stonePresent = res.HasStone;
-                    bool soilPresent  = res.HasSoil;
+                    bool stonePresent = hasStone;
+                    bool soilPresent  = hasSoil;
 
                     // Fully covered section accumulation (stone)
                     if (stonePresent)
@@ -240,8 +328,8 @@ namespace MVGE_GEN.Terrain
                             // Shrink start if stone overlaps from below into soil region
                             if (stonePresent)
                             {
-                                int stoneEnd = spanRef.stoneEnd;
-                                int stoneEndSec = stoneEnd >> SECTION_SHIFT;
+                                int stoneEndLocal = spanRef.stoneEnd;
+                                int stoneEndSec = stoneEndLocal >> SECTION_SHIFT;
                                 if (stoneEndSec >= fullStart) fullStart = stoneEndSec + 1;
                             }
                             if (fullStart <= fullEnd)
