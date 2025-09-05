@@ -33,6 +33,10 @@ namespace MVGE_GEN.Terrain
 
         public float[,] precomputedHeightmap;
 
+        // Cached per-vertical-chunk local span map for this (cx,cz) column (all vertical chunk layers).
+        // Passed in by Quadrant; currently unused by generation logic (reserved for future features).
+        internal BlockColumnProfile[] columnSpanMap;
+
         public const int SECTION_SHIFT = 4;
         public const int SECTION_MASK = 0xF;
 
@@ -105,14 +109,21 @@ namespace MVGE_GEN.Terrain
 
         private bool candidateFullyBuried; // heightmap suggested burial; confirmed after face solidity scan
 
-        // constructor allowing the caller to skip auto generation (used by disk load path) with optional uniform override.
-        internal Chunk(Vector3 chunkPosition, long seed, string chunkDataDirectory, float[,] precomputedHeightmap, bool autoGenerate, UniformOverride uniformOverride = UniformOverride.None)
+        // autogenerate = true for new chunks, false when loading from disk
+        internal Chunk(Vector3 chunkPosition,
+                       long seed,
+                       string chunkDataDirectory,
+                       float[,] precomputedHeightmap,
+                       bool autoGenerate,
+                       UniformOverride uniformOverride = UniformOverride.None,
+                       BlockColumnProfile[] columnSpanMap = null)
         {
             position = chunkPosition;
             saveDirectory = chunkDataDirectory;
             generationSeed = seed;
             this.precomputedHeightmap = precomputedHeightmap;
             _uniformOverride = uniformOverride;
+            this.columnSpanMap = columnSpanMap; // may be null for uniform overrides or legacy callers
 
             dimX = GameManager.settings.chunkMaxX;
             dimY = GameManager.settings.chunkMaxY;
@@ -136,10 +147,6 @@ namespace MVGE_GEN.Terrain
                 InitializeChunkData(); // triggers GenerateInitialChunkData or uniform shortcut
             }
         }
-
-        // Public constructor retains previous behaviour (auto-generate)
-        public Chunk(Vector3 chunkPosition, long seed, string chunkDataDirectory, float[,] precomputedHeightmap = null)
-            : this(chunkPosition, seed, chunkDataDirectory, precomputedHeightmap, true, UniformOverride.None) { }
 
         public void InitializeSectionGrid()
         {
@@ -318,15 +325,6 @@ namespace MVGE_GEN.Terrain
                 for (int y = 0; y < dimY; y++)
                     if (GetBlockLocal(x, y, z) == EMPTY) return false;
             return true;
-        }
-
-        // helper to get chunk indices without recomputing in multiple systems.
-        public (int cx,int cy,int cz) GetChunkIndices()
-        {
-            int sizeX = GameManager.settings.chunkMaxX;
-            int sizeY = GameManager.settings.chunkMaxY;
-            int sizeZ = GameManager.settings.chunkMaxZ;
-            return ((int)Math.Floor(position.X / sizeX), (int)Math.Floor(position.Y / sizeY), (int)Math.Floor(position.Z / sizeZ));
         }
     }
 }
