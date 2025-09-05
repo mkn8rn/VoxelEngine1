@@ -22,6 +22,18 @@ namespace MVGE_GEN.Terrain
         public int SoilEnd;   // -1 when no soil span
     }
 
+    // Cached per vertical chunk layer local spans for a single (cx,cz) chunk column.
+    // Each element represents the spans LOCAL to that vertical chunk (0..chunkHeight-1).
+    internal struct ColumnChunkLocalSpans
+    {
+        public short StoneStart; // -1 => absent
+        public short StoneEnd;
+        public short SoilStart;  // -1 => absent
+        public short SoilEnd;
+        public bool HasStone => StoneStart >= 0 && StoneEnd >= StoneStart;
+        public bool HasSoil => SoilStart >= 0 && SoilEnd >= SoilStart;
+    }
+
     // previously named Batch - you may see out of date comments referencing Batch.
     internal sealed class Quadrant
     {
@@ -59,6 +71,18 @@ namespace MVGE_GEN.Terrain
         private readonly ColumnProfile[,] _profiles = new ColumnProfile[QUAD_SIZE, QUAD_SIZE];
         private volatile bool _profilesBuilt;                    // True once every profile cell initialized
         private readonly object _profileBuildLock = new();       // Guards one‑time profile build
+
+        // ------------------------------------------------------------
+        // Cached per-column chunk-local span maps
+        // ------------------------------------------------------------
+        // Key: (columnCx, columnCz) in chunk coordinates.
+        // Value: array sized (2 * regionLimit + 1) of ColumnChunkLocalSpans where index (cy + regionLimit) maps to vertical chunk cy.
+        // These are derived directly from world-space ColumnProfile spans (single stone + single soil span) by clipping to each vertical chunk slab.
+        private readonly ConcurrentDictionary<(int cx, int cz), ColumnChunkLocalSpans[]> _columnLocalSpanCache = new();
+
+        // Stores the regionLimit/vertical chunk count used when maps were built so we can detect incompatible requests.
+        private long _spanCacheRegionLimit = -1; // -1 => uninitialized
+        private int _spanCacheChunkHeight = -1;
 
         // ------------------------------------------------------------
         // Batch state flags
@@ -225,6 +249,110 @@ namespace MVGE_GEN.Terrain
         }
 
         // ------------------------------------------------------------
+        // Build / retrieve per-column vertical chunk-local span maps
+        // ------------------------------------------------------------
+        private ColumnChunkLocalSpans[] GetOrBuildColumnSpanMap(int columnCx, int columnCz, int chunkSizeY, long regionLimit)
+        {
+            if (!_profilesBuilt)
+                throw new InvalidOperationException("Profiles must be built before requesting span maps.");
+
+            // Ensure cache configuration consistency; if region limit or chunk height changes (rare) we invalidate existing cache.
+            if (_spanCacheRegionLimit >= 0 && (_spanCacheRegionLimit != regionLimit || _spanCacheChunkHeight != chunkSizeY))
+            {
+                // Conservative: clear entire cache (mixed configurations would be incorrect indexing).
+                _columnLocalSpanCache.Clear();
+                _spanCacheRegionLimit = -1;
+            }
+            if (_spanCacheRegionLimit < 0)
+            {
+                _spanCacheRegionLimit = regionLimit;
+                _spanCacheChunkHeight = chunkSizeY;
+            }
+
+            return _columnLocalSpanCache.GetOrAdd((columnCx, columnCz), key => BuildSpanMapInternal(key.cx, key.cz, chunkSizeY, regionLimit));
+        }
+
+        private ColumnChunkLocalSpans[] BuildSpanMapInternal(int columnCx, int columnCz, int chunkSizeY, long regionLimit)
+        {
+            var (lx, lz) = LocalIndices(columnCx, columnCz);
+            ref ColumnProfile profile = ref _profiles[lx, lz];
+
+            int count = (int)(regionLimit * 2 + 1); // cy in [-regionLimit, +regionLimit]
+            var arr = new ColumnChunkLocalSpans[count];
+            if (profile.StoneStart < 0 && profile.SoilStart < 0) return arr; // all empty -> leave defaults (StoneStart/SoilStart default 0 but will mark absent below)
+
+            int worldStoneStart = profile.StoneStart;
+            int worldStoneEnd = profile.StoneEnd;
+            int worldSoilStart = profile.SoilStart;
+            int worldSoilEnd = profile.SoilEnd;
+
+            for (int i = 0; i < count; i++)
+            {
+                int cy = i - (int)regionLimit; // convert index to chunk Y coordinate
+                int slabBaseY = cy * chunkSizeY;
+                int slabTopY = slabBaseY + chunkSizeY - 1;
+                ColumnChunkLocalSpans spans = new ColumnChunkLocalSpans
+                {
+                    StoneStart = -1,
+                    StoneEnd = -1,
+                    SoilStart = -1,
+                    SoilEnd = -1
+                };
+
+                // Stone intersection
+                if (worldStoneStart >= 0 && worldStoneEnd >= worldStoneStart && slabTopY >= worldStoneStart && slabBaseY <= worldStoneEnd)
+                {
+                    int clipStart = Math.Max(slabBaseY, worldStoneStart);
+                    int clipEnd = Math.Min(slabTopY, worldStoneEnd);
+                    spans.StoneStart = (short)(clipStart - slabBaseY);
+                    spans.StoneEnd = (short)(clipEnd - slabBaseY);
+                }
+                // Soil intersection
+                if (worldSoilStart >= 0 && worldSoilEnd >= worldSoilStart && slabTopY >= worldSoilStart && slabBaseY <= worldSoilEnd)
+                {
+                    int clipStart = Math.Max(slabBaseY, worldSoilStart);
+                    int clipEnd = Math.Min(slabTopY, worldSoilEnd);
+                    spans.SoilStart = (short)(clipStart - slabBaseY);
+                    spans.SoilEnd = (short)(clipEnd - slabBaseY);
+                }
+                arr[i] = spans;
+            }
+            return arr;
+        }
+
+        // Public helper: get local spans for a specific vertical chunk of a column.
+        public bool TryGetChunkLocalSpansForColumn(int columnCx, int columnCy, int columnCz, int chunkSizeY, long regionLimit, out ColumnChunkLocalSpans spans)
+        {
+            spans = default;
+            if (!_profilesBuilt) return false;
+            var map = GetOrBuildColumnSpanMap(columnCx, columnCz, chunkSizeY, regionLimit);
+            int idx = columnCy + (int)regionLimit;
+            if ((uint)idx >= (uint)map.Length) return false;
+            spans = map[idx];
+            return true;
+        }
+
+        // Build a 2D grid of local spans for every column inside this quadrant for a given chunk layer cy.
+        // result[lx,lz] will be populated (array size must be [QUAD_SIZE,QUAD_SIZE]).
+        public void BuildChunkLayerLocalSpanGrid(int cy, int chunkSizeY, long regionLimit, ColumnChunkLocalSpans[,] result)
+        {
+            if (result.GetLength(0) != QUAD_SIZE || result.GetLength(1) != QUAD_SIZE)
+                throw new ArgumentException($"Result array must be sized [{QUAD_SIZE},{QUAD_SIZE}]");
+            if (!_profilesBuilt) throw new InvalidOperationException("Profiles must be built before requesting span grids.");
+
+            for (int lx = 0; lx < QUAD_SIZE; lx++)
+            {
+                int columnCx = quadX * QUAD_SIZE + lx;
+                for (int lz = 0; lz < QUAD_SIZE; lz++)
+                {
+                    int columnCz = quadZ * QUAD_SIZE + lz;
+                    TryGetChunkLocalSpansForColumn(columnCx, cy, columnCz, chunkSizeY, regionLimit, out var spans);
+                    result[lx, lz] = spans;
+                }
+            }
+        }
+
+        // ------------------------------------------------------------
         // Uniform classification for a vertical chunk slab
         // ------------------------------------------------------------
         public bool ClassifyVerticalChunk(int cy, int sizeY, out UniformKind kind)
@@ -238,9 +366,9 @@ namespace MVGE_GEN.Terrain
             int baseY = cy * sizeY;
             int topY = baseY + sizeY - 1;
 
-            bool allAir = true;
-            bool allStone = true;
-            bool allSoil = true;
+            bool allAir = true;   // Rule: slab is strictly above any material (surface) for every column.
+            bool allStone = true; // Rule: slab fully covered by stone span AND no soil overlaps slab (soil absent or entirely above or below slab) for every column.
+            bool allSoil = true;  // Rule: slab fully covered by soil span AND stone does NOT intrude (stoneEnd < baseY) for every column.
 
             for (int lx = 0; lx < QUAD_SIZE; lx++)
             {
@@ -248,27 +376,38 @@ namespace MVGE_GEN.Terrain
                 {
                     ref readonly ColumnProfile p = ref _profiles[lx, lz];
 
-                    // AllAir requires this slab to sit strictly above surface for every column.
+                    // --- All Air ---
                     if (!(baseY > p.Surface))
                     {
                         allAir = false;
                     }
 
-                    // Stone: stone span must cover entire slab range with no gap and soil must not intrude.
-                    bool stoneCovers = p.StoneStart >= 0 && p.StoneStart <= baseY && p.StoneEnd >= topY;
-                    if (!stoneCovers)
+                    // Precompute stone / soil coverage & overlap
+                    bool hasStoneSpan = p.StoneStart >= 0;
+                    bool hasSoilSpan = p.SoilStart >= 0;
+
+                    bool stoneCoversSlab = hasStoneSpan && p.StoneStart <= baseY && p.StoneEnd >= topY;
+                    bool soilCoversSlab = hasSoilSpan && p.SoilStart <= baseY && p.SoilEnd >= topY;
+
+                    bool soilOverlapsSlab = hasSoilSpan && p.SoilStart <= topY && p.SoilEnd >= baseY; // any soil voxel inside slab
+                    bool stoneOverlapsSlab = hasStoneSpan && p.StoneStart <= topY && p.StoneEnd >= baseY; // any stone voxel inside slab
+
+                    // --- All Stone ---
+                    // Must be fully stone covered & NO soil overlap with slab.
+                    if (!(stoneCoversSlab && !soilOverlapsSlab))
                     {
                         allStone = false;
                     }
 
-                    // Soil: soil span must fully cover slab and stone not extend into slab.
-                    bool soilCovers = p.SoilStart >= 0 && p.SoilStart <= baseY && p.SoilEnd >= topY && !(p.StoneEnd >= baseY);
-                    if (!soilCovers)
+                    // --- All Soil ---
+                    // Must be fully soil covered & stone does NOT intrude (stoneEnd < baseY or no stone span).
+                    bool stoneIntrudes = hasStoneSpan && p.StoneEnd >= baseY; // any stone cell at/above baseY breaks pure soil
+                    if (!(soilCoversSlab && !stoneIntrudes))
                     {
                         allSoil = false;
                     }
 
-                    // Early escape if all three disqualified.
+                    // Early exit if impossible
                     if (!allAir && !allStone && !allSoil)
                     {
                         kind = UniformKind.None;
@@ -341,6 +480,9 @@ namespace MVGE_GEN.Terrain
             int columnBaseZ = cz * sizeZ;
             var columnHeightmap = GetOrCreateHeightmap(seed, columnBaseX, columnBaseZ);
 
+            // Ensure span map for this column now (warm cache) – optional; ignore result (lazy on retrieval otherwise).
+            GetOrBuildColumnSpanMap(cx, cz, sizeY, regionLimit);
+
             int vMin = playerCy - verticalRange;
             int vMax = playerCy + verticalRange;
             if (vMin < -regionLimit) vMin = (int)-regionLimit;
@@ -366,7 +508,7 @@ namespace MVGE_GEN.Terrain
                 }
 
                 var worldPos = new Vector3(columnBaseX, cy * sizeY, columnBaseZ);
-                float[,] hmRef = (overrideKind == Chunk.UniformOverride.None) ? columnHeightmap : null; // Only needed for non‑uniform generation
+                float[,] hmRef = columnHeightmap;
                 var chunk = new Chunk(worldPos, seed, chunkSaveDirectory, hmRef, autoGenerate: true, uniformOverride: overrideKind);
 
                 AddOrReplaceChunk(chunk, cx, cy, cz);
