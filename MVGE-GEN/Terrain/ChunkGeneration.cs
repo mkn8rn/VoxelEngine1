@@ -53,6 +53,7 @@ namespace MVGE_GEN.Terrain
 
             // Section / column geometry
             int sectionSize = ChunkSection.SECTION_SIZE; // expected 16
+            int sectionVolume = ChunkSection.VOXELS_PER_SECTION; // expected 4096
             int sectionMask = sectionSize - 1;
             int sectionsYLocal = sectionsY;
             int columnCount = maxX * maxZ; // 256
@@ -234,8 +235,8 @@ namespace MVGE_GEN.Terrain
                                     IsAllAir = false,
                                     Kind = ChunkSection.RepresentationKind.Uniform,
                                     UniformBlockId = StoneId,
-                                    NonAirCount = sectionSize * sectionSize * sectionSize,
-                                    VoxelCount = sectionSize * sectionSize * sectionSize,
+                                    NonAirCount = sectionVolume,
+                                    VoxelCount = sectionVolume,
                                     CompletelyFull = true,
                                     MetadataBuilt = true,
                                     HasBounds = true,
@@ -257,8 +258,8 @@ namespace MVGE_GEN.Terrain
                                     IsAllAir = false,
                                     Kind = ChunkSection.RepresentationKind.Uniform,
                                     UniformBlockId = SoilId,
-                                    NonAirCount = sectionSize * sectionSize * sectionSize,
-                                    VoxelCount = sectionSize * sectionSize * sectionSize,
+                                    NonAirCount = sectionVolume,
+                                    VoxelCount = sectionVolume,
                                     CompletelyFull = true,
                                     MetadataBuilt = true,
                                     HasBounds = true,
