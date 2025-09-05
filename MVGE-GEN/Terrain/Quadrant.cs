@@ -117,11 +117,14 @@ namespace MVGE_GEN.Terrain
         public volatile bool Dirty;                              // Marked when chunk additions/removals occur (world save grouping)
 
         // ------------------------------------------------------------
-        // Precomputed quadrant-uniform stone vertical chunk layer range
+        // Precomputed quadrant-uniform ranges for stone, soil and air chunk layers
         // ------------------------------------------------------------
-        private bool _uniformStoneComputed;          // true once intersection across all columns processed
-        private int _uniformStoneFirstCy = int.MaxValue; // first cy inclusive for uniform stone (if any)
-        private int _uniformStoneLastCy = int.MinValue;  // last cy inclusive for uniform stone (if any)
+        private bool _uniformRangesComputed;      // true once below ranges computed
+        private int _uniformStoneFirstCy = int.MaxValue;
+        private int _uniformStoneLastCy = int.MinValue;
+        private int _uniformSoilFirstCy = int.MaxValue;
+        private int _uniformSoilLastCy = int.MinValue;
+        private int _uniformAirFirstCy = int.MaxValue;          // any cy >= this is all air (above maximum surface)
 
         // ------------------------------------------------------------
         // Uniform classification kinds for vertical chunk slabs
@@ -280,7 +283,7 @@ namespace MVGE_GEN.Terrain
                 }
                 _aggregatedBuiltCount = QUAD_SIZE * QUAD_SIZE;
                 _profilesBuilt = true;
-                ComputeUniformStoneRangeIfNeeded();
+                ComputeUniformRangesIfNeeded();
             }
         }
 
@@ -317,68 +320,105 @@ namespace MVGE_GEN.Terrain
                 if (_aggregatedBuiltCount == QUAD_SIZE * QUAD_SIZE)
                 {
                     _profilesBuilt = true; // all aggregated now
-                    ComputeUniformStoneRangeIfNeeded();
+                    ComputeUniformRangesIfNeeded();
                 }
             }
         }
 
-        // Computes the intersection of stone spans across all columns to derive a quadrant-wide uniform stone chunk layer range.
-        private void ComputeUniformStoneRangeIfNeeded()
+        // Computes quadrant-wide uniform ranges for stone, soil and air vertical chunk layers based on aggregated column extents only.
+        private void ComputeUniformRangesIfNeeded()
         {
-            if (_uniformStoneComputed || !_profilesBuilt) return;
-            int intersectStart = int.MinValue; // will become max of starts
-            int intersectEnd = int.MaxValue;   // will become min of ends
-            bool anyColumn = false;
+            if (_uniformRangesComputed || !_profilesBuilt) return;
+
+            // --- Uniform Air --- (any chunk layer whose baseY > every column surface)
+            int maxSurface = int.MinValue;
             for (int lx = 0; lx < QUAD_SIZE; lx++)
+                for (int lz = 0; lz < QUAD_SIZE; lz++)
+                    if (_profiles[lx, lz].Surface > maxSurface) maxSurface = _profiles[lx, lz].Surface;
+            if (maxSurface != int.MinValue)
+            {
+                int chunkSizeY = GameManager.settings.chunkMaxY;
+                int firstAirBaseY = maxSurface + 1;
+                if (firstAirBaseY < 0) firstAirBaseY = 0;
+                _uniformAirFirstCy = (firstAirBaseY + chunkSizeY - 1) / chunkSizeY; // ceilDiv
+            }
+
+            // --- Uniform Stone --- (intersection of stone spans, truncated before any soil start)
+            int stoneIntersectStart = int.MinValue;
+            int stoneIntersectEnd = int.MaxValue;
+            bool stonePossible = true;
+            for (int lx = 0; lx < QUAD_SIZE && stonePossible; lx++)
             {
                 for (int lz = 0; lz < QUAD_SIZE; lz++)
                 {
                     ref readonly var p = ref _profiles[lx, lz];
-                    if (!p.AggregatedBuilt)
-                    {
-                        _uniformStoneComputed = true; // defensive finalize
-                        return;
-                    }
-                    if (p.StoneStart < 0 || p.StoneEnd < p.StoneStart)
-                    {
-                        _uniformStoneComputed = true; // a column lacks stone -> no uniform stone range
-                        return;
-                    }
-                    anyColumn = true;
-                    if (p.StoneStart > intersectStart) intersectStart = p.StoneStart;
-                    if (p.StoneEnd < intersectEnd) intersectEnd = p.StoneEnd;
+                    if (p.StoneStart < 0 || p.StoneEnd < p.StoneStart) { stonePossible = false; break; }
+                    if (p.StoneStart > stoneIntersectStart) stoneIntersectStart = p.StoneStart;
+                    if (p.StoneEnd < stoneIntersectEnd) stoneIntersectEnd = p.StoneEnd;
                 }
             }
-            if (!anyColumn || intersectStart > intersectEnd)
+            if (stonePossible && stoneIntersectStart <= stoneIntersectEnd)
             {
-                _uniformStoneComputed = true;
-                return; // no overlap
-            }
-            // Remove soil intrusion: any column with soil starting inside overlap truncates top.
-            for (int lx = 0; lx < QUAD_SIZE; lx++)
-            {
-                for (int lz = 0; lz < QUAD_SIZE; lz++)
+                for (int lx = 0; lx < QUAD_SIZE && stoneIntersectStart <= stoneIntersectEnd; lx++)
                 {
-                    ref readonly var p = ref _profiles[lx, lz];
-                    if (p.SoilStart >= 0 && p.SoilStart <= intersectEnd)
+                    for (int lz = 0; lz < QUAD_SIZE; lz++)
                     {
-                        int newEnd = p.SoilStart - 1;
-                        if (newEnd < intersectEnd) intersectEnd = newEnd;
-                        if (intersectStart > intersectEnd)
+                        ref readonly var p = ref _profiles[lx, lz];
+                        if (p.SoilStart >= 0 && p.SoilStart <= stoneIntersectEnd)
                         {
-                            _uniformStoneComputed = true;
-                            return; // truncated to empty
+                            int newEnd = p.SoilStart - 1;
+                            if (newEnd < stoneIntersectEnd) stoneIntersectEnd = newEnd;
+                            if (stoneIntersectStart > stoneIntersectEnd) break;
                         }
                     }
                 }
+                if (stoneIntersectStart <= stoneIntersectEnd)
+                {
+                    int chunkSizeY = GameManager.settings.chunkMaxY;
+                    _uniformStoneFirstCy = FloorDiv(stoneIntersectStart, chunkSizeY);
+                    _uniformStoneLastCy = FloorDiv(stoneIntersectEnd, chunkSizeY);
+                }
             }
-            if (intersectStart <= intersectEnd)
+
+            // --- Uniform Soil ---
+            // Conditions across all columns for a baseY (chunk slab bottom) to be soil uniform:
+            //   baseY >= max(soilStart_i), topY <= min(soilEnd_i), and baseY > max(stoneEnd_i) (stone not intruding).
+            int soilStartMax = int.MinValue;
+            int soilEndMin = int.MaxValue;
+            int stoneEndMax = int.MinValue; // only stone columns considered for intrusion threshold
+            bool soilPossible = true;
+            for (int lx = 0; lx < QUAD_SIZE && soilPossible; lx++)
+            {
+                for (int lz = 0; lz < QUAD_SIZE; lz++)
+                {
+                    ref readonly var p = ref _profiles[lx, lz];
+                    if (p.SoilStart < 0 || p.SoilEnd < p.SoilStart) { soilPossible = false; break; } // any column missing soil span -> impossible
+                    if (p.SoilStart > soilStartMax) soilStartMax = p.SoilStart;
+                    if (p.SoilEnd < soilEndMin) soilEndMin = p.SoilEnd;
+                    if (p.StoneEnd >= 0 && p.StoneEnd > stoneEndMax) stoneEndMax = p.StoneEnd;
+                }
+            }
+            if (soilPossible && soilStartMax <= soilEndMin)
             {
                 int chunkSizeY = GameManager.settings.chunkMaxY;
-                _uniformStoneFirstCy = FloorDiv(intersectStart, chunkSizeY);
-                _uniformStoneLastCy = FloorDiv(intersectEnd, chunkSizeY);
+                // Bmin = max(soilStartMax, stoneEndMax+1), Bmax = soilEndMin - (chunkSizeY-1)
+                int baseMin = soilStartMax;
+                if (stoneEndMax >= 0 && stoneEndMax + 1 > baseMin) baseMin = stoneEndMax + 1;
+                int baseMax = soilEndMin - (chunkSizeY - 1);
+                if (baseMin <= baseMax)
+                {
+                    // Convert base range to cy range.
+                    int firstCy = (baseMin + chunkSizeY - 1) / chunkSizeY; // ceilDiv(baseMin)
+                    int lastCy = baseMax / chunkSizeY;                     // floorDiv(baseMax)
+                    if (firstCy <= lastCy)
+                    {
+                        _uniformSoilFirstCy = firstCy;
+                        _uniformSoilLastCy = lastCy;
+                    }
+                }
             }
-            _uniformStoneComputed = true;
+
+            _uniformRangesComputed = true;
         }
 
         // Ensure per-block column data exists for the specified chunk column (lazy build).
@@ -387,12 +427,9 @@ namespace MVGE_GEN.Terrain
             EnsureAggregatedProfile(columnCx, columnCz); // aggregated must precede block-level build
             var (lx, lz) = LocalIndices(columnCx, columnCz);
             ref var profile = ref _profiles[lx, lz];
-            if (profile.BlockColumnsBuilt)
-                return;
-            if (!_seedSet)
-                throw new InvalidOperationException("Seed not set before building block columns.");
-            if (Biome == null)
-                throw new InvalidOperationException("Biome must be set before building block columns.");
+            if (profile.BlockColumnsBuilt) return;
+            if (!_seedSet) throw new InvalidOperationException("Seed not set before building block columns.");
+            if (Biome == null) throw new InvalidOperationException("Biome must be set before building block columns.");
 
             int sizeX = GameManager.settings.chunkMaxX;
             int sizeZ = GameManager.settings.chunkMaxZ;
@@ -625,20 +662,16 @@ namespace MVGE_GEN.Terrain
                 int worldBaseZ = cz * sizeZ;
                 Biome = BiomeManager.SelectBiomeForChunk(seed, worldBaseX, worldBaseZ);
             }
-
-            if (!_seedSet)
-            {
-                _seed = seed;
-                _seedSet = true;
-            }
+            if (!_seedSet) { _seed = seed; _seedSet = true; }
 
             // Build aggregated profile for this column.
             EnsureAggregatedProfile(cx, cz);
 
-            bool canUniformClassify = _profilesBuilt; // aggregated grid complete
+            bool aggregatedComplete = _profilesBuilt; // grid ready for uniform range overrides
 
-            // Precomputed quadrant-uniform stone range may provide an immediate override without per-column block data.
-            bool haveUniformStoneRange = _uniformStoneComputed && _uniformStoneFirstCy <= _uniformStoneLastCy;
+            bool haveUniformStone = aggregatedComplete && _uniformStoneFirstCy <= _uniformStoneLastCy;
+            bool haveUniformSoil = aggregatedComplete && _uniformSoilFirstCy <= _uniformSoilLastCy;
+            bool haveUniformAir = aggregatedComplete && _uniformAirFirstCy != int.MaxValue;
 
             int vMin = playerCy - verticalRange;
             int vMax = playerCy + verticalRange;
@@ -647,22 +680,29 @@ namespace MVGE_GEN.Terrain
 
             int columnBaseX = cx * sizeX;
             int columnBaseZ = cz * sizeZ;
-            float[,] columnHeightmap = null; // created lazily only if a non pre-marked slab needs generation
-            BlockColumnProfile[] spanMap = null; // also built lazily
+            float[,] columnHeightmap = null;
+            BlockColumnProfile[] spanMap = null;
 
             for (int cy = vMin; cy <= vMax; cy++)
             {
-                if (TryGetChunk(cx, cy, cz, out _))
-                    continue;
+                if (TryGetChunk(cx, cy, cz, out _)) continue;
 
                 Chunk.UniformOverride overrideKind = Chunk.UniformOverride.None;
 
-                // Pre-marked quadrant-wide uniform stone range.
-                if (haveUniformStoneRange && cy >= _uniformStoneFirstCy && cy <= _uniformStoneLastCy)
+                // Priority: AllAir > AllStone > AllSoil (above-surface emptiness first, then solid stone, then soil)
+                if (haveUniformAir && cy >= _uniformAirFirstCy)
+                {
+                    overrideKind = Chunk.UniformOverride.AllAir;
+                }
+                else if (haveUniformStone && cy >= _uniformStoneFirstCy && cy <= _uniformStoneLastCy)
                 {
                     overrideKind = Chunk.UniformOverride.AllStone;
                 }
-                else if (canUniformClassify)
+                else if (haveUniformSoil && cy >= _uniformSoilFirstCy && cy <= _uniformSoilLastCy)
+                {
+                    overrideKind = Chunk.UniformOverride.AllSoil;
+                }
+                else if (aggregatedComplete)
                 {
                     // Fallback to full quadrant classification only when not covered by the precomputed stone range.
                     if (ClassifyVerticalChunk(cy, sizeY, out var classified))
@@ -681,20 +721,12 @@ namespace MVGE_GEN.Terrain
                 }
 
                 var worldPos = new Vector3(columnBaseX, cy * sizeY, columnBaseZ);
-                var chunk = new Chunk(
-                    worldPos,
-                    seed,
-                    chunkSaveDirectory,
-                    autoGenerate: true,
-                    uniformOverride: overrideKind,
-                    columnSpanMap: spanMap);
-
+                var chunk = new Chunk(worldPos, seed, chunkSaveDirectory, autoGenerate: true, uniformOverride: overrideKind, columnSpanMap: spanMap);
                 AddOrReplaceChunk(chunk, cx, cy, cz);
 
                 bool insideLod1 = Math.Abs(cx - playerCx) <= lodDist &&
                                   Math.Abs(cz - playerCz) <= lodDist &&
                                   Math.Abs(cy - playerCy) <= verticalRange;
-
                 registrar((cx, cy, cz), chunk, insideLod1);
             }
         }

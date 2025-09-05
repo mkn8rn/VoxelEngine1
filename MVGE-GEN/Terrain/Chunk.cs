@@ -184,18 +184,6 @@ namespace MVGE_GEN.Terrain
         // NOTE: InitializeChunkData & all generation helpers are in ChunkGenerator partial file.
         public void Render(ShaderProgram shader) => chunkRender?.Render(shader);
 
-        public ushort GenerateInitialBlockData(int lx, int ly, int lz, int columnHeight)
-        {
-            int currentHeight = (int)(position.Y + ly);
-            ushort type = EMPTY;
-            if (currentHeight <= columnHeight || currentHeight == 0)
-                type = (ushort)BaseBlockType.Stone;
-            int soilModifier = 100 - currentHeight / 2;
-            if (type == EMPTY && currentHeight < columnHeight + soilModifier)
-                type = (ushort)BaseBlockType.Soil;
-            return type;
-        }
-
         public ChunkSection GetOrCreateSection(int sx, int sy, int sz)
         {
             var sec = sections[sx, sy, sz];
@@ -259,17 +247,6 @@ namespace MVGE_GEN.Terrain
             {
                 UpdateBoundaryPlaneBit(lx, ly, lz, blockId);
             }
-        }
-
-        // Per-face solidity helpers
-        private void ComputeAllFaceSolidity()
-        {
-            FaceSolidNegX = ScanFaceSolidNegX();
-            FaceSolidPosX = ScanFaceSolidPosX();
-            FaceSolidNegY = ScanFaceSolidNegY();
-            FaceSolidPosY = ScanFaceSolidPosY();
-            FaceSolidNegZ = ScanFaceSolidNegZ();
-            FaceSolidPosZ = ScanFaceSolidPosZ();
         }
 
         private bool ScanFaceSolidNegX()
