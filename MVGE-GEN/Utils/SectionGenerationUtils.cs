@@ -513,7 +513,7 @@ namespace MVGE_GEN.Utils
             // -----------------------------------
             // 5. Escalated fallback (dense reconstruction)
             // -----------------------------------
-            EscalatedFinaliseSection(sec, scratch);
+            DenseExpandedFinaliseSection(sec, scratch);
         }
     }
 }

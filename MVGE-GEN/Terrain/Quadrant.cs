@@ -228,7 +228,7 @@ namespace MVGE_GEN.Terrain
             float[,] heightmap = new float[maxX, maxZ];
             var noise = GetNoise(seed);
 
-            const float scale = 0.005f;
+            const float scale = 0.001f;
             const float minHeight = 1f;
             const float maxHeight = 1000f;
 
