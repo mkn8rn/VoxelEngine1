@@ -73,13 +73,11 @@ namespace MVGE_GEN.Terrain
             Span<byte> columnMaterial = stackalloc byte[columnCount]; columnMaterial.Clear(); // bit0=stone, bit1=soil
 
             int columnWordCount = (columnCount + 63) >> 6; // 4
+            Span<ulong> anySpanBits = stackalloc ulong[columnWordCount]; anySpanBits.Clear(); // union presence
 
             // Per-section full coverage bitsets (stone/soil)
             Span<ulong> sectionStoneFullBits = stackalloc ulong[sectionsYLocal * columnWordCount]; sectionStoneFullBits.Clear();
             Span<ulong> sectionSoilFullBits = stackalloc ulong[sectionsYLocal * columnWordCount]; sectionSoilFullBits.Clear();
-
-            // Per-section union-of-columns bitsets (any material intersects the section)
-            Span<ulong> sectionAnyBits = stackalloc ulong[sectionsYLocal * columnWordCount]; sectionAnyBits.Clear();
 
             int globalMinSectionY = int.MaxValue;
             int globalMaxSectionY = -1;
@@ -88,14 +86,13 @@ namespace MVGE_GEN.Terrain
             {
                 int w = columnIndex >> 6; int b = columnIndex & 63; arr[sectionIndex * wordCount + w] |= 1UL << b;
             }
-            static void SetSectionAnyBit(Span<ulong> arr, int wordCount, int sectionIndex, int columnIndex)
+            static void SetUnionBit(Span<ulong> bits, int columnIndex)
             {
-                int w = columnIndex >> 6; int b = columnIndex & 63; arr[sectionIndex * wordCount + w] |= 1UL << b;
+                bits[columnIndex >> 6] |= 1UL << (columnIndex & 63);
             }
 
             // ------------------------------------------------------------------
-            // Phase 1: Column pass – derive spans & accumulate per‑section full coverage bitsets
-            //          Also build per‑section union-of-columns bitsets for later section‑first emission
+            // Phase 1: Column pass – derive spans & accumulate full coverage bits
             // ------------------------------------------------------------------
             for (int z = 0; z < maxZ; z++)
             {
@@ -155,7 +152,7 @@ namespace MVGE_GEN.Terrain
 
                     // Mark column
                     byte matFlags = 0; if (hasStone) matFlags |= 0x1; if (hasSoil) matFlags |= 0x2;
-                    columnMaterial[colIndex] = matFlags;
+                    columnMaterial[colIndex] = matFlags; SetUnionBit(anySpanBits, colIndex);
 
                     // Stone full sections (truncate above soil start if soil present immediately above)
                     if (hasStone)
@@ -202,17 +199,6 @@ namespace MVGE_GEN.Terrain
                         {
                             for (int sy = fullStart; sy <= fullEnd; sy++) SetSectionFullBit(sectionSoilFullBits, columnWordCount, sy, colIndex);
                         }
-                    }
-
-                    // Build per-section union-of-columns bitset for section-first emission
-                    int earliestSec = int.MaxValue; int latestSec = -1;
-                    if ((columnMaterial[colIndex] & 0x1) != 0) { if (spanRef.stoneFirstSec < earliestSec) earliestSec = spanRef.stoneFirstSec; if (spanRef.stoneLastSec > latestSec) latestSec = spanRef.stoneLastSec; }
-                    if ((columnMaterial[colIndex] & 0x2) != 0) { if (spanRef.soilFirstSec < earliestSec) earliestSec = spanRef.soilFirstSec; if (spanRef.soilLastSec > latestSec) latestSec = spanRef.soilLastSec; }
-                    if (earliestSec != int.MaxValue)
-                    {
-                        if (earliestSec < 0) earliestSec = 0;
-                        if (latestSec >= sectionsYLocal) latestSec = sectionsYLocal - 1;
-                        for (int sy = earliestSec; sy <= latestSec; sy++) SetSectionAnyBit(sectionAnyBits, columnWordCount, sy, colIndex);
                     }
                 }
             }
@@ -285,43 +271,42 @@ namespace MVGE_GEN.Terrain
                 }
             }
 
+            int uniformWordCount = (sectionsYLocal + 63) >> 6;
+            Span<ulong> uniformSkipBits = stackalloc ulong[uniformWordCount]; uniformSkipBits.Clear();
+            for (int sy = 0; sy < sectionsYLocal; sy++)
+                if (sectionUniformStone[sy] || sectionUniformSoil[sy]) { int w = sy >> 6; int b = sy & 63; uniformSkipBits[w] |= 1UL << b; }
+
             // ------------------------------------------------------------------
             // Phase 3: Emit partial spans
-            // Section-first emission: iterate sections (sy) outermost, use per-section union bitsets
-            // to visit only columns that intersect the current section, and emit runs into that section.
-            // This reduces scratch switching and improves cache locality.
             // ------------------------------------------------------------------
             if (globalMaxSectionY >= 0)
             {
-                for (int sy = globalMinSectionY; sy <= globalMaxSectionY; sy++)
+                for (int w = 0; w < columnWordCount; w++)
                 {
-                    // Skip sections already classified as uniform
-                    if (sectionUniformStone[sy] || sectionUniformSoil[sy]) continue;
-
-                    int sectionBase = sectionBaseYArr[sy];
-                    int sectionEnd = sectionEndYArr[sy];
-                    int baseIndex = sy * columnWordCount;
-
-                    for (int w = 0; w < columnWordCount; w++)
+                    ulong word = anySpanBits[w];
+                    while (word != 0)
                     {
-                        ulong word = sectionAnyBits[baseIndex + w];
-                        while (word != 0)
+                        int tz = BitOperations.TrailingZeroCount(word);
+                        int colIndex = (w << 6) + tz; word &= word - 1; if (colIndex >= columnCount) break;
+                        byte mat = columnMaterial[colIndex]; bool hasStone = (mat & 0x1) != 0; bool hasSoil = (mat & 0x2) != 0;
+                        if (!hasStone && !hasSoil) continue;
+                        ref ColumnSpans spanRef = ref columns[colIndex];
+                        int x = colIndex % maxX; int z = colIndex / maxX;
+                        int sxIndex = x >> SECTION_SHIFT; int ox = x & sectionMask;
+                        int szIndex = z >> SECTION_SHIFT; int oz = z & sectionMask;
+
+                        // Determine section range touched by either span.
+                        int earliestSec = int.MaxValue; int latestSec = -1;
+                        if (hasStone) { if (spanRef.stoneFirstSec < earliestSec) earliestSec = spanRef.stoneFirstSec; if (spanRef.stoneLastSec > latestSec) latestSec = spanRef.stoneLastSec; }
+                        if (hasSoil) { if (spanRef.soilFirstSec < earliestSec) earliestSec = spanRef.soilFirstSec; if (spanRef.soilLastSec > latestSec) latestSec = spanRef.soilLastSec; }
+                        if (earliestSec == int.MaxValue) continue;
+                        if (earliestSec < globalMinSectionY) earliestSec = globalMinSectionY;
+                        if (latestSec > globalMaxSectionY) latestSec = globalMaxSectionY;
+
+                        for (int sy = earliestSec; sy <= latestSec; sy++)
                         {
-                            int tz = BitOperations.TrailingZeroCount(word);
-                            int colIndex = (w << 6) + tz;
-                            word &= word - 1;
-                            if (colIndex >= columnCount) break;
-
-                            byte mat = columnMaterial[colIndex];
-                            bool hasStone = (mat & 0x1) != 0;
-                            bool hasSoil = (mat & 0x2) != 0;
-                            if (!hasStone && !hasSoil) continue;
-
-                            ref ColumnSpans spanRef = ref columns[colIndex];
-
-                            int x = colIndex % maxX; int z = colIndex / maxX;
-                            int sxIndex = x >> SECTION_SHIFT; int ox = x & sectionMask;
-                            int szIndex = z >> SECTION_SHIFT; int oz = z & sectionMask;
+                            int wSkip = sy >> 6; int bSkip = sy & 63; if ((uniformSkipBits[wSkip] & (1UL << bSkip)) != 0UL) continue; // skip uniform
+                            int sectionBase = sectionBaseYArr[sy]; int sectionEnd = sectionEndYArr[sy];
 
                             // Compute local stone segment inside this section if present.
                             int localStoneStart = -1, localStoneEnd = -1;
@@ -357,16 +342,20 @@ namespace MVGE_GEN.Terrain
                             var secRef = sections[sxIndex, sy, szIndex];
                             if (secRef == null) { secRef = new ChunkSection(); sections[sxIndex, sy, szIndex] = secRef; }
 
+                            // Acquire scratch once per section reference
+                            var scratch = SectionUtils.EnsureScratch(secRef);
+                            int ci = (oz << 4) | ox;
+
                             if (localStoneStart >= 0 && localSoilStart >= 0)
                             {
                                 // Two runs (stone beneath soil). Ensure correct ordering by Y.
                                 if (localStoneEnd < localSoilStart)
                                 {
-                                    SectionUtils.DirectSetColumnRuns(secRef, ox, oz, StoneId, localStoneStart, localStoneEnd, SoilId, localSoilStart, localSoilEnd);
+                                    SectionUtils.DirectSetColumnRuns(scratch, ci, StoneId, (byte)localStoneStart, (byte)localStoneEnd, SoilId, (byte)localSoilStart, (byte)localSoilEnd);
                                 }
                                 else if (localSoilEnd < localStoneStart)
                                 {
-                                    SectionUtils.DirectSetColumnRuns(secRef, ox, oz, SoilId, localSoilStart, localSoilEnd, StoneId, localStoneStart, localStoneEnd);
+                                    SectionUtils.DirectSetColumnRuns(scratch, ci, SoilId, (byte)localSoilStart, (byte)localSoilEnd, StoneId, (byte)localStoneStart, (byte)localStoneEnd);
                                 }
                                 else
                                 {
@@ -377,11 +366,11 @@ namespace MVGE_GEN.Terrain
                                         int sEndAdj = Math.Min(localStoneEnd, localSoilStart - 1);
                                         if (sEndAdj >= localStoneStart)
                                         {
-                                            SectionUtils.DirectSetColumnRuns(secRef, ox, oz, StoneId, localStoneStart, sEndAdj, SoilId, localSoilStart, localSoilEnd);
+                                            SectionUtils.DirectSetColumnRuns(scratch, ci, StoneId, (byte)localStoneStart, (byte)sEndAdj, SoilId, (byte)localSoilStart, (byte)localSoilEnd);
                                         }
                                         else
                                         {
-                                            SectionUtils.DirectSetColumnRuns(secRef, ox, oz, SoilId, localSoilStart, localSoilEnd);
+                                            SectionUtils.DirectSetColumnRun1(scratch, ci, SoilId, (byte)localSoilStart, (byte)localSoilEnd);
                                         }
                                     }
                                     else
@@ -389,22 +378,22 @@ namespace MVGE_GEN.Terrain
                                         int soilEndAdj = Math.Min(localSoilEnd, localStoneStart - 1);
                                         if (soilEndAdj >= localSoilStart)
                                         {
-                                            SectionUtils.DirectSetColumnRuns(secRef, ox, oz, SoilId, localSoilStart, soilEndAdj, StoneId, localStoneStart, localStoneEnd);
+                                            SectionUtils.DirectSetColumnRuns(scratch, ci, SoilId, (byte)localSoilStart, (byte)soilEndAdj, StoneId, (byte)localStoneStart, (byte)localStoneEnd);
                                         }
                                         else
                                         {
-                                            SectionUtils.DirectSetColumnRuns(secRef, ox, oz, StoneId, localStoneStart, localStoneEnd);
+                                            SectionUtils.DirectSetColumnRun1(scratch, ci, StoneId, (byte)localStoneStart, (byte)localStoneEnd);
                                         }
                                     }
                                 }
                             }
                             else if (localStoneStart >= 0)
                             {
-                                SectionUtils.DirectSetColumnRuns(secRef, ox, oz, StoneId, localStoneStart, localStoneEnd);
+                                SectionUtils.DirectSetColumnRun1(scratch, ci, StoneId, (byte)localStoneStart, (byte)localStoneEnd);
                             }
                             else // only soil
                             {
-                                SectionUtils.DirectSetColumnRuns(secRef, ox, oz, SoilId, localSoilStart, localSoilEnd);
+                                SectionUtils.DirectSetColumnRun1(scratch, ci, SoilId, (byte)localSoilStart, (byte)localSoilEnd);
                             }
                         }
                     }

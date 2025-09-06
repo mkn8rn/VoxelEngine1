@@ -66,128 +66,176 @@ namespace MVGE_GEN.Utils
         }
 
         // -------------------------------------------------------------------------------------------------
-        // DirectSetColumnRuns
-        // Overwrites a single vertical column (x,z) in the build scratch with 0, 1, or 2 runs and
-        // precomputed per‑column metadata. This is a fast generation‑time helper intended for cases
-        // where the caller already knows the final runs for a column and wants to bypass incremental
-        // merging/escalation logic.
-        //
-        // Purpose:
-        //   * Populate SectionBuildScratch.Columns[ci] directly with compact run data (up to two runs).
-        //   * Compute and store derived column metrics:
-        //       - OccMask: 16‑bit occupancy mask for Y levels covered by the run(s).
-        //       - NonAir: number of non‑air voxels in this column.
-        //       - AdjY:   internal vertical adjacency count within the column (sum of (len-1) per run
-        //                 plus +1 if two runs are exactly contiguous).
-        //   * Update scratch non‑empty bookkeeping bits and mark DistinctDirty so finalize can rebuild
-        //     per‑id sets and higher‑level metadata.
-        //
-        // Inputs:
-        //   - (localX, localZ): column coordinates in [0..15].
-        //   - id0, y0Start, y0End: first run definition (inclusive Y range). AIR or invalid range => empty column.
-        //   - id1, y1Start, y1End: optional second run. Ignored when id1 == 0/AIR or y1Start > y1End.
-        //
-        // Flow:
-        //   1) Guard null section; compute columnIndex = (z << 4) | x; fetch writable scratch via GetScratch.
-        //   2) Decide whether we have a single run (id1 is AIR/invalid) or two runs.
-        //   3) Compute target values (runCount, occMask, nonAir, adjY) and normalized ids/ranges:
-        //        - Empty: id0 is AIR or y0 invalid -> runCount=0, zero all metrics.
-        //        - Single run: runCount=1; occMask from MaskRangeLut; nonAir = length; adjY = length-1.
-        //        - Two runs: runCount=2; occMask = OR of both ranges; nonAir = lenA + lenB;
-        //                    adjY = (lenA-1) + (lenB-1) + (contiguous ? 1 : 0) where contiguous means y1Start == y0End+1.
-        //   4) Blast the computed fields into the writable column; clear Escalated (per‑voxel) storage.
-        //   5) Membership bookkeeping:
-        //        - If runCount>0: set NonEmptyColumnBits bit, increment NonEmptyCount, set AnyNonAir=true,
-        //          and mark DistinctDirty=true (distinct ids will be recomputed during finalize).
-        //        - Else (empty): zero ids and ranges for consistency.
-        //
-        // Notes:
-        //   * No attempt is made to merge/equalize ids, validate ordering, or track Distinct[] here.
-        //     Finalization paths rebuild distinct id lists and section‑level metadata based on the scratch.
-        //   * Intended for O(1) column writes during procedural generation; callers should provide sane,
-        //     non‑overlapping Y ranges within [0..15].
+        // EnsureScratch: Returns a writable SectionBuildScratch for the given section.
+        // Guarantees that the returned instance is initialized and ready for column writes.
         // -------------------------------------------------------------------------------------------------
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static void DirectSetColumnRuns(
-            ChunkSection sec, int localX, int localZ,
-            ushort id0, int y0Start, int y0End,
-            ushort id1 = 0, int y1Start = 0, int y1End = 0)
+        public static SectionBuildScratch EnsureScratch(ChunkSection sec)
         {
-            if (sec == null) return;
+            // Reuse existing helper to obtain a writable scratch. Assumes generation-time access.
+            return GetScratch(sec);
+        }
 
-            int ci = (localZ << 4) | localX;
-            var scratch = GetScratch(sec); // always writable at generation time
-
-            bool single = (id1 == 0 || id1 == ChunkSection.AIR || y1Start > y1End);
-
-            // Compute target values
-            byte runCount;
-            ushort occMask;
-            byte nonAir, adjY;
-            ushort outId0 = id0, outId1 = 0;
-            byte y0s = (byte)y0Start, y0e = (byte)y0End;
-            byte y1s = 0, y1e = 0;
-
-            if (id0 == ChunkSection.AIR || y0Start > y0End)
+        // -------------------------------------------------------------------------------------------------
+        // DirectSetColumnRun1: Specialized single-run fast path using precomputed scratch and ci.
+        // Overwrites a column with a single run (id, ys..ye).
+        // -------------------------------------------------------------------------------------------------
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void DirectSetColumnRun1(
+            SectionBuildScratch scratch, int ci,
+            ushort id, byte ys, byte ye)
+        {
+            if (id == AIR || ys > ye)
             {
-                runCount = 0;
-                occMask = 0;
-                nonAir = 0;
-                adjY = 0;
-                outId0 = 0;
-            }
-            else if (single)
-            {
-                runCount = 1;
-                occMask = MaskRangeLutGet(y0Start, y0End);
-                int len = y0End - y0Start + 1;
-                nonAir = (byte)len;
-                adjY = (byte)(len - 1);
-            }
-            else
-            {
-                runCount = 2;
-                occMask = (ushort)(MaskRangeLutGet(y0Start, y0End) | MaskRangeLutGet(y1Start, y1End));
-                outId1 = id1;
-                y1s = (byte)y1Start;
-                y1e = (byte)y1End;
-                int lenA = y0End - y0Start + 1;
-                int lenB = y1End - y1Start + 1;
-                nonAir = (byte)(lenA + lenB);
-                bool contiguous = (y1Start - y0End - 1) == 0;
-                adjY = (byte)((lenA - 1) + (lenB - 1) + (contiguous ? 1 : 0));
+                // Treat as empty write – clear minimal fields for consistency.
+                ref var emptyCol = ref scratch.GetWritableColumn(ci);
+                emptyCol.RunCount = 0;
+                emptyCol.Id0 = 0; emptyCol.Id1 = 0;
+                emptyCol.Y0Start = emptyCol.Y0End = emptyCol.Y1Start = emptyCol.Y1End = 0;
+                emptyCol.OccMask = 0;
+                emptyCol.NonAir = 0;
+                emptyCol.AdjY = 0;
+                emptyCol.Escalated = null;
+                return;
             }
 
-            // Acquire writable column and blast values
+            ushort occMask = MaskRangeLutGet(ys, ye);
+            int len = (ye - ys + 1);
+            byte nonAir = (byte)len;
+            byte adjY = (byte)(len - 1);
+
             ref var col = ref scratch.GetWritableColumn(ci);
-
-            col.RunCount = runCount;
-            col.Id0 = outId0;
-            col.Y0Start = y0s; col.Y0End = y0e;
-            col.Id1 = outId1;
-            col.Y1Start = y1s; col.Y1End = y1e;
+            col.RunCount = 1;
+            col.Id0 = id;
+            col.Y0Start = ys; col.Y0End = ye;
+            col.Id1 = 0;
+            col.Y1Start = 0; col.Y1End = 0;
             col.OccMask = occMask;
             col.NonAir = nonAir;
             col.AdjY = adjY;
             col.Escalated = null;
 
-            // Non-empty membership
-            if (runCount > 0)
+            int w = ci >> 6, b = ci & 63;
+            ulong bit = 1UL << b;
+            ulong prev = scratch.NonEmptyColumnBits[w];
+            if ((prev & bit) == 0) scratch.NonEmptyCount++;
+            scratch.NonEmptyColumnBits[w] = prev | bit;
+            scratch.AnyNonAir = true;
+            scratch.DistinctDirty = true;
+        }
+
+        // -------------------------------------------------------------------------------------------------
+        // DirectSetColumnRuns: Accepts precomputed scratch and column index with byte Y ranges.
+        // Writes 0, 1, or 2 runs directly without re-fetching scratch or recomputing ci.
+        // -------------------------------------------------------------------------------------------------
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void DirectSetColumnRuns(
+            SectionBuildScratch scratch, int ci,
+            ushort id0, byte y0s, byte y0e,
+            ushort id1 = 0, byte y1s = 0, byte y1e = 0)
+        {
+            if (id0 == AIR || y0s > y0e)
             {
-                int w = ci >> 6, b = ci & 63;
-                scratch.NonEmptyColumnBits[w] |= 1UL << b;
-                scratch.NonEmptyCount++;
-                scratch.AnyNonAir = true;
-                scratch.DistinctDirty = true;
-            }
-            else
-            {
-                col.Id0 = col.Id1 = 0;
+                // Empty column
+                ref var col = ref scratch.GetWritableColumn(ci);
+                col.RunCount = 0;
+                col.Id0 = 0; col.Id1 = 0;
                 col.Y0Start = col.Y0End = col.Y1Start = col.Y1End = 0;
+                col.OccMask = 0;
+                col.NonAir = 0;
+                col.AdjY = 0;
+                col.Escalated = null;
+                return;
             }
 
-            // Note: no equality check, no distinct-ID tracking.
-            // FinalizeSection will rebuild Distinct[] via DistinctDirty and mark StructuralDirty as needed.
+            bool single = (id1 == 0 || id1 == AIR || y1s > y1e);
+            if (single)
+            {
+                DirectSetColumnRun1(scratch, ci, id0, y0s, y0e);
+                return;
+            }
+
+            ushort occ0 = MaskRangeLutGet(y0s, y0e);
+            ushort occ1 = MaskRangeLutGet(y1s, y1e);
+            ushort occMask = (ushort)(occ0 | occ1);
+            int lenA = (y0e - y0s + 1);
+            int lenB = (y1e - y1s + 1);
+            byte nonAir = (byte)(lenA + lenB);
+            bool contiguous = y1s == (byte)(y0e + 1);
+            byte adjY = (byte)((lenA - 1) + (lenB - 1) + (contiguous ? 1 : 0));
+
+            ref var c = ref scratch.GetWritableColumn(ci);
+            c.RunCount = 2;
+            c.Id0 = id0;
+            c.Y0Start = y0s; c.Y0End = y0e;
+            c.Id1 = id1;
+            c.Y1Start = y1s; c.Y1End = y1e;
+            c.OccMask = occMask;
+            c.NonAir = nonAir;
+            c.AdjY = adjY;
+            c.Escalated = null;
+
+            int w = ci >> 6, b = ci & 63;
+            ulong bit = 1UL << b;
+            ulong prev = scratch.NonEmptyColumnBits[w];
+            if ((prev & bit) == 0) scratch.NonEmptyCount++;
+            scratch.NonEmptyColumnBits[w] = prev | bit;
+            scratch.AnyNonAir = true;
+            scratch.DistinctDirty = true;
+        }
+
+        // -------------------------------------------------------------------------------------------------
+        // DirectSetRowSingleRun16: Bulk single-run writer for a given Z row.
+        // Applies the same (id, yStart..yEnd) to all columns at (x,z) where xMask has a bit set.
+        // xMaskBits16[0] holds a 16-bit mask (LSB -> x=0). No-op when mask is zero.
+        // -------------------------------------------------------------------------------------------------
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void DirectSetRowSingleRun16(
+            SectionBuildScratch scratch, int z,
+            ushort id, byte yStart, byte yEnd,
+            in ReadOnlySpan<ushort> xMaskBits16)
+        {
+            if (id == AIR || yStart > yEnd) return;
+            if (xMaskBits16.IsEmpty) return;
+            ushort xMask = xMaskBits16[0];
+            if (xMask == 0) return;
+
+            ushort occMask = MaskRangeLutGet(yStart, yEnd);
+            int len = (yEnd - yStart + 1);
+            byte nonAir = (byte)len;
+            byte adjY = (byte)(len - 1);
+
+            int baseCi = (z << 4); // z * 16
+            int w = baseCi >> 6;   // row is always contained within one 64-bit word
+            int b0 = baseCi & 63;
+
+            // Column writes
+            ushort mask = xMask;
+            while (mask != 0)
+            {
+                int x = BitOperations.TrailingZeroCount(mask);
+                mask = (ushort)(mask & (mask - 1));
+                int ci = baseCi + x;
+                ref var col = ref scratch.GetWritableColumn(ci);
+                col.RunCount = 1;
+                col.Id0 = id;
+                col.Y0Start = yStart; col.Y0End = yEnd;
+                col.Id1 = 0;
+                col.Y1Start = 0; col.Y1End = 0;
+                col.OccMask = occMask;
+                col.NonAir = nonAir;
+                col.AdjY = adjY;
+                col.Escalated = null;
+            }
+
+            // Membership bits in bulk
+            ulong prev = scratch.NonEmptyColumnBits[w];
+            ulong shifted = ((ulong)xMask) << b0;
+            ulong newlyAdded = shifted & ~prev;
+            scratch.NonEmptyColumnBits[w] = prev | shifted;
+            scratch.NonEmptyCount += BitOperations.PopCount(newlyAdded);
+            scratch.AnyNonAir = true;
+            scratch.DistinctDirty = true;
         }
 
         // -------------------------------------------------------------------------------------------------
