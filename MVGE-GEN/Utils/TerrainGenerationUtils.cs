@@ -8,7 +8,7 @@ using MVGE_INF.Models.Terrain;
 
 namespace MVGE_GEN.Terrain
 {
-    internal static class TerrainGeneration
+    internal static class TerrainGenerationUtils
     {
         // ---------------- Soil smoothing constants ----------------
         // Larger => smoother, bigger coherent patches (8..24 is typical)
@@ -18,7 +18,7 @@ namespace MVGE_GEN.Terrain
         // Smooth noise impact on the soil reserve; lower => smoother (0.00..1.00)
         private const float ReserveNoiseAmp = 0.20f;
         // Maximum blocks to lower near-surface soil; 1..3 keeps top near surface, 7..9 is already quite harsh
-        private const int MaxLowering = 5;
+        private const int MaxLowering = 6;
         // Exposure weights: reduce NoiseWeight for smoother results; keep sum ≈ 1
         private const float ExposureSlopeWeight = 0.60f;
         private const float ExposureNoiseWeight = 0.40f;

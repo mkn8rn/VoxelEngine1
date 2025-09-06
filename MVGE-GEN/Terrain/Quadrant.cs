@@ -320,7 +320,7 @@ namespace MVGE_GEN.Terrain
                 var (stoneStart, stoneEnd, soilStart, soilEnd) =
 
                 // Derive stone and soil spans for this column
-                TerrainGeneration.DeriveWorldStoneSoilSpans(
+                TerrainGenerationUtils.DeriveWorldStoneSoilSpans(
                     surface,
                     Biome,
                     baseWorldX + localX,
@@ -480,7 +480,7 @@ namespace MVGE_GEN.Terrain
                     float slope01 = MathF.Min(1f, grad / 6f);
 
                     var (stoneStart, stoneEnd, soilStart, soilEnd) =
-                        TerrainGeneration.DeriveWorldStoneSoilSpans(
+                        TerrainGenerationUtils.DeriveWorldStoneSoilSpans(
                             surface,
                             Biome,
                             baseWorldX + x,
