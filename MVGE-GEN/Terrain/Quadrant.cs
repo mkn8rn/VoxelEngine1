@@ -309,7 +309,27 @@ namespace MVGE_GEN.Terrain
                 int localX = (int)((uint)(columnCx % sizeX + sizeX) % sizeX);
                 int localZ = (int)((uint)(columnCz % sizeZ + sizeZ) % sizeZ);
                 int surface = (int)hm[localX, localZ];
-                var (stoneStart, stoneEnd, soilStart, soilEnd) = TerrainGeneration.DeriveWorldStoneSoilSpans(surface, Biome);
+                
+                // Cheap slope (normalized to [0..1])
+                int clx0 = Math.Max(localX - 1, 0), clx1 = Math.Min(localX + 1, sizeX - 1);
+                int clz0 = Math.Max(localZ - 1, 0), clz1 = Math.Min(localZ + 1, sizeZ - 1);
+                float dx = hm[clx1, localZ] - hm[clx0, localZ];
+                float dz = hm[localX, clz1] - hm[localX, clz0];
+                float grad = MathF.Sqrt(dx * dx + dz * dz);
+                float slope01 = MathF.Min(1f, grad / 6f); // tune 6f to control sensitivity
+                var (stoneStart, stoneEnd, soilStart, soilEnd) =
+
+                // Derive stone and soil spans for this column
+                TerrainGeneration.DeriveWorldStoneSoilSpans(
+                    surface,
+                    Biome,
+                    baseWorldX + localX,
+                    baseWorldZ + localZ,
+                    _seed,
+                    slope01
+                );
+
+                // Store aggregated profile
                 profile.Surface = surface;
                 profile.StoneStart = stoneStart;
                 profile.StoneEnd = stoneEnd;
@@ -450,7 +470,24 @@ namespace MVGE_GEN.Terrain
                 for (int z = 0; z < sizeZ; z++)
                 {
                     int surface = (int)hm[x, z];
-                    var (stoneStart, stoneEnd, soilStart, soilEnd) = TerrainGeneration.DeriveWorldStoneSoilSpans(surface, Biome);
+
+                    // Cheap slope at (x,z)
+                    int x0 = Math.Max(x - 1, 0), x1 = Math.Min(x + 1, sizeX - 1);
+                    int z0 = Math.Max(z - 1, 0), z1 = Math.Min(z + 1, sizeZ - 1);
+                    float dx = hm[x1, z] - hm[x0, z];
+                    float dz = hm[x, z1] - hm[x, z0];
+                    float grad = MathF.Sqrt(dx * dx + dz * dz);
+                    float slope01 = MathF.Min(1f, grad / 6f);
+
+                    var (stoneStart, stoneEnd, soilStart, soilEnd) =
+                        TerrainGeneration.DeriveWorldStoneSoilSpans(
+                            surface,
+                            Biome,
+                            baseWorldX + x,
+                            baseWorldZ + z,
+                            _seed,
+                            slope01);
+
                     profile.BlockColumns[x * sizeZ + z] = new BlockColumnProfile
                     {
                         Surface = surface,

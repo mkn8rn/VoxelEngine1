@@ -34,7 +34,7 @@ namespace MVGE_GEN.Terrain
         /// Phases:
         ///  1. Column pass: derive clipped stone / soil spans and accumulate per‑section full‑coverage bitsets.
         ///  2. Section uniform classification (stone precedence over soil) from full‑coverage bitsets.
-        ///  3. Emit partial (non-uniform) spans sparsely. ( UPDATED: columns written directly with SectionUtils.DirectSetColumnRuns - avoids incremental GenerationAddRun state machine.)
+        ///  3. Emit partial (non-uniform) spans sparsely.
         ///  4. Whole‑chunk single block collapse if all created sections are uniform with the same id.
         ///  5. Finalize non‑uniform sections & build boundary planes.
         internal void GenerateInitialChunkData(BlockColumnProfile[] columnSpanMap)
