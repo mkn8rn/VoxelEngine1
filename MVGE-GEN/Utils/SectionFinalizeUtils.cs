@@ -9,6 +9,24 @@ namespace MVGE_GEN.Utils
 {
     internal partial class SectionUtils
     {
+
+        // -------------------------------------------------------------------------------------------------
+        // Array pooling: reduces allocation pressure for frequently reused temporary structures.
+        //   Occupancy: 4096 bits (64 * ulong) used when building face masks or packed/sparse data.
+        //   Dense:     4096 ushorts storing full per‑voxel ids (8 KB) for DenseExpanded or fallback.
+        // Objects are cleared before returning to pool to avoid leaking data across uses.
+        // -------------------------------------------------------------------------------------------------
+        private static readonly ConcurrentBag<ulong[]> _occupancyPool = new();
+        private static readonly ConcurrentBag<ushort[]> _densePool = new();
+        // Pool for escalated per-column 16-length voxel arrays
+        private static readonly ConcurrentBag<ushort[]> _escalatedColumnPool = new();
+
+        // -------------------------------------------------------------------------------------------------
+        // RentBitData – rents a uint[] array of at least the requested length.
+        // Used for Packed or MultiPacked representations.
+        // -------------------------------------------------------------------------------------------------
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static ulong[] RentOccupancy() => _occupancyPool.TryTake(out var a) ? a : new ulong[64];
         // -------------------------------------------------------------------------------------------------
         // WriteColumnMask
         // Inserts a 16‑bit vertical occupancy mask for a single column into the 4096‑bit section
@@ -47,58 +65,7 @@ namespace MVGE_GEN.Utils
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static ushort MaskRange(int ys, int ye) => _maskTable[ys, ye];
-
-        // -------------------------------------------------------------------------------------------------
-        // Array pooling: reduces allocation pressure for frequently reused temporary structures.
-        //   Occupancy: 4096 bits (64 * ulong) used when building face masks or packed/sparse data.
-        //   Dense:     4096 ushorts storing full per‑voxel ids (8 KB) for DenseExpanded or fallback.
-        // Objects are cleared before returning to pool to avoid leaking data across uses.
-        // -------------------------------------------------------------------------------------------------
-        private static readonly ConcurrentBag<ulong[]> _occupancyPool = new();
-        private static readonly ConcurrentBag<ushort[]> _densePool = new();
-        // Pool for escalated per-column 16-length voxel arrays
-        private static readonly ConcurrentBag<ushort[]> _escalatedColumnPool = new();
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static ushort[] RentEscalatedColumn()
-        {
-            if (_escalatedColumnPool.TryTake(out var a))
-            {
-                Array.Clear(a); // ensure clean (16 cells)
-                return a;
-            }
-            return new ushort[16];
-        }
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void ReturnEscalatedColumn(ushort[] arr)
-        {
-            if (arr == null || arr.Length != 16) return;
-            Array.Clear(arr);
-            _escalatedColumnPool.Add(arr);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static ulong[] RentOccupancy() => _occupancyPool.TryTake(out var a) ? a : new ulong[64];
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void ReturnOccupancy(ulong[] arr)
-        {
-            if (arr == null || arr.Length != 64) return;
-            Array.Clear(arr);            // ensure no stale bits leak
-            _occupancyPool.Add(arr);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static ushort[] RentDense() => _densePool.TryTake(out var a) ? a : new ushort[4096];
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void ReturnDense(ushort[] arr)
-        {
-            if (arr == null || arr.Length != 4096) return;
-            Array.Clear(arr);
-            _densePool.Add(arr);
-        }
 
         // -------------------------------------------------------------------------------------------------
         // Scratch pooling: Each in‑progress section maintains a SectionBuildScratch instance holding

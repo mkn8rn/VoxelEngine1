@@ -28,44 +28,6 @@ namespace MVGE_GEN.Utils
         private static ushort MaskRangeLutGet(int s, int e) => MaskRangeLut[s, e];
 
         // -------------------------------------------------------------------------------------------------
-        // TrackDistinct: Maintains up to 8 distinct non‑air block ids encountered while building.
-        // If more are encountered than fit, we simply stop adding (cap). This heuristic still allows
-        // rapid detection of single‑id or low‑variety sections without needing a larger structure.
-        // -------------------------------------------------------------------------------------------------
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void TrackDistinct(SectionBuildScratch sc, ushort id, int columnIndex = -1)
-        {
-            if (id == AIR) return;
-            int dc = sc.DistinctCount;
-            for (int i = 0; i < dc; i++)
-            {
-                if (sc.Distinct[i] == id)
-                {
-                    if (columnIndex >= 0)
-                    {
-                        int word = columnIndex >> 6; int bit = columnIndex & 63;
-                        sc.IdColumnBits[i, word] |= 1UL << bit;
-                    }
-                    return; // already tracked
-                }
-            }
-            if (dc < sc.Distinct.Length)
-            {
-                sc.Distinct[dc] = id;
-                if (columnIndex >= 0)
-                {
-                    int word = columnIndex >> 6; int bit = columnIndex & 63;
-                    sc.IdColumnBits[dc, word] |= 1UL << bit;
-                }
-                sc.DistinctCount = dc + 1;
-            }
-            else
-            {
-                sc.DistinctCount = dc; // ignore overflow
-            }
-        }
-
-        // -------------------------------------------------------------------------------------------------
         // EnsureScratch: Returns a writable SectionBuildScratch for the given section.
         // Guarantees that the returned instance is initialized and ready for column writes.
         // -------------------------------------------------------------------------------------------------
@@ -253,6 +215,8 @@ namespace MVGE_GEN.Utils
         // Fallback path:
         //   When any column escalated (RunCount==255) we rebuild a dense array (O(4096)).
         // -------------------------------------------------------------------------------------------------
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void GenerationFinalizeSection(ChunkSection sec)
         {
             if (sec == null) return;
