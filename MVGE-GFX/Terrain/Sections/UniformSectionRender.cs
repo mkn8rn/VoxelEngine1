@@ -37,6 +37,15 @@ namespace MVGE_GFX.Terrain.Sections
             uint tileNZ = ComputeTileIndex(block, Faces.BACK);
             uint tilePZ = ComputeTileIndex(block, Faces.FRONT);
             bool sameTileAllFaces = tileNX == tilePX && tileNX == tileNY && tileNX == tilePY && tileNX == tileNZ && tileNX == tilePZ;
+            // When all 6 faces share the same tile, emit using a single tile index to reduce per-face variation handling.
+            uint singleTileIndex = tileNX;
+            // Resolve per-face tiles once (applies singleTileIndex when all faces match)
+            uint rTileNX = sameTileAllFaces ? singleTileIndex : tileNX;
+            uint rTilePX = sameTileAllFaces ? singleTileIndex : tilePX;
+            uint rTileNY = sameTileAllFaces ? singleTileIndex : tileNY;
+            uint rTilePY = sameTileAllFaces ? singleTileIndex : tilePY;
+            uint rTileNZ = sameTileAllFaces ? singleTileIndex : tileNZ;
+            uint rTilePZ = sameTileAllFaces ? singleTileIndex : tilePZ;
 
             // Helper to emit a single instance (direct write, no per-voxel atlas lookup)
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -204,7 +213,7 @@ namespace MVGE_GFX.Terrain.Sections
                     for (int z = baseZ; z < endZ; z++)
                         for (int y = baseY; y < endY; y++)
                             if (!(baseX == 0 && PlaneBit(data.NeighborPlaneNegX, z * maxY + y))) // hidden when neighbor plane bit is set
-                                EmitOne(0, baseX, y, z, sameTileAllFaces ? tileNX : tileNX);
+                                EmitOne(0, baseX, y, z, rTileNX);
                 }
             }
             else
@@ -212,7 +221,7 @@ namespace MVGE_GFX.Terrain.Sections
                 ref var n = ref Neighbor(sx - 1, sy, sz);
                 if (n.Kind == 0 || (n.Kind == 1 && n.UniformBlockId == 0))
                 {
-                    EmitPlaneSingleTile(0, baseX, 0, 0, sameTileAllFaces ? tileNX : tileNX);
+                    EmitPlaneSingleTile(0, baseX, 0, 0, rTileNX);
                 }
                 else
                 {
@@ -222,14 +231,14 @@ namespace MVGE_GFX.Terrain.Sections
                         // Fast mask-based iteration: use neighbor's +X face (FacePosXBits); emit only visible bits.
                         if (n.FacePosXBits != null)
                         {
-                            EmitVisibleByMask_XFace(0, n.FacePosXBits, sameTileAllFaces ? tileNX : tileNX, baseX);
+                            EmitVisibleByMask_XFace(0, n.FacePosXBits, rTileNX, baseX);
                         }
                         else
                         {
                             // fallback occupancy test at neighbor local (x=15,y,z)
                             for (int z = 0; z < S; z++)
                                 for (int y = 0; y < S; y++)
-                                    if (!NeighborVoxelOccupied(ref n, 15, y, z)) EmitOne(0, baseX, baseY + y, baseZ + z, sameTileAllFaces ? tileNX : tileNX);
+                                    if (!NeighborVoxelOccupied(ref n, 15, y, z)) EmitOne(0, baseX, baseY + y, baseZ + z, rTileNX);
                         }
                     }
                 }
@@ -247,7 +256,7 @@ namespace MVGE_GFX.Terrain.Sections
                     for (int z = baseZ; z < endZ; z++)
                         for (int y = baseY; y < endY; y++)
                             if (!(wxRight == maxX - 1 && PlaneBit(data.NeighborPlanePosX, z * maxY + y)))
-                                EmitOne(1, wxRight, y, z, sameTileAllFaces ? tilePX : tilePX);
+                                EmitOne(1, wxRight, y, z, rTilePX);
                 }
             }
             else
@@ -255,7 +264,7 @@ namespace MVGE_GFX.Terrain.Sections
                 ref var n = ref Neighbor(sx + 1, sy, sz);
                 if (n.Kind == 0 || (n.Kind == 1 && n.UniformBlockId == 0))
                 {
-                    EmitPlaneSingleTile(1, wxRight, 0, 0, sameTileAllFaces ? tilePX : tilePX);
+                    EmitPlaneSingleTile(1, wxRight, 0, 0, rTilePX);
                 }
                 else
                 {
@@ -264,13 +273,13 @@ namespace MVGE_GFX.Terrain.Sections
                     {
                         if (n.FaceNegXBits != null)
                         {
-                            EmitVisibleByMask_XFace(1, n.FaceNegXBits, sameTileAllFaces ? tilePX : tilePX, wxRight);
+                            EmitVisibleByMask_XFace(1, n.FaceNegXBits, rTilePX, wxRight);
                         }
                         else
                         {
                             for (int z = 0; z < S; z++)
                                 for (int y = 0; y < S; y++)
-                                    if (!NeighborVoxelOccupied(ref n, 0, y, z)) EmitOne(1, wxRight, baseY + y, baseZ + z, sameTileAllFaces ? tilePX : tilePX);
+                                    if (!NeighborVoxelOccupied(ref n, 0, y, z)) EmitOne(1, wxRight, baseY + y, baseZ + z, rTilePX);
                         }
                     }
                 }
@@ -287,7 +296,7 @@ namespace MVGE_GFX.Terrain.Sections
                     for (int x = baseX; x < endX; x++)
                         for (int z = baseZ; z < endZ; z++)
                             if (!(baseY == 0 && PlaneBit(data.NeighborPlaneNegY, x * maxZ + z)))
-                                EmitOne(2, x, baseY, z, sameTileAllFaces ? tileNY : tileNY);
+                                EmitOne(2, x, baseY, z, rTileNY);
                 }
             }
             else
@@ -298,13 +307,13 @@ namespace MVGE_GFX.Terrain.Sections
                 {
                     if (n.FacePosYBits != null)
                     {
-                        EmitVisibleByMask_YFace(2, n.FacePosYBits, sameTileAllFaces ? tileNY : tileNY, baseY);
+                        EmitVisibleByMask_YFace(2, n.FacePosYBits, rTileNY, baseY);
                     }
                     else
                     {
                         for (int x = 0; x < S; x++)
                             for (int z = 0; z < S; z++)
-                                if (!NeighborVoxelOccupied(ref n, x, 15, z)) EmitOne(2, baseX + x, baseY, baseZ + z, sameTileAllFaces ? tileNY : tileNY);
+                                if (!NeighborVoxelOccupied(ref n, x, 15, z)) EmitOne(2, baseX + x, baseY, baseZ + z, rTileNY);
                     }
                 }
             }
@@ -321,7 +330,7 @@ namespace MVGE_GFX.Terrain.Sections
                     for (int x = baseX; x < endX; x++)
                         for (int z = baseZ; z < endZ; z++)
                             if (!(wyTop == maxY - 1 && PlaneBit(data.NeighborPlanePosY, x * maxZ + z)))
-                                EmitOne(3, x, wyTop, z, sameTileAllFaces ? tilePY : tilePY);
+                                EmitOne(3, x, wyTop, z, rTilePY);
                 }
             }
             else
@@ -332,13 +341,13 @@ namespace MVGE_GFX.Terrain.Sections
                 {
                     if (n.FaceNegYBits != null)
                     {
-                        EmitVisibleByMask_YFace(3, n.FaceNegYBits, sameTileAllFaces ? tilePY : tilePY, wyTop);
+                        EmitVisibleByMask_YFace(3, n.FaceNegYBits, rTilePY, wyTop);
                     }
                     else
                     {
                         for (int x = 0; x < S; x++)
                             for (int z = 0; z < S; z++)
-                                if (!NeighborVoxelOccupied(ref n, x, 0, z)) EmitOne(3, baseX + x, wyTop, baseZ + z, sameTileAllFaces ? tilePY : tilePY);
+                                if (!NeighborVoxelOccupied(ref n, x, 0, z)) EmitOne(3, baseX + x, wyTop, baseZ + z, rTilePY);
                     }
                 }
             }
@@ -354,7 +363,7 @@ namespace MVGE_GFX.Terrain.Sections
                     for (int x = baseX; x < endX; x++)
                         for (int y = baseY; y < endY; y++)
                             if (!(baseZ == 0 && PlaneBit(data.NeighborPlaneNegZ, x * maxY + y)))
-                                EmitOne(4, x, y, baseZ, sameTileAllFaces ? tileNZ : tileNZ);
+                                EmitOne(4, x, y, baseZ, rTileNZ);
                 }
             }
             else
@@ -364,13 +373,13 @@ namespace MVGE_GFX.Terrain.Sections
                 {
                     if (n.FacePosZBits != null)
                     {
-                        EmitVisibleByMask_ZFace(4, n.FacePosZBits, sameTileAllFaces ? tileNZ : tileNZ, baseZ);
+                        EmitVisibleByMask_ZFace(4, n.FacePosZBits, rTileNZ, baseZ);
                     }
                     else
                     {
                         for (int x = 0; x < S; x++)
                             for (int y = 0; y < S; y++)
-                                if (!NeighborVoxelOccupied(ref n, x, y, 15)) EmitOne(4, baseX + x, baseY + y, baseZ, sameTileAllFaces ? tileNZ : tileNZ);
+                                if (!NeighborVoxelOccupied(ref n, x, y, 15)) EmitOne(4, baseX + x, baseY + y, baseZ, rTileNZ);
                     }
                 }
             }
@@ -387,7 +396,7 @@ namespace MVGE_GFX.Terrain.Sections
                     for (int x = baseX; x < endX; x++)
                         for (int y = baseY; y < endY; y++)
                             if (!(wzFront == maxZ - 1 && PlaneBit(data.NeighborPlanePosZ, x * maxY + y)))
-                                EmitOne(5, x, y, wzFront, sameTileAllFaces ? tilePZ : tilePZ);
+                                EmitOne(5, x, y, wzFront, rTilePZ);
                 }
             }
             else
@@ -397,13 +406,13 @@ namespace MVGE_GFX.Terrain.Sections
                 {
                     if (n.FaceNegZBits != null)
                     {
-                        EmitVisibleByMask_ZFace(5, n.FaceNegZBits, sameTileAllFaces ? tilePZ : tilePZ, wzFront);
+                        EmitVisibleByMask_ZFace(5, n.FaceNegZBits, rTilePZ, wzFront);
                     }
                     else
                     {
                         for (int x = 0; x < S; x++)
                             for (int y = 0; y < S; y++)
-                                if (!NeighborVoxelOccupied(ref n, x, y, 0)) EmitOne(5, baseX + x, baseY + y, wzFront, sameTileAllFaces ? tilePZ : tilePZ);
+                                if (!NeighborVoxelOccupied(ref n, x, y, 0)) EmitOne(5, baseX + x, baseY + y, wzFront, rTilePZ);
                     }
                 }
             }
