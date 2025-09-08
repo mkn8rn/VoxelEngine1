@@ -115,15 +115,28 @@ namespace MVGE_GFX.Terrain.Sections
             var occ = desc.OccupancyBits;          // 64 ulongs (4096 bits) occupancy
             ushort block = desc.Palette[1];        // single non‑air block id
 
-            // Precompute tileIndex (same for all faces of this block).
-            var uvFaceSample = atlas.GetBlockUVs(block, Faces.LEFT);
-            byte minTileX = 255, minTileY = 255;
-            for (int i = 0; i < 4; i++)
+            // Precompute tileIndex per face (detects if all faces share the same tile and keeps a fast path in that case).
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            uint ComputeTileIndex(ushort blk, Faces face)
             {
-                if (uvFaceSample[i].x < minTileX) minTileX = uvFaceSample[i].x;
-                if (uvFaceSample[i].y < minTileY) minTileY = uvFaceSample[i].y;
+                var uvFace = atlas.GetBlockUVs(blk, face);
+                byte minTileX = 255, minTileY = 255;
+                for (int i = 0; i < 4; i++)
+                {
+                    if (uvFace[i].x < minTileX) minTileX = uvFace[i].x;
+                    if (uvFace[i].y < minTileY) minTileY = uvFace[i].y;
+                }
+                return (uint)(minTileY * atlas.tilesX + minTileX);
             }
-            uint tileIndex = (uint)(minTileY * atlas.tilesX + minTileX);
+
+            uint tileNX = ComputeTileIndex(block, Faces.LEFT);
+            uint tilePX = ComputeTileIndex(block, Faces.RIGHT);
+            uint tileNY = ComputeTileIndex(block, Faces.BOTTOM);
+            uint tilePY = ComputeTileIndex(block, Faces.TOP);
+            uint tileNZ = ComputeTileIndex(block, Faces.BACK);
+            uint tilePZ = ComputeTileIndex(block, Faces.FRONT);
+            bool sameTileAllFaces = tileNX == tilePX && tileNX == tileNY && tileNX == tilePY && tileNX == tileNZ && tileNX == tilePZ;
+            uint singleTileIndex = tileNX; // arbitrary representative when all same
 
             int baseX = sx * S;
             int baseY = sy * S;
@@ -487,7 +500,7 @@ namespace MVGE_GFX.Terrain.Sections
             // 3. Emit faces from masks
             // --------------------------------------------------
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            void EmitMask(Span<ulong> mask, byte faceDir)
+            void EmitMaskSingleTile(Span<ulong> mask, byte faceDir)
             {
                 for (int wi = 0; wi < 64; wi++)
                 {
@@ -503,18 +516,53 @@ namespace MVGE_GFX.Terrain.Sections
                         offsetList.Add((byte)(baseX + lx));
                         offsetList.Add((byte)(baseY + ly));
                         offsetList.Add((byte)(baseZ + lz));
-                        tileIndexList.Add(tileIndex);
+                        tileIndexList.Add(singleTileIndex);
                         faceDirList.Add(faceDir);
                     }
                 }
             }
 
-            EmitMask(faceNX, 0);
-            EmitMask(facePX, 1);
-            EmitMask(faceNY, 2);
-            EmitMask(facePY, 3);
-            EmitMask(faceNZ, 4);
-            EmitMask(facePZ, 5);
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            void EmitMaskPerFace(Span<ulong> mask, byte faceDir, uint tileIndexForFace)
+            {
+                for (int wi = 0; wi < 64; wi++)
+                {
+                    ulong word = mask[wi];
+                    while (word != 0)
+                    {
+                        int bit = BitOperations.TrailingZeroCount(word);
+                        word &= word - 1;
+                        int li = (wi << 6) + bit;
+                        int ly = _lyFromLi[li];
+                        int t = li >> 4; int lx = t & 15; int lz = t >> 4;
+                        if (lx < lxMin || lx > lxMax || ly < lyMin || ly > lyMax || lz < lzMin || lz > lzMax) continue;
+                        offsetList.Add((byte)(baseX + lx));
+                        offsetList.Add((byte)(baseY + ly));
+                        offsetList.Add((byte)(baseZ + lz));
+                        tileIndexList.Add(tileIndexForFace);
+                        faceDirList.Add(faceDir);
+                    }
+                }
+            }
+
+            if (sameTileAllFaces)
+            {
+                EmitMaskSingleTile(faceNX, 0);
+                EmitMaskSingleTile(facePX, 1);
+                EmitMaskSingleTile(faceNY, 2);
+                EmitMaskSingleTile(facePY, 3);
+                EmitMaskSingleTile(faceNZ, 4);
+                EmitMaskSingleTile(facePZ, 5);
+            }
+            else
+            {
+                EmitMaskPerFace(faceNX, 0, tileNX);
+                EmitMaskPerFace(facePX, 1, tilePX);
+                EmitMaskPerFace(faceNY, 2, tileNY);
+                EmitMaskPerFace(facePY, 3, tilePY);
+                EmitMaskPerFace(faceNZ, 4, tileNZ);
+                EmitMaskPerFace(facePZ, 5, tilePZ);
+            }
 
             return true;
         }

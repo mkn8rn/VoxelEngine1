@@ -1,6 +1,4 @@
-﻿using MVGE_INF.Generation.Models;
-
-namespace MVGE_INF.Models.Generation
+﻿namespace MVGE_INF.Models.Generation.Biomes
 {
     public class Biome
     {
@@ -18,8 +16,8 @@ namespace MVGE_INF.Models.Generation
         public required List<SimpleReplacementRule> simpleReplacements { get; set; }
 
         // --- Added precompiled rule data (immutable once built) ---------------------------------
-        public CompiledSimpleReplacementRule[] compiledSimpleReplacementRules { get; internal set; } = System.Array.Empty<CompiledSimpleReplacementRule>();
+        public CompiledSimpleReplacementRule[] compiledSimpleReplacementRules { get; internal set; } = Array.Empty<CompiledSimpleReplacementRule>();
         // Bucketed by section Y index (for 16-high sections). Each entry holds indices into compiledSimpleReplacementRules.
-        public int[][] sectionYRuleBuckets { get; internal set; } = System.Array.Empty<int[]>();
+        public int[][] sectionYRuleBuckets { get; internal set; } = Array.Empty<int[]>();
     }
 }

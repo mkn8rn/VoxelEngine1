@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
-using MVGE_INF.Models.Generation;
+using MVGE_INF.Models.Generation.Biomes;
 using MVGE_INF.Models.Terrain;
 
 namespace MVGE_GEN.Terrain

@@ -2,7 +2,7 @@ using MVGE_INF.Models.Terrain;
 using System;
 using System.Collections.Generic;
 
-namespace MVGE_INF.Models.Generation
+namespace MVGE_INF.Models.Generation.Biomes
 {
     /// Precompiled representation of a SimpleReplacementRule for fast batch application.
     /// Built once at biome load time. Immutable after construction.
@@ -41,7 +41,7 @@ namespace MVGE_INF.Models.Generation
 
         public bool Matches(ushort id, BaseBlockType bt)
         {
-            if (((BaseTypeBitMask >> (int)bt) & 1u) != 0u) return true;
+            if ((BaseTypeBitMask >> (int)bt & 1u) != 0u) return true;
             if (SpecificIdsSorted.Length == 0) return false;
             return Array.BinarySearch(SpecificIdsSorted, id) >= 0;
         }

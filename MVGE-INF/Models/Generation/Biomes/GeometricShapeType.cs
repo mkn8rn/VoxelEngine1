@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace MVGE_INF.Models.Generation
+namespace MVGE_INF.Models.Generation.Biomes
 {
     public enum GeometricShapeType
     {

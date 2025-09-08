@@ -4,9 +4,9 @@ using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using MVGE_INF.Generation.Models;
-using MVGE_INF.Models.Generation;
 using MVGE_INF.Models.Terrain;
 using MVGE_INF.Loaders;
+using MVGE_INF.Models.Generation.Biomes;
 
 namespace MVGE_INF.Managers
 {

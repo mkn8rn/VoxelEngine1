@@ -1,5 +1,5 @@
 ﻿using MVGE_INF.Managers;
-using MVGE_INF.Models.Generation;
+using MVGE_INF.Models.Generation.Biomes;
 using MVGE_INF.Models.Terrain;
 using MVGE_Tools.Noise;
 using OpenTK.Mathematics;
