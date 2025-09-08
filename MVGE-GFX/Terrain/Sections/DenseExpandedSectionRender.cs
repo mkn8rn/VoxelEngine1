@@ -32,7 +32,8 @@ namespace MVGE_GFX.Terrain.Sections
         ///  1. Produce internal face bitsets by shifting occupancy and removing occluded pairs
         ///     (skipping boundary voxels so boundary handling is centralized).
         ///  2. Re-introduce boundary faces by consulting boundary plane bitsets and external
-        ///     chunk neighbor planes / adjacent section voxels.
+        ///     chunk neighbor planes / adjacent section voxels. Neighbor tests use neighbor 
+        ///     section face bitsets with per-voxel fallback.
         ///  3. Iterate each face direction mask and emit an instance for every surviving bit.
         /// Returns true if handled; false signals fallback brute scan.
         private bool EmitDenseExpandedSectionInstances(
@@ -172,6 +173,7 @@ namespace MVGE_GFX.Terrain.Sections
             // ---------------------------------------------------------------------------------
             // 2. Boundary faces: selectively add only those boundary voxels whose outward face
             //    is not occluded by chunk neighbor plane bits or a directly adjacent voxel.
+            //    Neighbor checks use neighbor section face bitsets and per-voxel fallback.
             // ---------------------------------------------------------------------------------
             var planeNegX = data.NeighborPlaneNegX; var planePosX = data.NeighborPlanePosX;
             var planeNegY = data.NeighborPlaneNegY; var planePosY = data.NeighborPlanePosY;
@@ -190,6 +192,77 @@ namespace MVGE_GFX.Terrain.Sections
                 int b = index & 63;
                 if (w >= plane.Length) return false;
                 return (plane[w] & (1UL << b)) != 0UL;
+            }
+
+            // Neighbor section descriptors (for cross-section occlusion tests at internal boundaries)
+            int sxCount = data.sectionsX; int syCount = data.sectionsY; int szCount = data.sectionsZ;
+            SectionPrerenderDesc[] allSecs = data.SectionDescs;
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            static int SecIndex(int sxL, int syL, int szL, int syC, int szC) => ((sxL * syC) + syL) * szC + szL;
+
+            bool hasLeft  = sx > 0;                 ref SectionPrerenderDesc leftSec  = ref hasLeft  ? ref allSecs[SecIndex(sx - 1, sy, sz, syCount, szCount)] : ref desc;
+            bool hasRight = sx + 1 < sxCount;       ref SectionPrerenderDesc rightSec = ref hasRight ? ref allSecs[SecIndex(sx + 1, sy, sz, syCount, szCount)] : ref desc;
+            bool hasDown  = sy > 0;                 ref SectionPrerenderDesc downSec  = ref hasDown  ? ref allSecs[SecIndex(sx, sy - 1, sz, syCount, szCount)] : ref desc;
+            bool hasUp    = sy + 1 < syCount;       ref SectionPrerenderDesc upSec    = ref hasUp    ? ref allSecs[SecIndex(sx, sy + 1, sz, syCount, szCount)] : ref desc;
+            bool hasBack  = sz > 0;                 ref SectionPrerenderDesc backSec  = ref hasBack  ? ref allSecs[SecIndex(sx, sy, sz - 1, syCount, szCount)] : ref desc;
+            bool hasFront = sz + 1 < szCount;       ref SectionPrerenderDesc frontSec = ref hasFront ? ref allSecs[SecIndex(sx, sy, sz + 1, syCount, szCount)] : ref desc;
+
+            // Fallback neighbor voxel test when masks missing.
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            static bool NeighborVoxelSolidFallback(ref SectionPrerenderDesc n, int lx, int ly, int lz)
+            {
+                if (n.Kind == 0 || n.NonAirCount == 0) return false;
+                switch (n.Kind)
+                {
+                    case 1: return n.UniformBlockId != 0; // Uniform
+                    case 2: // Sparse
+                        if (n.SparseIndices != null)
+                        {
+                            int li = ((lz * 16 + lx) * 16) + ly;
+                            var arr = n.SparseIndices;
+                            for (int i = 0; i < arr.Length; i++) if (arr[i] == li) return true;
+                        }
+                        return false;
+                    case 3: // DenseExpanded
+                        if (n.ExpandedDense != null)
+                        {
+                            int liD = ((lz * 16 + lx) * 16) + ly;
+                            return n.ExpandedDense[liD] != 0;
+                        }
+                        return false;
+                    case 4: // Packed single-id or multi-id fallback occupancy check
+                    case 5: // MultiPacked
+                        if (n.OccupancyBits != null)
+                        {
+                            int li = ((lz * 16 + lx) * 16) + ly;
+                            return (n.OccupancyBits[li >> 6] & (1UL << (li & 63))) != 0UL;
+                        }
+                        return false;
+                    default: return false;
+                }
+            }
+
+            // Neighbor boundary probe using its precomputed face bitsets (with fallback).
+            // Matches semantics used by packed/multi-packed paths.
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            static bool NeighborBoundarySolid(ref SectionPrerenderDesc n, int faceDir, int x, int y, int z)
+            {
+                ulong[] mask = null; int localIndex = 0; int lx = x, ly = y, lz = z;
+                switch (faceDir)
+                {
+                    case 0: mask = n.FacePosXBits; localIndex = z * 16 + y; lx = 15; break; // neighbor +X face
+                    case 1: mask = n.FaceNegXBits; localIndex = z * 16 + y; lx = 0;  break; // neighbor -X face
+                    case 2: mask = n.FacePosYBits; localIndex = x * 16 + z; ly = 15; break; // neighbor +Y face
+                    case 3: mask = n.FaceNegYBits; localIndex = x * 16 + z; ly = 0;  break; // neighbor -Y face
+                    case 4: mask = n.FacePosZBits; localIndex = x * 16 + y; lz = 15; break; // neighbor +Z face
+                    case 5: mask = n.FaceNegZBits; localIndex = x * 16 + y; lz = 0;  break; // neighbor -Z face
+                }
+                if (mask != null)
+                {
+                    int w = localIndex >> 6; int b = localIndex & 63; if ((mask[w] & (1UL << b)) != 0UL) return true;
+                }
+                // fallback per-voxel check if mask missing or bit not set
+                return NeighborVoxelSolidFallback(ref n, lx, ly, lz);
             }
 
             // LEFT boundary (x = 0)
@@ -211,7 +284,7 @@ namespace MVGE_GFX.Terrain.Sections
                             // Outer chunk boundary: consult neighbor chunk plane (-X face of neighbor)
                             if (PlaneBit(planeNegX, (baseZ + z) * maxY + (baseY + y))) hidden = true;
                         }
-                        else if (GetBlock(worldX - 1, baseY + y, baseZ + z) != 0)
+                        else if (hasLeft && NeighborBoundarySolid(ref leftSec, 0, 15, y, z))
                         {
                             hidden = true; // internal neighbor solid
                         }
@@ -242,7 +315,7 @@ namespace MVGE_GFX.Terrain.Sections
                         {
                             if (PlaneBit(planePosX, (baseZ + z) * maxY + (baseY + y))) hidden = true;
                         }
-                        else if (GetBlock(worldX + 1, baseY + y, baseZ + z) != 0)
+                        else if (hasRight && NeighborBoundarySolid(ref rightSec, 1, 0, y, z))
                         {
                             hidden = true;
                         }
@@ -273,7 +346,7 @@ namespace MVGE_GFX.Terrain.Sections
                         {
                             if (PlaneBit(planeNegY, (baseX + x) * maxZ + (baseZ + z))) hidden = true;
                         }
-                        else if (GetBlock(baseX + x, worldY - 1, baseZ + z) != 0)
+                        else if (hasDown && NeighborBoundarySolid(ref downSec, 2, x, 15, z))
                         {
                             hidden = true;
                         }
@@ -304,7 +377,7 @@ namespace MVGE_GFX.Terrain.Sections
                         {
                             if (PlaneBit(planePosY, (baseX + x) * maxZ + (baseZ + z))) hidden = true;
                         }
-                        else if (GetBlock(baseX + x, worldY + 1, baseZ + z) != 0)
+                        else if (hasUp && NeighborBoundarySolid(ref upSec, 3, x, 0, z))
                         {
                             hidden = true;
                         }
@@ -335,7 +408,7 @@ namespace MVGE_GFX.Terrain.Sections
                         {
                             if (PlaneBit(planeNegZ, (baseX + x) * maxY + (baseY + y))) hidden = true;
                         }
-                        else if (GetBlock(baseX + x, baseY + y, worldZ - 1) != 0)
+                        else if (hasBack && NeighborBoundarySolid(ref backSec, 4, x, y, 15))
                         {
                             hidden = true;
                         }
@@ -366,7 +439,7 @@ namespace MVGE_GFX.Terrain.Sections
                         {
                             if (PlaneBit(planePosZ, (baseX + x) * maxY + (baseY + y))) hidden = true;
                         }
-                        else if (GetBlock(baseX + x, baseY + y, worldZ + 1) != 0)
+                        else if (hasFront && NeighborBoundarySolid(ref frontSec, 5, x, y, 0))
                         {
                             hidden = true;
                         }
