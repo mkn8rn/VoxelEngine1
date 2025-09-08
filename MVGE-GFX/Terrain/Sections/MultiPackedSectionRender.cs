@@ -62,10 +62,6 @@ namespace MVGE_GFX.Terrain.Sections
             int szCount = data.sectionsZ;
             SectionPrerenderDesc[] allSecs = data.SectionDescs;
 
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            static int SecIndex(int sxL, int syL, int szL, int syC, int szC)
-                => ((sxL * syC) + syL) * szC + szL;
-
             bool hasLeft  = sx > 0;              ref SectionPrerenderDesc leftSec  = ref hasLeft  ? ref allSecs[SecIndex(sx - 1, sy, sz, syCount, szCount)] : ref desc;
             bool hasRight = sx + 1 < sxCount;    ref SectionPrerenderDesc rightSec = ref hasRight ? ref allSecs[SecIndex(sx + 1, sy, sz, syCount, szCount)] : ref desc;
             bool hasDown  = sy > 0;              ref SectionPrerenderDesc downSec  = ref hasDown  ? ref allSecs[SecIndex(sx, sy - 1, sz, syCount, szCount)]   : ref desc;
@@ -87,133 +83,23 @@ namespace MVGE_GFX.Terrain.Sections
             Span<ulong> faceNZ = stackalloc ulong[64]; // -Z faces
             Span<ulong> facePZ = stackalloc ulong[64]; // +Z faces
 
-            // Bitset shifting helpers (copy of single packed logic; minimal & branchless)
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            static void ShiftLeft(ReadOnlySpan<ulong> src, int bits, Span<ulong> dst)
-            {
-                int wordShift = bits >> 6;
-                int bitShift  = bits & 63;
-                for (int i = 63; i >= 0; i--)
-                {
-                    ulong v = 0;
-                    int si = i - wordShift;
-                    if (si >= 0)
-                    {
-                        v = src[si];
-                        if (bitShift != 0)
-                        {
-                            ulong carry = (si - 1 >= 0) ? src[si - 1] : 0;
-                            v = (v << bitShift) | (carry >> (64 - bitShift));
-                        }
-                    }
-                    dst[i] = v;
-                }
-            }
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            static void ShiftRight(ReadOnlySpan<ulong> src, int bits, Span<ulong> dst)
-            {
-                int wordShift = bits >> 6;
-                int bitShift  = bits & 63;
-                for (int i = 0; i < 64; i++)
-                {
-                    ulong v = 0;
-                    int si = i + wordShift;
-                    if (si < 64)
-                    {
-                        v = src[si];
-                        if (bitShift != 0)
-                        {
-                            ulong carry = (si + 1 < 64) ? src[si + 1] : 0;
-                            v = (v >> bitShift) | (carry << (64 - bitShift));
-                        }
-                    }
-                    dst[i] = v;
-                }
-            }
-
             // strides in linear-index space for +X / +Y / +Z neighbors
             const int strideX = 16;
             const int strideY = 1;
             const int strideZ = 256; // 16 * 16
 
             // Internal faces: occupancy AND NOT(shifted occupancy) excluding boundary layer bits.
-            ShiftLeft (occ, strideX, shift); for (int i = 0; i < 64; i++) faceNX[i] = (occ[i] & ~_maskX0 [i]) & ~shift[i];
-            ShiftRight(occ, strideX, shift); for (int i = 0; i < 64; i++) facePX[i] = (occ[i] & ~_maskX15[i]) & ~shift[i];
-            ShiftLeft (occ, strideY, shift); for (int i = 0; i < 64; i++) faceNY[i] = (occ[i] & ~_maskY0 [i]) & ~shift[i];
-            ShiftRight(occ, strideY, shift); for (int i = 0; i < 64; i++) facePY[i] = (occ[i] & ~_maskY15[i]) & ~shift[i];
-            ShiftLeft (occ, strideZ, shift); for (int i = 0; i < 64; i++) faceNZ[i] = (occ[i] & ~_maskZ0 [i]) & ~shift[i];
-            ShiftRight(occ, strideZ, shift); for (int i = 0; i < 64; i++) facePZ[i] = (occ[i] & ~_maskZ15[i]) & ~shift[i];
+            BitsetShiftLeft (occ, strideX, shift); for (int i = 0; i < 64; i++) faceNX[i] = (occ[i] & ~_maskX0 [i]) & ~shift[i];
+            BitsetShiftRight(occ, strideX, shift); for (int i = 0; i < 64; i++) facePX[i] = (occ[i] & ~_maskX15[i]) & ~shift[i];
+            BitsetShiftLeft(occ, strideY, shift); for (int i = 0; i < 64; i++) faceNY[i] = (occ[i] & ~_maskY0 [i]) & ~shift[i];
+            BitsetShiftRight(occ, strideY, shift); for (int i = 0; i < 64; i++) facePY[i] = (occ[i] & ~_maskY15[i]) & ~shift[i];
+            BitsetShiftLeft(occ, strideZ, shift); for (int i = 0; i < 64; i++) faceNZ[i] = (occ[i] & ~_maskZ0 [i]) & ~shift[i];
+            BitsetShiftRight(occ, strideZ, shift); for (int i = 0; i < 64; i++) facePZ[i] = (occ[i] & ~_maskZ15[i]) & ~shift[i];
 
             // Neighbor chunk boundary planes (bit per world boundary cell) used for world-edge occlusion
             var planeNegX = data.NeighborPlaneNegX; var planePosX = data.NeighborPlanePosX;
             var planeNegY = data.NeighborPlaneNegY; var planePosY = data.NeighborPlanePosY;
             var planeNegZ = data.NeighborPlaneNegZ; var planePosZ = data.NeighborPlanePosZ;
-
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            static bool PlaneBit(ulong[] plane, int index)
-            {
-                if (plane == null) return false;
-                int w = index >> 6; int b = index & 63;
-                return w < plane.Length && (plane[w] & (1UL << b)) != 0UL;
-            }
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            static bool NeighborVoxelSolidFallback(ref SectionPrerenderDesc n, int lx, int ly, int lz)
-            {
-                if (n.Kind == 0 || n.NonAirCount == 0) return false;
-                switch (n.Kind)
-                {
-                    case 1: // Uniform
-                        return n.UniformBlockId != 0;
-                    case 2: // Sparse
-                        if (n.SparseIndices != null)
-                        {
-                            int li = ((lz * 16 + lx) * 16) + ly;
-                            var arr = n.SparseIndices;
-                            for (int i = 0; i < arr.Length; i++) if (arr[i] == li) return true;
-                        }
-                        return false;
-                    case 3: // DenseExpanded
-                        if (n.ExpandedDense != null)
-                        {
-                            int liD = ((lz * 16 + lx) * 16) + ly;
-                            return n.ExpandedDense[liD] != 0;
-                        }
-                        return false;
-                    case 4: // Single Packed
-                    case 5: // MultiPacked
-                        if (n.OccupancyBits != null)
-                        {
-                            int li = ((lz * 16 + lx) * 16) + ly;
-                            return (n.OccupancyBits[li >> 6] & (1UL << (li & 63))) != 0UL;
-                        }
-                        return false;
-                    default:
-                        return false;
-                }
-            }
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            static bool NeighborBoundarySolid(ref SectionPrerenderDesc n, int faceDir, int x, int y, int z)
-            {
-                // faceDir: 0..5 following standard order (-X,+X,-Y,+Y,-Z,+Z) mapping in caller
-                ulong[] mask = null;
-                int localIndex = 0;
-                int lx = x, ly = y, lz = z;
-                switch (faceDir)
-                {
-                    case 0: mask = n.FacePosXBits; localIndex = z * 16 + y; lx = 15; break; // neighbor +X face
-                    case 1: mask = n.FaceNegXBits; localIndex = z * 16 + y; lx = 0;  break; // neighbor -X face
-                    case 2: mask = n.FacePosYBits; localIndex = x * 16 + z; ly = 15; break; // neighbor +Y face
-                    case 3: mask = n.FaceNegYBits; localIndex = x * 16 + z; ly = 0;  break; // neighbor -Y face
-                    case 4: mask = n.FacePosZBits; localIndex = x * 16 + y; lz = 15; break; // neighbor +Z face
-                    case 5: mask = n.FaceNegZBits; localIndex = x * 16 + y; lz = 0;  break; // neighbor -Z face
-                }
-                if (mask != null)
-                {
-                    int w = localIndex >> 6; int b = localIndex & 63;
-                    if ((mask[w] & (1UL << b)) != 0UL) return true; // fast bit test
-                }
-                return NeighborVoxelSolidFallback(ref n, lx, ly, lz); // fallback decode
-            }
 
             // --- Add boundary faces (only those visible w.r.t outside world / neighbor sections) ---
 
@@ -391,6 +277,7 @@ namespace MVGE_GFX.Terrain.Sections
             uint[] tileCache = new uint[2048];
             for (int i = 0; i < tileCache.Length; i++) tileCache[i] = 0xFFFFFFFFu;
 
+            // Decode block id from packed representation at local coords.
             uint GetTileIndex(ushort block, byte faceDir)
             {
                 int key = (block << 3) | faceDir;
@@ -410,11 +297,8 @@ namespace MVGE_GFX.Terrain.Sections
                 return cached;
             }
 
-            // Local copy of descriptor (avoid capturing 'ref' in nested local method with ref parameter usage).
+            // Local copy of descriptor.
             var localDesc = desc;
-
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            ushort DecodeBlock(int lx, int ly, int lz) => DecodePacked(ref localDesc, lx, ly, lz);
 
             // Emit all faces represented by bits inside a given directional mask.
             void EmitMask(Span<ulong> mask, byte faceDir)
@@ -437,7 +321,7 @@ namespace MVGE_GFX.Terrain.Sections
                         // Skip outside tight bounds
                         if (lx < lxMin || lx > lxMax || ly < lyMin || ly > lyMax || lz < lzMin || lz > lzMax) continue;
 
-                        ushort block = DecodeBlock(lx, ly, lz);
+                        ushort block = DecodePacked(ref localDesc, lx, ly, lz);
                         if (block == 0) continue; // safety (should not happen because occupancy bit guaranteed solid)
 
                         // Emit instance

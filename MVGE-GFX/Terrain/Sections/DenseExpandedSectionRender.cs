@@ -82,88 +82,43 @@ namespace MVGE_GFX.Terrain.Sections
             const int strideY = 1;    // +Y delta
             const int strideZ = 256;  // +Z delta (16 * 16)
 
-            // Bitset shift helpers ----------------------------------------------------------
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            static void ShiftLeft(ReadOnlySpan<ulong> src, int shiftBits, Span<ulong> dst)
-            {
-                int wordShift = shiftBits >> 6;
-                int bitShift = shiftBits & 63;
-                for (int i = 63; i >= 0; i--)
-                {
-                    ulong v = 0;
-                    int si = i - wordShift;
-                    if (si >= 0)
-                    {
-                        v = src[si];
-                        if (bitShift != 0)
-                        {
-                            ulong carry = (si - 1 >= 0) ? src[si - 1] : 0UL;
-                            v = (v << bitShift) | (carry >> (64 - bitShift));
-                        }
-                    }
-                    dst[i] = v;
-                }
-            }
-
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            static void ShiftRight(ReadOnlySpan<ulong> src, int shiftBits, Span<ulong> dst)
-            {
-                int wordShift = shiftBits >> 6;
-                int bitShift = shiftBits & 63;
-                for (int i = 0; i < 64; i++)
-                {
-                    ulong v = 0;
-                    int si = i + wordShift;
-                    if (si < 64)
-                    {
-                        v = src[si];
-                        if (bitShift != 0)
-                        {
-                            ulong carry = (si + 1 < 64) ? src[si + 1] : 0UL;
-                            v = (v >> bitShift) | (carry << (64 - bitShift));
-                        }
-                    }
-                    dst[i] = v;
-                }
-            }
-
             // -X internal faces
-            ShiftLeft(occ, strideX, shift);
+            BitsetShiftLeft(occ, strideX, shift);
             for (int i = 0; i < 64; i++)
             {
                 ulong candidates = occ[i] & ~_maskX0[i];   // ignore boundary layer at x=0
                 faceNX[i] = candidates & ~shift[i];         // keep only uncovered faces
             }
             // +X internal faces
-            ShiftRight(occ, strideX, shift);
+            BitsetShiftRight(occ, strideX, shift);
             for (int i = 0; i < 64; i++)
             {
                 ulong candidates = occ[i] & ~_maskX15[i];  // ignore boundary layer at x=15
                 facePX[i] = candidates & ~shift[i];
             }
             // -Y internal faces
-            ShiftLeft(occ, strideY, shift);
+            BitsetShiftLeft(occ, strideY, shift);
             for (int i = 0; i < 64; i++)
             {
                 ulong candidates = occ[i] & ~_maskY0[i];
                 faceNY[i] = candidates & ~shift[i];
             }
             // +Y internal faces
-            ShiftRight(occ, strideY, shift);
+            BitsetShiftRight(occ, strideY, shift);
             for (int i = 0; i < 64; i++)
             {
                 ulong candidates = occ[i] & ~_maskY15[i];
                 facePY[i] = candidates & ~shift[i];
             }
             // -Z internal faces
-            ShiftLeft(occ, strideZ, shift);
+            BitsetShiftLeft(occ, strideZ, shift);
             for (int i = 0; i < 64; i++)
             {
                 ulong candidates = occ[i] & ~_maskZ0[i];
                 faceNZ[i] = candidates & ~shift[i];
             }
             // +Z internal faces
-            ShiftRight(occ, strideZ, shift);
+            BitsetShiftRight(occ, strideZ, shift);
             for (int i = 0; i < 64; i++)
             {
                 ulong candidates = occ[i] & ~_maskZ15[i];
@@ -206,64 +161,6 @@ namespace MVGE_GFX.Terrain.Sections
             bool hasUp    = sy + 1 < syCount;       ref SectionPrerenderDesc upSec    = ref hasUp    ? ref allSecs[SecIndex(sx, sy + 1, sz, syCount, szCount)] : ref desc;
             bool hasBack  = sz > 0;                 ref SectionPrerenderDesc backSec  = ref hasBack  ? ref allSecs[SecIndex(sx, sy, sz - 1, syCount, szCount)] : ref desc;
             bool hasFront = sz + 1 < szCount;       ref SectionPrerenderDesc frontSec = ref hasFront ? ref allSecs[SecIndex(sx, sy, sz + 1, syCount, szCount)] : ref desc;
-
-            // Fallback neighbor voxel test when masks missing.
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            static bool NeighborVoxelSolidFallback(ref SectionPrerenderDesc n, int lx, int ly, int lz)
-            {
-                if (n.Kind == 0 || n.NonAirCount == 0) return false;
-                switch (n.Kind)
-                {
-                    case 1: return n.UniformBlockId != 0; // Uniform
-                    case 2: // Sparse
-                        if (n.SparseIndices != null)
-                        {
-                            int li = ((lz * 16 + lx) * 16) + ly;
-                            var arr = n.SparseIndices;
-                            for (int i = 0; i < arr.Length; i++) if (arr[i] == li) return true;
-                        }
-                        return false;
-                    case 3: // DenseExpanded
-                        if (n.ExpandedDense != null)
-                        {
-                            int liD = ((lz * 16 + lx) * 16) + ly;
-                            return n.ExpandedDense[liD] != 0;
-                        }
-                        return false;
-                    case 4: // Packed single-id or multi-id fallback occupancy check
-                    case 5: // MultiPacked
-                        if (n.OccupancyBits != null)
-                        {
-                            int li = ((lz * 16 + lx) * 16) + ly;
-                            return (n.OccupancyBits[li >> 6] & (1UL << (li & 63))) != 0UL;
-                        }
-                        return false;
-                    default: return false;
-                }
-            }
-
-            // Neighbor boundary probe using its precomputed face bitsets (with fallback).
-            // Matches semantics used by packed/multi-packed paths.
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            static bool NeighborBoundarySolid(ref SectionPrerenderDesc n, int faceDir, int x, int y, int z)
-            {
-                ulong[] mask = null; int localIndex = 0; int lx = x, ly = y, lz = z;
-                switch (faceDir)
-                {
-                    case 0: mask = n.FacePosXBits; localIndex = z * 16 + y; lx = 15; break; // neighbor +X face
-                    case 1: mask = n.FaceNegXBits; localIndex = z * 16 + y; lx = 0;  break; // neighbor -X face
-                    case 2: mask = n.FacePosYBits; localIndex = x * 16 + z; ly = 15; break; // neighbor +Y face
-                    case 3: mask = n.FaceNegYBits; localIndex = x * 16 + z; ly = 0;  break; // neighbor -Y face
-                    case 4: mask = n.FacePosZBits; localIndex = x * 16 + y; lz = 15; break; // neighbor +Z face
-                    case 5: mask = n.FaceNegZBits; localIndex = x * 16 + y; lz = 0;  break; // neighbor -Z face
-                }
-                if (mask != null)
-                {
-                    int w = localIndex >> 6; int b = localIndex & 63; if ((mask[w] & (1UL << b)) != 0UL) return true;
-                }
-                // fallback per-voxel check if mask missing or bit not set
-                return NeighborVoxelSolidFallback(ref n, lx, ly, lz);
-            }
 
             // LEFT boundary (x = 0)
             if (bNegX != null)

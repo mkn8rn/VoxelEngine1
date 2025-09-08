@@ -32,10 +32,6 @@ namespace MVGE_GFX.Terrain.Sections
                 localMap[indices[i]] = blocks[i];
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            static void DecodeIndex(int li, out int lx, out int ly, out int lz)
-            { ly = li & 15; int rest = li >> 4; lx = rest & 15; lz = rest >> 4; }
-
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
             ushort Local(int lx, int ly, int lz, Dictionary<int, ushort> map)
             {
                 if ((uint)lx > 15 || (uint)ly > 15 || (uint)lz > 15) return 0;
