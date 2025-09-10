@@ -2,6 +2,7 @@
 using MVGE_GFX.Textures;
 using MVGE_INF.Models.Generation;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 
@@ -34,6 +35,40 @@ namespace MVGE_GFX.Terrain.Sections
         internal const int STRIDE_X = 16;   // +X neighbor in linear space
         internal const int STRIDE_Y = 1;    // +Y neighbor in linear space
         internal const int STRIDE_Z = 256;  // +Z neighbor in linear space (16*16)
+
+        // ------------------------------------------------------------------------------------
+        // Uniform face tile cache (per block id) to avoid recomputing PrecomputePerFaceTiles for
+        // repeated uniform sections of the same block. Cache entries store whether all faces
+        // share a single tile and each individual face tile index. This is global because the
+        // atlas layout is global for all SectionRender instances.
+        // ------------------------------------------------------------------------------------
+        private struct UniformFaceTileSet
+        {
+            public bool AllSame;
+            public uint SingleTile;
+            public uint TileNX, TilePX, TileNY, TilePY, TileNZ, TilePZ;
+        }
+        private static readonly ConcurrentDictionary<ushort, UniformFaceTileSet> _uniformFaceTileCache = new();
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private UniformFaceTileSet GetUniformFaceTileSet(ushort blockId)
+        {
+            if (_uniformFaceTileCache.TryGetValue(blockId, out var set)) return set;
+            Span<uint> tmp = stackalloc uint[6];
+            PrecomputePerFaceTiles(blockId, out bool allSame, out uint shared, tmp);
+            set = new UniformFaceTileSet
+            {
+                AllSame = allSame,
+                SingleTile = shared,
+                TileNX = tmp[0],
+                TilePX = tmp[1],
+                TileNY = tmp[2],
+                TilePY = tmp[3],
+                TileNZ = tmp[4],
+                TilePZ = tmp[5]
+            };
+            return _uniformFaceTileCache.GetOrAdd(blockId, set);
+        }
 
         // ------------------------------------------------------------------------------------
         // Ensure boundary masks (shared static arrays)

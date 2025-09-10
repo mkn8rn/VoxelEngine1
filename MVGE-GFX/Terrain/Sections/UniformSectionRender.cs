@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using MVGE_GFX.Models;
+using System.Runtime.InteropServices; // for CollectionsMarshal if needed
 
 namespace MVGE_GFX.Terrain.Sections
 {
@@ -10,13 +11,15 @@ namespace MVGE_GFX.Terrain.Sections
         /// Emits boundary face instances for a Uniform section (Kind==1) containing a single non‑air block id.
         /// Only faces on the outer surface of the section that are exposed to air or world boundary are emitted.
         /// Steps:
-        ///  1. Compute per‑face tile indices (PrecomputePerFaceTiles); enable single‑tile fast path if all equal.
-        ///  2. For each of the 6 faces:
-        ///       a. If chunk face lies on world border, consult the corresponding world neighbor plane bitset to skip fully occluded spans.
-        ///       b. Otherwise fetch neighbor section descriptor; if neighbor is empty or air‑uniform, emit whole plane quickly.
-        ///       c. If neighbor potentially partial, attempt mask‑based visibility using neighbor face bitsets; fall back to per‑voxel
-        ///          occupancy tests (NeighborVoxelSolid) when bitsets absent.
-        ///  3. Emit every visible boundary voxel using EmitOneInstance (plane loops or mask-driven sparse loops).
+        ///  1. Compute per‑face tile indices (PrecomputePerFaceTiles) OR fetch cached set; enable single‑tile fast path if all equal.
+        ///  2. Early interior occlusion fast path: if all six neighbors exist and are fully solid, skip immediately.
+        ///  3. Reserve list capacities for worst-case emission (6 * 256 faces) to avoid repeated reallocations.
+        ///  4. For each face apply visibility logic:
+        ///       a. World border: consult plane bitset; emit only visible cells.
+        ///       b. Neighbor missing/air: emit whole plane using bulk plane writer (single call, minimized per-voxel overhead).
+        ///       c. Neighbor fully solid: skip.
+        ///       d. Neighbor partial with face mask: enumerate visible bits (inverted mask) and emit per visible cell.
+        ///       e. Fallback neighbor voxel queries when mask absent.
         /// Returns true (uniform path always handled; empty uniform returns true with no output).
         private bool EmitUniformSectionInstances(ref SectionPrerenderDesc desc, int sx, int sy, int sz, int S,
             List<byte> offsetList, List<uint> tileIndexList, List<byte> faceDirList)
@@ -30,39 +33,66 @@ namespace MVGE_GFX.Terrain.Sections
             int endY = baseY + S; if (endY > maxY) endY = maxY;
             int endZ = baseZ + S; if (endZ > maxZ) endZ = maxZ;
 
-            // Precompute per-face tile indices once for this uniform block; keep a fast path when all 6 faces match.
-            // Replaces local ComputeTileIndex with shared PrecomputePerFaceTiles helper.
-            Span<uint> faceTiles = stackalloc uint[6];
-            PrecomputePerFaceTiles(block, out bool sameTileAllFaces, out uint singleTileIndex, faceTiles);
-            uint rTileNX = sameTileAllFaces ? singleTileIndex : faceTiles[0];
-            uint rTilePX = sameTileAllFaces ? singleTileIndex : faceTiles[1];
-            uint rTileNY = sameTileAllFaces ? singleTileIndex : faceTiles[2];
-            uint rTilePY = sameTileAllFaces ? singleTileIndex : faceTiles[3];
-            uint rTileNZ = sameTileAllFaces ? singleTileIndex : faceTiles[4];
-            uint rTilePZ = sameTileAllFaces ? singleTileIndex : faceTiles[5];
+            // Use cached uniform face tile set to avoid recomputing per-face indices for repeated block ids.
+            var tileSet = GetUniformFaceTileSet(block);
+            bool sameTileAllFaces = tileSet.AllSame;
+            uint rTileNX = sameTileAllFaces ? tileSet.SingleTile : tileSet.TileNX;
+            uint rTilePX = sameTileAllFaces ? tileSet.SingleTile : tileSet.TilePX;
+            uint rTileNY = sameTileAllFaces ? tileSet.SingleTile : tileSet.TileNY;
+            uint rTilePY = sameTileAllFaces ? tileSet.SingleTile : tileSet.TilePY;
+            uint rTileNZ = sameTileAllFaces ? tileSet.SingleTile : tileSet.TileNZ;
+            uint rTilePZ = sameTileAllFaces ? tileSet.SingleTile : tileSet.TilePZ;
 
-            // Helper to emit entire face plane of SxS blocks using shared EmitOneInstance to reduce code duplication
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            void EmitPlaneSingleTile(int faceDir, int wxFixed, int wyFixed, int wzFixed, uint tileIndex)
+            // Early interior full-occlusion skip: check if section is interior (all neighbors exist) and every neighbor is fully solid.
+            if (sx > 0 && sx < data.sectionsX - 1 && sy > 0 && sy < data.sectionsY - 1 && sz > 0 && sz < data.sectionsZ - 1)
             {
-                // axis: derived from faceDir (0/1: x fixed, varying y,z) (2/3: y fixed, varying x,z) (4/5: z fixed, varying x,y)
+                // indices of neighbors
+                var secs = data.SectionDescs;
+                ref var nL = ref secs[((sx - 1) * data.sectionsY + sy) * data.sectionsZ + sz];
+                ref var nR = ref secs[((sx + 1) * data.sectionsY + sy) * data.sectionsZ + sz];
+                ref var nD = ref secs[(sx * data.sectionsY + (sy - 1)) * data.sectionsZ + sz];
+                ref var nU = ref secs[(sx * data.sectionsY + (sy + 1)) * data.sectionsZ + sz];
+                ref var nB = ref secs[(sx * data.sectionsY + sy) * data.sectionsZ + (sz - 1)];
+                ref var nF = ref secs[(sx * data.sectionsY + sy) * data.sectionsZ + (sz + 1)];
+                if (NeighborFullySolid(ref nL) && NeighborFullySolid(ref nR) &&
+                    NeighborFullySolid(ref nD) && NeighborFullySolid(ref nU) &&
+                    NeighborFullySolid(ref nB) && NeighborFullySolid(ref nF))
+                {
+                    return true; // fully occluded interior uniform section
+                }
+            }
+
+            // Reserve worst-case capacity (6 planes * 256 faces) to reduce reallocations when many faces visible.
+            const int MAX_FACES_PER_SECTION = 6 * 256;
+            offsetList.EnsureCapacity(offsetList.Count + MAX_FACES_PER_SECTION * 3);
+            tileIndexList.EnsureCapacity(tileIndexList.Count + MAX_FACES_PER_SECTION);
+            faceDirList.EnsureCapacity(faceDirList.Count + MAX_FACES_PER_SECTION);
+
+            // Bulk plane emission helper (single-tile only) for full-plane visibility (avoids per-voxel function call overhead).
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            void EmitFullPlaneSingleTile(int faceDir, uint tileIndex, int fixedCoord)
+            {
+                // axis mapping: (0,1) x fixed -> vary y,z ; (2,3) y fixed -> vary x,z ; (4,5) z fixed -> vary x,y
                 if (faceDir == 0 || faceDir == 1)
                 {
+                    int wx = fixedCoord;
                     for (int y = baseY; y < endY; y++)
                         for (int z = baseZ; z < endZ; z++)
-                            EmitOneInstance(wxFixed, y, z, tileIndex, (byte)faceDir, offsetList, tileIndexList, faceDirList);
+                            EmitOneInstance(wx, y, z, tileIndex, (byte)faceDir, offsetList, tileIndexList, faceDirList);
                 }
                 else if (faceDir == 2 || faceDir == 3)
                 {
+                    int wy = fixedCoord;
                     for (int x = baseX; x < endX; x++)
                         for (int z = baseZ; z < endZ; z++)
-                            EmitOneInstance(x, wyFixed, z, tileIndex, (byte)faceDir, offsetList, tileIndexList, faceDirList);
+                            EmitOneInstance(x, wy, z, tileIndex, (byte)faceDir, offsetList, tileIndexList, faceDirList);
                 }
                 else
                 {
+                    int wz = fixedCoord;
                     for (int x = baseX; x < endX; x++)
                         for (int y = baseY; y < endY; y++)
-                            EmitOneInstance(x, y, wzFixed, tileIndex, (byte)faceDir, offsetList, tileIndexList, faceDirList);
+                            EmitOneInstance(x, y, wz, tileIndex, (byte)faceDir, offsetList, tileIndexList, faceDirList);
                 }
             }
 
@@ -82,11 +112,6 @@ namespace MVGE_GFX.Terrain.Sections
                 if ((n.Kind == 4 || n.Kind == 5) && n.NonAirCount == 4096) return true;
                 return false;
             }
-
-            // Replace NeighborFaceBit with FaceBitIsSet helper (selection via faceDir & planeIndex)
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            static bool NeighborFaceBit(ref SectionPrerenderDesc n, int faceDir, int planeIndex)
-                => FaceBitIsSet(ref n, faceDir, planeIndex);
 
             // Replace NeighborVoxelOccupied with NeighborVoxelSolid (generic occupancy test for neighbor section types)
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -190,7 +215,7 @@ namespace MVGE_GFX.Terrain.Sections
                 ref var n = ref Neighbor(sx - 1, sy, sz);
                 if (n.Kind == 0 || (n.Kind == 1 && n.UniformBlockId == 0))
                 {
-                    EmitPlaneSingleTile(0, baseX, 0, 0, rTileNX);
+                    EmitFullPlaneSingleTile(0, rTileNX, baseX);
                 }
                 else
                 {
@@ -231,7 +256,7 @@ namespace MVGE_GFX.Terrain.Sections
                 ref var n = ref Neighbor(sx + 1, sy, sz);
                 if (n.Kind == 0 || (n.Kind == 1 && n.UniformBlockId == 0))
                 {
-                    EmitPlaneSingleTile(1, wxRight, 0, 0, rTilePX);
+                    EmitFullPlaneSingleTile(1, rTilePX, wxRight);
                 }
                 else
                 {
