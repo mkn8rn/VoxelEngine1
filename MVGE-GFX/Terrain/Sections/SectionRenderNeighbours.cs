@@ -1,7 +1,9 @@
 ﻿using MVGE_INF.Models.Generation;
 using System;
+using System.Buffers.Text;
 using System.Collections.Generic;
 using System.Linq;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
@@ -98,6 +100,72 @@ namespace MVGE_GFX.Terrain.Sections
                 if ((mask[w] & (1UL << b)) != 0UL) return true;
             }
             return NeighborVoxelSolid(ref n, lx, ly, lz);
+        }
+
+        // Neighbor section queries for whole-face occlusion
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        ref SectionPrerenderDesc Neighbor(int nsx, int nsy, int nsz)
+        {
+            int idx = ((nsx * data.sectionsY) + nsy) * data.sectionsZ + nsz;
+            return ref data.SectionDescs[idx];
+        }
+
+        // Helper: treat neighbor as fully solid if it is uniform non-air OR a single-id packed (Kind 4) fully filled OR a multi-packed (Kind 5) with palette indicating full occupancy (NonAirCount==4096).
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        static bool NeighborFullySolid(ref SectionPrerenderDesc n)
+        {
+            if (n.Kind == 1 && n.UniformBlockId != 0) return true; // uniform solid
+            if ((n.Kind == 4 || n.Kind == 5) && n.NonAirCount == 4096) return true;
+            return false;
+        }
+
+        // Neighbor mask popcount (occluded cells) for predicted capacity. Guard length to plane size (<=256 bits)
+        int MaskOcclusionCount(ulong[] mask)
+        {
+            if (mask == null) return 0;
+            int occluded = 0; int neededWords = 4; // 256 bits -> 4 * 64
+            for (int i = 0; i < mask.Length && i < neededWords; i++) occluded += BitOperations.PopCount(mask[i]);
+            return occluded;
+        }
+
+        // Helper for world-edge plane quick skip if fully occluded in the SxS window.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        bool IsWorldPlaneFullySet(ulong[] plane, int startA, int startB, int countA, int countB, int strideB)
+        {
+            if (plane == null) return false;
+            for (int a = 0; a < countA; a++)
+            {
+                int baseIndex = (startA + a) * strideB + startB;
+                int remaining = countB;
+                int idx = baseIndex;
+                while (remaining-- > 0)
+                {
+                    int w = idx >> 6; int b = idx & 63; if (w >= plane.Length) return false;
+                    if ((plane[w] & (1UL << b)) == 0UL) return false; // found a hole
+                    idx++;
+                }
+            }
+            return true;
+        }
+
+        // Count visible cells for world boundary face (used for capacity prediction)
+        int CountVisibleWorldBoundary(ulong[] plane, int startA, int startB, int countA, int countB, int strideB)
+        {
+            int total = countA * countB;
+            if (total <= 0) return 0;
+            if (plane == null) return total; // no occlusion plane -> all visible
+            int visible = 0;
+            for (int a = 0; a < countA; a++)
+            {
+                int baseIndex = (startA + a) * strideB + startB;
+                int idx = baseIndex;
+                for (int b = 0; b < countB; b++, idx++)
+                {
+                    int w = idx >> 6; int bit = idx & 63; if (w >= plane.Length) { visible++; continue; }
+                    if ((plane[w] & (1UL << bit)) == 0UL) visible++; // hole -> visible
+                }
+            }
+            return visible;
         }
     }
 }

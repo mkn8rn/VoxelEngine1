@@ -4,6 +4,7 @@ using MVGE_INF.Models.Generation;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 
 namespace MVGE_GFX.Terrain.Sections

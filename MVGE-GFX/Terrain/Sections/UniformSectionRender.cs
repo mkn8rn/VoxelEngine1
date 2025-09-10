@@ -116,28 +116,6 @@ namespace MVGE_GFX.Terrain.Sections
                 }
             }
 
-            // Neighbor section queries for whole-face occlusion
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            ref SectionPrerenderDesc Neighbor(int nsx, int nsy, int nsz)
-            {
-                int idx = ((nsx * data.sectionsY) + nsy) * data.sectionsZ + nsz;
-                return ref data.SectionDescs[idx];
-            }
-
-            // Helper: treat neighbor as fully solid if it is uniform non-air OR a single-id packed (Kind 4) fully filled OR a multi-packed (Kind 5) with palette indicating full occupancy (NonAirCount==4096).
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            static bool NeighborFullySolid(ref SectionPrerenderDesc n)
-            {
-                if (n.Kind == 1 && n.UniformBlockId != 0) return true; // uniform solid
-                if ((n.Kind == 4 || n.Kind == 5) && n.NonAirCount == 4096) return true;
-                return false;
-            }
-
-            // Replace NeighborVoxelOccupied with NeighborVoxelSolid (generic occupancy test for neighbor section types)
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            static bool NeighborVoxelOccupied(ref SectionPrerenderDesc n, int lx, int ly, int lz)
-                => NeighborVoxelSolid(ref n, lx, ly, lz);
-
             // Bitset-driven emission helpers for partial neighbor occlusion (mask present). Visible bits are mask==0.
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             void EmitVisibleByMask_XFace(int faceDir, ulong[] neighborMask, uint tileIndex, int xFixed)
@@ -192,55 +170,6 @@ namespace MVGE_GFX.Terrain.Sections
                         EmitOneInstance(baseX + x, baseY + y, zFixed, tileIndex, (byte)faceDir, offsetList, tileIndexList, faceDirList);
                     }
                 }
-            }
-
-            // Helper for world-edge plane quick skip if fully occluded in the SxS window.
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            bool IsWorldPlaneFullySet(ulong[] plane, int startA, int startB, int countA, int countB, int strideB)
-            {
-                if (plane == null) return false;
-                for (int a = 0; a < countA; a++)
-                {
-                    int baseIndex = (startA + a) * strideB + startB;
-                    int remaining = countB;
-                    int idx = baseIndex;
-                    while (remaining-- > 0)
-                    {
-                        int w = idx >> 6; int b = idx & 63; if (w >= plane.Length) return false;
-                        if ((plane[w] & (1UL << b)) == 0UL) return false; // found a hole
-                        idx++;
-                    }
-                }
-                return true;
-            }
-
-            // Count visible cells for world boundary face (used for capacity prediction)
-            int CountVisibleWorldBoundary(ulong[] plane, int startA, int startB, int countA, int countB, int strideB)
-            {
-                int total = countA * countB;
-                if (total <= 0) return 0;
-                if (plane == null) return total; // no occlusion plane -> all visible
-                int visible = 0;
-                for (int a = 0; a < countA; a++)
-                {
-                    int baseIndex = (startA + a) * strideB + startB;
-                    int idx = baseIndex;
-                    for (int b = 0; b < countB; b++, idx++)
-                    {
-                        int w = idx >> 6; int bit = idx & 63; if (w >= plane.Length) { visible++; continue; }
-                        if ((plane[w] & (1UL << bit)) == 0UL) visible++; // hole -> visible
-                    }
-                }
-                return visible;
-            }
-
-            // Neighbor mask popcount (occluded cells) for predicted capacity. Guard length to plane size (<=256 bits)
-            int MaskOcclusionCount(ulong[] mask)
-            {
-                if (mask == null) return 0;
-                int occluded = 0; int neededWords = 4; // 256 bits -> 4 * 64
-                for (int i = 0; i < mask.Length && i < neededWords; i++) occluded += BitOperations.PopCount(mask[i]);
-                return occluded;
             }
 
             // World plane arrays (same order for convenience)
@@ -497,7 +426,7 @@ namespace MVGE_GFX.Terrain.Sections
                         int lxNeighbor = meta.Negative ? 15 : 0; // sample neighbor boundary layer
                         for (int z = 0; z < S; z++)
                             for (int y = 0; y < S; y++)
-                                if (!NeighborVoxelOccupied(ref nDesc, lxNeighbor, y, z))
+                                if (!NeighborVoxelSolid(ref nDesc, lxNeighbor, y, z))
                                     EmitOneInstance(fixedCoord, baseY + y, baseZ + z, tile, (byte)faceDir, offsetList, tileIndexList, faceDirList);
                     }
                     else if (meta.Axis == 1) // Y fixed
@@ -505,7 +434,7 @@ namespace MVGE_GFX.Terrain.Sections
                         int lyNeighbor = meta.Negative ? 15 : 0;
                         for (int xLocal = 0; xLocal < S; xLocal++)
                             for (int z = 0; z < S; z++)
-                                if (!NeighborVoxelOccupied(ref nDesc, xLocal, lyNeighbor, z))
+                                if (!NeighborVoxelSolid(ref nDesc, xLocal, lyNeighbor, z))
                                     EmitOneInstance(baseX + xLocal, fixedCoord, baseZ + z, tile, (byte)faceDir, offsetList, tileIndexList, faceDirList);
                     }
                     else // Z fixed
@@ -513,7 +442,7 @@ namespace MVGE_GFX.Terrain.Sections
                         int lzNeighbor = meta.Negative ? 15 : 0;
                         for (int xLocal = 0; xLocal < S; xLocal++)
                             for (int yLocal = 0; yLocal < S; yLocal++)
-                                if (!NeighborVoxelOccupied(ref nDesc, xLocal, yLocal, lzNeighbor))
+                                if (!NeighborVoxelSolid(ref nDesc, xLocal, yLocal, lzNeighbor))
                                     EmitOneInstance(baseX + xLocal, baseY + yLocal, fixedCoord, tile, (byte)faceDir, offsetList, tileIndexList, faceDirList);
                         return true; // original behavior returned immediately after Z-face fallback; preserved intentionally
                     }
