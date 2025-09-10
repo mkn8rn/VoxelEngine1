@@ -31,6 +31,7 @@ namespace MVGE_GFX.Terrain.Sections
             for (int i = 0; i < indices.Length; i++)
                 localMap[indices[i]] = blocks[i];
 
+            // Local fast lookup inside 16^3 section bounds.
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             ushort Local(int lx, int ly, int lz, Dictionary<int, ushort> map)
             {
@@ -39,10 +40,13 @@ namespace MVGE_GFX.Terrain.Sections
                 return map.TryGetValue(li, out var v) ? v : (ushort)0;
             }
 
+            // Tile index cache (shared helper) to avoid recomputing atlas lookups for repeated block ids per face direction.
+            var tileCache = new TileIndexCache();
+
             for (int i = 0; i < indices.Length; i++)
             {
-                int li = indices[i]; ushort block = blocks[i]; if (block == 0) continue;
-                DecodeIndex(li, out int lx, out int ly, out int lz);
+                int li = indices[i]; ushort block = blocks[i]; if (block == 0) continue; // skip air
+                DecodeIndex(li, out int lx, out int ly, out int lz); // shared helper from common
                 int wx = baseX + lx; int wy = baseY + ly; int wz = baseZ + lz;
 
                 // LEFT (-X)
@@ -51,13 +55,13 @@ namespace MVGE_GFX.Terrain.Sections
                     if (wx == 0)
                     {
                         if (!PlaneBit(planeNegX, wz * maxY + wy))
-                            EmitFaceInstance(block, 0, wx, wy, wz, offsetList, tileIndexList, faceDirList);
+                            EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 0), 0, offsetList, tileIndexList, faceDirList);
                     }
                     else if (GetBlock(wx - 1, wy, wz) == 0)
-                        EmitFaceInstance(block, 0, wx, wy, wz, offsetList, tileIndexList, faceDirList);
+                        EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 0), 0, offsetList, tileIndexList, faceDirList);
                 }
                 else if (Local(lx - 1, ly, lz, localMap) == 0)
-                    EmitFaceInstance(block, 0, wx, wy, wz, offsetList, tileIndexList, faceDirList);
+                    EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 0), 0, offsetList, tileIndexList, faceDirList);
 
                 // RIGHT (+X)
                 if (lx == 15)
@@ -65,13 +69,13 @@ namespace MVGE_GFX.Terrain.Sections
                     if (wx == maxX - 1)
                     {
                         if (!PlaneBit(planePosX, wz * maxY + wy))
-                            EmitFaceInstance(block, 1, wx, wy, wz, offsetList, tileIndexList, faceDirList);
+                            EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 1), 1, offsetList, tileIndexList, faceDirList);
                     }
                     else if (GetBlock(wx + 1, wy, wz) == 0)
-                        EmitFaceInstance(block, 1, wx, wy, wz, offsetList, tileIndexList, faceDirList);
+                        EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 1), 1, offsetList, tileIndexList, faceDirList);
                 }
                 else if (Local(lx + 1, ly, lz, localMap) == 0)
-                    EmitFaceInstance(block, 1, wx, wy, wz, offsetList, tileIndexList, faceDirList);
+                    EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 1), 1, offsetList, tileIndexList, faceDirList);
 
                 // BOTTOM (-Y)
                 if (ly == 0)
@@ -79,13 +83,13 @@ namespace MVGE_GFX.Terrain.Sections
                     if (wy == 0)
                     {
                         if (!PlaneBit(planeNegY, wx * maxZ + wz))
-                            EmitFaceInstance(block, 2, wx, wy, wz, offsetList, tileIndexList, faceDirList);
+                            EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 2), 2, offsetList, tileIndexList, faceDirList);
                     }
                     else if (GetBlock(wx, wy - 1, wz) == 0)
-                        EmitFaceInstance(block, 2, wx, wy, wz, offsetList, tileIndexList, faceDirList);
+                        EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 2), 2, offsetList, tileIndexList, faceDirList);
                 }
                 else if (Local(lx, ly - 1, lz, localMap) == 0)
-                    EmitFaceInstance(block, 2, wx, wy, wz, offsetList, tileIndexList, faceDirList);
+                    EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 2), 2, offsetList, tileIndexList, faceDirList);
 
                 // TOP (+Y)
                 if (ly == 15)
@@ -93,13 +97,13 @@ namespace MVGE_GFX.Terrain.Sections
                     if (wy == maxY - 1)
                     {
                         if (!PlaneBit(planePosY, wx * maxZ + wz))
-                            EmitFaceInstance(block, 3, wx, wy, wz, offsetList, tileIndexList, faceDirList);
+                            EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 3), 3, offsetList, tileIndexList, faceDirList);
                     }
                     else if (GetBlock(wx, wy + 1, wz) == 0)
-                        EmitFaceInstance(block, 3, wx, wy, wz, offsetList, tileIndexList, faceDirList);
+                        EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 3), 3, offsetList, tileIndexList, faceDirList);
                 }
                 else if (Local(lx, ly + 1, lz, localMap) == 0)
-                    EmitFaceInstance(block, 3, wx, wy, wz, offsetList, tileIndexList, faceDirList);
+                    EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 3), 3, offsetList, tileIndexList, faceDirList);
 
                 // BACK (-Z)
                 if (lz == 0)
@@ -107,13 +111,13 @@ namespace MVGE_GFX.Terrain.Sections
                     if (wz == 0)
                     {
                         if (!PlaneBit(planeNegZ, wx * maxY + wy))
-                            EmitFaceInstance(block, 4, wx, wy, wz, offsetList, tileIndexList, faceDirList);
+                            EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 4), 4, offsetList, tileIndexList, faceDirList);
                     }
                     else if (GetBlock(wx, wy, wz - 1) == 0)
-                        EmitFaceInstance(block, 4, wx, wy, wz, offsetList, tileIndexList, faceDirList);
+                        EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 4), 4, offsetList, tileIndexList, faceDirList);
                 }
                 else if (Local(lx, ly, lz - 1, localMap) == 0)
-                    EmitFaceInstance(block, 4, wx, wy, wz, offsetList, tileIndexList, faceDirList);
+                    EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 4), 4, offsetList, tileIndexList, faceDirList);
 
                 // FRONT (+Z)
                 if (lz == 15)
@@ -121,13 +125,13 @@ namespace MVGE_GFX.Terrain.Sections
                     if (wz == maxZ - 1)
                     {
                         if (!PlaneBit(planePosZ, wx * maxY + wy))
-                            EmitFaceInstance(block, 5, wx, wy, wz, offsetList, tileIndexList, faceDirList);
+                            EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 5), 5, offsetList, tileIndexList, faceDirList);
                     }
                     else if (GetBlock(wx, wy, wz + 1) == 0)
-                        EmitFaceInstance(block, 5, wx, wy, wz, offsetList, tileIndexList, faceDirList);
+                        EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 5), 5, offsetList, tileIndexList, faceDirList);
                 }
                 else if (Local(lx, ly, lz + 1, localMap) == 0)
-                    EmitFaceInstance(block, 5, wx, wy, wz, offsetList, tileIndexList, faceDirList);
+                    EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 5), 5, offsetList, tileIndexList, faceDirList);
             }
             return true;
         }

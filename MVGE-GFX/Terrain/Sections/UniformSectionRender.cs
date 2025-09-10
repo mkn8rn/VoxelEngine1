@@ -22,41 +22,17 @@ namespace MVGE_GFX.Terrain.Sections
             int endZ = baseZ + S; if (endZ > maxZ) endZ = maxZ;
 
             // Precompute per-face tile indices once for this uniform block; keep a fast path when all 6 faces match.
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            uint ComputeTileIndex(ushort blk, Faces face)
-            {
-                var uvFace = atlas.GetBlockUVs(blk, face);
-                byte minTileX = 255, minTileY = 255;
-                for (int i = 0; i < 4; i++) { if (uvFace[i].x < minTileX) minTileX = uvFace[i].x; if (uvFace[i].y < minTileY) minTileY = uvFace[i].y; }
-                return (uint)(minTileY * atlas.tilesX + minTileX);
-            }
-            uint tileNX = ComputeTileIndex(block, Faces.LEFT);
-            uint tilePX = ComputeTileIndex(block, Faces.RIGHT);
-            uint tileNY = ComputeTileIndex(block, Faces.BOTTOM);
-            uint tilePY = ComputeTileIndex(block, Faces.TOP);
-            uint tileNZ = ComputeTileIndex(block, Faces.BACK);
-            uint tilePZ = ComputeTileIndex(block, Faces.FRONT);
-            bool sameTileAllFaces = tileNX == tilePX && tileNX == tileNY && tileNX == tilePY && tileNX == tileNZ && tileNX == tilePZ;
-            // When all 6 faces share the same tile, emit using a single tile index to reduce per-face variation handling.
-            uint singleTileIndex = tileNX;
-            // Resolve per-face tiles once (applies singleTileIndex when all faces match)
-            uint rTileNX = sameTileAllFaces ? singleTileIndex : tileNX;
-            uint rTilePX = sameTileAllFaces ? singleTileIndex : tilePX;
-            uint rTileNY = sameTileAllFaces ? singleTileIndex : tileNY;
-            uint rTilePY = sameTileAllFaces ? singleTileIndex : tilePY;
-            uint rTileNZ = sameTileAllFaces ? singleTileIndex : tileNZ;
-            uint rTilePZ = sameTileAllFaces ? singleTileIndex : tilePZ;
+            // Replaces local ComputeTileIndex with shared PrecomputePerFaceTiles helper.
+            Span<uint> faceTiles = stackalloc uint[6];
+            PrecomputePerFaceTiles(block, out bool sameTileAllFaces, out uint singleTileIndex, faceTiles);
+            uint rTileNX = sameTileAllFaces ? singleTileIndex : faceTiles[0];
+            uint rTilePX = sameTileAllFaces ? singleTileIndex : faceTiles[1];
+            uint rTileNY = sameTileAllFaces ? singleTileIndex : faceTiles[2];
+            uint rTilePY = sameTileAllFaces ? singleTileIndex : faceTiles[3];
+            uint rTileNZ = sameTileAllFaces ? singleTileIndex : faceTiles[4];
+            uint rTilePZ = sameTileAllFaces ? singleTileIndex : faceTiles[5];
 
-            // Helper to emit a single instance (direct write, no per-voxel atlas lookup)
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            void EmitOne(byte faceDir, int wx, int wy, int wz, uint tileIndex)
-            {
-                offsetList.Add((byte)wx); offsetList.Add((byte)wy); offsetList.Add((byte)wz);
-                tileIndexList.Add(tileIndex);
-                faceDirList.Add(faceDir);
-            }
-
-            // Helper to emit an entire face plane of SxS blocks
+            // Helper to emit entire face plane of SxS blocks using shared EmitOneInstance to reduce code duplication
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             void EmitPlaneSingleTile(int faceDir, int wxFixed, int wyFixed, int wzFixed, uint tileIndex)
             {
@@ -65,19 +41,19 @@ namespace MVGE_GFX.Terrain.Sections
                 {
                     for (int y = baseY; y < endY; y++)
                         for (int z = baseZ; z < endZ; z++)
-                            EmitOne((byte)faceDir, wxFixed, y, z, tileIndex);
+                            EmitOneInstance(wxFixed, y, z, tileIndex, (byte)faceDir, offsetList, tileIndexList, faceDirList);
                 }
                 else if (faceDir == 2 || faceDir == 3)
                 {
                     for (int x = baseX; x < endX; x++)
                         for (int z = baseZ; z < endZ; z++)
-                            EmitOne((byte)faceDir, x, wyFixed, z, tileIndex);
+                            EmitOneInstance(x, wyFixed, z, tileIndex, (byte)faceDir, offsetList, tileIndexList, faceDirList);
                 }
                 else
                 {
                     for (int x = baseX; x < endX; x++)
                         for (int y = baseY; y < endY; y++)
-                            EmitOne((byte)faceDir, x, y, wzFixed, tileIndex);
+                            EmitOneInstance(x, y, wzFixed, tileIndex, (byte)faceDir, offsetList, tileIndexList, faceDirList);
                 }
             }
 
@@ -94,37 +70,22 @@ namespace MVGE_GFX.Terrain.Sections
             static bool NeighborFullySolid(ref SectionPrerenderDesc n)
             {
                 if (n.Kind == 1 && n.UniformBlockId != 0) return true; // uniform solid
-                // Multi/Single packed cannot guarantee full fill without occupancy; rely on NonAirCount==4096 heuristic if metadata kept.
                 if ((n.Kind == 4 || n.Kind == 5) && n.NonAirCount == 4096) return true;
                 return false;
             }
 
-            // NEW: Fast per-boundary-voxel occlusion test leveraging neighbor face bitsets or occupancy
+            // Replace NeighborFaceBit with FaceBitIsSet helper (selection via faceDir & planeIndex)
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            static bool NeighborFaceBit(ref SectionPrerenderDesc n, int whichFaceArray /*0 NX,1 PX,2 NY,3 PY,4 NZ,5 PZ*/, int planeIndex)
-            {
-                ulong[] arr = whichFaceArray switch
-                {
-                    0 => n.FaceNegXBits,
-                    1 => n.FacePosXBits,
-                    2 => n.FaceNegYBits,
-                    3 => n.FacePosYBits,
-                    4 => n.FaceNegZBits,
-                    5 => n.FacePosZBits,
-                    _ => null
-                };
-                if (arr == null) return false;
-                int w = planeIndex >> 6; int b = planeIndex & 63; if (w >= arr.Length) return false; return (arr[w] & (1UL << b)) != 0UL;
-            }
+            static bool NeighborFaceBit(ref SectionPrerenderDesc n, int faceDir, int planeIndex)
+                => FaceBitIsSet(ref n, faceDir, planeIndex);
+
+            // Replace NeighborVoxelOccupied with NeighborVoxelSolid (generic occupancy test for neighbor section types)
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             static bool NeighborVoxelOccupied(ref SectionPrerenderDesc n, int lx, int ly, int lz)
-            {
-                if (n.OccupancyBits == null) return false;
-                int li = ((lz * 16 + lx) * 16) + ly;
-                return (n.OccupancyBits[li >> 6] & (1UL << (li & 63))) != 0UL;
-            }
+                => NeighborVoxelSolid(ref n, lx, ly, lz);
 
             // Bitset-driven emission helpers for partial neighbor occlusion (mask present). Visible bits are mask==0.
+            // Updated to use EmitOneInstance instead of local EmitOne.
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             void EmitVisibleByMask_XFace(int faceDir, ulong[] neighborMask, uint tileIndex, int xFixed)
             {
@@ -139,7 +100,7 @@ namespace MVGE_GFX.Terrain.Sections
                         visible &= visible - 1;
                         int idx = (wi << 6) + bit; if (idx >= 256) continue; // guard if longer
                         int z = idx >> 4; int y = idx & 15;
-                        EmitOne((byte)faceDir, xFixed, baseY + y, baseZ + z, tileIndex);
+                        EmitOneInstance(xFixed, baseY + y, baseZ + z, tileIndex, (byte)faceDir, offsetList, tileIndexList, faceDirList);
                     }
                 }
             }
@@ -157,7 +118,7 @@ namespace MVGE_GFX.Terrain.Sections
                         visible &= visible - 1;
                         int idx = (wi << 6) + bit; if (idx >= 256) continue;
                         int x = idx >> 4; int z = idx & 15;
-                        EmitOne((byte)faceDir, baseX + x, yFixed, baseZ + z, tileIndex);
+                        EmitOneInstance(baseX + x, yFixed, baseZ + z, tileIndex, (byte)faceDir, offsetList, tileIndexList, faceDirList);
                     }
                 }
             }
@@ -175,7 +136,7 @@ namespace MVGE_GFX.Terrain.Sections
                         visible &= visible - 1;
                         int idx = (wi << 6) + bit; if (idx >= 256) continue;
                         int x = idx >> 4; int y = idx & 15;
-                        EmitOne((byte)faceDir, baseX + x, baseY + y, zFixed, tileIndex);
+                        EmitOneInstance(baseX + x, baseY + y, zFixed, tileIndex, (byte)faceDir, offsetList, tileIndexList, faceDirList);
                     }
                 }
             }
@@ -203,7 +164,6 @@ namespace MVGE_GFX.Terrain.Sections
             // LEFT
             if (sx == 0)
             {
-                // Check neighbor plane bitset at chunk boundary. Whole-plane fast skip if plane says fully occluded.
                 if (baseX == 0 && IsWorldPlaneFullySet(data.NeighborPlaneNegX, baseZ, baseY, endZ - baseZ, endY - baseY, maxY))
                 {
                     // fully hidden
@@ -212,8 +172,8 @@ namespace MVGE_GFX.Terrain.Sections
                 {
                     for (int z = baseZ; z < endZ; z++)
                         for (int y = baseY; y < endY; y++)
-                            if (!(baseX == 0 && PlaneBit(data.NeighborPlaneNegX, z * maxY + y))) // hidden when neighbor plane bit is set
-                                EmitOne(0, baseX, y, z, rTileNX);
+                            if (!(baseX == 0 && PlaneBit(data.NeighborPlaneNegX, z * maxY + y)))
+                                EmitOneInstance(baseX, y, z, rTileNX, 0, offsetList, tileIndexList, faceDirList);
                 }
             }
             else
@@ -228,17 +188,15 @@ namespace MVGE_GFX.Terrain.Sections
                     bool fullOcclude = NeighborFullySolid(ref n);
                     if (!fullOcclude)
                     {
-                        // Fast mask-based iteration: use neighbor's +X face (FacePosXBits); emit only visible bits.
                         if (n.FacePosXBits != null)
                         {
                             EmitVisibleByMask_XFace(0, n.FacePosXBits, rTileNX, baseX);
                         }
                         else
                         {
-                            // fallback occupancy test at neighbor local (x=15,y,z)
                             for (int z = 0; z < S; z++)
                                 for (int y = 0; y < S; y++)
-                                    if (!NeighborVoxelOccupied(ref n, 15, y, z)) EmitOne(0, baseX, baseY + y, baseZ + z, rTileNX);
+                                    if (!NeighborVoxelOccupied(ref n, 15, y, z)) EmitOneInstance(baseX, baseY + y, baseZ + z, rTileNX, 0, offsetList, tileIndexList, faceDirList);
                         }
                     }
                 }
@@ -256,7 +214,7 @@ namespace MVGE_GFX.Terrain.Sections
                     for (int z = baseZ; z < endZ; z++)
                         for (int y = baseY; y < endY; y++)
                             if (!(wxRight == maxX - 1 && PlaneBit(data.NeighborPlanePosX, z * maxY + y)))
-                                EmitOne(1, wxRight, y, z, rTilePX);
+                                EmitOneInstance(wxRight, y, z, rTilePX, 1, offsetList, tileIndexList, faceDirList);
                 }
             }
             else
@@ -279,7 +237,7 @@ namespace MVGE_GFX.Terrain.Sections
                         {
                             for (int z = 0; z < S; z++)
                                 for (int y = 0; y < S; y++)
-                                    if (!NeighborVoxelOccupied(ref n, 0, y, z)) EmitOne(1, wxRight, baseY + y, baseZ + z, rTilePX);
+                                    if (!NeighborVoxelOccupied(ref n, 0, y, z)) EmitOneInstance(wxRight, baseY + y, baseZ + z, rTilePX, 1, offsetList, tileIndexList, faceDirList);
                         }
                     }
                 }
@@ -296,7 +254,7 @@ namespace MVGE_GFX.Terrain.Sections
                     for (int x = baseX; x < endX; x++)
                         for (int z = baseZ; z < endZ; z++)
                             if (!(baseY == 0 && PlaneBit(data.NeighborPlaneNegY, x * maxZ + z)))
-                                EmitOne(2, x, baseY, z, rTileNY);
+                                EmitOneInstance(x, baseY, z, rTileNY, 2, offsetList, tileIndexList, faceDirList);
                 }
             }
             else
@@ -313,7 +271,7 @@ namespace MVGE_GFX.Terrain.Sections
                     {
                         for (int x = 0; x < S; x++)
                             for (int z = 0; z < S; z++)
-                                if (!NeighborVoxelOccupied(ref n, x, 15, z)) EmitOne(2, baseX + x, baseY, baseZ + z, rTileNY);
+                                if (!NeighborVoxelOccupied(ref n, x, 15, z)) EmitOneInstance(baseX + x, baseY, baseZ + z, rTileNY, 2, offsetList, tileIndexList, faceDirList);
                     }
                 }
             }
@@ -330,7 +288,7 @@ namespace MVGE_GFX.Terrain.Sections
                     for (int x = baseX; x < endX; x++)
                         for (int z = baseZ; z < endZ; z++)
                             if (!(wyTop == maxY - 1 && PlaneBit(data.NeighborPlanePosY, x * maxZ + z)))
-                                EmitOne(3, x, wyTop, z, rTilePY);
+                                EmitOneInstance(x, wyTop, z, rTilePY, 3, offsetList, tileIndexList, faceDirList);
                 }
             }
             else
@@ -347,7 +305,7 @@ namespace MVGE_GFX.Terrain.Sections
                     {
                         for (int x = 0; x < S; x++)
                             for (int z = 0; z < S; z++)
-                                if (!NeighborVoxelOccupied(ref n, x, 0, z)) EmitOne(3, baseX + x, wyTop, baseZ + z, rTilePY);
+                                if (!NeighborVoxelOccupied(ref n, x, 0, z)) EmitOneInstance(baseX + x, wyTop, baseZ + z, rTilePY, 3, offsetList, tileIndexList, faceDirList);
                     }
                 }
             }
@@ -363,7 +321,7 @@ namespace MVGE_GFX.Terrain.Sections
                     for (int x = baseX; x < endX; x++)
                         for (int y = baseY; y < endY; y++)
                             if (!(baseZ == 0 && PlaneBit(data.NeighborPlaneNegZ, x * maxY + y)))
-                                EmitOne(4, x, y, baseZ, rTileNZ);
+                                EmitOneInstance(x, y, baseZ, rTileNZ, 4, offsetList, tileIndexList, faceDirList);
                 }
             }
             else
@@ -379,7 +337,7 @@ namespace MVGE_GFX.Terrain.Sections
                     {
                         for (int x = 0; x < S; x++)
                             for (int y = 0; y < S; y++)
-                                if (!NeighborVoxelOccupied(ref n, x, y, 15)) EmitOne(4, baseX + x, baseY + y, baseZ, rTileNZ);
+                                if (!NeighborVoxelOccupied(ref n, x, y, 15)) EmitOneInstance(baseX + x, baseY + y, baseZ, rTileNZ, 4, offsetList, tileIndexList, faceDirList);
                     }
                 }
             }
@@ -396,7 +354,7 @@ namespace MVGE_GFX.Terrain.Sections
                     for (int x = baseX; x < endX; x++)
                         for (int y = baseY; y < endY; y++)
                             if (!(wzFront == maxZ - 1 && PlaneBit(data.NeighborPlanePosZ, x * maxY + y)))
-                                EmitOne(5, x, y, wzFront, rTilePZ);
+                                EmitOneInstance(x, y, wzFront, rTilePZ, 5, offsetList, tileIndexList, faceDirList);
                 }
             }
             else
@@ -412,7 +370,7 @@ namespace MVGE_GFX.Terrain.Sections
                     {
                         for (int x = 0; x < S; x++)
                             for (int y = 0; y < S; y++)
-                                if (!NeighborVoxelOccupied(ref n, x, y, 0)) EmitOne(5, baseX + x, baseY + y, wzFront, rTilePZ);
+                                if (!NeighborVoxelOccupied(ref n, x, y, 0)) EmitOneInstance(baseX + x, baseY + y, wzFront, rTilePZ, 5, offsetList, tileIndexList, faceDirList);
                     }
                 }
             }

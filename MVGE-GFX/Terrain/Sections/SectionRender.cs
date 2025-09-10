@@ -12,10 +12,13 @@ namespace MVGE_GFX.Terrain.Sections
         private readonly ChunkPrerenderData data;
         private readonly BlockTextureAtlas atlas;
         private const ushort EMPTY = 0;
+        // Cache to avoid repeated atlas UV -> tile lookups in fallback / generic emission paths.
+        private readonly TileIndexCache _fallbackTileCache;
 
         public SectionRender(ChunkPrerenderData data, BlockTextureAtlas atlas)
         {
             this.data = data; this.atlas = atlas;
+            _fallbackTileCache = new TileIndexCache();
         }
 
         // Builds: one instance per emitted face
@@ -142,22 +145,12 @@ namespace MVGE_GFX.Terrain.Sections
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool PlaneBit(ulong[] plane, int index)
-        {
-            if (plane == null) return false; int w = index >> 6; int b = index & 63; if (w >= plane.Length) return false; return (plane[w] & (1UL << b)) != 0UL;
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void EmitFaceInstance(ushort block, byte faceDir, int x, int y, int z,
                                       List<byte> offsetList, List<uint> tileIndexList, List<byte> faceDirList)
         {
-            var uvFace = atlas.GetBlockUVs(block, (Faces)faceDir);
-            byte minTileX = 255, minTileY = 255;
-            for (int i = 0; i < 4; i++) { if (uvFace[i].x < minTileX) minTileX = uvFace[i].x; if (uvFace[i].y < minTileY) minTileY = uvFace[i].y; }
-            uint tileIndex = (uint)(minTileY * atlas.tilesX + minTileX);
-            offsetList.Add((byte)x); offsetList.Add((byte)y); offsetList.Add((byte)z);
-            tileIndexList.Add(tileIndex);
-            faceDirList.Add(faceDir);
+            // Use shared tile index cache + helper to compute atlas tile index once and emit instance.
+            uint tileIndex = _fallbackTileCache.Get(atlas, block, faceDir);
+            EmitOneInstance(x, y, z, tileIndex, faceDir, offsetList, tileIndexList, faceDirList);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
