@@ -228,12 +228,19 @@ namespace MVGE_GEN
 
         private void EnqueueMeshBuild((int cx, int cy, int cz) key, bool markDirty = true)
         {
-            if (!unbuiltChunks.ContainsKey(key) && !activeChunks.ContainsKey(key)) return;
+            // If marking dirty, ensure chunk is marked dirty even if not enqueued for build (will be built next time)
             if (markDirty)
             {
                 // Ensure dirty flag exists (idempotent)
                 dirtyChunks.TryAdd(key, 0);
             }
+
+            // Only enqueue if chunk is present (unbuilt or active)
+            if (!unbuiltChunks.ContainsKey(key) && !activeChunks.ContainsKey(key)) return;
+
+            // Skip if already built and not dirty
+            if (activeChunks.ContainsKey(key) && !dirtyChunks.ContainsKey(key)) return;
+
             if (meshBuildSchedule.TryAdd(key, 0))
             {
                 meshBuildQueue.Add(key);

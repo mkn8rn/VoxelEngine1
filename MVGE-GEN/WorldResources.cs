@@ -463,7 +463,15 @@ namespace MVGE_GEN
 
                         TryMarkBuriedByNeighbors(key, ch);
                         PopulateNeighborFaceFlags(key, ch);
+
+                        if (activeChunks.ContainsKey(key) && !dirtyChunks.ContainsKey(key))
+                        {
+                            // Nothing to do; skip rebuilding
+                            continue;
+                        }
+
                         ch.BuildRender(worldBlockAccessor);
+
                         if (unbuiltChunks.TryRemove(key, out var builtChunk))
                         {
                             activeChunks[key] = builtChunk;

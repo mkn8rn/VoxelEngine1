@@ -64,7 +64,7 @@ namespace MVGE_GFX.Terrain
         // Usually we use column-major: projection*view*model*vec4(pos)
         // That mismatch mirrors geometry turning front faces into back faces,
         // Which is why our indices are flipped from how they normally are (0,1,2,0,2,3 -> 0,2,1,0,3,2)
-        private static readonly ushort[] QuadIndices = new ushort[] { 0, 1, 2, 0, 2, 3 }; // two triangles
+        private static readonly ushort[] QuadIndices = new ushort[] { 0, 2, 1, 0, 3, 2 }; // two triangles
 
         public ChunkRender(ChunkPrerenderData prerenderData)
         {
