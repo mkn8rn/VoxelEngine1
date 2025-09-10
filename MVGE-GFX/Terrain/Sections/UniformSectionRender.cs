@@ -10,23 +10,6 @@ namespace MVGE_GFX.Terrain.Sections
 {
     internal partial class SectionRender
     {
-        // Face metadata for table-driven uniform section emission. Axis: 0=X,1=Y,2=Z. Negative indicates -axis face.
-        private readonly struct FaceMeta
-        {
-            public readonly int FaceDir; public readonly sbyte Dx; public readonly sbyte Dy; public readonly sbyte Dz; public readonly int Axis; public readonly bool Negative;
-            public FaceMeta(int faceDir, sbyte dx, sbyte dy, sbyte dz, int axis, bool negative)
-            { FaceDir = faceDir; Dx = dx; Dy = dy; Dz = dz; Axis = axis; Negative = negative; }
-        }
-        private static readonly FaceMeta[] _uniformFaceMetas = new FaceMeta[]
-        {
-            new FaceMeta(0,-1,0,0,0,true),  // LEFT (-X face)
-            new FaceMeta(1, 1,0,0,0,false), // RIGHT (+X face)
-            new FaceMeta(2,0,-1,0,1,true),  // BOTTOM (-Y face)
-            new FaceMeta(3,0, 1,0,1,false), // TOP (+Y face)
-            new FaceMeta(4,0,0,-1,2,true),  // BACK (-Z face)
-            new FaceMeta(5,0,0, 1,2,false), // FRONT (+Z face)
-        };
-
         // Face classification state (fast-path stratification pre-pass)
         private enum FaceState : byte
         {
@@ -199,7 +182,7 @@ namespace MVGE_GFX.Terrain.Sections
             }
 
             // Classification loop (mirrors original per-face switch but only assigns metadata; emission happens later)
-            foreach (var meta in _uniformFaceMetas)
+            foreach (var meta in _faces)
             {
                 int faceDir = meta.FaceDir;
                 bool atWorldBoundary = false;
@@ -346,7 +329,7 @@ namespace MVGE_GFX.Terrain.Sections
             }
 
             // ---------------- REMAINING FACES (PARTIAL / BOUNDARY / FALLBACK) ----------------
-            foreach (var meta in _uniformFaceMetas)
+            foreach (var meta in _faces)
             {
                 int faceDir = meta.FaceDir;
                 FaceState state = faceStates[faceDir];

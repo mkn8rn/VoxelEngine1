@@ -49,7 +49,7 @@ void main()
     vec3 oriented = FacePosition(iFaceDir, aPosition.xy, iOffset);
     vec3 worldPosition = oriented + chunkPosition;
 
-    gl_Position = vec4(worldPosition, 1.0) * model * view * projection; // keep existing order per pipeline requirement
+    gl_Position = vec4(worldPosition, 1.0) * model * view * projection; // do not change order!
 
     texCoord = (aTexCoord + tileOffset) / vec2(tilesX, tilesY);
 }

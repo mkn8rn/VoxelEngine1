@@ -194,7 +194,37 @@ namespace MVGE_GFX.Terrain.Sections
             allSame = perFace[1] == shared && perFace[2] == shared && perFace[3] == shared && perFace[4] == shared && perFace[5] == shared;
         }
 
-        // single shared tile index for all bits in mask
+        // Helper: build an allowed-bounds mask (bits set only where lx/ly/lz within provided inclusive ranges) then AND with each face mask.
+        // This removes the need for per-bit bounds checks during emission for trimmed masks.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static void ApplyBoundsMask(int lxMin, int lxMax, int lyMin, int lyMax, int lzMin, int lzMax,
+                                             Span<ulong> faceNX, Span<ulong> facePX, Span<ulong> faceNY, Span<ulong> facePY,
+                                             Span<ulong> faceNZ, Span<ulong> facePZ)
+        {
+            // Fast exit when bounds cover whole section.
+            if (lxMin == 0 && lxMax == 15 && lyMin == 0 && lyMax == 15 && lzMin == 0 && lzMax == 15) return;
+            Span<ulong> allowed = stackalloc ulong[64];
+            for (int z = lzMin; z <= lzMax; z++)
+            {
+                for (int x = lxMin; x <= lxMax; x++)
+                {
+                    int baseLi = (z * 16 + x) * 16; // start y=0
+                    for (int y = lyMin; y <= lyMax; y++)
+                    {
+                        int li = baseLi + y;
+                        int w = li >> 6; int b = li & 63;
+                        allowed[w] |= 1UL << b;
+                    }
+                }
+            }
+            for (int i = 0; i < 64; i++)
+            {
+                ulong m = allowed[i];
+                faceNX[i] &= m; facePX[i] &= m; faceNY[i] &= m; facePY[i] &= m; faceNZ[i] &= m; facePZ[i] &= m;
+            }
+        }
+
+        // single shared tile index for all bits in mask (with bounds check retained)
         internal static void EmitFacesFromMask
             (Span<ulong> mask, byte faceDir,
             int baseX, int baseY, int baseZ,
@@ -214,6 +244,30 @@ namespace MVGE_GFX.Terrain.Sections
                     int ly = _lyFromLi[li];
                     int t = li >> 4; int lx = t & 15; int lz = t >> 4;
                     if (lx < lxMin || lx > lxMax || ly < lyMin || ly > lyMax || lz < lzMin || lz > lzMax) continue;
+                    EmitOneInstance(baseX + lx, baseY + ly, baseZ + lz, tileIndex, faceDir, offsetList, tileIndexList, faceDirList);
+                }
+            }
+        }
+
+        // No-bounds variant used after ApplyBoundsMask so per-bit coordinate comparisons are eliminated.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static void EmitFacesFromMaskNoBounds(
+            Span<ulong> mask, byte faceDir,
+            int baseX, int baseY, int baseZ,
+            uint tileIndex,
+            List<byte> offsetList, List<uint> tileIndexList, List<byte> faceDirList)
+        {
+            EnsureLiDecode();
+            for (int wi = 0; wi < 64; wi++)
+            {
+                ulong word = mask[wi];
+                while (word != 0)
+                {
+                    int bit = System.Numerics.BitOperations.TrailingZeroCount(word);
+                    word &= word - 1;
+                    int li = (wi << 6) + bit;
+                    int ly = _lyFromLi[li];
+                    int t = li >> 4; int lx = t & 15; int lz = t >> 4;
                     EmitOneInstance(baseX + lx, baseY + ly, baseZ + lz, tileIndex, faceDir, offsetList, tileIndexList, faceDirList);
                 }
             }
