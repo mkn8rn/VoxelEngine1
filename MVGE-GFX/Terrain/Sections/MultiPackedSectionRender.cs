@@ -12,9 +12,18 @@ namespace MVGE_GFX.Terrain.Sections
 {
     internal partial class SectionRender
     {
-        /// Emits faces for a MultiPacked section (Kind == 5).
-        /// MultiPacked: multi-id palette packed bit representation (BitsPerIndex >= 2 OR palette.Count > 2).
-        /// Strategy mirrors single-id packed fast path but adds per-voxel block decode and tile index caching.
+        /// Emits face instances for a MultiPacked section (Kind==5) where multiple block ids share packed bit storage.
+        /// Preconditions:
+        ///   - desc.OccupancyBits, desc.PackedBitData, desc.Palette present
+        ///   - Palette/BitsPerIndex imply more than one distinct non‑air id (otherwise single packed path applies)
+        /// Steps:
+        ///  1. Resolve local bounds (ResolveLocalBounds) to confine iteration.
+        ///  2. Build internal face masks (BuildInternalFaceMasks) ignoring boundary layers.
+        ///  3. Add visible boundary faces (AddVisibleBoundaryFaces) using neighbor face bitsets + world boundary planes.
+        ///  4. For each mask/direction, decode per‑voxel block id on demand (DecodePacked) only for set bits inside bounds.
+        ///  5. Use a TileIndexCache to map (block, faceDir) -> atlas tile index, avoiding repeated UV queries.
+        ///  6. Emit all faces with EmitFacesFromMask supplying a per‑voxel lambda returning (block, tileIndex).
+        /// Returns true if multi‑packed emission completed; false if preconditions not met so caller can choose another path.
         private bool EmitMultiPackedSectionInstances(
             ref SectionPrerenderDesc desc,
             int sx, int sy, int sz, int S,

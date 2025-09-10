@@ -9,8 +9,19 @@ namespace MVGE_GFX.Terrain.Sections
 {
     internal partial class SectionRender
     {
-        /// Emits faces for a Packed section (Kind == 4).
-        /// Packed: single-id palette packed bit representation
+        /// Emits face instances for a Packed single‑id section (Kind==4) using occupancy + precomputed boundary data.
+        /// Preconditions:
+        ///   - desc.OccupancyBits != null
+        ///   - desc.BitsPerIndex == 1 and palette[1] is the single non‑air block
+        /// Steps:
+        ///  1. Resolve tight local voxel bounds (ResolveLocalBounds) to minimize work when section has partial fill metadata.
+        ///  2. Build internal face masks (BuildInternalFaceMasks) to mark faces between occupied and non‑occupied voxels,
+        ///     excluding outer boundary layers (those are added conditionally later).
+        ///  3. Reintroduce only visible boundary faces (AddVisibleBoundaryFaces) by testing neighbor sections and world
+        ///     boundary plane bitsets (suppresses faces hidden by adjacent solid content).
+        ///  4. Precompute per‑face tile indices (PrecomputePerFaceTiles); if all six faces share a tile, use a fast single‑tile path.
+        ///  5. Emit instances per direction (EmitFacesFromMask) with either a single shared tile index or per‑face tile indices.
+        /// Returns true if the packed fast path handled emission; false signals caller to attempt another path.
         private bool EmitSinglePackedSectionInstances(
             ref SectionPrerenderDesc desc,
             int sx, int sy, int sz, int S,

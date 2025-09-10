@@ -6,7 +6,19 @@ namespace MVGE_GFX.Terrain.Sections
 {
     internal partial class SectionRender
     {
-        // Instanced emission for sparse sections (Kind=2). Returns true when handled.
+        /// Emits face instances for a Sparse section (Kind==2) using an explicit list of occupied voxel indices.
+        /// Preconditions:
+        ///   - desc.SparseIndices and desc.SparseBlocks contain matching non‑empty entries
+        /// Steps:
+        ///  1. Build a local dictionary (li -> block) for O(1) sparse neighbor existence checks within the section.
+        ///  2. For each sparse voxel:
+        ///       a. Decode linear index to (lx,ly,lz) (DecodeIndex) and compute world (wx,wy,wz).
+        ///       b. For each of the 6 directions, test exposure:
+        ///          - Boundary to world: consult corresponding world neighbor plane (PlaneBit) to suppress hidden faces.
+        ///          - Interior neighbor: check local sparse map (Local) else fall back to GetBlock for cross‑section neighbor.
+        ///       c. When neighbor is air / absent, emit that face using cached tile index (TileIndexCache + EmitOneInstance).
+        ///  3. Repeat until all sparse voxels processed.
+        /// Returns true (always handled) unless sparse arrays are null/empty (early no‑op true).
         private bool EmitSparseSectionInstances(ref SectionPrerenderDesc desc, int sx, int sy, int sz, int S,
             List<byte> offsetList, List<uint> tileIndexList, List<byte> faceDirList)
         {

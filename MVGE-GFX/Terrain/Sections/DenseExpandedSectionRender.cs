@@ -10,7 +10,7 @@ namespace MVGE_GFX.Terrain.Sections
     internal partial class SectionRender
     {
         /// Emits face instances for a DenseExpanded (Kind==3) section using pre-computed
-        /// occupancy + boundary plane masks (now generated during section finalization).
+        /// occupancy + boundary plane masks.
         /// Steps:
         ///  1. Produce internal face bitsets by shifting occupancy and removing occluded pairs
         ///     (skipping boundary voxels so boundary handling is centralized) now via BuildInternalFaceMasks.

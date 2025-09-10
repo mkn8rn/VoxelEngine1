@@ -7,8 +7,17 @@ namespace MVGE_GFX.Terrain.Sections
 {
     internal partial class SectionRender
     {
-        // Instanced emission for uniform sections. Emits only boundary faces.
-        // Returns true if handled (always true for uniform non-air).
+        /// Emits boundary face instances for a Uniform section (Kind==1) containing a single non‑air block id.
+        /// Only faces on the outer surface of the section that are exposed to air or world boundary are emitted.
+        /// Steps:
+        ///  1. Compute per‑face tile indices (PrecomputePerFaceTiles); enable single‑tile fast path if all equal.
+        ///  2. For each of the 6 faces:
+        ///       a. If chunk face lies on world border, consult the corresponding world neighbor plane bitset to skip fully occluded spans.
+        ///       b. Otherwise fetch neighbor section descriptor; if neighbor is empty or air‑uniform, emit whole plane quickly.
+        ///       c. If neighbor potentially partial, attempt mask‑based visibility using neighbor face bitsets; fall back to per‑voxel
+        ///          occupancy tests (NeighborVoxelSolid) when bitsets absent.
+        ///  3. Emit every visible boundary voxel using EmitOneInstance (plane loops or mask-driven sparse loops).
+        /// Returns true (uniform path always handled; empty uniform returns true with no output).
         private bool EmitUniformSectionInstances(ref SectionPrerenderDesc desc, int sx, int sy, int sz, int S,
             List<byte> offsetList, List<uint> tileIndexList, List<byte> faceDirList)
         {
