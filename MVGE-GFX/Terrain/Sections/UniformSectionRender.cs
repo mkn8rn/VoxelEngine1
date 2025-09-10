@@ -8,13 +8,30 @@ namespace MVGE_GFX.Terrain.Sections
 {
     internal partial class SectionRender
     {
+        // Face metadata for table-driven uniform section emission. Axis: 0=X,1=Y,2=Z. Negative indicates -axis face.
+        private readonly struct FaceMeta
+        {
+            public readonly int FaceDir; public readonly sbyte Dx; public readonly sbyte Dy; public readonly sbyte Dz; public readonly int Axis; public readonly bool Negative;
+            public FaceMeta(int faceDir, sbyte dx, sbyte dy, sbyte dz, int axis, bool negative)
+            { FaceDir = faceDir; Dx = dx; Dy = dy; Dz = dz; Axis = axis; Negative = negative; }
+        }
+        private static readonly FaceMeta[] _uniformFaceMetas = new FaceMeta[]
+        {
+            new FaceMeta(0,-1,0,0,0,true),  // LEFT (-X face)
+            new FaceMeta(1, 1,0,0,0,false), // RIGHT (+X face)
+            new FaceMeta(2,0,-1,0,1,true),  // BOTTOM (-Y face)
+            new FaceMeta(3,0, 1,0,1,false), // TOP (+Y face)
+            new FaceMeta(4,0,0,-1,2,true),  // BACK (-Z face)
+            new FaceMeta(5,0,0, 1,2,false), // FRONT (+Z face)
+        };
+
         /// Emits boundary face instances for a Uniform section (Kind==1) containing a single non‑air block id.
         /// Only faces on the outer surface of the section that are exposed to air or world boundary are emitted.
         /// Steps:
         ///  1. Compute per‑face tile indices (PrecomputePerFaceTiles) OR fetch cached set; enable single‑tile fast path if all equal.
         ///  2. Early interior occlusion fast path: if all six neighbors exist and are fully solid, skip immediately.
         ///  3. Reserve list capacities for worst-case emission (6 * 256 faces) to avoid repeated reallocations.
-        ///  4. For each face apply visibility logic:
+        ///  4. Table-driven per-face loop (FaceMeta array) applies visibility logic for all six faces uniformly:
         ///       a. World border: consult plane bitset; emit only visible cells.
         ///       b. Neighbor missing/air: emit whole plane using bulk plane writer (single call, minimized per-voxel overhead).
         ///       c. Neighbor fully solid: skip.
@@ -42,6 +59,7 @@ namespace MVGE_GFX.Terrain.Sections
             uint rTilePY = sameTileAllFaces ? tileSet.SingleTile : tileSet.TilePY;
             uint rTileNZ = sameTileAllFaces ? tileSet.SingleTile : tileSet.TileNZ;
             uint rTilePZ = sameTileAllFaces ? tileSet.SingleTile : tileSet.TilePZ;
+            uint[] faceTiles = { rTileNX, rTilePX, rTileNY, rTilePY, rTileNZ, rTilePZ };
 
             // Early interior full-occlusion skip: check if section is interior (all neighbors exist) and every neighbor is fully solid.
             if (sx > 0 && sx < data.sectionsX - 1 && sy > 0 && sy < data.sectionsY - 1 && sz > 0 && sz < data.sectionsZ - 1)
@@ -119,7 +137,6 @@ namespace MVGE_GFX.Terrain.Sections
                 => NeighborVoxelSolid(ref n, lx, ly, lz);
 
             // Bitset-driven emission helpers for partial neighbor occlusion (mask present). Visible bits are mask==0.
-            // Updated to use EmitOneInstance instead of local EmitOne.
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             void EmitVisibleByMask_XFace(int faceDir, ulong[] neighborMask, uint tileIndex, int xFixed)
             {
@@ -195,217 +212,174 @@ namespace MVGE_GFX.Terrain.Sections
                 return true;
             }
 
-            // LEFT
-            if (sx == 0)
+            // World plane arrays (same order for convenience)
+            var planeNegX = data.NeighborPlaneNegX; var planePosX = data.NeighborPlanePosX;
+            var planeNegY = data.NeighborPlaneNegY; var planePosY = data.NeighborPlanePosY;
+            var planeNegZ = data.NeighborPlaneNegZ; var planePosZ = data.NeighborPlanePosZ;
+
+            // Iterate table
+            foreach (var meta in _uniformFaceMetas)
             {
-                if (baseX == 0 && IsWorldPlaneFullySet(data.NeighborPlaneNegX, baseZ, baseY, endZ - baseZ, endY - baseY, maxY))
+                int faceDir = meta.FaceDir;
+                uint tile = faceTiles[faceDir];
+
+                // ---------------- WORLD BOUNDARY CHECK & EMISSION ----------------
+                bool atWorldBoundary = false;
+                ulong[] worldPlane = null;
+                int startA = 0, startB = 0, countA = 0, countB = 0, strideB = 0;
+                int fixedCoord = 0; // world coordinate fixed along axis
+
+                // Provide per-face comments retained from earlier code blocks
+                switch (faceDir)
                 {
-                    // fully hidden
-                }
-                else
-                {
-                    for (int z = baseZ; z < endZ; z++)
-                        for (int y = baseY; y < endY; y++)
-                            if (!(baseX == 0 && PlaneBit(data.NeighborPlaneNegX, z * maxY + y)))
-                                EmitOneInstance(baseX, y, z, rTileNX, 0, offsetList, tileIndexList, faceDirList);
-                }
-            }
-            else
-            {
-                ref var n = ref Neighbor(sx - 1, sy, sz);
-                if (n.Kind == 0 || (n.Kind == 1 && n.UniformBlockId == 0))
-                {
-                    EmitFullPlaneSingleTile(0, rTileNX, baseX);
-                }
-                else
-                {
-                    bool fullOcclude = NeighborFullySolid(ref n);
-                    if (!fullOcclude)
-                    {
-                        if (n.FacePosXBits != null)
+                    case 0: // LEFT (-X)
+                        if (sx == 0)
                         {
-                            EmitVisibleByMask_XFace(0, n.FacePosXBits, rTileNX, baseX);
+                            atWorldBoundary = true; worldPlane = planeNegX; fixedCoord = baseX;
+                            startA = baseZ; countA = endZ - baseZ; startB = baseY; countB = endY - baseY; strideB = maxY;
                         }
-                        else
+                        else fixedCoord = baseX;
+                        break;
+                    case 1: // RIGHT (+X)
+                        if (sx == data.sectionsX - 1)
                         {
-                            for (int z = 0; z < S; z++)
-                                for (int y = 0; y < S; y++)
-                                    if (!NeighborVoxelOccupied(ref n, 15, y, z)) EmitOneInstance(baseX, baseY + y, baseZ + z, rTileNX, 0, offsetList, tileIndexList, faceDirList);
+                            atWorldBoundary = true; worldPlane = planePosX; fixedCoord = baseX + S - 1;
+                            startA = baseZ; countA = endZ - baseZ; startB = baseY; countB = endY - baseY; strideB = maxY;
                         }
-                    }
-                }
-            }
-            // RIGHT
-            int wxRight = baseX + S - 1;
-            if (sx == data.sectionsX - 1)
-            {
-                if (wxRight == maxX - 1 && IsWorldPlaneFullySet(data.NeighborPlanePosX, baseZ, baseY, endZ - baseZ, endY - baseY, maxY))
-                {
-                    // fully hidden
-                }
-                else
-                {
-                    for (int z = baseZ; z < endZ; z++)
-                        for (int y = baseY; y < endY; y++)
-                            if (!(wxRight == maxX - 1 && PlaneBit(data.NeighborPlanePosX, z * maxY + y)))
-                                EmitOneInstance(wxRight, y, z, rTilePX, 1, offsetList, tileIndexList, faceDirList);
-                }
-            }
-            else
-            {
-                ref var n = ref Neighbor(sx + 1, sy, sz);
-                if (n.Kind == 0 || (n.Kind == 1 && n.UniformBlockId == 0))
-                {
-                    EmitFullPlaneSingleTile(1, rTilePX, wxRight);
-                }
-                else
-                {
-                    bool fullOcclude = NeighborFullySolid(ref n);
-                    if (!fullOcclude)
-                    {
-                        if (n.FaceNegXBits != null)
+                        else fixedCoord = baseX + S - 1;
+                        break;
+                    case 2: // BOTTOM (-Y)
+                        if (sy == 0)
                         {
-                            EmitVisibleByMask_XFace(1, n.FaceNegXBits, rTilePX, wxRight);
+                            atWorldBoundary = true; worldPlane = planeNegY; fixedCoord = baseY;
+                            startA = baseX; countA = endX - baseX; startB = baseZ; countB = endZ - baseZ; strideB = maxZ;
                         }
-                        else
+                        else fixedCoord = baseY;
+                        break;
+                    case 3: // TOP (+Y)
+                        if (sy == data.sectionsY - 1)
                         {
-                            for (int z = 0; z < S; z++)
-                                for (int y = 0; y < S; y++)
-                                    if (!NeighborVoxelOccupied(ref n, 0, y, z)) EmitOneInstance(wxRight, baseY + y, baseZ + z, rTilePX, 1, offsetList, tileIndexList, faceDirList);
+                            atWorldBoundary = true; worldPlane = planePosY; fixedCoord = baseY + S - 1;
+                            startA = baseX; countA = endX - baseX; startB = baseZ; countB = endZ - baseZ; strideB = maxZ;
+                        }
+                        else fixedCoord = baseY + S - 1;
+                        break;
+                    case 4: // BACK (-Z)
+                        if (sz == 0)
+                        {
+                            atWorldBoundary = true; worldPlane = planeNegZ; fixedCoord = baseZ;
+                            startA = baseX; countA = endX - baseX; startB = baseY; countB = endY - baseY; strideB = maxY;
+                        }
+                        else fixedCoord = baseZ;
+                        break;
+                    case 5: // FRONT (+Z)
+                        if (sz == data.sectionsZ - 1)
+                        {
+                            atWorldBoundary = true; worldPlane = planePosZ; fixedCoord = baseZ + S - 1;
+                            startA = baseX; countA = endX - baseX; startB = baseY; countB = endY - baseY; strideB = maxY;
+                        }
+                        else fixedCoord = baseZ + S - 1;
+                        break;
+                }
+
+                if (atWorldBoundary)
+                {
+                    if (!IsWorldPlaneFullySet(worldPlane, startA, startB, countA, countB, strideB))
+                    {
+                        // Per-axis emission with plane bit test
+                        if (meta.Axis == 0) // X fixed, iterate z,y
+                        {
+                            for (int z = baseZ; z < endZ; z++)
+                                for (int y = baseY; y < endY; y++)
+                                {
+                                    int idxPlane = (z * maxY) + y;
+                                    if (worldPlane != null && PlaneBit(worldPlane, idxPlane)) continue;
+                                    EmitOneInstance(fixedCoord, y, z, tile, (byte)faceDir, offsetList, tileIndexList, faceDirList);
+                                }
+                        }
+                        else if (meta.Axis == 1) // Y fixed, iterate x,z
+                        {
+                            for (int xw = baseX; xw < endX; xw++)
+                                for (int z = baseZ; z < endZ; z++)
+                                {
+                                    int idxPlane = (xw * maxZ) + z;
+                                    if (worldPlane != null && PlaneBit(worldPlane, idxPlane)) continue;
+                                    EmitOneInstance(xw, fixedCoord, z, tile, (byte)faceDir, offsetList, tileIndexList, faceDirList);
+                                }
+                        }
+                        else // Z fixed, iterate x,y
+                        {
+                            for (int xw = baseX; xw < endX; xw++)
+                                for (int y = baseY; y < endY; y++)
+                                {
+                                    int idxPlane = (xw * maxY) + y;
+                                    if (worldPlane != null && PlaneBit(worldPlane, idxPlane)) continue;
+                                    EmitOneInstance(xw, y, fixedCoord, tile, (byte)faceDir, offsetList, tileIndexList, faceDirList);
+                                }
                         }
                     }
+                    continue; // world boundary faces handled; proceed to next face
                 }
-            }
-            // BOTTOM
-            if (sy == 0)
-            {
-                if (baseY == 0 && IsWorldPlaneFullySet(data.NeighborPlaneNegY, baseX, baseZ, endX - baseX, endZ - baseZ, maxZ))
+
+                // ---------------- NEIGHBOR HANDLING ----------------
+                int nsx = sx + meta.Dx; int nsy = sy + meta.Dy; int nsz = sz + meta.Dz;
+                ref var nDesc = ref Neighbor(nsx, nsy, nsz);
+
+                // Neighbor empty or air-uniform -> emit whole plane
+                if (nDesc.Kind == 0 || (nDesc.Kind == 1 && nDesc.UniformBlockId == 0))
                 {
-                    // fully hidden
+                    EmitFullPlaneSingleTile(faceDir, tile, fixedCoord);
+                    continue;
                 }
-                else
+
+                // Neighbor fully solid -> skip
+                if (NeighborFullySolid(ref nDesc)) continue;
+
+                // Neighbor partial: attempt mask-driven visibility
+                ulong[] neighborMask = faceDir switch
                 {
-                    for (int x = baseX; x < endX; x++)
-                        for (int z = baseZ; z < endZ; z++)
-                            if (!(baseY == 0 && PlaneBit(data.NeighborPlaneNegY, x * maxZ + z)))
-                                EmitOneInstance(x, baseY, z, rTileNY, 2, offsetList, tileIndexList, faceDirList);
+                    0 => nDesc.FacePosXBits,
+                    1 => nDesc.FaceNegXBits,
+                    2 => nDesc.FacePosYBits,
+                    3 => nDesc.FaceNegYBits,
+                    4 => nDesc.FacePosZBits,
+                    5 => nDesc.FaceNegZBits,
+                    _ => null
+                };
+
+                if (neighborMask != null)
+                {
+                    if (meta.Axis == 0) EmitVisibleByMask_XFace(faceDir, neighborMask, tile, fixedCoord);
+                    else if (meta.Axis == 1) EmitVisibleByMask_YFace(faceDir, neighborMask, tile, fixedCoord);
+                    else EmitVisibleByMask_ZFace(faceDir, neighborMask, tile, fixedCoord);
+                    continue;
                 }
-            }
-            else
-            {
-                ref var n = ref Neighbor(sx, sy - 1, sz);
-                bool fullOcclude = NeighborFullySolid(ref n);
-                if (!fullOcclude)
+
+                // Fallback per-voxel neighbor occupancy test (no mask available)
+                if (meta.Axis == 0) // X fixed
                 {
-                    if (n.FacePosYBits != null)
-                    {
-                        EmitVisibleByMask_YFace(2, n.FacePosYBits, rTileNY, baseY);
-                    }
-                    else
-                    {
-                        for (int x = 0; x < S; x++)
-                            for (int z = 0; z < S; z++)
-                                if (!NeighborVoxelOccupied(ref n, x, 15, z)) EmitOneInstance(baseX + x, baseY, baseZ + z, rTileNY, 2, offsetList, tileIndexList, faceDirList);
-                    }
+                    int lxNeighbor = meta.Negative ? 15 : 0; // sample neighbor boundary layer
+                    for (int z = 0; z < S; z++)
+                        for (int y = 0; y < S; y++)
+                            if (!NeighborVoxelOccupied(ref nDesc, lxNeighbor, y, z))
+                                EmitOneInstance(fixedCoord, baseY + y, baseZ + z, tile, (byte)faceDir, offsetList, tileIndexList, faceDirList);
                 }
-            }
-            // TOP
-            int wyTop = baseY + S - 1;
-            if (sy == data.sectionsY - 1)
-            {
-                if (wyTop == maxY - 1 && IsWorldPlaneFullySet(data.NeighborPlanePosY, baseX, baseZ, endX - baseX, endZ - baseZ, maxZ))
+                else if (meta.Axis == 1) // Y fixed
                 {
-                    // fully hidden
+                    int lyNeighbor = meta.Negative ? 15 : 0;
+                    for (int xLocal = 0; xLocal < S; xLocal++)
+                        for (int z = 0; z < S; z++)
+                            if (!NeighborVoxelOccupied(ref nDesc, xLocal, lyNeighbor, z))
+                                EmitOneInstance(baseX + xLocal, fixedCoord, baseZ + z, tile, (byte)faceDir, offsetList, tileIndexList, faceDirList);
                 }
-                else
+                else // Z fixed
                 {
-                    for (int x = baseX; x < endX; x++)
-                        for (int z = baseZ; z < endZ; z++)
-                            if (!(wyTop == maxY - 1 && PlaneBit(data.NeighborPlanePosY, x * maxZ + z)))
-                                EmitOneInstance(x, wyTop, z, rTilePY, 3, offsetList, tileIndexList, faceDirList);
-                }
-            }
-            else
-            {
-                ref var n = ref Neighbor(sx, sy + 1, sz);
-                bool fullOcclude = NeighborFullySolid(ref n);
-                if (!fullOcclude)
-                {
-                    if (n.FaceNegYBits != null)
-                    {
-                        EmitVisibleByMask_YFace(3, n.FaceNegYBits, rTilePY, wyTop);
-                    }
-                    else
-                    {
-                        for (int x = 0; x < S; x++)
-                            for (int z = 0; z < S; z++)
-                                if (!NeighborVoxelOccupied(ref n, x, 0, z)) EmitOneInstance(baseX + x, wyTop, baseZ + z, rTilePY, 3, offsetList, tileIndexList, faceDirList);
-                    }
-                }
-            }
-            // BACK
-            if (sz == 0)
-            {
-                if (baseZ == 0 && IsWorldPlaneFullySet(data.NeighborPlaneNegZ, baseX, baseY, endX - baseX, endY - baseY, maxY))
-                {
-                    // fully hidden
-                }
-                else
-                {
-                    for (int x = baseX; x < endX; x++)
-                        for (int y = baseY; y < endY; y++)
-                            if (!(baseZ == 0 && PlaneBit(data.NeighborPlaneNegZ, x * maxY + y)))
-                                EmitOneInstance(x, y, baseZ, rTileNZ, 4, offsetList, tileIndexList, faceDirList);
-                }
-            }
-            else
-            {
-                ref var n = ref Neighbor(sx, sy, sz - 1); bool fullOcclude = NeighborFullySolid(ref n);
-                if (!fullOcclude)
-                {
-                    if (n.FacePosZBits != null)
-                    {
-                        EmitVisibleByMask_ZFace(4, n.FacePosZBits, rTileNZ, baseZ);
-                    }
-                    else
-                    {
-                        for (int x = 0; x < S; x++)
-                            for (int y = 0; y < S; y++)
-                                if (!NeighborVoxelOccupied(ref n, x, y, 15)) EmitOneInstance(baseX + x, baseY + y, baseZ, rTileNZ, 4, offsetList, tileIndexList, faceDirList);
-                    }
-                }
-            }
-            // FRONT
-            int wzFront = baseZ + S - 1;
-            if (sz == data.sectionsZ - 1)
-            {
-                if (wzFront == maxZ - 1 && IsWorldPlaneFullySet(data.NeighborPlanePosZ, baseX, baseY, endX - baseX, endY - baseY, maxY))
-                {
-                    // fully hidden
-                }
-                else
-                {
-                    for (int x = baseX; x < endX; x++)
-                        for (int y = baseY; y < endY; y++)
-                            if (!(wzFront == maxZ - 1 && PlaneBit(data.NeighborPlanePosZ, x * maxY + y)))
-                                EmitOneInstance(x, y, wzFront, rTilePZ, 5, offsetList, tileIndexList, faceDirList);
-                }
-            }
-            else
-            {
-                ref var n = ref Neighbor(sx, sy, sz + 1); bool fullOcclude = NeighborFullySolid(ref n);
-                if (!fullOcclude)
-                {
-                    if (n.FaceNegZBits != null)
-                    {
-                        EmitVisibleByMask_ZFace(5, n.FaceNegZBits, rTilePZ, wzFront);
-                    }
-                    else
-                    {
-                        for (int x = 0; x < S; x++)
-                            for (int y = 0; y < S; y++)
-                                if (!NeighborVoxelOccupied(ref n, x, y, 0)) EmitOneInstance(baseX + x, baseY + y, wzFront, rTilePZ, 5, offsetList, tileIndexList, faceDirList);
-                    }
+                    int lzNeighbor = meta.Negative ? 15 : 0;
+                    for (int xLocal = 0; xLocal < S; xLocal++)
+                        for (int yLocal = 0; yLocal < S; yLocal++)
+                            if (!NeighborVoxelOccupied(ref nDesc, xLocal, yLocal, lzNeighbor))
+                                EmitOneInstance(baseX + xLocal, baseY + yLocal, fixedCoord, tile, (byte)faceDir, offsetList, tileIndexList, faceDirList);
+                    return true;
                 }
             }
             return true;
