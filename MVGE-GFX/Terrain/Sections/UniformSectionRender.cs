@@ -2,7 +2,9 @@
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using MVGE_GFX.Models;
-using System.Runtime.InteropServices; // for CollectionsMarshal if needed
+using System.Runtime.InteropServices;
+using System;
+using System.Numerics;
 
 namespace MVGE_GFX.Terrain.Sections
 {
@@ -25,19 +27,25 @@ namespace MVGE_GFX.Terrain.Sections
             new FaceMeta(5,0,0, 1,2,false), // FRONT (+Z face)
         };
 
+        // Face classification state (fast-path stratification pre-pass)
+        private enum FaceState : byte
+        {
+            WorldBoundary = 0,    // World boundary (needs world plane mask evaluation)
+            NeighborMissing = 1,  // Neighbor empty / air -> full plane emission
+            NeighborFullSolid = 2,// Neighbor fully solid -> skip
+            NeighborMask = 3,     // Neighbor has per-face mask -> partial emission via mask inversion
+            NeighborFallback = 4  // Neighbor requires per-voxel occupancy fallback test
+        }
+
         /// Emits boundary face instances for a Uniform section (Kind==1) containing a single non‑air block id.
         /// Only faces on the outer surface of the section that are exposed to air or world boundary are emitted.
         /// Steps:
         ///  1. Compute per‑face tile indices (PrecomputePerFaceTiles) OR fetch cached set; enable single‑tile fast path if all equal.
         ///  2. Early interior occlusion fast path: if all six neighbors exist and are fully solid, skip immediately.
-        ///  3. Reserve list capacities for worst-case emission (6 * 256 faces) to avoid repeated reallocations.
-        ///  4. Table-driven per-face loop (FaceMeta array) applies visibility logic for all six faces uniformly:
-        ///       a. World border: consult plane bitset; emit only visible cells.
-        ///       b. Neighbor missing/air: emit whole plane using bulk plane writer (single call, minimized per-voxel overhead).
-        ///       c. Neighbor fully solid: skip.
-        ///       d. Neighbor partial with face mask: enumerate visible bits (inverted mask) and emit per visible cell.
-        ///       e. Fallback neighbor voxel queries when mask absent.
-        /// Returns true (uniform path always handled; empty uniform returns true with no output).
+        ///  3. Fast-path stratification pre-pass: classify each of the six faces into FaceState (WorldBoundary, NeighborMissing, NeighborFullSolid, NeighborMask, NeighborFallback) and compute predicted visible face count (capacity reservation uses this tighter bound instead of worst-case 6*256).
+        ///  4. Emit all guaranteed full-plane faces first (NeighborMissing) in a tight loop (reduces branching inside the main per-face loop). These are never world boundary faces with potential plane holes.
+        ///  5. Process remaining faces (WorldBoundary, NeighborMask, NeighborFallback) applying original logic (boundary plane filtering, mask-driven emission, fallback voxel checks). NeighborFullSolid faces are skipped.
+        ///  6. Return true (uniform path always handled; empty uniform returns true with no output). Existing comments retained and updated to describe functionality.
         private bool EmitUniformSectionInstances(ref SectionPrerenderDesc desc, int sx, int sy, int sz, int S,
             List<byte> offsetList, List<uint> tileIndexList, List<byte> faceDirList)
         {
@@ -79,12 +87,6 @@ namespace MVGE_GFX.Terrain.Sections
                     return true; // fully occluded interior uniform section
                 }
             }
-
-            // Reserve worst-case capacity (6 planes * 256 faces) to reduce reallocations when many faces visible.
-            const int MAX_FACES_PER_SECTION = 6 * 256;
-            offsetList.EnsureCapacity(offsetList.Count + MAX_FACES_PER_SECTION * 3);
-            tileIndexList.EnsureCapacity(tileIndexList.Count + MAX_FACES_PER_SECTION);
-            faceDirList.EnsureCapacity(faceDirList.Count + MAX_FACES_PER_SECTION);
 
             // Bulk plane emission helper (single-tile only) for full-plane visibility (avoids per-voxel function call overhead).
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -147,7 +149,7 @@ namespace MVGE_GFX.Terrain.Sections
                     ulong visible = ~neighborMask[wi];
                     while (visible != 0)
                     {
-                        int bit = System.Numerics.BitOperations.TrailingZeroCount(visible);
+                        int bit = BitOperations.TrailingZeroCount(visible);
                         visible &= visible - 1;
                         int idx = (wi << 6) + bit; if (idx >= 256) continue; // guard if longer
                         int z = idx >> 4; int y = idx & 15;
@@ -165,7 +167,7 @@ namespace MVGE_GFX.Terrain.Sections
                     ulong visible = ~neighborMask[wi];
                     while (visible != 0)
                     {
-                        int bit = System.Numerics.BitOperations.TrailingZeroCount(visible);
+                        int bit = BitOperations.TrailingZeroCount(visible);
                         visible &= visible - 1;
                         int idx = (wi << 6) + bit; if (idx >= 256) continue;
                         int x = idx >> 4; int z = idx & 15;
@@ -183,7 +185,7 @@ namespace MVGE_GFX.Terrain.Sections
                     ulong visible = ~neighborMask[wi];
                     while (visible != 0)
                     {
-                        int bit = System.Numerics.BitOperations.TrailingZeroCount(visible);
+                        int bit = BitOperations.TrailingZeroCount(visible);
                         visible &= visible - 1;
                         int idx = (wi << 6) + bit; if (idx >= 256) continue;
                         int x = idx >> 4; int y = idx & 15;
@@ -212,24 +214,69 @@ namespace MVGE_GFX.Terrain.Sections
                 return true;
             }
 
+            // Count visible cells for world boundary face (used for capacity prediction)
+            int CountVisibleWorldBoundary(ulong[] plane, int startA, int startB, int countA, int countB, int strideB)
+            {
+                int total = countA * countB;
+                if (total <= 0) return 0;
+                if (plane == null) return total; // no occlusion plane -> all visible
+                int visible = 0;
+                for (int a = 0; a < countA; a++)
+                {
+                    int baseIndex = (startA + a) * strideB + startB;
+                    int idx = baseIndex;
+                    for (int b = 0; b < countB; b++, idx++)
+                    {
+                        int w = idx >> 6; int bit = idx & 63; if (w >= plane.Length) { visible++; continue; }
+                        if ((plane[w] & (1UL << bit)) == 0UL) visible++; // hole -> visible
+                    }
+                }
+                return visible;
+            }
+
+            // Neighbor mask popcount (occluded cells) for predicted capacity. Guard length to plane size (<=256 bits)
+            int MaskOcclusionCount(ulong[] mask)
+            {
+                if (mask == null) return 0;
+                int occluded = 0; int neededWords = 4; // 256 bits -> 4 * 64
+                for (int i = 0; i < mask.Length && i < neededWords; i++) occluded += BitOperations.PopCount(mask[i]);
+                return occluded;
+            }
+
             // World plane arrays (same order for convenience)
             var planeNegX = data.NeighborPlaneNegX; var planePosX = data.NeighborPlanePosX;
             var planeNegY = data.NeighborPlaneNegY; var planePosY = data.NeighborPlanePosY;
             var planeNegZ = data.NeighborPlaneNegZ; var planePosZ = data.NeighborPlanePosZ;
 
-            // Iterate table
+            // ---------------- FAST-PATH STRATIFICATION PRE-PASS ----------------
+            Span<FaceState> faceStates = stackalloc FaceState[6];
+            int[] fixedCoords = new int[6];
+            ulong[][] worldPlanes = new ulong[6][]; // only valid for WorldBoundary states
+            // World boundary indexing parameters per face
+            int[] wb_startA = new int[6]; int[] wb_startB = new int[6]; int[] wb_countA = new int[6]; int[] wb_countB = new int[6]; int[] wb_strideB = new int[6];
+            // Cache neighbor masks (for NeighborMask state) to avoid recomputing switch later
+            ulong[][] neighborMasks = new ulong[6][];
+
+            // Helper local for face plane cell counts
+            int PlaneCellCount(int faceDir)
+            {
+                // Axis 0 faces vary Y,Z; axis 1 faces vary X,Z; axis 2 faces vary X,Y
+                return faceDir switch
+                {
+                    0 or 1 => (endY - baseY) * (endZ - baseZ),
+                    2 or 3 => (endX - baseX) * (endZ - baseZ),
+                    _ => (endX - baseX) * (endY - baseY)
+                };
+            }
+
+            // Classification loop (mirrors original per-face switch but only assigns metadata; emission happens later)
             foreach (var meta in _uniformFaceMetas)
             {
                 int faceDir = meta.FaceDir;
-                uint tile = faceTiles[faceDir];
-
-                // ---------------- WORLD BOUNDARY CHECK & EMISSION ----------------
                 bool atWorldBoundary = false;
                 ulong[] worldPlane = null;
                 int startA = 0, startB = 0, countA = 0, countB = 0, strideB = 0;
-                int fixedCoord = 0; // world coordinate fixed along axis
-
-                // Provide per-face comments retained from earlier code blocks
+                int fixedCoord = 0;
                 switch (faceDir)
                 {
                     case 0: // LEFT (-X)
@@ -282,11 +329,116 @@ namespace MVGE_GFX.Terrain.Sections
                         break;
                 }
 
+                fixedCoords[faceDir] = fixedCoord;
                 if (atWorldBoundary)
                 {
+                    faceStates[faceDir] = FaceState.WorldBoundary;
+                    worldPlanes[faceDir] = worldPlane;
+                    wb_startA[faceDir] = startA; wb_startB[faceDir] = startB;
+                    wb_countA[faceDir] = countA; wb_countB[faceDir] = countB; wb_strideB[faceDir] = strideB;
+                    continue;
+                }
+
+                // Neighbor classification (non-boundary only)
+                int nsx = sx + meta.Dx; int nsy = sy + meta.Dy; int nsz = sz + meta.Dz;
+                ref var nDesc = ref Neighbor(nsx, nsy, nsz);
+
+                if (nDesc.Kind == 0 || (nDesc.Kind == 1 && nDesc.UniformBlockId == 0))
+                {
+                    faceStates[faceDir] = FaceState.NeighborMissing; // full plane emission
+                    continue;
+                }
+                if (NeighborFullySolid(ref nDesc))
+                {
+                    faceStates[faceDir] = FaceState.NeighborFullSolid; // skip later
+                    continue;
+                }
+                // Determine neighbor mask (if any) matching original switch
+                ulong[] neighborMask = faceDir switch
+                {
+                    0 => nDesc.FacePosXBits,
+                    1 => nDesc.FaceNegXBits,
+                    2 => nDesc.FacePosYBits,
+                    3 => nDesc.FaceNegYBits,
+                    4 => nDesc.FacePosZBits,
+                    5 => nDesc.FaceNegZBits,
+                    _ => null
+                };
+                if (neighborMask != null)
+                {
+                    faceStates[faceDir] = FaceState.NeighborMask;
+                    neighborMasks[faceDir] = neighborMask;
+                }
+                else
+                {
+                    faceStates[faceDir] = FaceState.NeighborFallback;
+                }
+            }
+
+            // Predicted capacity (tighter than worst-case). Pessimistic for fallback faces (assume full plane). World boundary uses exact count of visible cells.
+            int predictedFaces = 0;
+            for (int fd = 0; fd < 6; fd++)
+            {
+                FaceState st = faceStates[fd];
+                switch (st)
+                {
+                    case FaceState.NeighborMissing:
+                        predictedFaces += PlaneCellCount(fd);
+                        break;
+                    case FaceState.WorldBoundary:
+                        predictedFaces += CountVisibleWorldBoundary(worldPlanes[fd], wb_startA[fd], wb_startB[fd], wb_countA[fd], wb_countB[fd], wb_strideB[fd]);
+                        break;
+                    case FaceState.NeighborMask:
+                        int pcells = PlaneCellCount(fd);
+                        int occ = MaskOcclusionCount(neighborMasks[fd]);
+                        int vis = pcells - occ; if (vis < 0) vis = 0; predictedFaces += vis;
+                        break;
+                    case FaceState.NeighborFullSolid:
+                        break; // zero
+                    case FaceState.NeighborFallback:
+                        predictedFaces += PlaneCellCount(fd); // pessimistic
+                        break;
+                }
+            }
+            if (predictedFaces < 0) predictedFaces = 0; // safety
+            if (predictedFaces > 6 * 256) predictedFaces = 6 * 256; // clamp (should not exceed)
+            offsetList.EnsureCapacity(offsetList.Count + predictedFaces * 3);
+            tileIndexList.EnsureCapacity(tileIndexList.Count + predictedFaces);
+            faceDirList.EnsureCapacity(faceDirList.Count + predictedFaces);
+
+            // ---------------- FULL-PLANE EMISSION FAST PATH ----------------
+            for (int fd = 0; fd < 6; fd++)
+            {
+                if (faceStates[fd] == FaceState.NeighborMissing)
+                {
+                    // Emit entire plane (never world boundary here by classification).
+                    EmitFullPlaneSingleTile(fd, faceTiles[fd], fixedCoords[fd]);
+                }
+            }
+
+            // ---------------- REMAINING FACES (PARTIAL / BOUNDARY / FALLBACK) ----------------
+            foreach (var meta in _uniformFaceMetas)
+            {
+                int faceDir = meta.FaceDir;
+                FaceState state = faceStates[faceDir];
+                if (state == FaceState.NeighborMissing) continue; // already emitted
+                uint tile = faceTiles[faceDir];
+
+                if (state == FaceState.NeighborFullSolid)
+                {
+                    continue; // fully occluded by solid neighbor
+                }
+
+                if (state == FaceState.WorldBoundary)
+                {
+                    ulong[] worldPlane = worldPlanes[faceDir];
+                    int startA = wb_startA[faceDir]; int startB = wb_startB[faceDir];
+                    int countA = wb_countA[faceDir]; int countB = wb_countB[faceDir]; int strideB = wb_strideB[faceDir];
+                    int fixedCoord = fixedCoords[faceDir];
+
                     if (!IsWorldPlaneFullySet(worldPlane, startA, startB, countA, countB, strideB))
                     {
-                        // Per-axis emission with plane bit test
+                        // Per-axis emission with plane bit test (same as original body, retained, only wrapped by classification)
                         if (meta.Axis == 0) // X fixed, iterate z,y
                         {
                             for (int z = baseZ; z < endZ; z++)
@@ -318,68 +470,53 @@ namespace MVGE_GFX.Terrain.Sections
                                 }
                         }
                     }
-                    continue; // world boundary faces handled; proceed to next face
+                    continue; // boundary face handled
                 }
 
-                // ---------------- NEIGHBOR HANDLING ----------------
-                int nsx = sx + meta.Dx; int nsy = sy + meta.Dy; int nsz = sz + meta.Dz;
-                ref var nDesc = ref Neighbor(nsx, nsy, nsz);
-
-                // Neighbor empty or air-uniform -> emit whole plane
-                if (nDesc.Kind == 0 || (nDesc.Kind == 1 && nDesc.UniformBlockId == 0))
+                if (state == FaceState.NeighborMask)
                 {
-                    EmitFullPlaneSingleTile(faceDir, tile, fixedCoord);
-                    continue;
-                }
-
-                // Neighbor fully solid -> skip
-                if (NeighborFullySolid(ref nDesc)) continue;
-
-                // Neighbor partial: attempt mask-driven visibility
-                ulong[] neighborMask = faceDir switch
-                {
-                    0 => nDesc.FacePosXBits,
-                    1 => nDesc.FaceNegXBits,
-                    2 => nDesc.FacePosYBits,
-                    3 => nDesc.FaceNegYBits,
-                    4 => nDesc.FacePosZBits,
-                    5 => nDesc.FaceNegZBits,
-                    _ => null
-                };
-
-                if (neighborMask != null)
-                {
+                    int fixedCoord = fixedCoords[faceDir];
+                    ulong[] neighborMask = neighborMasks[faceDir];
                     if (meta.Axis == 0) EmitVisibleByMask_XFace(faceDir, neighborMask, tile, fixedCoord);
                     else if (meta.Axis == 1) EmitVisibleByMask_YFace(faceDir, neighborMask, tile, fixedCoord);
-                    else EmitVisibleByMask_ZFace(faceDir, neighborMask, tile, fixedCoord);
+                    else EmitVisibleByMask_ZFace(faceDir, neighborMask, tile, fixedCoords[faceDir]);
                     continue;
                 }
 
-                // Fallback per-voxel neighbor occupancy test (no mask available)
-                if (meta.Axis == 0) // X fixed
+                // Fallback per-voxel neighbor occupancy test (no mask available) (original logic retained). This covers FaceState.NeighborFallback.
+                if (state == FaceState.NeighborFallback)
                 {
-                    int lxNeighbor = meta.Negative ? 15 : 0; // sample neighbor boundary layer
-                    for (int z = 0; z < S; z++)
-                        for (int y = 0; y < S; y++)
-                            if (!NeighborVoxelOccupied(ref nDesc, lxNeighbor, y, z))
-                                EmitOneInstance(fixedCoord, baseY + y, baseZ + z, tile, (byte)faceDir, offsetList, tileIndexList, faceDirList);
-                }
-                else if (meta.Axis == 1) // Y fixed
-                {
-                    int lyNeighbor = meta.Negative ? 15 : 0;
-                    for (int xLocal = 0; xLocal < S; xLocal++)
+                    // Need neighbor descriptor again (re-fetch) because we did not store it; classification limited memory. Cost negligible vs fallback scan.
+                    int nsx = sx + meta.Dx; int nsy = sy + meta.Dy; int nsz = sz + meta.Dz;
+                    ref var nDesc = ref Neighbor(nsx, nsy, nsz);
+                    int fixedCoord = fixedCoords[faceDir];
+
+                    // Fallback per-voxel neighbor occupancy test (no mask available)
+                    if (meta.Axis == 0) // X fixed
+                    {
+                        int lxNeighbor = meta.Negative ? 15 : 0; // sample neighbor boundary layer
                         for (int z = 0; z < S; z++)
-                            if (!NeighborVoxelOccupied(ref nDesc, xLocal, lyNeighbor, z))
-                                EmitOneInstance(baseX + xLocal, fixedCoord, baseZ + z, tile, (byte)faceDir, offsetList, tileIndexList, faceDirList);
-                }
-                else // Z fixed
-                {
-                    int lzNeighbor = meta.Negative ? 15 : 0;
-                    for (int xLocal = 0; xLocal < S; xLocal++)
-                        for (int yLocal = 0; yLocal < S; yLocal++)
-                            if (!NeighborVoxelOccupied(ref nDesc, xLocal, yLocal, lzNeighbor))
-                                EmitOneInstance(baseX + xLocal, baseY + yLocal, fixedCoord, tile, (byte)faceDir, offsetList, tileIndexList, faceDirList);
-                    return true;
+                            for (int y = 0; y < S; y++)
+                                if (!NeighborVoxelOccupied(ref nDesc, lxNeighbor, y, z))
+                                    EmitOneInstance(fixedCoord, baseY + y, baseZ + z, tile, (byte)faceDir, offsetList, tileIndexList, faceDirList);
+                    }
+                    else if (meta.Axis == 1) // Y fixed
+                    {
+                        int lyNeighbor = meta.Negative ? 15 : 0;
+                        for (int xLocal = 0; xLocal < S; xLocal++)
+                            for (int z = 0; z < S; z++)
+                                if (!NeighborVoxelOccupied(ref nDesc, xLocal, lyNeighbor, z))
+                                    EmitOneInstance(baseX + xLocal, fixedCoord, baseZ + z, tile, (byte)faceDir, offsetList, tileIndexList, faceDirList);
+                    }
+                    else // Z fixed
+                    {
+                        int lzNeighbor = meta.Negative ? 15 : 0;
+                        for (int xLocal = 0; xLocal < S; xLocal++)
+                            for (int yLocal = 0; yLocal < S; yLocal++)
+                                if (!NeighborVoxelOccupied(ref nDesc, xLocal, yLocal, lzNeighbor))
+                                    EmitOneInstance(baseX + xLocal, baseY + yLocal, fixedCoord, tile, (byte)faceDir, offsetList, tileIndexList, faceDirList);
+                        return true; // original behavior returned immediately after Z-face fallback; preserved intentionally
+                    }
                 }
             }
             return true;
