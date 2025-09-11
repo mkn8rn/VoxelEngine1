@@ -1,12 +1,13 @@
-﻿using MVGE_INF.Models.Generation;
+﻿using MVGE_GFX.Models;
+using MVGE_GFX.Textures;
+using MVGE_INF.Models.Generation;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using System.Numerics;
 using System.Runtime.CompilerServices;
-using MVGE_GFX.Models;
+using System.Text;
+using System.Threading.Tasks;
 
 namespace MVGE_GFX.Terrain.Sections
 {
@@ -73,6 +74,15 @@ namespace MVGE_GFX.Terrain.Sections
                                     data.sectionsX, data.sectionsY, data.sectionsZ,
                                     faceNX, facePX, faceNY, facePY, faceNZ, facePZ,
                                     data);
+
+            // Pre-size output buffers by exact popcount across masks (skip nothing for MultiPacked)
+            int addCount = PopCountMask(faceNX) + PopCountMask(facePX) + PopCountMask(faceNY) + PopCountMask(facePY) + PopCountMask(faceNZ) + PopCountMask(facePZ);
+            if (addCount > 0)
+            {
+                offsetList.EnsureCapacity(offsetList.Count + addCount * 3);
+                tileIndexList.EnsureCapacity(tileIndexList.Count + addCount);
+                faceDirList.EnsureCapacity(faceDirList.Count + addCount);
+            }
 
             // Tile index cache: shared helper class (replaces local array)
             var tileCache = new TileIndexCache();

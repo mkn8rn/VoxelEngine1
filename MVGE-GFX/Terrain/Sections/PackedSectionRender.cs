@@ -93,12 +93,34 @@ namespace MVGE_GFX.Terrain.Sections
                 ApplyBoundsMask(lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, faceNX, facePX, faceNY, facePY, faceNZ, facePZ);
             }
 
+            // Reserve capacity exactly by popcount after boundary reinsertion and optional bounds trimming.
+            int cNX = skipFace[0] ? 0 : PopCountMask(faceNX);
+            int cPX = skipFace[1] ? 0 : PopCountMask(facePX);
+            int cNY = skipFace[2] ? 0 : PopCountMask(faceNY);
+            int cPY = skipFace[3] ? 0 : PopCountMask(facePY);
+            int cNZ = skipFace[4] ? 0 : PopCountMask(faceNZ);
+            int cPZ = skipFace[5] ? 0 : PopCountMask(facePZ);
+            int addCount = cNX + cPX + cNY + cPY + cNZ + cPZ;
+            if (addCount > 0)
+            {
+                offsetList.EnsureCapacity(offsetList.Count + addCount * 3);
+                tileIndexList.EnsureCapacity(tileIndexList.Count + addCount);
+                faceDirList.EnsureCapacity(faceDirList.Count + addCount);
+            }
+
             // 5. Per-face tile indices via shared cache used also by uniform path.
             var tileSet = GetUniformFaceTileSet(block);
             bool sameTileAllFaces = tileSet.AllSame;
-            uint[] faceTilesCached = sameTileAllFaces
-                ? new uint[] { tileSet.SingleTile, tileSet.SingleTile, tileSet.SingleTile, tileSet.SingleTile, tileSet.SingleTile, tileSet.SingleTile }
-                : new uint[] { tileSet.TileNX, tileSet.TilePX, tileSet.TileNY, tileSet.TilePY, tileSet.TileNZ, tileSet.TilePZ };
+            Span<uint> faceTilesCached = stackalloc uint[6];
+            if (!sameTileAllFaces)
+            {
+                faceTilesCached[0] = tileSet.TileNX;
+                faceTilesCached[1] = tileSet.TilePX;
+                faceTilesCached[2] = tileSet.TileNY;
+                faceTilesCached[3] = tileSet.TilePY;
+                faceTilesCached[4] = tileSet.TileNZ;
+                faceTilesCached[5] = tileSet.TilePZ;
+            }
 
             // 6. Emit faces from masks (respect skip flags). Use no-bounds path when trimming applied.
             if (sameTileAllFaces)

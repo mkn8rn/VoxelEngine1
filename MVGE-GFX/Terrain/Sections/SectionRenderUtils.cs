@@ -168,6 +168,15 @@ namespace MVGE_GFX.Terrain.Sections
         // ------------------------------------------------------------------------------------
         // Emits a single instance (voxel face) into the output lists.
         // ------------------------------------------------------------------------------------
+        // Popcount of a 4096-bit mask (64 ulongs)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static int PopCountMask(ReadOnlySpan<ulong> mask)
+        {
+            int c = 0;
+            for (int i = 0; i < 64; i++) c += BitOperations.PopCount(mask[i]);
+            return c;
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static void EmitOneInstance(
             int wx, int wy, int wz, uint tileIndex, byte faceDir,
@@ -287,7 +296,7 @@ namespace MVGE_GFX.Terrain.Sections
                 ulong word = mask[wi];
                 while (word != 0)
                 {
-                    int bit = System.Numerics.BitOperations.TrailingZeroCount(word);
+                    int bit = BitOperations.TrailingZeroCount(word);
                     word &= word - 1;
                     int li = (wi << 6) + bit;
                     int ly = _lyFromLi[li];

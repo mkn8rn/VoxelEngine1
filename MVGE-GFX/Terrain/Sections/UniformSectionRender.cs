@@ -50,7 +50,7 @@ namespace MVGE_GFX.Terrain.Sections
             uint rTilePY = sameTileAllFaces ? tileSet.SingleTile : tileSet.TilePY;
             uint rTileNZ = sameTileAllFaces ? tileSet.SingleTile : tileSet.TileNZ;
             uint rTilePZ = sameTileAllFaces ? tileSet.SingleTile : tileSet.TilePZ;
-            uint[] faceTiles = { rTileNX, rTilePX, rTileNY, rTilePY, rTileNZ, rTilePZ };
+            Span<uint> faceTiles = stackalloc uint[6] { rTileNX, rTilePX, rTileNY, rTilePY, rTileNZ, rTilePZ }; // stackalloc to avoid heap alloc per section
 
             // Early interior full-occlusion skip: check if section is interior (all neighbors exist) and every neighbor is fully solid.
             if (sx > 0 && sx < data.sectionsX - 1 && sy > 0 && sy < data.sectionsY - 1 && sz > 0 && sz < data.sectionsZ - 1)
