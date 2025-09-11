@@ -27,7 +27,7 @@ namespace MVGE_GFX.Terrain.Sections
         ///  2. Early interior occlusion fast path: if all six neighbors exist and are fully solid, skip immediately.
         ///  3. Fast-path stratification pre-pass: classify each of the six faces into FaceState (WorldBoundary, NeighborMissing, NeighborFullSolid, NeighborMask, NeighborFallback) and compute predicted visible face count (capacity reservation uses this tighter bound instead of worst-case 6*256).
         ///  4. Emit all guaranteed full-plane faces first (NeighborMissing) in a tight loop (reduces branching inside the main per-face loop). These are never world boundary faces with potential plane holes.
-        ///  5. Process remaining faces (WorldBoundary, NeighborMask, NeighborFallback) applying original logic (boundary plane filtering, mask-driven emission, fallback voxel checks). NeighborFullSolid faces are skipped.
+        ///  5. Process remaining faces (WorldBoundary, NeighborMask, NeighborFallback) applying boundary plane filtering, mask-driven emission, fallback voxel checks. NeighborFullSolid faces are skipped.
         ///  6. Return true (uniform path always handled; empty uniform returns true with no output). Existing comments retained and updated to describe functionality.
         private bool EmitUniformSectionInstances(ref SectionPrerenderDesc desc, int sx, int sy, int sz, int S,
             List<byte> offsetList, List<uint> tileIndexList, List<byte> faceDirList)

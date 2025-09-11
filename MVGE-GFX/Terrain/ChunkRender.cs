@@ -101,10 +101,6 @@ namespace MVGE_GFX.Terrain
             quadPosVBO = new VBO(QuadPositions, QuadPositions.Length); quadPosVBO.Bind();
             chunkVAO.LinkToVAO(0, 3, VertexAttribPointerType.UnsignedByte, false, quadPosVBO);
 
-            // Static quad UV VBO (location 1)
-            quadUVVBO = new VBO(QuadUVs, QuadUVs.Length); quadUVVBO.Bind();
-            chunkVAO.LinkToVAO(1, 2, VertexAttribPointerType.UnsignedByte, false, quadUVVBO);
-
             // Instance offsets (location 2)
             instanceOffsetVBO = new VBO(instanceOffsetBuffer ?? Array.Empty<byte>(), instanceOffsetBuffer?.Length ?? 0); instanceOffsetVBO.Bind();
             chunkVAO.LinkToVAO(2, 3, VertexAttribPointerType.UnsignedByte, false, instanceOffsetVBO);
