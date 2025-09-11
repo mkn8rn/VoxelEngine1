@@ -151,6 +151,7 @@ namespace MVGE_INF.Managers
                     soilMaxYLevel = biomeJson.soil_max_ylevel,
                     soilMinDepth = biomeJson.soil_min_depth,
                     soilMaxDepth = biomeJson.soil_max_depth,
+                    waterLevel = biomeJson.water_level,
                     microbiomes = microbiomesList,
                     simpleReplacements = simpleReplacementRules
                 };

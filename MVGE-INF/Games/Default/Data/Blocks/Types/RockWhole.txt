@@ -1,5 +1,5 @@
 {
-  "ID": 101,
+  "ID": 256,
   "Name": "Dolomite",
   "BaseType": "Stone",
   "TextureFaceBase": "RockWhole"

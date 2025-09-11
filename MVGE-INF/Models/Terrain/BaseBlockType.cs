@@ -10,13 +10,15 @@ namespace MVGE_INF.Models.Terrain
     {
         Empty = 0,
         Gas = 1,
-        Living = 2,
+        // empty = 2
         Mineral = 3,
-        Liquid = 4,
+        // empty = 4
         Soil = 5,
         Stone = 6,
-        Water = 7,
-        Wood = 8,
-        Glass = 9
+        Wood = 7,
+        Fungus = 8,
+        // empty = 9
+        Glass = 10,
+        Water = 11,
     }
 }

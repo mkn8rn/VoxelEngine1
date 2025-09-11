@@ -15,7 +15,10 @@ namespace MVGE_INF.Loaders
     {
         // Loading
         private ushort blockTypeCounter = 0; // used only for base types
-        private const ushort FIRST_CUSTOM_BLOCK_ID = 101; // IDs <=100 reserved for base / special
+        private const ushort FIRST_CUSTOM_BLOCK_ID = 256; // IDs <256 reserved for base / special
+
+        // Non-opaque, non-air base block types (transparent/translucent buckets used by prerender/render)
+        public static HashSet<BaseBlockType> NonOpaqueNonAirBaseBlocks { get; private set; }
 
         public TerrainLoader()
         {
@@ -23,9 +26,46 @@ namespace MVGE_INF.Loaders
 
             LoadBaseBlockType();
             LoadOtherBlockTypes();
+            InitializeNonOpaqueNonAirBaseBlocks();
 
             Console.WriteLine("Terrain data finished loading.");
             Console.WriteLine($"Total block types (including base): {allBlockTypes.Count}");
+        }
+
+        public static bool IsNonOpaque(ushort blockId)
+        {
+            if (blockId == (ushort)BaseBlockType.Empty) return false;
+
+            // Base range (0..FIRST_CUSTOM_BLOCK_ID-1) maps 1:1 to BaseBlockType enum values.
+            if (blockId < FIRST_CUSTOM_BLOCK_ID)
+            {
+                return NonOpaqueNonAirBaseBlocks.Contains((BaseBlockType)blockId);
+            }
+
+            // Custom block: resolve its base type (linear scan; acceptable for now).
+            // (Can be optimized later with an optional lookup table if profiling justifies it.)
+            for (int i = 0; i < allBlockTypeObjects.Count; i++)
+            {
+                var bt = allBlockTypeObjects[i];
+                if (bt.ID == blockId)
+                    return NonOpaqueNonAirBaseBlocks.Contains(bt.BaseType);
+            }
+            return false;
+        }
+
+        private void InitializeNonOpaqueNonAirBaseBlocks()
+        {
+            // Because base blocks are hardcoded,
+            // we can just list the known non-opaque types here.
+            NonOpaqueNonAirBaseBlocks = new HashSet<BaseBlockType>
+            {
+                BaseBlockType.Gas,
+                BaseBlockType.Water,
+                BaseBlockType.Glass
+            };
+
+            // Non-base block types are not considered here yet
+            // to keep things simple for now. I'll add that later.
         }
 
         internal void LoadBaseBlockType()

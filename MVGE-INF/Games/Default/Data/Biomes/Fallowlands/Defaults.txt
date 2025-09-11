@@ -9,5 +9,5 @@
   "soil_max_ylevel": 5600,
   "soil_min_depth": 320,
   "soil_max_depth": 3200,
-  "water_level": 320
+  "water_level": 640
 }

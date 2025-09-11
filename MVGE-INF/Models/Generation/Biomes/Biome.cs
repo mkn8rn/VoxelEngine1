@@ -12,6 +12,7 @@
         public required int soilMaxYLevel { get; set; }
         public required int soilMinDepth { get; set; }
         public required int soilMaxDepth { get; set; }
+        public required int waterLevel { get; set; }
         public required List<MicrobiomeJSON> microbiomes { get; set; }
         public required List<SimpleReplacementRule> simpleReplacements { get; set; }
 
