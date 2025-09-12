@@ -11,7 +11,7 @@ namespace MVGE_INF.Models.Generation
     {
         public byte Kind; // mirrors ChunkSection.RepresentationKind
         public ushort UniformBlockId;
-        public int NonAirCount;
+        public int OpaqueCount;
         public int[] SparseIndices;
         public ushort[] SparseBlocks;
         public ushort[] ExpandedDense;
@@ -31,7 +31,6 @@ namespace MVGE_INF.Models.Generation
     }
 
     // Container for all pre-render flags and cached plane data passed from Chunk -> ChunkRender.
-    // NOTE: Pure data transfer object; no logic here. Rendering logic remains unchanged.
     public struct ChunkPrerenderData
     {
         // Face solidity flags for this chunk

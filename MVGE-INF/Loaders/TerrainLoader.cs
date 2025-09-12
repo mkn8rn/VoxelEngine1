@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Runtime.CompilerServices;
 
 namespace MVGE_INF.Loaders
 {
@@ -21,8 +22,14 @@ namespace MVGE_INF.Loaders
         // Parallel id set for membership queries. Kept in sync with NonOpaqueBlocks.
         public static HashSet<ushort> NonOpaqueBlockIds { get; private set; }
 
+        // Fast O(1) classification table (index = block id) populated after InitializeNonOpaqueBlocks.
+        // True => block id is non-opaque (air, gas, water, glass, etc.); false => opaque / solid.
+        // Always length 65536 (full ushort domain) to avoid bounds checks.
+        private static readonly bool[] NonOpaqueLut = new bool[65536];
+        private static volatile bool _nonOpaqueLutBuilt; // build guard for early queries
+
         // Hardcoded list of base block types that are non-opaque (includes Empty). Used during base load before custom blocks.
-        public List<BaseBlockType> NonOpaqueBaseBlocks = new List<BaseBlockType> { 
+        public List<BaseBlockType> NonOpaqueBaseBlocks = new List<BaseBlockType> {
             BaseBlockType.Empty,
             BaseBlockType.Gas,
             BaseBlockType.Water,
@@ -36,28 +43,44 @@ namespace MVGE_INF.Loaders
             LoadBaseBlockType();
             LoadOtherBlockTypes();
             InitializeNonOpaqueBlocks();
+            BuildNonOpaqueLookup();
 
             Console.WriteLine("Terrain data finished loading.");
             Console.WriteLine($"Total block types (including base): {allBlockTypes.Count}");
         }
 
-        public static bool IsNonOpaque(ushort blockId)
+        // Build / rebuild the non-opaque LUT from current NonOpaqueBlockIds (idempotent, fast).
+        private static void BuildNonOpaqueLookup()
         {
-            // Falls back to false if not initialized.
-            if (NonOpaqueBlockIds == null || NonOpaqueBlockIds.Count == 0) return false;
-            return NonOpaqueBlockIds.Contains(blockId);
+            if (NonOpaqueBlockIds == null) return; // nothing to do yet
+            Array.Clear(NonOpaqueLut, 0, NonOpaqueLut.Length);
+            foreach (var id in NonOpaqueBlockIds)
+            {
+                NonOpaqueLut[id] = true;
+            }
+            _nonOpaqueLutBuilt = true;
         }
 
-        public static bool IsNonOpaqueNonAir(ushort blockId)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool IsNonOpaque(ushort blockId)
         {
-            // Air (Empty) explicitly excluded here while remaining in the general non-opaque set.
-            if (blockId == (ushort)BaseBlockType.Empty) return false; // air
-            return IsNonOpaque(blockId);
+            // Uses precomputed LUT for O(1) classification. Air (id 0) always treated as non-opaque even
+            // if LUT not yet built. Falls back gracefully before initialization.
+            if (blockId == 0) return true; // air shortcut
+            return NonOpaqueLut[blockId];
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool IsOpaque(ushort blockId)
+        {
+            // Opaque = not air and not in non-opaque LUT.
+            if (blockId == 0) return false; // air
+            return !NonOpaqueLut[blockId];
         }
 
         private void InitializeNonOpaqueBlocks()
         {
-            // Create new set (object instances) and parallel id set for O(1) lookups.
+            // Create new set (object instances) and parallel id set for O(1) lookups (backing data for LUT construction).
             NonOpaqueBlocks = new HashSet<BlockType>();
             NonOpaqueBlockIds = new HashSet<ushort>();
 

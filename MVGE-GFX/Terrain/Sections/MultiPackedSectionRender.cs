@@ -34,7 +34,7 @@ namespace MVGE_GFX.Terrain.Sections
         {
             // Validate preconditions.
             if (desc.Kind != 5) return false; // Not MultiPacked (caller will fallback / choose other path)
-            if (desc.NonAirCount == 0 ||
+            if (desc.OpaqueCount == 0 ||
                 desc.OccupancyBits == null ||
                 desc.PackedBitData == null ||
                 desc.Palette == null) return false; // nothing to emit / cannot decode

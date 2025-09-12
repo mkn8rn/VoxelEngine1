@@ -540,7 +540,7 @@ namespace MVGE_GFX.Terrain.Sections
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static bool NeighborVoxelSolid(ref SectionPrerenderDesc n, int lx, int ly, int lz)
         {
-            if (n.Kind == 0 || n.NonAirCount == 0) return false;
+            if (n.Kind == 0 || n.OpaqueCount == 0) return false;
             switch (n.Kind)
             {
                 case 1: // Uniform
@@ -610,7 +610,7 @@ namespace MVGE_GFX.Terrain.Sections
         static bool NeighborFullySolid(ref SectionPrerenderDesc n)
         {
             if (n.Kind == 1 && n.UniformBlockId != 0) return true; // uniform solid
-            if ((n.Kind == 4 || n.Kind == 5) && n.NonAirCount == 4096) return true;
+            if ((n.Kind == 4 || n.Kind == 5) && n.OpaqueCount == 4096) return true;
             return false;
         }
 

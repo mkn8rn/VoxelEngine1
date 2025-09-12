@@ -4,6 +4,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using MVGE_INF.Loaders;
 
 namespace MVGE_GEN.Utils
 {
@@ -157,7 +158,7 @@ namespace MVGE_GEN.Utils
             int totalVoxels = S * S * S;
             sec.VoxelCount = totalVoxels;
 
-            int nonAir = 0;
+            int opaqueCount = 0; // replaces previous nonAir accumulation semantics
             int adjY = 0;
             int adjX = 0;
             int adjZ = 0;
@@ -221,43 +222,57 @@ namespace MVGE_GEN.Utils
                         }
                     }
 
-                    nonAir += col.NonAir;
-                    adjY += col.AdjY;
-
-                    if (!boundsInit)
+                    // Recompute opaque occupancy per column from runs; existing col.OccMask represented full run vertical bits regardless of opacity.
+                    // We assume generation paths only write opaque materials for stone/soil; if transparency added to runs, filter here.
+                    ushort occMaskOpaque = 0;
+                    if (col.RunCount >= 1 && col.Id0 != AIR && TerrainLoader.IsOpaque(col.Id0))
                     {
-                        boundsInit = true;
-                        minX = maxX = (byte)x;
-                        minZ = maxZ = (byte)z;
-                        minY = 15;
-                        maxY = 0;
+                        // col.OccMask includes both runs when RunCount==2; reconstruct mask segments instead of using full mask unfiltered.
+                        int y0s = col.Y0Start; int y0e = col.Y0End; for (int y = y0s; y <= y0e; y++) occMaskOpaque |= (ushort)(1 << y);
+                        opaqueCount += (y0e - y0s + 1);
+                        adjY += (y0e - y0s); // vertical adjacencies within run
+                    }
+                    if (col.RunCount == 2 && col.Id1 != AIR && TerrainLoader.IsOpaque(col.Id1))
+                    {
+                        int y1s = col.Y1Start; int y1e = col.Y1End; for (int y = y1s; y <= y1e; y++) occMaskOpaque |= (ushort)(1 << y);
+                        opaqueCount += (y1e - y1s + 1);
+                        adjY += (y1e - y1s); // vertical adjacencies within second run
+                        // If the two runs are contiguous and both opaque add the connecting adjacency
+                        if (col.Id0 != AIR && TerrainLoader.IsOpaque(col.Id0) && y1s == col.Y0End + 1) adjY++;
                     }
 
-                    // Y bounds
-                    if (col.RunCount >= 1)
+                    if (occMaskOpaque != 0)
                     {
-                        if (col.Y0Start < minY) minY = col.Y0Start;
-                        if (col.Y0End > maxY) maxY = col.Y0End;
-                    }
-                    if (col.RunCount == 2)
-                    {
-                        if (col.Y1Start < minY) minY = col.Y1Start;
-                        if (col.Y1End > maxY) maxY = col.Y1End;
+                        if (!boundsInit)
+                        {
+                            boundsInit = true;
+                            minX = maxX = (byte)x;
+                            minZ = maxZ = (byte)z;
+                            minY = 15; maxY = 0; // will correct below
+                        }
+                        // Y bounds
+                        if (col.RunCount >= 1)
+                        {
+                            if (col.Y0Start < minY) minY = col.Y0Start; if (col.Y0End > maxY) maxY = col.Y0End;
+                        }
+                        if (col.RunCount == 2)
+                        {
+                            if (col.Y1Start < minY) minY = col.Y1Start; if (col.Y1End > maxY) maxY = col.Y1End;
+                        }
+
+                        // X/Z bounds
+                        if (x < minX) minX = (byte)x; else if (x > maxX) maxX = (byte)x;
+                        if (z < minZ) minZ = (byte)z; else if (z > maxZ) maxZ = (byte)z;
                     }
 
-                    // X/Z bounds
-                    if (x < minX) minX = (byte)x; else if (x > maxX) maxX = (byte)x;
-                    if (z < minZ) minZ = (byte)z; else if (z > maxZ) maxZ = (byte)z;
-
-                    ushort occ = col.OccMask;
-                    curRowOcc[x] = occ;
+                    curRowOcc[x] = occMaskOpaque;
 
                     // X adjacency via popcount of overlap with previous column in row
-                    if (x > 0 && prevOccInRow != 0 && occ != 0)
+                    if (x > 0 && prevOccInRow != 0 && occMaskOpaque != 0)
                     {
-                        adjX += BitOperations.PopCount((uint)(occ & prevOccInRow));
+                        adjX += BitOperations.PopCount((uint)(occMaskOpaque & prevOccInRow));
                     }
-                    prevOccInRow = occ;
+                    prevOccInRow = occMaskOpaque;
 
                     // Distinct rebuild (linear scan up to 8 entries is still fastest here)
                     if (rebuildDistinct)
@@ -265,49 +280,33 @@ namespace MVGE_GEN.Utils
                         if (col.RunCount >= 1 && col.Id0 != AIR)
                         {
                             int foundIndex = -1;
-                            for (int i = 0; i < tmpDistinctCount; i++)
-                            {
-                                if (tmpDistinct[i] == col.Id0) { foundIndex = i; break; }
-                            }
-                            if (foundIndex == -1 && tmpDistinctCount < 8)
-                            {
-                                foundIndex = tmpDistinctCount;
-                                tmpDistinct[tmpDistinctCount++] = col.Id0;
-                            }
+                            for (int i = 0; i < tmpDistinctCount; i++) if (tmpDistinct[i] == col.Id0) { foundIndex = i; break; }
+                            if (foundIndex == -1 && tmpDistinctCount < 8) { foundIndex = tmpDistinctCount; tmpDistinct[tmpDistinctCount++] = col.Id0; }
                             if (foundIndex >= 0)
                             {
+                                // Only treat as potential uniform if whole section volume opaque with this id
+                                // For simplicity accumulate raw run size (includes potential translucent if added later)
                                 tmpDistinctVoxelCounts[foundIndex] += col.NonAir;
                                 if (!earlyUniformShortCircuit && tmpDistinctVoxelCounts[foundIndex] == totalVoxels)
                                 {
-                                    earlyUniformShortCircuit = true;
-                                    earlyUniformId = col.Id0;
+                                    earlyUniformShortCircuit = true; earlyUniformId = col.Id0;
                                 }
                             }
                         }
-
                         if (col.RunCount == 2 && col.Id1 != AIR)
                         {
                             int foundIndex = -1;
-                            for (int i = 0; i < tmpDistinctCount; i++)
-                            {
-                                if (tmpDistinct[i] == col.Id1) { foundIndex = i; break; }
-                            }
-                            if (foundIndex == -1 && tmpDistinctCount < 8)
-                            {
-                                foundIndex = tmpDistinctCount;
-                                tmpDistinct[tmpDistinctCount++] = col.Id1;
-                            }
+                            for (int i = 0; i < tmpDistinctCount; i++) if (tmpDistinct[i] == col.Id1) { foundIndex = i; break; }
+                            if (foundIndex == -1 && tmpDistinctCount < 8) { foundIndex = tmpDistinctCount; tmpDistinct[tmpDistinctCount++] = col.Id1; }
                             if (foundIndex >= 0)
                             {
                                 tmpDistinctVoxelCounts[foundIndex] += col.NonAir;
                                 if (!earlyUniformShortCircuit && tmpDistinctVoxelCounts[foundIndex] == totalVoxels)
                                 {
-                                    earlyUniformShortCircuit = true;
-                                    earlyUniformId = col.Id1;
+                                    earlyUniformShortCircuit = true; earlyUniformId = col.Id1;
                                 }
                             }
                         }
-
                         if (singleIdPossible && tmpDistinctCount > 1) singleIdPossible = false;
                     }
                 }
@@ -335,8 +334,8 @@ namespace MVGE_GEN.Utils
                 sec.Kind = ChunkSection.RepresentationKind.Uniform;
                 sec.UniformBlockId = earlyUniformId;
                 sec.IsAllAir = false;
-                sec.NonAirCount = sec.VoxelCount = totalVoxels;
-                sec.CompletelyFull = true;
+                sec.NonAirCount = TerrainLoader.IsOpaque(earlyUniformId) ? sec.VoxelCount : 0;
+                sec.CompletelyFull = TerrainLoader.IsOpaque(earlyUniformId);
 
                 long lenL = S;
                 long internalAdj = (lenL - 1) * lenL * lenL + lenL * (lenL - 1) * lenL + lenL * lenL * (lenL - 1);
@@ -361,8 +360,8 @@ namespace MVGE_GEN.Utils
                 scratch.DistinctDirty = false;
             }
 
-            sec.NonAirCount = nonAir;
-            if (!boundsInit || nonAir == 0)
+            sec.NonAirCount = opaqueCount;
+            if (!boundsInit || opaqueCount == 0)
             {
                 sec.Kind = ChunkSection.RepresentationKind.Empty;
                 sec.IsAllAir = true;
@@ -378,63 +377,46 @@ namespace MVGE_GEN.Utils
             sec.MinLX = minX; sec.MaxLX = maxX;
             sec.MinLY = minY; sec.MaxLY = maxY;
             sec.MinLZ = minZ; sec.MaxLZ = maxZ;
-            sec.InternalExposure = 6 * nonAir - 2 * (adjX + adjY + adjZ);
+            sec.InternalExposure = 6 * opaqueCount - 2 * (adjX + adjY + adjZ);
 
             // ---------------- Representation selection ----------------
-            if (nonAir == totalVoxels && scratch.DistinctCount == 1)
+            if (opaqueCount == totalVoxels && scratch.DistinctCount == 1 && TerrainLoader.IsOpaque(scratch.Distinct[0]))
             {
                 sec.Kind = ChunkSection.RepresentationKind.Uniform;
                 sec.UniformBlockId = scratch.Distinct[0];
                 sec.IsAllAir = false;
                 sec.CompletelyFull = true;
             }
-            else if (nonAir <= 128)
+            else if (opaqueCount <= 128)
             {
-                int count = nonAir;
-                var idxArr = new int[count];
-                var blkArr = new ushort[count];
-                int write = 0;
-                ushort singleId = scratch.DistinctCount == 1 ? scratch.Distinct[0] : (ushort)0;
-
-                // iterate active columns only
+                int count = opaqueCount;
+                var idxArr = new List<int>(count);
+                var blkArr = new List<ushort>(count);
                 for (int i = 0; i < activeColumnCount; i++)
                 {
                     int ci = activeColumns[i];
                     ref readonly var col = ref scratch.GetReadonlyColumn(ci);
                     int baseLi = ci << 4;
-
-                    if (col.RunCount >= 1)
+                    if (col.RunCount >= 1 && col.Id0 != AIR && TerrainLoader.IsOpaque(col.Id0))
                     {
-                        ushort id0 = singleId != 0 ? singleId : col.Id0;
-                        for (int y = col.Y0Start; y <= col.Y0End; y++)
-                        {
-                            idxArr[write] = baseLi + y;
-                            blkArr[write++] = id0;
-                        }
+                        for (int y = col.Y0Start; y <= col.Y0End; y++) { idxArr.Add(baseLi + y); blkArr.Add(col.Id0); }
                     }
-                    if (col.RunCount == 2)
+                    if (col.RunCount == 2 && col.Id1 != AIR && TerrainLoader.IsOpaque(col.Id1))
                     {
-                        ushort id1 = singleId != 0 ? singleId : col.Id1;
-                        for (int y = col.Y1Start; y <= col.Y1End; y++)
-                        {
-                            idxArr[write] = baseLi + y;
-                            blkArr[write++] = id1;
-                        }
+                        for (int y = col.Y1Start; y <= col.Y1End; y++) { idxArr.Add(baseLi + y); blkArr.Add(col.Id1); }
                     }
                 }
-
                 sec.Kind = ChunkSection.RepresentationKind.Sparse;
-                sec.SparseIndices = idxArr;
-                sec.SparseBlocks = blkArr;
+                sec.SparseIndices = idxArr.ToArray();
+                sec.SparseBlocks = blkArr.ToArray();
                 sec.IsAllAir = false;
 
                 if (count >= SPARSE_MASK_BUILD_MIN && count <= 128)
                 {
                     var occSparse = RentOccupancy();
-                    // build occupancy by setting 1 bits for each li
-                    for (int i = 0; i < idxArr.Length; i++)
+                    for (int i = 0; i < sec.SparseIndices.Length; i++)
                     {
-                        int li = idxArr[i];
+                        int li = sec.SparseIndices[i];
                         occSparse[li >> 6] |= 1UL << (li & 63);
                     }
                     sec.OccupancyBits = occSparse;
@@ -444,7 +426,7 @@ namespace MVGE_GEN.Utils
             else
             {
                 // higher voxel counts
-                if (scratch.DistinctCount == 1)
+                if (scratch.DistinctCount == 1 && TerrainLoader.IsOpaque(scratch.Distinct[0]))
                 {
                     sec.Kind = ChunkSection.RepresentationKind.Packed;
                     ushort only = scratch.Distinct[0];
@@ -454,24 +436,38 @@ namespace MVGE_GEN.Utils
                     sec.BitData = RentBitData(128);
                     Array.Clear(sec.BitData, 0, sec.BitData.Length);
                     var occ = RentOccupancy();
-
                     for (int i = 0; i < activeColumnCount; i++)
                     {
                         int ci = activeColumns[i];
                         ref readonly var col = ref scratch.GetReadonlyColumn(ci);
-                        if (col.OccMask == 0) continue;
-                        WriteColumnMask(occ, ci, col.OccMask);
-                        WriteColumnMaskToBitData(sec.BitData, ci, col.OccMask);
+                        if (col.RunCount >= 1 && col.Id0 != AIR && TerrainLoader.IsOpaque(col.Id0))
+                        {
+                            for (int y = col.Y0Start; y <= col.Y0End; y++)
+                            {
+                                int li = (ci << 4) + y;
+                                WriteBits(sec, li, 1);
+                                occ[li >> 6] |= 1UL << (li & 63);
+                            }
+                        }
+                        if (col.RunCount == 2 && col.Id1 != AIR && TerrainLoader.IsOpaque(col.Id1))
+                        {
+                            for (int y = col.Y1Start; y <= col.Y1End; y++)
+                            {
+                                int li = (ci << 4) + y;
+                                WriteBits(sec, li, 1);
+                                occ[li >> 6] |= 1UL << (li & 63);
+                            }
+                        }
                     }
-
                     sec.OccupancyBits = occ;
                     sec.IsAllAir = false;
                     BuildFaceMasks(sec, occ);
                 }
                 else
                 {
-                    int distinctCount = scratch.DistinctCount;
-                    int paletteCount = distinctCount + 1; // include AIR
+                    int distinctCount = 0;
+                    for (int i = 0; i < scratch.DistinctCount; i++) if (TerrainLoader.IsOpaque(scratch.Distinct[i])) distinctCount++;
+                    int paletteCount = distinctCount + 1; // include AIR always
                     int bitsPerIndex = paletteCount <= 1 ? 1 : (int)BitOperations.Log2((uint)(paletteCount - 1)) + 1;
                     long packedBytes = ((long)bitsPerIndex * totalVoxels + 7) / 8;
                     long denseBytes = (long)totalVoxels * sizeof(ushort);
@@ -482,16 +478,12 @@ namespace MVGE_GEN.Utils
                         sec.Kind = ChunkSection.RepresentationKind.MultiPacked;
                         sec.Palette = new List<ushort>(paletteCount) { AIR };
                         sec.PaletteLookup = new Dictionary<ushort, int>(paletteCount) { { AIR, 0 } };
-                        for (int i = 0; i < distinctCount; i++)
+                        for (int i = 0; i < scratch.DistinctCount; i++)
                         {
                             ushort id = scratch.Distinct[i];
-                            if (!sec.PaletteLookup.ContainsKey(id))
-                            {
-                                sec.PaletteLookup[id] = sec.Palette.Count;
-                                sec.Palette.Add(id);
-                            }
+                            if (!TerrainLoader.IsOpaque(id)) continue;
+                            if (!sec.PaletteLookup.ContainsKey(id)) { sec.PaletteLookup[id] = sec.Palette.Count; sec.Palette.Add(id); }
                         }
-
                         int pcMinusOne = sec.Palette.Count - 1;
                         sec.BitsPerIndex = pcMinusOne <= 0 ? 1 : (int)BitOperations.Log2((uint)pcMinusOne) + 1;
                         long totalBits = (long)sec.BitsPerIndex * totalVoxels;
@@ -499,75 +491,56 @@ namespace MVGE_GEN.Utils
                         sec.BitData = RentBitData(uintCount);
                         Array.Clear(sec.BitData, 0, uintCount);
                         var occ = RentOccupancy();
-
                         for (int i = 0; i < activeColumnCount; i++)
                         {
                             int ci = activeColumns[i];
                             ref readonly var col = ref scratch.GetReadonlyColumn(ci);
                             int baseLi = ci << 4;
-
-                            if (col.RunCount >= 1)
+                            if (col.RunCount >= 1 && col.Id0 != AIR && TerrainLoader.IsOpaque(col.Id0))
                             {
                                 int pi0 = sec.PaletteLookup[col.Id0];
                                 for (int y = col.Y0Start; y <= col.Y0End; y++)
                                 {
-                                    int li = baseLi + y;
-                                    WriteBits(sec, li, pi0);
-                                    occ[li >> 6] |= 1UL << (li & 63);
+                                    int li = baseLi + y; WriteBits(sec, li, pi0); occ[li >> 6] |= 1UL << (li & 63);
                                 }
                             }
-                            if (col.RunCount == 2)
+                            if (col.RunCount == 2 && col.Id1 != AIR && TerrainLoader.IsOpaque(col.Id1))
                             {
                                 int pi1 = sec.PaletteLookup[col.Id1];
                                 for (int y = col.Y1Start; y <= col.Y1End; y++)
                                 {
-                                    int li = baseLi + y;
-                                    WriteBits(sec, li, pi1);
-                                    occ[li >> 6] |= 1UL << (li & 63);
+                                    int li = baseLi + y; WriteBits(sec, li, pi1); occ[li >> 6] |= 1UL << (li & 63);
                                 }
                             }
                         }
-
-                        sec.OccupancyBits = occ;
-                        sec.IsAllAir = false;
-                        BuildFaceMasks(sec, occ);
+                        sec.OccupancyBits = occ; sec.IsAllAir = false; BuildFaceMasks(sec, occ);
                     }
                     else
                     {
                         sec.Kind = ChunkSection.RepresentationKind.DenseExpanded;
                         var dense = RentDense();
                         var occDense = RentOccupancy();
-
                         for (int i = 0; i < activeColumnCount; i++)
                         {
                             int ci = activeColumns[i];
                             ref readonly var col = ref scratch.GetReadonlyColumn(ci);
                             int baseLi = ci << 4;
-
-                            if (col.RunCount >= 1)
+                            if (col.RunCount >= 1 && col.Id0 != AIR && TerrainLoader.IsOpaque(col.Id0))
                             {
                                 for (int y = col.Y0Start; y <= col.Y0End; y++)
                                 {
-                                    int li = baseLi + y;
-                                    dense[li] = col.Id0;
-                                    occDense[li >> 6] |= 1UL << (li & 63);
+                                    int li = baseLi + y; dense[li] = col.Id0; occDense[li >> 6] |= 1UL << (li & 63);
                                 }
                             }
-                            if (col.RunCount == 2)
+                            if (col.RunCount == 2 && col.Id1 != AIR && TerrainLoader.IsOpaque(col.Id1))
                             {
                                 for (int y = col.Y1Start; y <= col.Y1End; y++)
                                 {
-                                    int li = baseLi + y;
-                                    dense[li] = col.Id1;
-                                    occDense[li >> 6] |= 1UL << (li & 63);
+                                    int li = baseLi + y; dense[li] = col.Id1; occDense[li >> 6] |= 1UL << (li & 63);
                                 }
                             }
                         }
-
-                        sec.ExpandedDense = dense;
-                        sec.OccupancyBits = occDense;
-                        sec.IsAllAir = false;
-                        BuildFaceMasks(sec, occDense);
+                        sec.ExpandedDense = dense; sec.OccupancyBits = occDense; sec.IsAllAir = false; BuildFaceMasks(sec, occDense);
                     }
                 }
             }
@@ -591,7 +564,7 @@ namespace MVGE_GEN.Utils
             var dense = RentDense();
             var occ = RentOccupancy();
 
-            int nonAir = 0;
+            int opaqueCount = 0;
             byte minX = 255, minY = 255, minZ = 255, maxX = 0, maxY = 0, maxZ = 0;
             bool bounds = false;
             int adjX = 0, adjY = 0, adjZ = 0;
@@ -603,15 +576,14 @@ namespace MVGE_GEN.Utils
                 int li = (ci << 4) + y;
                 if (dense[li] != 0) return; // already set from another run path
                 dense[li] = id;
-                nonAir++;
-                occ[li >> 6] |= 1UL << (li & 63);
-
+                if (TerrainLoader.IsOpaque(id))
+                {
+                    opaqueCount++;
+                    occ[li >> 6] |= 1UL << (li & 63);
+                }
                 if (!bounds)
                 {
-                    bounds = true;
-                    minX = maxX = (byte)x;
-                    minY = maxY = (byte)y;
-                    minZ = maxZ = (byte)z;
+                    bounds = true; minX = maxX = (byte)x; minY = maxY = (byte)y; minZ = maxZ = (byte)z;
                 }
                 else
                 {
@@ -690,21 +662,16 @@ namespace MVGE_GEN.Utils
             // Build final representation (DenseExpanded) + metadata.
             sec.Kind = ChunkSection.RepresentationKind.DenseExpanded;
             sec.ExpandedDense = dense;
-            sec.NonAirCount = nonAir;
+            sec.NonAirCount = opaqueCount;
 
             if (bounds)
             {
-                sec.HasBounds = true;
-                sec.MinLX = minX; sec.MaxLX = maxX;
-                sec.MinLY = minY; sec.MaxLY = maxY;
-                sec.MinLZ = minZ; sec.MaxLZ = maxZ;
+                sec.HasBounds = true; sec.MinLX = minX; sec.MaxLX = maxX; sec.MinLY = minY; sec.MaxLY = maxY; sec.MinLZ = minZ; sec.MaxLZ = maxZ;
             }
 
             long internalAdj = (long)adjX + adjY + adjZ;
-            sec.InternalExposure = (int)(6L * nonAir - 2L * internalAdj);
-            sec.IsAllAir = nonAir == 0;
-            sec.OccupancyBits = occ;
-            BuildFaceMasks(sec, occ);
+            sec.InternalExposure = (int)(6L * opaqueCount - 2L * internalAdj);
+            sec.IsAllAir = opaqueCount == 0; sec.OccupancyBits = occ; BuildFaceMasks(sec, occ);
 
             sec.MetadataBuilt = true;
             sec.StructuralDirty = false;

@@ -94,23 +94,37 @@ namespace MVGE_INF.Managers
                             if (rule.generation_type != GenerationType.SimpleReplacement)
                                 continue; // only map SimpleReplacement for now
 
-                            // Resolve target block type by ID
-                            var targetBlock = TerrainLoader.allBlockTypeObjects.Find(b => b.ID == rule.block_type_id);
+                            // Resolve target block type 
+                            var targetBlock = ResolveBlockType(rule.block_type_id);
                             if (targetBlock == null)
-                                throw new Exception($"Rule references unknown block_type_id {rule.block_type_id}");
+                                throw new Exception($"Rule references unknown block_type_id '{rule.block_type_id}'");
 
                             // Build list of base block types to replace
                             var baseList = new List<BaseBlockType>();
-                            var blockList = new List<BlockType>();
                             if (rule.base_blocks_to_replace != null && rule.base_blocks_to_replace.Count > 0)
                             {
-                                foreach (var bb in rule.base_blocks_to_replace)
+                                foreach (var token in rule.base_blocks_to_replace)
                                 {
-                                    if (Enum.IsDefined(typeof(BaseBlockType), (byte)bb))
-                                        baseList.Add((BaseBlockType)bb);
+                                    if (string.IsNullOrWhiteSpace(token)) continue;
+                                    if (TryResolveBaseBlockType(token, out var bbt))
+                                    {
+                                        if (!baseList.Contains(bbt))
+                                            baseList.Add(bbt);
+                                    }
+                                    else
+                                    {
+                                        // Allow a block unique/name mapping -> its base type
+                                        var bt = ResolveBlockType(token);
+                                        if (bt != null && !baseList.Contains(bt.BaseType))
+                                            baseList.Add(bt.BaseType);
+                                        else
+                                            Console.WriteLine($"[Biome][WARN] Unknown base block type token '{token}' in biome '{biomeFolderName}'.");
+                                    }
                                 }
                             }
-                            
+
+                            // Specific block IDs to replace
+                            var blockList = new List<BlockType>();
                             if (rule.blocks_to_replace != null && rule.blocks_to_replace.Count > 0)
                             {
                                 // Derive block types from specific block IDs
@@ -319,6 +333,51 @@ namespace MVGE_INF.Managers
                 throw new FileNotFoundException($"Microbiome Defaults.txt not found for microbiome '{microName}' in biome '{biomeName}' at {defaultsPath}");
             // Placeholder for future JSON parse; currently only validates presence
             return new MicrobiomeJSON();
+        }
+
+        // --- Resolution helpers (string -> runtime objects) ------------------------------------
+        private static BlockType? ResolveBlockType(string? token)
+        {
+            if (string.IsNullOrWhiteSpace(token)) return null;
+
+            // Try numeric id
+            if (ushort.TryParse(token, out var numeric))
+            {
+                return TerrainLoader.allBlockTypeObjects.Find(b => b.ID == numeric);
+            }
+
+            // Try base block enum name
+            if (Enum.TryParse<BaseBlockType>(token, true, out var baseEnum))
+            {
+                ushort id = (ushort)baseEnum;
+                return TerrainLoader.allBlockTypeObjects.Find(b => b.ID == id);
+            }
+
+            // Try unique name first (UniqueName is distinct but we only have in object list)
+            var bt = TerrainLoader.allBlockTypeObjects.Find(b => token.Equals(b.UniqueName, StringComparison.OrdinalIgnoreCase));
+            if (bt != null) return bt;
+
+            // Try display Name
+            bt = TerrainLoader.allBlockTypeObjects.Find(b => token.Equals(b.Name, StringComparison.OrdinalIgnoreCase));
+            return bt;
+        }
+
+        private static bool TryResolveBaseBlockType(string token, out BaseBlockType baseBlock)
+        {
+            // Numeric
+            if (byte.TryParse(token, out var num) && Enum.IsDefined(typeof(BaseBlockType), num))
+            {
+                baseBlock = (BaseBlockType)num;
+                return true;
+            }
+            // Enum name
+            if (Enum.TryParse<BaseBlockType>(token, true, out var parsed))
+            {
+                baseBlock = parsed;
+                return true;
+            }
+            baseBlock = default;
+            return false;
         }
 
         // --- Preprocessing helper -------------------------------------------------------------

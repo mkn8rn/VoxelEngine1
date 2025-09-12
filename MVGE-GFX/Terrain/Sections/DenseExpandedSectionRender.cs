@@ -27,7 +27,7 @@ namespace MVGE_GFX.Terrain.Sections
             List<byte> faceDirList)
         {
             // Quick rejection / no-op
-            if (desc.NonAirCount == 0 || desc.Kind != 3)
+            if (desc.OpaqueCount == 0 || desc.Kind != 3)
                 return true; // nothing to emit (handled)
 
             // If occupancy is somehow missing (should be rare after refactor) fall back

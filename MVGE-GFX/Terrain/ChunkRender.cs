@@ -164,7 +164,6 @@ namespace MVGE_GFX.Terrain
             if (!isBuilt) return;
             chunkVAO.Delete();
             quadPosVBO.Delete();
-            quadUVVBO.Delete();
             instanceOffsetVBO.Delete();
             instanceTileIndexVBO.Delete();
             instanceFaceDirVBO.Delete();

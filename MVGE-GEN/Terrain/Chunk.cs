@@ -11,6 +11,7 @@ using System.Buffers;
 using MVGE_INF.Models.Terrain;
 using MVGE_INF.Generation.Models;
 using MVGE_INF.Models.Generation.Biomes;
+using MVGE_INF.Loaders;
 
 namespace MVGE_GEN.Terrain
 {
@@ -83,7 +84,7 @@ namespace MVGE_GEN.Terrain
         public bool AllOneBlockChunk { get; internal set; }
         public ushort AllOneBlockBlockId { get; internal set; } // The uniform non-air block id for AllOneBlockChunk
 
-        // per-face full solidity flags (all boundary voxels on that face are non-empty)
+        // per-face full solidity flags (all boundary voxels on that face are non-empty & opaque).
         // Naming: NegX = x==0 face ("left"), PosX = x==dimX-1 ("right"), etc.
         public bool FaceSolidNegX { get; internal set; }
         public bool FaceSolidPosX { get; internal set; }
@@ -253,7 +254,7 @@ namespace MVGE_GEN.Terrain
         {
             for (int y = 0; y < dimY; y++)
                 for (int z = 0; z < dimZ; z++)
-                    if (GetBlockLocal(0, y, z) == EMPTY) return false;
+                    if (!TerrainLoader.IsOpaque(GetBlockLocal(0, y, z))) return false;
             return true;
         }
         private bool ScanFaceSolidPosX()
@@ -261,14 +262,14 @@ namespace MVGE_GEN.Terrain
             int x = dimX - 1;
             for (int y = 0; y < dimY; y++)
                 for (int z = 0; z < dimZ; z++)
-                    if (GetBlockLocal(x, y, z) == EMPTY) return false;
+                    if (!TerrainLoader.IsOpaque(GetBlockLocal(x, y, z))) return false;
             return true;
         }
         private bool ScanFaceSolidNegY()
         {
             for (int x = 0; x < dimX; x++)
                 for (int z = 0; z < dimZ; z++)
-                    if (GetBlockLocal(x, 0, z) == EMPTY) return false;
+                    if (!TerrainLoader.IsOpaque(GetBlockLocal(x, 0, z))) return false;
             return true;
         }
         private bool ScanFaceSolidPosY()
@@ -276,14 +277,14 @@ namespace MVGE_GEN.Terrain
             int y = dimY - 1;
             for (int x = 0; x < dimX; x++)
                 for (int z = 0; z < dimZ; z++)
-                    if (GetBlockLocal(x, y, z) == EMPTY) return false;
+                    if (!TerrainLoader.IsOpaque(GetBlockLocal(x, y, z))) return false;
             return true;
         }
         private bool ScanFaceSolidNegZ()
         {
             for (int x = 0; x < dimX; x++)
                 for (int y = 0; y < dimY; y++)
-                    if (GetBlockLocal(x, y, 0) == EMPTY) return false;
+                    if (!TerrainLoader.IsOpaque(GetBlockLocal(x, y, 0))) return false;
             return true;
         }
         private bool ScanFaceSolidPosZ()
@@ -291,7 +292,7 @@ namespace MVGE_GEN.Terrain
             int z = dimZ - 1;
             for (int x = 0; x < dimX; x++)
                 for (int y = 0; y < dimY; y++)
-                    if (GetBlockLocal(x, y, z) == EMPTY) return false;
+                    if (!TerrainLoader.IsOpaque(GetBlockLocal(x, y, z))) return false;
             return true;
         }
     }

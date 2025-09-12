@@ -1,15 +1,15 @@
 ﻿[
   {
     "generation_type": "InlineReplacement",
-    "base_blocks_to_replace": [Stone],
-    "block_type_id": LimeWhole,
+    "base_blocks_to_replace": ["Stone"],
+    "block_type_id": "LimeWhole",
     "priority": 1,
     "microbiome_id": null
   },
   {
     "generation_type": "InlineReplacement",
-    "base_blocks_to_replace": [Soil],
-    "block_type_id": Rendzina,
+    "base_blocks_to_replace": ["Soil"],
+    "block_type_id": "Rendzina",
     "priority": 2,
     "microbiome_id": null
   }

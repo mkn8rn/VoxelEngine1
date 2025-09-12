@@ -50,7 +50,7 @@ namespace MVGE_GFX.Terrain.Sections
                     {
                         int si = ((sx * data.sectionsY) + sy) * data.sectionsZ + sz;
                         ref var desc = ref data.SectionDescs[si];
-                        if (desc.Kind == 0 || desc.NonAirCount == 0) continue; // empty
+                        if (desc.Kind == 0 || desc.OpaqueCount == 0) continue; // empty
 
                         bool specializedHandled = false;
                         switch (desc.Kind)

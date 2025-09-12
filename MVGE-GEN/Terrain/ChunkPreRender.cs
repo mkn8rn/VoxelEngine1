@@ -9,6 +9,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
+using MVGE_INF.Loaders;
 
 namespace MVGE_GEN.Terrain
 {
@@ -51,14 +52,13 @@ namespace MVGE_GEN.Terrain
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void UpdateBoundaryPlaneBit(int lx, int ly, int lz, ushort blockId)
         {
-            ushort EMPTY = (ushort)BaseBlockType.Empty;
-            bool solid = blockId != EMPTY;
+            // A voxel contributes to boundary plane solidity only if it is opaque (not air / not transparent).
+            bool solid = TerrainLoader.IsOpaque(blockId);
             // allocate if not present yet (late creation path after generation)
             EnsurePlaneArrays();
             if (lx == 0)
             {
-                int yzIndex = lz * dimY + ly; int w = yzIndex >> 6; int b = yzIndex & 63;
-                ulong mask = 1UL << b;
+                int yzIndex = lz * dimY + ly; int w = yzIndex >> 6; int b = yzIndex & 63; ulong mask = 1UL << b;
                 if (solid) PlaneNegX[w] |= mask; else PlaneNegX[w] &= ~mask;
             }
             if (lx == dimX - 1)
@@ -97,10 +97,10 @@ namespace MVGE_GEN.Terrain
         // Mesh prepass stats generated during flattening to avoid extra scans in ChunkRender
         internal struct ChunkMeshPrepassStats
         {
-            public int SolidCount;
-            public int ExposureEstimate;
+            public int SolidCount;              // opaque voxel count at chunk level
+            public int ExposureEstimate;        // exposure estimate over opaque occupancy
             public int MinX, MinY, MinZ, MaxX, MaxY, MaxZ; // inclusive bounds
-            public int XNonEmpty, YNonEmpty, ZNonEmpty;     // counts of slices with any solid
+            public int XNonEmpty, YNonEmpty, ZNonEmpty;     // counts of slices with any opaque voxel
             public bool HasStats;
             public void AccumulateBounds(int x, int y, int z)
             {
@@ -180,7 +180,7 @@ namespace MVGE_GEN.Terrain
                         {
                             Kind = (byte)sec.Kind,
                             UniformBlockId = sec.UniformBlockId,
-                            NonAirCount = sec.NonAirCount,
+                            OpaqueCount = sec.NonAirCount,
                             SparseIndices = sec.SparseIndices,
                             SparseBlocks = sec.SparseBlocks,
                             ExpandedDense = sec.ExpandedDense,
@@ -223,24 +223,28 @@ namespace MVGE_GEN.Terrain
             if (AllOneBlockChunk)
             {
                 int vol = dimX * dimY * dimZ;
+                bool uniformOpaque = TerrainLoader.IsOpaque(AllOneBlockBlockId);
                 long internalAdj = (long)(dimX - 1) * dimY * dimZ + (long)dimX * (dimZ - 1) * dimY + (long)dimX * dimZ * (dimY - 1);
-                int exposure = (int)(6L * vol - 2L * internalAdj);
+                int exposure = uniformOpaque ? (int)(6L * vol - 2L * internalAdj) : 0;
                 MeshPrepassStats = new ChunkMeshPrepassStats
                 {
-                    SolidCount = vol,
+                    SolidCount = uniformOpaque ? vol : 0,
                     ExposureEstimate = exposure,
                     MinX = 0, MinY = 0, MinZ = 0,
                     MaxX = dimX - 1, MaxY = dimY - 1, MaxZ = dimZ - 1,
-                    XNonEmpty = dimX, YNonEmpty = dimY, ZNonEmpty = dimZ, HasStats = true
+                    XNonEmpty = uniformOpaque ? dimX : 0,
+                    YNonEmpty = uniformOpaque ? dimY : 0,
+                    ZNonEmpty = uniformOpaque ? dimZ : 0,
+                    HasStats = uniformOpaque
                 };
                 var prerenderUniform = BuildPrerenderData(BuildSectionDescriptors());
                 chunkRender = new ChunkRender(prerenderUniform);
                 return;
             }
 
-            // Aggregate stats directly from sections (no flatten)
+            // Aggregate opaque stats directly from sections (no flatten)
             long internalExposureSum = 0;
-            int totalNonAir = 0;
+            int totalOpaque = 0;
             bool boundsInit = false;
             int gMinX = 0, gMinY = 0, gMinZ = 0, gMaxX = 0, gMaxY = 0, gMaxZ = 0;
             for (int sx = 0; sx < sectionsX; sx++)
@@ -250,8 +254,8 @@ namespace MVGE_GEN.Terrain
                     for (int sz = 0; sz < sectionsZ; sz++)
                     {
                         var sec = sections[sx, sy, sz];
-                        if (sec == null || sec.NonAirCount == 0) continue;
-                        totalNonAir += sec.NonAirCount;
+                        if (sec == null || sec.NonAirCount == 0) continue; // NonAirCount holds opaque count
+                        totalOpaque += sec.NonAirCount;
                         internalExposureSum += sec.InternalExposure;
                         if (sec.HasBounds)
                         {
@@ -277,16 +281,16 @@ namespace MVGE_GEN.Terrain
             }
             MeshPrepassStats = new ChunkMeshPrepassStats
             {
-                SolidCount = totalNonAir,
+                SolidCount = totalOpaque,
                 ExposureEstimate = (int)Math.Min(int.MaxValue, internalExposureSum),
                 MinX = gMinX, MinY = gMinY, MinZ = gMinZ,
                 MaxX = gMaxX, MaxY = gMaxY, MaxZ = gMaxZ,
-                XNonEmpty = dimX, // coarse placeholders
-                YNonEmpty = dimY,
-                ZNonEmpty = dimZ,
+                XNonEmpty = totalOpaque > 0 ? dimX : 0,
+                YNonEmpty = totalOpaque > 0 ? dimY : 0,
+                ZNonEmpty = totalOpaque > 0 ? dimZ : 0,
                 HasStats = boundsInit
             };
-            if (totalNonAir == 0) return;
+            if (totalOpaque == 0) return;
             var prerender = BuildPrerenderData(BuildSectionDescriptors());
             chunkRender = new ChunkRender(prerender);
         }
