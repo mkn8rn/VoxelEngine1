@@ -17,17 +17,18 @@ namespace MVGE_GFX.Terrain.Sections
         ///  1. Resolve tight local voxel bounds (ResolveLocalBounds) to minimize work when section has partial fill metadata.
         ///  2. Build internal face masks (BuildInternalFaceMasks) to mark faces between occupied and non‑occupied voxels,
         ///     excluding outer boundary layers (those are added conditionally later).
-        ///  3. Fast neighbor full‑solid classification (lightweight) marks faces that are completely occluded by a fully solid neighbor
-        ///     so boundary face reinsertion and later emission for those directions are skipped entirely (internal mask bits for those
-        ///     faces remain but are ignored to reduce per-bit enumeration cost).
+        ///  3. Fast neighbor full‑solid classification marks directions whose boundary layer would be fully
+        ///     occluded by a fully solid neighbor; ONLY boundary face reinsertion is skipped for those directions. Internal
+        ///     faces (already computed in step 2) are still emitted for all directions to preserve walls of internal cavities.
         ///  4. Reintroduce only visible boundary faces (AddVisibleBoundaryFacesSelective) by testing neighbor sections and world
-        ///     boundary plane bitsets (suppresses faces hidden by adjacent solid content) while honoring skip flags from step 3.
+        ///     boundary plane bitsets (suppresses faces hidden by adjacent solid content) while honoring boundary skip flags
+        ///     from step 3.
         ///  5. Apply bounds mask trimming (ApplyBoundsMask) when section has tight bounds, allowing subsequent emission without
         ///     per-bit bounds comparisons (EmitFacesFromMaskNoBounds fast path) for remaining masks.
         ///  6. Fetch per‑face tile indices from the shared uniform face tile cache (GetUniformFaceTileSet) to avoid recomputing
         ///     atlas lookups for repeated block ids; if all six faces share a tile, use a fast single‑tile path.
-        ///  7. Emit instances per direction for non‑skipped faces with either a single shared tile index or per‑face tile indices using
-        ///     either the bounds-elided or bounded emission path depending on whether trimming occurred.
+        ///  7. Emit instances per direction. Emission no longer checks the boundary skip flags; those affected only boundary
+        ///     augmentation. Internal face masks always participate in emission if they contain bits.
         /// Returns true if the packed fast path handled emission; false signals caller to attempt another path.
         private bool EmitSinglePackedSectionInstances(
             ref SectionPrerenderDesc desc,
@@ -69,21 +70,21 @@ namespace MVGE_GFX.Terrain.Sections
             // 1. Internal faces (exclude boundary layers first) via shared helper
             BuildInternalFaceMasks(occ, faceNX, facePX, faceNY, facePY, faceNZ, facePZ);
 
-            // 2. Neighbor full-solid fast classification (skip flags). Order: 0..5 (-X,+X,-Y,+Y,-Z,+Z)
-            Span<bool> skipFace = stackalloc bool[6]; // initialized false
-            if (sx > 0) { ref var nLeft = ref allSecs[SecIndex(sx - 1, sy, sz, syCount, szCount)]; if (NeighborFullySolid(ref nLeft)) skipFace[0] = true; }
-            if (sx + 1 < sxCount) { ref var nRight = ref allSecs[SecIndex(sx + 1, sy, sz, syCount, szCount)]; if (NeighborFullySolid(ref nRight)) skipFace[1] = true; }
-            if (sy > 0) { ref var nDown = ref allSecs[SecIndex(sx, sy - 1, sz, syCount, szCount)]; if (NeighborFullySolid(ref nDown)) skipFace[2] = true; }
-            if (sy + 1 < syCount) { ref var nUp = ref allSecs[SecIndex(sx, sy + 1, sz, syCount, szCount)]; if (NeighborFullySolid(ref nUp)) skipFace[3] = true; }
-            if (sz > 0) { ref var nBack = ref allSecs[SecIndex(sx, sy, sz - 1, syCount, szCount)]; if (NeighborFullySolid(ref nBack)) skipFace[4] = true; }
-            if (sz + 1 < szCount) { ref var nFront = ref allSecs[SecIndex(sx, sy, sz + 1, syCount, szCount)]; if (NeighborFullySolid(ref nFront)) skipFace[5] = true; }
+            // 2. Neighbor full-solid fast classification (boundary skip flags). Order: 0..5 (-X,+X,-Y,+Y,-Z,+Z)
+            Span<bool> skipBoundary = stackalloc bool[6]; // initialized false
+            if (sx > 0)        { ref var nLeft  = ref allSecs[SecIndex(sx - 1, sy, sz, syCount, szCount)];  if (NeighborFullySolid(ref nLeft))  skipBoundary[0] = true; }
+            if (sx + 1 < sxCount) { ref var nRight = ref allSecs[SecIndex(sx + 1, sy, sz, syCount, szCount)]; if (NeighborFullySolid(ref nRight)) skipBoundary[1] = true; }
+            if (sy > 0)        { ref var nDown  = ref allSecs[SecIndex(sx, sy - 1, sz, syCount, szCount)];  if (NeighborFullySolid(ref nDown))  skipBoundary[2] = true; }
+            if (sy + 1 < syCount) { ref var nUp    = ref allSecs[SecIndex(sx, sy + 1, sz, syCount, szCount)]; if (NeighborFullySolid(ref nUp))    skipBoundary[3] = true; }
+            if (sz > 0)        { ref var nBack  = ref allSecs[SecIndex(sx, sy, sz - 1, syCount, szCount)];  if (NeighborFullySolid(ref nBack))  skipBoundary[4] = true; }
+            if (sz + 1 < szCount) { ref var nFront = ref allSecs[SecIndex(sx, sy, sz + 1, syCount, szCount)]; if (NeighborFullySolid(ref nFront)) skipBoundary[5] = true; }
 
-            // 3. Boundary faces: add only visible boundary voxels, respecting skip flags for fully occluded faces.
+            // 3. Boundary faces: add only visible boundary voxels, respecting boundary skip flags (skipBoundary).
             AddVisibleBoundaryFacesSelective(ref desc,
                 baseX, baseY, baseZ,
                 lxMin, lxMax, lyMin, lyMax, lzMin, lzMax,
                 allSecs, sx, sy, sz,
-                sxCount, syCount, szCount, skipFace,
+                sxCount, syCount, szCount, skipBoundary,
                 faceNX, facePX, faceNY, facePY, faceNZ, facePZ,
                 data);
 
@@ -94,12 +95,12 @@ namespace MVGE_GFX.Terrain.Sections
             }
 
             // Reserve capacity exactly by popcount after boundary reinsertion and optional bounds trimming.
-            int cNX = skipFace[0] ? 0 : PopCountMask(faceNX);
-            int cPX = skipFace[1] ? 0 : PopCountMask(facePX);
-            int cNY = skipFace[2] ? 0 : PopCountMask(faceNY);
-            int cPY = skipFace[3] ? 0 : PopCountMask(facePY);
-            int cNZ = skipFace[4] ? 0 : PopCountMask(faceNZ);
-            int cPZ = skipFace[5] ? 0 : PopCountMask(facePZ);
+            int cNX = PopCountMask(faceNX);
+            int cPX = PopCountMask(facePX);
+            int cNY = PopCountMask(faceNY);
+            int cPY = PopCountMask(facePY);
+            int cNZ = PopCountMask(faceNZ);
+            int cPZ = PopCountMask(facePZ);
             int addCount = cNX + cPX + cNY + cPY + cNZ + cPZ;
             if (addCount > 0)
             {
@@ -122,24 +123,48 @@ namespace MVGE_GFX.Terrain.Sections
                 faceTilesCached[5] = tileSet.TilePZ;
             }
 
-            // 6. Emit faces from masks (respect skip flags). Use no-bounds path when trimming applied.
+            // 6. Emit faces from masks. Boundary skip flags are intentionally ignored here so internal cavity walls are preserved.
             if (sameTileAllFaces)
             {
-                if (!skipFace[0]) { if (hasTightBounds) EmitFacesFromMaskNoBounds(faceNX, 0, baseX, baseY, baseZ, tileSet.SingleTile, offsetList, tileIndexList, faceDirList); else EmitFacesFromMask(faceNX, 0, baseX, baseY, baseZ, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, tileSet.SingleTile, offsetList, tileIndexList, faceDirList); }
-                if (!skipFace[1]) { if (hasTightBounds) EmitFacesFromMaskNoBounds(facePX, 1, baseX, baseY, baseZ, tileSet.SingleTile, offsetList, tileIndexList, faceDirList); else EmitFacesFromMask(facePX, 1, baseX, baseY, baseZ, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, tileSet.SingleTile, offsetList, tileIndexList, faceDirList); }
-                if (!skipFace[2]) { if (hasTightBounds) EmitFacesFromMaskNoBounds(faceNY, 2, baseX, baseY, baseZ, tileSet.SingleTile, offsetList, tileIndexList, faceDirList); else EmitFacesFromMask(faceNY, 2, baseX, baseY, baseZ, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, tileSet.SingleTile, offsetList, tileIndexList, faceDirList); }
-                if (!skipFace[3]) { if (hasTightBounds) EmitFacesFromMaskNoBounds(facePY, 3, baseX, baseY, baseZ, tileSet.SingleTile, offsetList, tileIndexList, faceDirList); else EmitFacesFromMask(facePY, 3, baseX, baseY, baseZ, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, tileSet.SingleTile, offsetList, tileIndexList, faceDirList); }
-                if (!skipFace[4]) { if (hasTightBounds) EmitFacesFromMaskNoBounds(faceNZ, 4, baseX, baseY, baseZ, tileSet.SingleTile, offsetList, tileIndexList, faceDirList); else EmitFacesFromMask(faceNZ, 4, baseX, baseY, baseZ, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, tileSet.SingleTile, offsetList, tileIndexList, faceDirList); }
-                if (!skipFace[5]) { if (hasTightBounds) EmitFacesFromMaskNoBounds(facePZ, 5, baseX, baseY, baseZ, tileSet.SingleTile, offsetList, tileIndexList, faceDirList); else EmitFacesFromMask(facePZ, 5, baseX, baseY, baseZ, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, tileSet.SingleTile, offsetList, tileIndexList, faceDirList); }
+                if (hasTightBounds)
+                {
+                    EmitFacesFromMaskNoBounds(faceNX, 0, baseX, baseY, baseZ, tileSet.SingleTile, offsetList, tileIndexList, faceDirList);
+                    EmitFacesFromMaskNoBounds(facePX, 1, baseX, baseY, baseZ, tileSet.SingleTile, offsetList, tileIndexList, faceDirList);
+                    EmitFacesFromMaskNoBounds(faceNY, 2, baseX, baseY, baseZ, tileSet.SingleTile, offsetList, tileIndexList, faceDirList);
+                    EmitFacesFromMaskNoBounds(facePY, 3, baseX, baseY, baseZ, tileSet.SingleTile, offsetList, tileIndexList, faceDirList);
+                    EmitFacesFromMaskNoBounds(faceNZ, 4, baseX, baseY, baseZ, tileSet.SingleTile, offsetList, tileIndexList, faceDirList);
+                    EmitFacesFromMaskNoBounds(facePZ, 5, baseX, baseY, baseZ, tileSet.SingleTile, offsetList, tileIndexList, faceDirList);
+                }
+                else
+                {
+                    EmitFacesFromMask(faceNX, 0, baseX, baseY, baseZ, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, tileSet.SingleTile, offsetList, tileIndexList, faceDirList);
+                    EmitFacesFromMask(facePX, 1, baseX, baseY, baseZ, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, tileSet.SingleTile, offsetList, tileIndexList, faceDirList);
+                    EmitFacesFromMask(faceNY, 2, baseX, baseY, baseZ, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, tileSet.SingleTile, offsetList, tileIndexList, faceDirList);
+                    EmitFacesFromMask(facePY, 3, baseX, baseY, baseZ, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, tileSet.SingleTile, offsetList, tileIndexList, faceDirList);
+                    EmitFacesFromMask(faceNZ, 4, baseX, baseY, baseZ, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, tileSet.SingleTile, offsetList, tileIndexList, faceDirList);
+                    EmitFacesFromMask(facePZ, 5, baseX, baseY, baseZ, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, tileSet.SingleTile, offsetList, tileIndexList, faceDirList);
+                }
             }
             else
             {
-                if (!skipFace[0]) { if (hasTightBounds) EmitFacesFromMaskNoBounds(faceNX, 0, baseX, baseY, baseZ, faceTilesCached[0], offsetList, tileIndexList, faceDirList); else EmitFacesFromMask(faceNX, 0, baseX, baseY, baseZ, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, faceTilesCached[0], offsetList, tileIndexList, faceDirList); }
-                if (!skipFace[1]) { if (hasTightBounds) EmitFacesFromMaskNoBounds(facePX, 1, baseX, baseY, baseZ, faceTilesCached[1], offsetList, tileIndexList, faceDirList); else EmitFacesFromMask(facePX, 1, baseX, baseY, baseZ, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, faceTilesCached[1], offsetList, tileIndexList, faceDirList); }
-                if (!skipFace[2]) { if (hasTightBounds) EmitFacesFromMaskNoBounds(faceNY, 2, baseX, baseY, baseZ, faceTilesCached[2], offsetList, tileIndexList, faceDirList); else EmitFacesFromMask(faceNY, 2, baseX, baseY, baseZ, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, faceTilesCached[2], offsetList, tileIndexList, faceDirList); }
-                if (!skipFace[3]) { if (hasTightBounds) EmitFacesFromMaskNoBounds(facePY, 3, baseX, baseY, baseZ, faceTilesCached[3], offsetList, tileIndexList, faceDirList); else EmitFacesFromMask(facePY, 3, baseX, baseY, baseZ, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, faceTilesCached[3], offsetList, tileIndexList, faceDirList); }
-                if (!skipFace[4]) { if (hasTightBounds) EmitFacesFromMaskNoBounds(faceNZ, 4, baseX, baseY, baseZ, faceTilesCached[4], offsetList, tileIndexList, faceDirList); else EmitFacesFromMask(faceNZ, 4, baseX, baseY, baseZ, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, faceTilesCached[4], offsetList, tileIndexList, faceDirList); }
-                if (!skipFace[5]) { if (hasTightBounds) EmitFacesFromMaskNoBounds(facePZ, 5, baseX, baseY, baseZ, faceTilesCached[5], offsetList, tileIndexList, faceDirList); else EmitFacesFromMask(facePZ, 5, baseX, baseY, baseZ, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, faceTilesCached[5], offsetList, tileIndexList, faceDirList); }
+                if (hasTightBounds)
+                {
+                    EmitFacesFromMaskNoBounds(faceNX, 0, baseX, baseY, baseZ, faceTilesCached[0], offsetList, tileIndexList, faceDirList);
+                    EmitFacesFromMaskNoBounds(facePX, 1, baseX, baseY, baseZ, faceTilesCached[1], offsetList, tileIndexList, faceDirList);
+                    EmitFacesFromMaskNoBounds(faceNY, 2, baseX, baseY, baseZ, faceTilesCached[2], offsetList, tileIndexList, faceDirList);
+                    EmitFacesFromMaskNoBounds(facePY, 3, baseX, baseY, baseZ, faceTilesCached[3], offsetList, tileIndexList, faceDirList);
+                    EmitFacesFromMaskNoBounds(faceNZ, 4, baseX, baseY, baseZ, faceTilesCached[4], offsetList, tileIndexList, faceDirList);
+                    EmitFacesFromMaskNoBounds(facePZ, 5, baseX, baseY, baseZ, faceTilesCached[5], offsetList, tileIndexList, faceDirList);
+                }
+                else
+                {
+                    EmitFacesFromMask(faceNX, 0, baseX, baseY, baseZ, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, faceTilesCached[0], offsetList, tileIndexList, faceDirList);
+                    EmitFacesFromMask(facePX, 1, baseX, baseY, baseZ, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, faceTilesCached[1], offsetList, tileIndexList, faceDirList);
+                    EmitFacesFromMask(faceNY, 2, baseX, baseY, baseZ, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, faceTilesCached[2], offsetList, tileIndexList, faceDirList);
+                    EmitFacesFromMask(facePY, 3, baseX, baseY, baseZ, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, faceTilesCached[3], offsetList, tileIndexList, faceDirList);
+                    EmitFacesFromMask(faceNZ, 4, baseX, baseY, baseZ, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, faceTilesCached[4], offsetList, tileIndexList, faceDirList);
+                    EmitFacesFromMask(facePZ, 5, baseX, baseY, baseZ, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, faceTilesCached[5], offsetList, tileIndexList, faceDirList);
+                }
             }
 
             return true;
