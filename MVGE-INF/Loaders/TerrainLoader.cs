@@ -16,8 +16,18 @@ namespace MVGE_INF.Loaders
         // Loading
         private const ushort FIRST_CUSTOM_BLOCK_ID = 256; // IDs <256 reserved for base / special
 
-        // Non-opaque, non-air base block types (transparent/translucent buckets used by prerender/render)
-        public static HashSet<BaseBlockType> NonOpaqueNonAirBaseBlocks { get; private set; }
+        // Non-opaque (transparent or translucent) blocks including air. The BlockType set stores rich objects for iteration/reporting.
+        public static HashSet<BlockType> NonOpaqueBlocks { get; private set; }
+        // Parallel id set for membership queries. Kept in sync with NonOpaqueBlocks.
+        public static HashSet<ushort> NonOpaqueBlockIds { get; private set; }
+
+        // Hardcoded list of base block types that are non-opaque (includes Empty). Used during base load before custom blocks.
+        public List<BaseBlockType> NonOpaqueBaseBlocks = new List<BaseBlockType> { 
+            BaseBlockType.Empty,
+            BaseBlockType.Gas,
+            BaseBlockType.Water,
+            BaseBlockType.Glass
+        };
 
         public TerrainLoader()
         {
@@ -25,7 +35,7 @@ namespace MVGE_INF.Loaders
 
             LoadBaseBlockType();
             LoadOtherBlockTypes();
-            InitializeNonOpaqueNonAirBaseBlocks();
+            InitializeNonOpaqueBlocks();
 
             Console.WriteLine("Terrain data finished loading.");
             Console.WriteLine($"Total block types (including base): {allBlockTypes.Count}");
@@ -33,38 +43,46 @@ namespace MVGE_INF.Loaders
 
         public static bool IsNonOpaque(ushort blockId)
         {
-            if (blockId == (ushort)BaseBlockType.Empty) return false;
-
-            // Base range (0..FIRST_CUSTOM_BLOCK_ID-1) maps 1:1 to BaseBlockType enum values.
-            if (blockId < FIRST_CUSTOM_BLOCK_ID)
-            {
-                return NonOpaqueNonAirBaseBlocks.Contains((BaseBlockType)blockId);
-            }
-
-            // Custom block: resolve its base type (linear scan; acceptable for now).
-            // (Can be optimized later with an optional lookup table if profiling justifies it.)
-            for (int i = 0; i < allBlockTypeObjects.Count; i++)
-            {
-                var bt = allBlockTypeObjects[i];
-                if (bt.ID == blockId)
-                    return NonOpaqueNonAirBaseBlocks.Contains(bt.BaseType);
-            }
-            return false;
+            // Falls back to false if not initialized.
+            if (NonOpaqueBlockIds == null || NonOpaqueBlockIds.Count == 0) return false;
+            return NonOpaqueBlockIds.Contains(blockId);
         }
 
-        private void InitializeNonOpaqueNonAirBaseBlocks()
+        public static bool IsNonOpaqueNonAir(ushort blockId)
         {
-            // Because base blocks are hardcoded,
-            // we can just list the known non-opaque types here.
-            NonOpaqueNonAirBaseBlocks = new HashSet<BaseBlockType>
-            {
-                BaseBlockType.Gas,
-                BaseBlockType.Water,
-                BaseBlockType.Glass
-            };
+            // Air (Empty) explicitly excluded here while remaining in the general non-opaque set.
+            if (blockId == (ushort)BaseBlockType.Empty) return false; // air
+            return IsNonOpaque(blockId);
+        }
 
-            // Non-base block types are not considered here yet
-            // to keep things simple for now. I'll add that later.
+        private void InitializeNonOpaqueBlocks()
+        {
+            // Create new set (object instances) and parallel id set for O(1) lookups.
+            NonOpaqueBlocks = new HashSet<BlockType>();
+            NonOpaqueBlockIds = new HashSet<ushort>();
+
+            // 1. Add the hardcoded non-opaque base block types (includes Empty).
+            foreach (var baseType in NonOpaqueBaseBlocks)
+            {
+                ushort id = (ushort)baseType;
+                var bt = allBlockTypeObjects.FirstOrDefault(o => o.ID == id);
+                if (bt != null)
+                {
+                    NonOpaqueBlocks.Add(bt);
+                    NonOpaqueBlockIds.Add(bt.ID);
+                }
+            }
+
+            // 2. Add all custom (non-base) block types that are transparent.
+            foreach (var bt in allBlockTypeObjects)
+            {
+                if (bt.ID < FIRST_CUSTOM_BLOCK_ID) continue; // skip base enum defined types here
+                if (bt.IsTransparent)
+                {
+                    NonOpaqueBlocks.Add(bt);
+                    NonOpaqueBlockIds.Add(bt.ID);
+                }
+            }
         }
 
         internal void LoadBaseBlockType()
@@ -79,6 +97,7 @@ namespace MVGE_INF.Loaders
                 }
 
                 string name = baseType.ToString();
+                bool isTransparent = NonOpaqueBaseBlocks.Contains(baseType);
 
                 // Detect and warn on duplicate (should not happen, but keeps behavior explicit).
                 if (allBlockTypesByIds.ContainsKey(id))
@@ -103,7 +122,8 @@ namespace MVGE_INF.Loaders
                     TextureFaceBack = name,
                     TextureFaceLeft = name,
                     TextureFaceRight = name,
-                    TextureFaceBottom = name
+                    TextureFaceBottom = name,
+                    IsTransparent = isTransparent
                 };
                 allBlockTypeObjects.Add(btObj);
 
@@ -213,7 +233,8 @@ namespace MVGE_INF.Loaders
                         TextureFaceBack = json.TextureFaceBack ?? json.TextureFaceBase,
                         TextureFaceLeft = json.TextureFaceLeft ?? json.TextureFaceBase,
                         TextureFaceRight = json.TextureFaceRight ?? json.TextureFaceBase,
-                        TextureFaceBottom = json.TextureFaceBottom ?? json.TextureFaceBase
+                        TextureFaceBottom = json.TextureFaceBottom ?? json.TextureFaceBase,
+                        IsTransparent = json.IsTransparent
                     };
                     RegisterRuntimeBlock(rt, file);
                     explicitAssigned.Add((rt.Name, rt.ID));
@@ -253,7 +274,8 @@ namespace MVGE_INF.Loaders
                         TextureFaceBack = json.TextureFaceBack ?? json.TextureFaceBase,
                         TextureFaceLeft = json.TextureFaceLeft ?? json.TextureFaceBase,
                         TextureFaceRight = json.TextureFaceRight ?? json.TextureFaceBase,
-                        TextureFaceBottom = json.TextureFaceBottom ?? json.TextureFaceBase
+                        TextureFaceBottom = json.TextureFaceBottom ?? json.TextureFaceBase,
+                        IsTransparent = json.IsTransparent
                     };
                     RegisterRuntimeBlock(rt, file);
                     autoAssigned.Add((rt.Name, rt.ID));

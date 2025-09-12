@@ -2,5 +2,6 @@
   "ID": 401,
   "Name": "Limestone Black Soil",
   "BaseType": "Soil",
-  "TextureFaceBase": "Rendzina"
+  "TextureFaceBase": "Rendzina",
+  "IsTransparent": true
 }

@@ -3,4 +3,5 @@
   "Name": "Limestone",
   "BaseType": "Stone",
   "TextureFaceBase": "LimeWhole"
+  "IsTransparent": true
 }

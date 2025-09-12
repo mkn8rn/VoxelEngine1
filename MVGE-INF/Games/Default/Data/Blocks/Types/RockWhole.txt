@@ -2,5 +2,6 @@
   "ID": 256,
   "Name": "Dolomite",
   "BaseType": "Stone",
-  "TextureFaceBase": "RockWhole"
+  "TextureFaceBase": "RockWhole",
+  "IsTransparent": true
 }
