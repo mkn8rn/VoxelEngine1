@@ -7,6 +7,7 @@ using MVGE_INF.Generation.Models;
 using MVGE_INF.Models.Terrain;
 using MVGE_INF.Loaders;
 using MVGE_INF.Models.Generation.Biomes;
+using System.Text;
 
 namespace MVGE_INF.Managers
 {
@@ -79,7 +80,12 @@ namespace MVGE_INF.Managers
                         string rulesJsonText = File.ReadAllText(generationRulesPath);
                         if (string.IsNullOrWhiteSpace(rulesJsonText))
                             throw new Exception("GenerationRules.txt is empty");
-                        var rules = JsonSerializer.Deserialize<List<GenerationRuleJSON>>(rulesJsonText, jsonOptions);
+
+                        // Preprocess to allow unquoted identifiers (e.g., Stone, Soil, LimeWhole) by mapping them to numeric IDs.
+                        // This keeps the on-disk format human-readable while reusing existing numeric-based JSON model.
+                        string processedText = PreprocessGenerationRulesText(rulesJsonText);
+
+                        var rules = JsonSerializer.Deserialize<List<GenerationRuleJSON>>(processedText, jsonOptions);
                         if (rules == null)
                             throw new Exception("Deserialized rules list is null");
 
@@ -313,6 +319,84 @@ namespace MVGE_INF.Managers
                 throw new FileNotFoundException($"Microbiome Defaults.txt not found for microbiome '{microName}' in biome '{biomeName}' at {defaultsPath}");
             // Placeholder for future JSON parse; currently only validates presence
             return new MicrobiomeJSON();
+        }
+
+        // --- Preprocessing helper -------------------------------------------------------------
+        // Converts unquoted identifiers referencing BaseBlockType names or BlockType unique names
+        // to their numeric IDs so that standard System.Text.Json deserialization (expecting numbers) succeeds.
+        private static string PreprocessGenerationRulesText(string raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return raw;
+
+            // Build lookup maps (case-insensitive)
+            var baseTypeMap = new Dictionary<string, ushort>(StringComparer.OrdinalIgnoreCase);
+            foreach (BaseBlockType bt in Enum.GetValues(typeof(BaseBlockType)))
+            {
+                baseTypeMap[bt.ToString()] = (ushort)bt;
+            }
+            var blockTypeMap = new Dictionary<string, ushort>(StringComparer.OrdinalIgnoreCase);
+            foreach (var bt in TerrainLoader.allBlockTypeObjects)
+            {
+                if (!blockTypeMap.ContainsKey(bt.UniqueName)) blockTypeMap[bt.UniqueName] = bt.ID;
+                if (!string.IsNullOrWhiteSpace(bt.Name) && !blockTypeMap.ContainsKey(bt.Name)) blockTypeMap[bt.Name] = bt.ID;
+            }
+
+            // We only transform tokens that are not inside strings.
+            // A token becomes numeric if found in either map; otherwise left as-is.
+            // Reserved literals that should remain untouched.
+            static bool IsReserved(string s) => string.Equals(s, "null", StringComparison.OrdinalIgnoreCase)
+                                              || string.Equals(s, "true", StringComparison.OrdinalIgnoreCase)
+                                              || string.Equals(s, "false", StringComparison.OrdinalIgnoreCase);
+
+            var sb = new StringBuilder(raw.Length + 64);
+            bool inString = false;
+            for (int i = 0; i < raw.Length; )
+            {
+                char c = raw[i];
+                if (c == '"')
+                {
+                    sb.Append(c);
+                    i++;
+                    // handle escape sequences (skip) simplistic
+                    inString = !inString;
+                    continue;
+                }
+                if (inString)
+                {
+                    sb.Append(c);
+                    i++;
+                    continue;
+                }
+                if (char.IsLetter(c) || c == '_')
+                {
+                    int start = i;
+                    i++;
+                    while (i < raw.Length && (char.IsLetterOrDigit(raw[i]) || raw[i] == '_')) i++;
+                    string token = raw[start..i];
+                    if (IsReserved(token))
+                    {
+                        sb.Append(token);
+                        continue;
+                    }
+                    if (baseTypeMap.TryGetValue(token, out ushort baseId))
+                    {
+                        sb.Append(baseId.ToString());
+                        continue;
+                    }
+                    if (blockTypeMap.TryGetValue(token, out ushort blockId))
+                    {
+                        sb.Append(blockId.ToString());
+                        continue;
+                    }
+                    // Unknown identifier: leave unchanged so downstream error surfaces with context.
+                    sb.Append(token);
+                    continue;
+                }
+                // All other characters copied verbatim
+                sb.Append(c);
+                i++;
+            }
+            return sb.ToString();
         }
     }
 }
