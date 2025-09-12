@@ -14,7 +14,6 @@ namespace MVGE_INF.Loaders
     public class TerrainLoader
     {
         // Loading
-        private ushort blockTypeCounter = 0; // used only for base types
         private const ushort FIRST_CUSTOM_BLOCK_ID = 256; // IDs <256 reserved for base / special
 
         // Non-opaque, non-air base block types (transparent/translucent buckets used by prerender/render)
@@ -73,14 +72,28 @@ namespace MVGE_INF.Loaders
             // Base enum block types occupy the reserved ID range starting at 0.
             foreach (BaseBlockType baseType in Enum.GetValues(typeof(BaseBlockType)))
             {
+                ushort id = (ushort)baseType; // authoritative ID for the base block
+                if (id >= FIRST_CUSTOM_BLOCK_ID)
+                {
+                    throw new InvalidOperationException($"Base block enum value '{baseType}' has underlying id {id} which collides with custom block ID range (>= {FIRST_CUSTOM_BLOCK_ID}).");
+                }
+
                 string name = baseType.ToString();
+
+                // Detect and warn on duplicate (should not happen, but keeps behavior explicit).
+                if (allBlockTypesByIds.ContainsKey(id))
+                {
+                    Console.WriteLine($"[TerrainLoader][WARN] Duplicate base block ID {id} for enum {baseType}; existing='{allBlockTypesByIds[id]}'. Skipping.");
+                    continue;
+                }
+
                 allBlockTypes.Add(name);
                 allBlockTypesByBaseType[name] = baseType;
-                allBlockTypesByIds[blockTypeCounter] = name;
+                allBlockTypesByIds[id] = name;
 
                 var btObj = new BlockType
                 {
-                    ID = blockTypeCounter,
+                    ID = id,
                     UniqueName = name,
                     Name = name,
                     BaseType = baseType,
@@ -94,8 +107,7 @@ namespace MVGE_INF.Loaders
                 };
                 allBlockTypeObjects.Add(btObj);
 
-                Console.WriteLine("Base type defined: " + name + ", id: " + blockTypeCounter + "/65535");
-                blockTypeCounter++;
+                Console.WriteLine("Base type defined: " + name + ", id: " + id + "/65535");
             }
         }
 
