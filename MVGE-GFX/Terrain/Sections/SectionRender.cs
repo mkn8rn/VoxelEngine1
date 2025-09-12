@@ -4,6 +4,7 @@ using MVGE_GFX.Models;
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
+using MVGE_INF.Loaders;
 
 namespace MVGE_GFX.Terrain.Sections
 {
@@ -14,6 +15,9 @@ namespace MVGE_GFX.Terrain.Sections
         private const ushort EMPTY = 0;
         // Cache to avoid repeated atlas UV -> tile lookups in fallback / generic emission paths.
         private readonly TileIndexCache _fallbackTileCache;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool Occludes(ushort id) => id != 0 && TerrainLoader.IsOpaque(id);
 
         public SectionRender(ChunkPrerenderData data, BlockTextureAtlas atlas)
         {
@@ -50,7 +54,7 @@ namespace MVGE_GFX.Terrain.Sections
                     {
                         int si = ((sx * data.sectionsY) + sy) * data.sectionsZ + sz;
                         ref var desc = ref data.SectionDescs[si];
-                        if (desc.Kind == 0 || desc.OpaqueCount == 0) continue; // empty
+                        if (desc.Kind == 0 || desc.OpaqueCount == 0) continue; // empty / no opaque content
 
                         bool specializedHandled = false;
                         switch (desc.Kind)
@@ -99,7 +103,7 @@ namespace MVGE_GFX.Terrain.Sections
             int endY = Math.Min(baseY + S, maxY);
             int endZ = Math.Min(baseZ + S, maxZ);
 
-            // If tight bounds exist, clamp iteration volume to those bounds in world coords.
+            // Clamp to bounds (bounds track any content; opaque emission still guarded by GetBlock+Occludes)
             if (desc.HasBounds)
             {
                 int bMinX = baseX + desc.MinLX; int bMaxX = baseX + desc.MaxLX;
@@ -116,28 +120,30 @@ namespace MVGE_GFX.Terrain.Sections
 
             for (int x = baseX; x < endX; x++)
             {
-                for (int y = baseY, newY = baseY; y < endY; y++, newY++)
+                for (int y = baseY; y < endY; y++)
                 {
                     for (int z = baseZ; z < endZ; z++)
                     {
-                        ushort block = GetBlock(x, y, z); if (block == EMPTY) continue;
+                        ushort block = GetBlock(x, y, z);
+                        if (!Occludes(block)) continue; // only opaque block faces emitted in fallback
+
                         // LEFT (-X)
-                        if ((x == 0 && !PlaneBit(nNegX, z * maxY + y)) || (x > 0 && GetBlock(x - 1, y, z) == EMPTY))
+                        if ((x == 0 && !PlaneBit(nNegX, z * maxY + y)) || (x > 0 && !Occludes(GetBlock(x - 1, y, z))))
                             EmitFaceInstance(block, 0, x, y, z, offsetList, tileIndexList, faceDirList);
                         // RIGHT (+X)
-                        if ((x == maxX - 1 && !PlaneBit(nPosX, z * maxY + y)) || (x < maxX - 1 && GetBlock(x + 1, y, z) == EMPTY))
+                        if ((x == maxX - 1 && !PlaneBit(nPosX, z * maxY + y)) || (x < maxX - 1 && !Occludes(GetBlock(x + 1, y, z))))
                             EmitFaceInstance(block, 1, x, y, z, offsetList, tileIndexList, faceDirList);
                         // BOTTOM (-Y)
-                        if ((y == 0 && !PlaneBit(nNegY, x * maxZ + z)) || (y > 0 && GetBlock(x, y - 1, z) == EMPTY))
+                        if ((y == 0 && !PlaneBit(nNegY, x * maxZ + z)) || (y > 0 && !Occludes(GetBlock(x, y - 1, z))))
                             EmitFaceInstance(block, 2, x, y, z, offsetList, tileIndexList, faceDirList);
                         // TOP (+Y)
-                        if ((y == maxY - 1 && !PlaneBit(nPosY, x * maxZ + z)) || (y < maxY - 1 && GetBlock(x, y + 1, z) == EMPTY))
+                        if ((y == maxY - 1 && !PlaneBit(nPosY, x * maxZ + z)) || (y < maxY - 1 && !Occludes(GetBlock(x, y + 1, z))))
                             EmitFaceInstance(block, 3, x, y, z, offsetList, tileIndexList, faceDirList);
                         // BACK (-Z)
-                        if ((z == 0 && !PlaneBit(nNegZ, x * maxY + y)) || (z > 0 && GetBlock(x, y, z - 1) == EMPTY))
+                        if ((z == 0 && !PlaneBit(nNegZ, x * maxY + y)) || (z > 0 && !Occludes(GetBlock(x, y, z - 1))))
                             EmitFaceInstance(block, 4, x, y, z, offsetList, tileIndexList, faceDirList);
                         // FRONT (+Z)
-                        if ((z == maxZ - 1 && !PlaneBit(nPosZ, x * maxY + y)) || (z < maxZ - 1 && GetBlock(x, y, z + 1) == EMPTY))
+                        if ((z == maxZ - 1 && !PlaneBit(nPosZ, x * maxY + y)) || (z < maxZ - 1 && !Occludes(GetBlock(x, y, z + 1))))
                             EmitFaceInstance(block, 5, x, y, z, offsetList, tileIndexList, faceDirList);
                     }
                 }

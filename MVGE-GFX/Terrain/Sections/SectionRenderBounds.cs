@@ -7,6 +7,7 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
+using MVGE_INF.Loaders; // for TerrainLoader.IsOpaque
 
 namespace MVGE_GFX.Terrain.Sections
 {
@@ -84,6 +85,8 @@ namespace MVGE_GFX.Terrain.Sections
         { ly = li & 15; int rest = li >> 4; lx = rest & 15; lz = rest >> 4; }
 
         // 1. BuildInternalFaceMasks: fills directional face masks for internal faces only (excludes boundary layers).
+        // NOTE: occ now indicates only opaque voxel occupancy; transparent blocks are excluded upstream so internal mask
+        // generation inherently ignores them without extra filtering here.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static void BuildInternalFaceMasks(ReadOnlySpan<ulong> occ,
                                                     Span<ulong> faceNX, Span<ulong> facePX,
@@ -138,6 +141,7 @@ namespace MVGE_GFX.Terrain.Sections
 
         // reintroduces boundary faces that are exposed (not occluded by world planes or neighbor sections).
         // face bit is added directly into the provided faceNX..facePZ masks.
+        // World plane bitsets and neighbor face bitsets are opaque-only: a set bit = opaque voxel present.
         internal static void AddVisibleBoundaryFaces(
             ref SectionPrerenderDesc desc,
             int baseX, int baseY, int baseZ,
@@ -159,7 +163,7 @@ namespace MVGE_GFX.Terrain.Sections
             bool hasBack  = sz > 0;                ref SectionPrerenderDesc backSec  = ref hasBack  ? ref allSecs[SecIndex(sx, sy, sz - 1, syCount, szCount)] : ref desc;
             bool hasFront = sz + 1 < szCount;      ref SectionPrerenderDesc frontSec = ref hasFront ? ref allSecs[SecIndex(sx, sy, sz + 1, syCount, szCount)] : ref desc;
 
-            // World boundary plane bitsets (holes suppress faces at world edge)
+            // World boundary plane bitsets (holes suppress faces at world edge). Set bit == opaque neighbor voxel.
             var planeNegX = data.NeighborPlaneNegX; var planePosX = data.NeighborPlanePosX;
             var planeNegY = data.NeighborPlaneNegY; var planePosY = data.NeighborPlanePosY;
             var planeNegZ = data.NeighborPlaneNegZ; var planePosZ = data.NeighborPlanePosZ;
@@ -177,25 +181,25 @@ namespace MVGE_GFX.Terrain.Sections
                         int w = planeIndex >> 6;
                         int b = planeIndex & 63;
                         ulong maskBit = 1UL << b;
-                        if ((desc.FaceNegXBits[w] & maskBit) == 0) continue; // boundary voxel not present
+                        if ((desc.FaceNegXBits[w] & maskBit) == 0) continue; // boundary voxel not present (opaque)
 
                         bool hidden = false;
                         if (worldX == 0)
                         {
-                            // World -X edge: consult world plane bitset
+                            // World -X edge: consult world plane bitset (set bit means opaque neighbor outside chunk)
                             int planeBitIndex = (baseZ + z) * maxY + (baseY + y);
                             hidden = PlaneBit(planeNegX, planeBitIndex);
-                    }
+                        }
                         else if (hasLeft && NeighborBoundarySolid(ref leftSec, 0, 15, y, z))
                         {
-                            hidden = true; // Occluded by neighbor +X boundary or voxel
-                }
+                            hidden = true; // Occluded by neighbor +X boundary opaque voxel
+                        }
 
                         if (!hidden)
                         {
                             int li = ((z * 16) + 0) * 16 + y; // local voxel linear index at x=0
                             faceNX[li >> 6] |= 1UL << (li & 63);
-            }
+                        }
                     }
                 }
             }
@@ -373,6 +377,7 @@ namespace MVGE_GFX.Terrain.Sections
 
         // Generalized boundary reinsertion (metadata-driven) with optional skip flags (used by packed selective path).
         // Preserves original face visibility semantics while reducing branch duplication.
+        // World plane & neighbor face bit semantics: bit set == opaque voxel present; transparent blocks are treated as holes.
         internal static void AddVisibleBoundaryFacesSelective(
             ref SectionPrerenderDesc desc,
             int baseX, int baseY, int baseZ,
@@ -436,7 +441,7 @@ namespace MVGE_GFX.Terrain.Sections
                     5 => desc.FacePosZBits,
                     _ => null
                 };
-                if (faceBits == null) continue;
+                if (faceBits == null) continue; // null means no opaque voxels on that boundary
 
                 // World boundary plane & neighbor selection
                 ulong[] plane = null; bool hasNeighbor = false; SectionPrerenderDesc neighbor = default;
@@ -450,7 +455,7 @@ namespace MVGE_GFX.Terrain.Sections
                     case 5: plane = (baseZ + 15) == maxZ - 1 ? planePosZ : null; hasNeighbor = hasFront; neighbor = hasFront ? frontSec : desc; break;
                 }
 
-                // Iterate plane indices according to face orientation
+                // Iterate plane indices according to face orientation (faceBits store opaque voxel positions)
                 if (meta.FaceDir == 0 || meta.FaceDir == 1) // X faces iterate z,y
                 {
                     for (int z = lzMin; z <= lzMax; z++)
@@ -537,15 +542,16 @@ namespace MVGE_GFX.Terrain.Sections
         }
 
         // Fallback solid test against arbitrary neighbor descriptor (shared across paths).
+        // Returns true only for opaque voxels (uniform transparent blocks excluded).
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static bool NeighborVoxelSolid(ref SectionPrerenderDesc n, int lx, int ly, int lz)
         {
-            if (n.Kind == 0 || n.OpaqueCount == 0) return false;
+            if (n.Kind == 0 || n.OpaqueCount == 0) return false; // empty or no opaque voxels
             switch (n.Kind)
             {
                 case 1: // Uniform
-                    return n.UniformBlockId != 0;
-                case 2: // Sparse
+                    return TerrainLoader.IsOpaque(n.UniformBlockId);
+                case 2: // Sparse (indices list opaque voxels only after pipeline refactor)
                     if (n.SparseIndices != null)
                     {
                         int li = ((lz * 16 + lx) * 16) + ly;
@@ -557,7 +563,8 @@ namespace MVGE_GFX.Terrain.Sections
                     if (n.ExpandedDense != null)
                     {
                         int liD = ((lz * 16 + lx) * 16) + ly;
-                        return n.ExpandedDense[liD] != 0;
+                        ushort id = n.ExpandedDense[liD];
+                        return id != 0 && TerrainLoader.IsOpaque(id);
                     }
                     return false;
                 case 4: // Packed
@@ -574,7 +581,7 @@ namespace MVGE_GFX.Terrain.Sections
         }
 
         // Neighbor boundary probe using its precomputed face bitsets (with per-voxel fallback).
-        // faceDir: 0..5 (-X,+X,-Y,+Y,-Z,+Z)
+        // faceDir: 0..5 (-X,+X,-Y,+Y,-Z,+Z)  (bit set == opaque voxel)
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static bool NeighborBoundarySolid(ref SectionPrerenderDesc n, int faceDir, int x, int y, int z)
         {
@@ -605,16 +612,18 @@ namespace MVGE_GFX.Terrain.Sections
             return ref data.SectionDescs[idx];
         }
 
-        // Helper: treat neighbor as fully solid if it is uniform non-air OR a single-id packed (Kind 4) fully filled OR a multi-packed (Kind 5) with palette indicating full occupancy (NonAirCount==4096).
+        // Helper: treat neighbor as fully solid only if every voxel is opaque. Uniform transparent sections are NOT treated as solid.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         static bool NeighborFullySolid(ref SectionPrerenderDesc n)
         {
-            if (n.Kind == 1 && n.UniformBlockId != 0) return true; // uniform solid
-            if ((n.Kind == 4 || n.Kind == 5) && n.OpaqueCount == 4096) return true;
+            if (n.OpaqueCount != 4096) return false;
+            if (n.Kind == 1) return TerrainLoader.IsOpaque(n.UniformBlockId);
+            if (n.Kind == 4 || n.Kind == 5 || n.Kind == 3) return true; // packed, multi-packed, dense (opaque occupancy fully filled)
             return false;
         }
 
-        // Neighbor mask popcount (occluded cells) for predicted capacity. Guard length to plane size (<=256 bits)
+        // Neighbor mask popcount (occluded cells) for predicted capacity. Guard length to plane size (<=256 bits).
+        // Masks operate over opaque-only bits.
         int MaskOcclusionCount(ulong[] mask)
         {
             if (mask == null) return 0;
@@ -623,7 +632,7 @@ namespace MVGE_GFX.Terrain.Sections
             return occluded;
         }
 
-        // Helper for world-edge plane quick skip if fully occluded in the SxS window.
+        // Helper for world-edge plane quick skip if fully occluded in the SxS window. Plane bits represent opaque voxels only.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         bool IsWorldPlaneFullySet(ulong[] plane, int startA, int startB, int countA, int countB, int strideB)
         {
@@ -636,14 +645,14 @@ namespace MVGE_GFX.Terrain.Sections
                 while (remaining-- > 0)
                 {
                     int w = idx >> 6; int b = idx & 63; if (w >= plane.Length) return false;
-                    if ((plane[w] & (1UL << b)) == 0UL) return false; // found a hole
+                    if ((plane[w] & (1UL << b)) == 0UL) return false; // found a hole (non-opaque)
                     idx++;
                 }
             }
             return true;
         }
 
-        // Count visible cells for world boundary face (used for capacity prediction)
+        // Count visible cells for world boundary face (used for capacity prediction). Plane bits represent opaque voxels only.
         int CountVisibleWorldBoundary(ulong[] plane, int startA, int startB, int countA, int countB, int strideB)
         {
             int total = countA * countB;
@@ -657,7 +666,7 @@ namespace MVGE_GFX.Terrain.Sections
                 for (int b = 0; b < countB; b++, idx++)
                 {
                     int w = idx >> 6; int bit = idx & 63; if (w >= plane.Length) { visible++; continue; }
-                    if ((plane[w] & (1UL << bit)) == 0UL) visible++; // hole -> visible
+                    if ((plane[w] & (1UL << bit)) == 0UL) visible++; // hole -> visible (transparent or air)
                 }
             }
             return visible;

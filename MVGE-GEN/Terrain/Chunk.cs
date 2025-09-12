@@ -236,7 +236,8 @@ namespace MVGE_GEN.Terrain
             // Eager metadata rebuild so downstream flatten has up-to-date representation without on-demand classify cost
             SectionUtils.ClassifyRepresentation(sec);
 
-            // Update face solidity if we touched a boundary cell (cheap plane scan only for affected faces)
+            // Update per-face full solidity flags when a boundary voxel changes. A face reports solid only if
+            // every voxel along that boundary is opaque (TerrainLoader.IsOpaque). Transparent / air break solidity.
             if (lx == 0) FaceSolidNegX = ScanFaceSolidNegX();
             if (lx == dimX - 1) FaceSolidPosX = ScanFaceSolidPosX();
             if (lz == 0) FaceSolidNegZ = ScanFaceSolidNegZ();
@@ -244,6 +245,8 @@ namespace MVGE_GEN.Terrain
             if (ly == 0) FaceSolidNegY = ScanFaceSolidNegY();
             if (ly == dimY - 1) FaceSolidPosY = ScanFaceSolidPosY();
 
+            // Boundary plane bitsets represent opaque occupancy only. Always update when a boundary cell mutates so
+            // transitions opaque<->non-opaque correctly set/clear bits (UpdateBoundaryPlaneBit internally tests IsOpaque).
             if (lx == 0 || lx == dimX - 1 || ly == 0 || ly == dimY - 1 || lz == 0 || lz == dimZ - 1)
             {
                 UpdateBoundaryPlaneBit(lx, ly, lz, blockId);
