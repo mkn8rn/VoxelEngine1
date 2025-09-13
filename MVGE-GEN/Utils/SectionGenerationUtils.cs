@@ -493,7 +493,7 @@ namespace MVGE_GEN.Utils
                             }
                         }
                     }
-                    sec.OccupancyBits = occ;
+                    sec.OpaqueBits = occ;
                     BuildFaceMasks(sec, occ);
 
                     sec.IsAllAir = false;

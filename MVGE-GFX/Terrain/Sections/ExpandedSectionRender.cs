@@ -31,14 +31,14 @@ namespace MVGE_GFX.Terrain.Sections
                 return true; // nothing to emit (handled)
 
             // If occupancy is somehow missing (should be rare after refactor) fall back
-            if (desc.OccupancyBits == null)
+            if (desc.OpaqueBits == null)
                 return false; // ask caller to use brute fallback path
 
             // Initialize shared masks / decode tables.
             EnsureBoundaryMasks(); // direct call (legacy EnsureMasks retained but unused here)
             EnsureLiDecode();      // decode tables (lx, ly, lz)
 
-            var occ = desc.OccupancyBits;          // 64 ulongs for 4096 voxels
+            var occ = desc.OpaqueBits;          // 64 ulongs for 4096 voxels
             ushort[] dense = desc.ExpandedDense;   // dense block id array (length 4096)
 
             int baseX = sx * S;

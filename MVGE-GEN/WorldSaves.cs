@@ -216,7 +216,7 @@ namespace MVGE_GEN
                             ps.Write(nonAir);
                             ps.Write(sec?.InternalExposure ?? 0);
                             bool hasBounds = sec?.HasBounds == true;
-                            bool hasOcc = sec != null && sec.OccupancyBits != null && sec.FaceNegXBits != null && sec.FacePosXBits != null && sec.FaceNegYBits != null && sec.FacePosYBits != null && sec.FaceNegZBits != null && sec.FacePosZBits != null;
+                            bool hasOcc = sec != null && sec.OpaqueBits != null && sec.FaceNegXBits != null && sec.FacePosXBits != null && sec.FaceNegYBits != null && sec.FacePosYBits != null && sec.FaceNegZBits != null && sec.FacePosZBits != null;
                             byte metaFlags = 0;
                             if (hasBounds) metaFlags |= 1;              // bit0
                             if (hasOcc) metaFlags |= 1 << 1;            // bit1
@@ -243,7 +243,7 @@ namespace MVGE_GEN
                                     ps.Write((byte)arr.Length);
                                     for (int i = 0; i < arr.Length; i++) ps.Write(arr[i]);
                                 }
-                                WriteUlongArray(sec.OccupancyBits);
+                                WriteUlongArray(sec.OpaqueBits);
                                 WriteUlongArray(sec.FaceNegXBits);
                                 WriteUlongArray(sec.FacePosXBits);
                                 WriteUlongArray(sec.FaceNegYBits);
@@ -614,7 +614,7 @@ namespace MVGE_GEN
                 sec.NonAirCount = br.ReadUInt16(); sec.InternalExposure = br.ReadInt32(); byte metaFlags = br.ReadByte();
                 bool hasBounds = (metaFlags & 1)!=0; bool hasOcc = (metaFlags & 2)!=0;
                 if (hasBounds && ms.Position + 6 <= ms.Length){ sec.HasBounds=true; sec.MinLX=br.ReadByte(); sec.MinLY=br.ReadByte(); sec.MinLZ=br.ReadByte(); sec.MaxLX=br.ReadByte(); sec.MaxLY=br.ReadByte(); sec.MaxLZ=br.ReadByte(); }
-                if (hasOcc){ ulong[] ReadOcc(){ if (ms.Position>=ms.Length) return null; int len = br.ReadByte(); if (len<=0 || ms.Position + len*8 > ms.Length) return null; var arr=new ulong[len]; for(int i=0;i<len;i++) arr[i]=br.ReadUInt64(); return arr; } sec.OccupancyBits=ReadOcc(); sec.FaceNegXBits=ReadOcc(); sec.FacePosXBits=ReadOcc(); sec.FaceNegYBits=ReadOcc(); sec.FacePosYBits=ReadOcc(); sec.FaceNegZBits=ReadOcc(); sec.FacePosZBits=ReadOcc(); }
+                if (hasOcc){ ulong[] ReadOcc(){ if (ms.Position>=ms.Length) return null; int len = br.ReadByte(); if (len<=0 || ms.Position + len*8 > ms.Length) return null; var arr=new ulong[len]; for(int i=0;i<len;i++) arr[i]=br.ReadUInt64(); return arr; } sec.OpaqueBits=ReadOcc(); sec.FaceNegXBits=ReadOcc(); sec.FacePosXBits=ReadOcc(); sec.FaceNegYBits=ReadOcc(); sec.FacePosYBits=ReadOcc(); sec.FaceNegZBits=ReadOcc(); sec.FacePosZBits=ReadOcc(); }
                 sec.CompletelyFull = (metaFlags & (1<<2))!=0; sec.MetadataBuilt = (metaFlags & (1<<3))!=0; sec.IsAllAir = (metaFlags & (1<<4))!=0; sec.StructuralDirty = (metaFlags & (1<<5))!=0; sec.IdMapDirty = (metaFlags & (1<<6))!=0; sec.BoundingBoxDirty = (metaFlags & (1<<7))!=0;
                 switch(kind)
                 {

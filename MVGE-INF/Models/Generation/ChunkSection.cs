@@ -10,14 +10,13 @@ namespace MVGE_INF.Generation.Models
         public const ushort AIR = 0;
 
         // Multi-form representation kind (added for performance optimization / decode avoidance)
-        // Legacy path uses Packed when BitData+Palette in variable bits form.
         public enum RepresentationKind : byte
         {
             Empty = 0,          // All air (IsAllAir == true, no storage)
             Uniform = 1,        // Single non-air block fills all voxels (uniformBlockId)
             Sparse = 2,         // Few voxels: sparse indices list with associated block ids
             DenseExpanded = 3,  // Expanded per-voxel block ids (ushort[] expandedDense)
-            Packed = 4,         // Legacy single-id packed (also used for 1-bit partial fill)
+            Packed = 4,         // Single-id packed (also used for 1-bit partial fill)
             MultiPacked = 5     // Multi-id low-entropy packed (palette + variable bits per index)
         }
 
@@ -29,10 +28,10 @@ namespace MVGE_INF.Generation.Models
         public List<ushort> Palette;                // index -> blockId (used for Packed or when still convenient)
         public Dictionary<ushort, int> PaletteLookup; // blockId -> palette index
 
-        public uint[] BitData; // legacy packed storage
+        public uint[] BitData; // packed storage
         public int BitsPerIndex;
         public int VoxelCount;
-        public int NonAirCount;
+        public int NonAirCount; // opaque voxel count
 
         // Uniform representation
         public ushort UniformBlockId; // valid when Kind==Uniform
@@ -45,7 +44,7 @@ namespace MVGE_INF.Generation.Models
         public ushort[] ExpandedDense; // valid when Kind==DenseExpanded
 
         // ---- metadata for fast flatten / exposure aggregation ----
-        public ulong[] OccupancyBits; // null if not built
+        public ulong[] OpaqueBits; // null if not built (previously occupancybits)
         public ulong[] FaceNegXBits; // YZ plane (index = z*16 + y)
         public ulong[] FacePosXBits; // YZ plane
         public ulong[] FaceNegYBits; // XZ plane (index = x*16 + z)
@@ -57,15 +56,23 @@ namespace MVGE_INF.Generation.Models
         public byte MinLX, MinLY, MinLZ, MaxLX, MaxLY, MaxLZ;
         public bool MetadataBuilt;
 
-        // ---- Incremental fast-classification helpers (legacy, unused in new builder but retained for compatibility) ----
-        public bool PreclassUniformCandidate = true; // remains true while only one non-air block id seen
-        public ushort PreclassFirstBlock;            // first non-air block encountered
-        public bool PreclassMultipleBlocks;          // set true once a different block encountered
-        public int DistinctNonAirBlocks;             // may be used later for heuristic decisions
-        public List<int> TempSparseIndices;          // collected linear indices while still under sparse threshold
-        public List<ushort> TempSparseBlocks;        // parallel block ids
-        public bool BoundsInitialized;               // internal flag for incremental bounds capture
-        public int AdjPairsX, AdjPairsY, AdjPairsZ;   // incremental adjacency counters (unused after refactor)
+        // ---- transparent voxel tracking (non-opaque, non-air). Populated in future finalize step. ----
+        public ulong[] TransparentBits;            // bits set where voxel is transparent (e.g. water, glass)
+        public int TransparentCount;               // count of transparent voxels
+        public ulong[] TransparentFaceNegXBits;    // optional per-face transparent boundary masks (same layout as opaque)
+        public ulong[] TransparentFacePosXBits;
+        public ulong[] TransparentFaceNegYBits;
+        public ulong[] TransparentFacePosYBits;
+        public ulong[] TransparentFaceNegZBits;
+        public ulong[] TransparentFacePosZBits;
+
+        // ---- explicit air (empty) tracking convenience (id == 0) ----
+        public ulong[] EmptyBits;                  // bits set where voxel is air
+        public int EmptyCount;                     // number of air voxels
+
+        // Convenience flags (do not drive logic yet)
+        public bool HasTransparent => TransparentCount > 0;
+        public bool HasAir => EmptyCount > 0;
 
         // Strongly-typed two-phase build scratch (internal use by SectionUtils)
         public SectionBuildScratch BuildScratch;

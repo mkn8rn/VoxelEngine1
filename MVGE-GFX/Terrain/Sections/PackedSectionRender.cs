@@ -38,13 +38,13 @@ namespace MVGE_GFX.Terrain.Sections
             List<byte> faceDirList)
         {
             // Preconditions: must be single‑id packed (BitsPerIndex=1, palette[1] is block id) with occupancy.
-            if (desc.OccupancyBits == null || desc.OpaqueCount == 0) return false;
+            if (desc.OpaqueBits == null || desc.OpaqueCount == 0) return false;
             if (desc.Palette == null || desc.Palette.Count < 2 || desc.BitsPerIndex != 1) return false;
 
             EnsureBoundaryMasks();
             EnsureLiDecode();
 
-            var occ = desc.OccupancyBits;          // 64 ulongs (4096 bits) occupancy
+            var occ = desc.OpaqueBits;          // 64 ulongs (4096 bits) occupancy
             ushort block = desc.Palette[1];        // single non‑air block id
 
             int baseX = sx * S;

@@ -35,7 +35,7 @@ namespace MVGE_GFX.Terrain.Sections
             // Validate preconditions.
             if (desc.Kind != 5) return false; // Not MultiPacked (caller will fallback / choose other path)
             if (desc.OpaqueCount == 0 ||
-                desc.OccupancyBits == null ||
+                desc.OpaqueBits == null ||
                 desc.PackedBitData == null ||
                 desc.Palette == null) return false; // nothing to emit / cannot decode
             // If palette effectively single non‑air id with 1 bit index prefer the single packed path.
@@ -44,7 +44,7 @@ namespace MVGE_GFX.Terrain.Sections
             EnsureBoundaryMasks();   // boundary position masks
             EnsureLiDecode();        // linear index -> (lx,ly,lz) decode tables
 
-            var occ = desc.OccupancyBits; // 64 * ulong => 4096 occupancy bits
+            var occ = desc.OpaqueBits; // 64 * ulong => 4096 occupancy bits
 
             // World base coordinates for this section
             int baseX = sx * S;

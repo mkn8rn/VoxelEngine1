@@ -569,10 +569,10 @@ namespace MVGE_GFX.Terrain.Sections
                     return false;
                 case 4: // Packed
                 case 5: // MultiPacked
-                    if (n.OccupancyBits != null)
+                    if (n.OpaqueBits != null)
                     {
                         int li = ((lz * 16 + lx) * 16) + ly;
-                        return (n.OccupancyBits[li >> 6] & (1UL << (li & 63))) != 0UL;
+                        return (n.OpaqueBits[li >> 6] & (1UL << (li & 63))) != 0UL;
                     }
                     return false;
                 default:

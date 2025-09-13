@@ -18,13 +18,28 @@ namespace MVGE_INF.Models.Generation
         public uint[] PackedBitData;
         public List<ushort> Palette;
         public int BitsPerIndex;
-        public ulong[] OccupancyBits;
+        public ulong[] OpaqueBits; // Previously named OccupancyBits
         public ulong[] FaceNegXBits;
         public ulong[] FacePosXBits;
         public ulong[] FaceNegYBits;
         public ulong[] FacePosYBits;
         public ulong[] FaceNegZBits;
         public ulong[] FacePosZBits;
+
+        // ---- transparent voxel data (non-opaque, non-air) ----
+        public int TransparentCount;
+        public ulong[] TransparentBits;
+        public ulong[] TransparentFaceNegXBits;
+        public ulong[] TransparentFacePosXBits;
+        public ulong[] TransparentFaceNegYBits;
+        public ulong[] TransparentFacePosYBits;
+        public ulong[] TransparentFaceNegZBits;
+        public ulong[] TransparentFacePosZBits;
+
+        // ---- explicit air tracking ----
+        public int EmptyCount;        // air voxel count
+        public ulong[] EmptyBits;     // bits for air voxels
+
         public bool HasBounds;
         public byte MinLX, MinLY, MinLZ, MaxLX, MaxLY, MaxLZ;
         public int SectionBaseX, SectionBaseY, SectionBaseZ; // world-local base

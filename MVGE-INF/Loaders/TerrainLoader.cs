@@ -25,6 +25,8 @@ namespace MVGE_INF.Loaders
         // Always length 65536 (full ushort domain) to avoid bounds checks.
         private static readonly bool[] NonOpaqueLut = new bool[65536];
         private static readonly bool[] LiquidLut = new bool[65536];
+        private static readonly bool[] SolidLut = new bool[65536];
+        private static readonly bool[] GasLut = new bool[65536];
 
         // Liquid blocks.
         public static HashSet<BlockType> LiquidBlocks { get; private set; }
@@ -34,13 +36,13 @@ namespace MVGE_INF.Loaders
         public List<BaseBlockType> NonOpaqueBaseBlocks = new List<BaseBlockType> {
             BaseBlockType.Empty,
             BaseBlockType.Gas,
-            // BaseBlockType.Water,
+            //BaseBlockType.Water,
             BaseBlockType.Glass
         };
 
         // Hardcoded list of liquid base block types.
         public List<BaseBlockType> LiquidBaseBlocks = new List<BaseBlockType> {
-            // BaseBlockType.Water
+            BaseBlockType.Water
         };
 
         public TerrainLoader()
@@ -84,6 +86,14 @@ namespace MVGE_INF.Loaders
             // Opaque = not air and not in non-opaque LUT.
             if (blockId == 0) return false; // air
             return !NonOpaqueLut[blockId];
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool IsLiquid(ushort blockId)
+        {
+            // Liquid = not air and in liquid LUT.
+            if (blockId == 0) return false; // air
+            return LiquidLut[blockId];
         }
 
         private void InitializeNonOpaqueBlocks()

@@ -240,7 +240,7 @@ namespace MVGE_GEN.Utils
 
         private static void BuildMetadataUniform(ChunkSection sec)
         {
-            sec.OccupancyBits = null; // not needed
+            sec.OpaqueBits = null; // not needed
             sec.FaceNegXBits = sec.FacePosXBits = sec.FaceNegYBits = sec.FacePosYBits = sec.FaceNegZBits = sec.FacePosZBits = null; // implicit full (opaque) if uniform block is opaque; renderer treats transparency separately.
             int N = VOXELS_PER_SECTION;
             // Internal adjacency for full 16^3 block
@@ -276,7 +276,7 @@ namespace MVGE_GEN.Utils
             }
             ComputeInternalExposure(bits, out int exposure);
             sec.InternalExposure = exposure;
-            sec.OccupancyBits = bits; // opaque occupancy only
+            sec.OpaqueBits = bits; // opaque occupancy only
             BuildFaceMasks(sec, bits);
             sec.HasBounds = true; sec.MinLX = minx; sec.MinLY = miny; sec.MinLZ = minz; sec.MaxLX = maxx; sec.MaxLY = maxy; sec.MaxLZ = maxz; sec.MetadataBuilt = true;
         }
@@ -301,7 +301,7 @@ namespace MVGE_GEN.Utils
             }
             ComputeInternalExposure(bits, out int exposure);
             sec.InternalExposure = exposure;
-            sec.OccupancyBits = bits;
+            sec.OpaqueBits = bits;
             BuildFaceMasks(sec, bits);
             sec.HasBounds = minx != 255; // if any non-air (including transparent)
             if (sec.HasBounds)
@@ -331,7 +331,7 @@ namespace MVGE_GEN.Utils
             }
             ComputeInternalExposure(bits, out int exposure);
             sec.InternalExposure = exposure;
-            sec.OccupancyBits = bits;
+            sec.OpaqueBits = bits;
             BuildFaceMasks(sec, bits);
             sec.HasBounds = minx != 255; // if any non-air (including transparent)
             if (sec.HasBounds)

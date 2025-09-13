@@ -419,7 +419,7 @@ namespace MVGE_GEN.Utils
                         int li = sec.SparseIndices[i];
                         occSparse[li >> 6] |= 1UL << (li & 63);
                     }
-                    sec.OccupancyBits = occSparse;
+                    sec.OpaqueBits = occSparse;
                     BuildFaceMasks(sec, occSparse);
                 }
             }
@@ -459,7 +459,7 @@ namespace MVGE_GEN.Utils
                             }
                         }
                     }
-                    sec.OccupancyBits = occ;
+                    sec.OpaqueBits = occ;
                     sec.IsAllAir = false;
                     BuildFaceMasks(sec, occ);
                 }
@@ -513,7 +513,7 @@ namespace MVGE_GEN.Utils
                                 }
                             }
                         }
-                        sec.OccupancyBits = occ; sec.IsAllAir = false; BuildFaceMasks(sec, occ);
+                        sec.OpaqueBits = occ; sec.IsAllAir = false; BuildFaceMasks(sec, occ);
                     }
                     else
                     {
@@ -540,7 +540,7 @@ namespace MVGE_GEN.Utils
                                 }
                             }
                         }
-                        sec.ExpandedDense = dense; sec.OccupancyBits = occDense; sec.IsAllAir = false; BuildFaceMasks(sec, occDense);
+                        sec.ExpandedDense = dense; sec.OpaqueBits = occDense; sec.IsAllAir = false; BuildFaceMasks(sec, occDense);
                     }
                 }
             }
@@ -671,7 +671,7 @@ namespace MVGE_GEN.Utils
 
             long internalAdj = (long)adjX + adjY + adjZ;
             sec.InternalExposure = (int)(6L * opaqueCount - 2L * internalAdj);
-            sec.IsAllAir = opaqueCount == 0; sec.OccupancyBits = occ; BuildFaceMasks(sec, occ);
+            sec.IsAllAir = opaqueCount == 0; sec.OpaqueBits = occ; BuildFaceMasks(sec, occ);
 
             sec.MetadataBuilt = true;
             sec.StructuralDirty = false;
