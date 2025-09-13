@@ -189,7 +189,6 @@ namespace MVGE_GEN.Terrain
             GenerateInitialChunkData(columnSpanMap);
         }
 
-        // NOTE: InitializeChunkData & all generation helpers are in ChunkGenerator partial file.
         public void Render(ShaderProgram shader) => chunkRender?.Render(shader);
 
         public ChunkSection GetOrCreateSection(int sx, int sy, int sz)

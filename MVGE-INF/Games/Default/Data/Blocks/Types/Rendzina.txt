@@ -3,5 +3,6 @@
   "Name": "Limestone Black Soil",
   "BaseType": "Soil",
   "TextureFaceBase": "Rendzina",
-  "IsTransparent": true
+  "IsTransparent": true,
+  "StateOfMatter": "Solid"
 }

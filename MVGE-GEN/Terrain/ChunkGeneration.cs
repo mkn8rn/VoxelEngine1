@@ -565,7 +565,6 @@ namespace MVGE_GEN.Terrain
                     }
 
             BuildAllBoundaryPlanesInitial();
-            // Burial classification removed here; can be determined later using neighbor context if required.
         }
     }
 }

@@ -3,5 +3,6 @@
   "Name": "Limestone",
   "BaseType": "Stone",
   "TextureFaceBase": "LimeWhole"
-  "IsTransparent": true
+  "IsTransparent": true,
+  "StateOfMatter": "Solid"
 }

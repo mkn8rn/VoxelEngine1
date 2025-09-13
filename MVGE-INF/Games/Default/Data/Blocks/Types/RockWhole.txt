@@ -3,5 +3,6 @@
   "Name": "Dolomite",
   "BaseType": "Stone",
   "TextureFaceBase": "RockWhole",
-  "IsTransparent": true
+  "IsTransparent": true,
+  "StateOfMatter": "Solid"
 }

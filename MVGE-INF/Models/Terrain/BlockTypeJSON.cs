@@ -19,5 +19,6 @@ namespace MVGE_INF.Models.Terrain
         public string? TextureFaceRight { get; set; }
         public string? TextureFaceBottom { get; set; }
         public required bool IsTransparent { get; set; }
+        public required BlockStateOfMatter StateOfMatter { get; set; }
     }
 }
