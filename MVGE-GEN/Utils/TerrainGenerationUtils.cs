@@ -22,14 +22,15 @@ namespace MVGE_GEN.Terrain
         // Exposure weights: reduce NoiseWeight for smoother results; keep sum ≈ 1
         private const float ExposureSlopeWeight = 0.60f;
         private const float ExposureNoiseWeight = 0.40f;
-        // -------------------------------------------------------------------------
 
-        /// Derive world-space stone & soil spans for a single (cx,cz) column given its surface height.
-        /// Returns inclusive world Y spans: (-1,-1) for an absent material span. This is a simplified form
-        /// of the logic inside DeriveStoneSoilSpans used for batch profile construction: it performs the
-        /// stone depth allocation (respecting soil reserve & min/max depth constraints) and the soil span
-        /// determination above stone, but does NOT apply any chunk-local clipping or uniform invalidation.
-        internal static (int stoneStart, int stoneEnd, int soilStart, int soilEnd)
+        // -------------------------------------------------------------------------
+        // Derive world-space stone & soil spans for a single (cx,cz) column given its surface height.
+        // Returns inclusive world Y spans: (-1,-1) for an absent material span. This is a simplified form
+        // of the logic inside DeriveStoneSoilSpans used for batch profile construction: it performs the
+        // stone depth allocation (respecting soil reserve & min/max depth constraints) and the soil span
+        // determination above stone, but does NOT apply any chunk-local clipping or uniform invalidation.
+        // -------------------------------------------------------------------------
+        internal static (int stoneStart, int stoneEnd, int soilStart, int soilEnd, int waterStart, int waterEnd)
         DeriveWorldStoneSoilSpans(
             int surfaceY,
             Biome biome,
@@ -121,7 +122,15 @@ namespace MVGE_GEN.Terrain
                 }
             }
 
-            return (stoneStart, stoneEnd, soilStart, soilEnd);
+            // ---- Water span (above surface up to biome water level) ----
+            int waterStart = -1, waterEnd = -1;
+            if (biome.waterLevel > surfaceY)
+            {
+                waterStart = surfaceY + 1; // starts immediately above surface
+                waterEnd = biome.waterLevel; // inclusive
+            }
+
+            return (stoneStart, stoneEnd, soilStart, soilEnd, waterStart, waterEnd);
 
             // ------------------ Helpers ------------------
             static uint Hash(int x, int z, long s)

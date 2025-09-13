@@ -18,7 +18,7 @@ namespace MVGE_GEN.Terrain
     public partial class Chunk
     {
         // Optional uniform override supplied by batch classification to skip normal span derivation path.
-        internal enum UniformOverride { None = 0, AllAir, AllStone, AllSoil }
+        internal enum UniformOverride { None = 0, AllAir, AllStone, AllSoil, AllWater } // AllWater added for slabs fully submerged between surface+1 and cached water level
         private readonly UniformOverride _uniformOverride;
 
         public Vector3 position { get; set; }
@@ -80,6 +80,8 @@ namespace MVGE_GEN.Terrain
         public bool AllStoneChunk { get; internal set; }
         // Fast path: entire chunk volume is uniform soil (no stone/air inside)
         public bool AllSoilChunk { get; internal set; }
+        // Fast path: entire chunk volume is uniform water (fully submerged slab between per-column surface+1)
+        public bool AllWaterChunk { get; internal set; }
         // Post-replacement fast path: entire chunk still a single non-air block (originally stone or soil, may have been transformed by replacement rules)
         public bool AllOneBlockChunk { get; internal set; }
         public ushort AllOneBlockBlockId { get; internal set; } // The uniform non-air block id for AllOneBlockChunk
@@ -173,7 +175,12 @@ namespace MVGE_GEN.Terrain
                     AllSoilChunk = true;
                     CreateUniformSections((ushort)BaseBlockType.Soil);
                 }
-                if (AllStoneChunk || AllSoilChunk)
+                else if (_uniformOverride == UniformOverride.AllWater)
+                {
+                    AllWaterChunk = true; // full slab uniformly water
+                    CreateUniformSections((ushort)BaseBlockType.Water);
+                }
+                if (AllStoneChunk || AllSoilChunk || AllWaterChunk)
                 {
                     BuildAllBoundaryPlanesInitial();
                 }

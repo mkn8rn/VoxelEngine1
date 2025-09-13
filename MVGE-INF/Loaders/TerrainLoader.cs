@@ -32,7 +32,7 @@ namespace MVGE_INF.Loaders
         public List<BaseBlockType> NonOpaqueBaseBlocks = new List<BaseBlockType> {
             BaseBlockType.Empty,
             BaseBlockType.Gas,
-            BaseBlockType.Water,
+            // BaseBlockType.Water,
             BaseBlockType.Glass
         };
 

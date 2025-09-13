@@ -36,6 +36,8 @@ namespace MVGE_GEN.Terrain
         public int StoneEnd;   // world stone span end (inclusive) or -1
         public int SoilStart;  // world soil span start (inclusive) or -1
         public int SoilEnd;    // world soil span end (inclusive) or -1
+        public int WaterStart; // world water span start (surface+1) or -1 when no water above surface
+        public int WaterEnd;   // world water span end (biome water level inclusive) or -1
     }
 
     // Compact vertical band summary for a single (chunkX,chunkZ) column across ALL vertical chunks.
@@ -134,7 +136,8 @@ namespace MVGE_GEN.Terrain
             None = 0,
             AllAir = 1,
             AllStone = 2,
-            AllSoil = 3
+            AllSoil = 3,
+            AllWater = 4
         }
 
         // ------------------------------------------------------------
@@ -317,9 +320,9 @@ namespace MVGE_GEN.Terrain
                 float dz = hm[localX, clz1] - hm[localX, clz0];
                 float grad = MathF.Sqrt(dx * dx + dz * dz);
                 float slope01 = MathF.Min(1f, grad / 6f); // tune 6f to control sensitivity
-                var (stoneStart, stoneEnd, soilStart, soilEnd) =
+                var (stoneStart, stoneEnd, soilStart, soilEnd, waterStartTmp, waterEndTmp) =
 
-                // Derive stone and soil spans for this column
+                // Derive stone and soil spans for this column (water span also returned but aggregated not stored yet)
                 TerrainGenerationUtils.DeriveWorldStoneSoilSpans(
                     surface,
                     Biome,
@@ -479,7 +482,7 @@ namespace MVGE_GEN.Terrain
                     float grad = MathF.Sqrt(dx * dx + dz * dz);
                     float slope01 = MathF.Min(1f, grad / 6f);
 
-                    var (stoneStart, stoneEnd, soilStart, soilEnd) =
+                    var (stoneStart, stoneEnd, soilStart, soilEnd, waterStart, waterEnd) =
                         TerrainGenerationUtils.DeriveWorldStoneSoilSpans(
                             surface,
                             Biome,
@@ -494,7 +497,9 @@ namespace MVGE_GEN.Terrain
                         StoneStart = stoneStart,
                         StoneEnd = stoneEnd,
                         SoilStart = soilStart,
-                        SoilEnd = soilEnd
+                        SoilEnd = soilEnd,
+                        WaterStart = waterStart,
+                        WaterEnd = waterEnd
                     };
 
                     if (stoneStart >= 0 && stoneEnd >= stoneStart)
@@ -599,8 +604,7 @@ namespace MVGE_GEN.Terrain
         public bool ClassifyVerticalChunk(int cy, int sizeY, out UniformKind kind)
         {
             kind = UniformKind.None;
-            // If not all aggregated profiles built yet, uniform classification is deferred (return false) to avoid partial decisions.
-            if (!_profilesBuilt)
+            if (!_profilesBuilt) // aggregated profiles must be complete
             {
                 return false;
             }
@@ -608,57 +612,49 @@ namespace MVGE_GEN.Terrain
             int baseY = cy * sizeY;
             int topY = baseY + sizeY - 1;
 
-            bool allAir = true;   // Rule: slab is strictly above any material (surface) for every column.
-            bool allStone = true; // Rule: slab fully covered by stone span AND no soil overlaps slab (soil absent or entirely above or below slab) for every column.
-            bool allSoil = true;  // Rule: slab fully covered by soil span AND stone does NOT intrude (stoneEnd < baseY) for every column.
+            bool allAir = true;   // baseY strictly above surface for every column
+            bool allStone = true; // slab fully inside stone span and no soil overlap
+            bool allSoil = true;  // slab fully inside soil span and stone does not intrude into baseY
+            bool allWater = true; // slab fully inside per-column water span: baseY >= surface+1 AND topY <= biome.waterLevel for every column and biome.waterLevel > surface
 
             for (int lx = 0; lx < QUAD_SIZE; lx++)
             {
                 for (int lz = 0; lz < QUAD_SIZE; lz++)
                 {
                     ref readonly ChunkColumnProfile p = ref _profiles[lx, lz];
-
-                    // Aggregated profile must be built when _profilesBuilt is true; defensively skip if not.
                     if (!p.AggregatedBuilt)
                     {
-                        kind = UniformKind.None;
-                        return false;
+                        kind = UniformKind.None; return false; // defensive
                     }
 
-                    // --- All Air ---
-                    if (!(baseY > p.Surface))
-                    {
-                        allAir = false;
-                    }
+                    // AllAir check
+                    if (!(baseY > p.Surface)) allAir = false;
 
-                    bool hasStoneSpan = p.StoneStart >= 0;
-                    bool hasSoilSpan = p.SoilStart >= 0;
+                    bool hasStoneSpan = p.StoneStart >= 0 && p.StoneEnd >= p.StoneStart;
+                    bool hasSoilSpan = p.SoilStart >= 0 && p.SoilEnd >= p.SoilStart;
 
                     bool stoneCoversSlab = hasStoneSpan && p.StoneStart <= baseY && p.StoneEnd >= topY;
                     bool soilCoversSlab = hasSoilSpan && p.SoilStart <= baseY && p.SoilEnd >= topY;
+                    bool soilOverlapsSlab = hasSoilSpan && p.SoilStart <= topY && p.SoilEnd >= baseY;
+                    if (!(stoneCoversSlab && !soilOverlapsSlab)) allStone = false;
 
-                    bool soilOverlapsSlab = hasSoilSpan && p.SoilStart <= topY && p.SoilEnd >= baseY; // any soil voxel inside slab
+                    bool stoneIntrudes = hasStoneSpan && p.StoneEnd >= baseY; // stone intersects soil-only candidate slab
+                    if (!(soilCoversSlab && !stoneIntrudes)) allSoil = false;
 
-                    if (!(stoneCoversSlab && !soilOverlapsSlab))
+                    // AllWater: biome water plane must be above surface; slab must be entirely between surface+1 and waterLevel inclusive.
+                    // Stone / soil do not disqualify since water is only above surface; if slab reaches below or intersects surface reject.
+                    if (!(Biome.waterLevel > p.Surface && baseY >= p.Surface + 1 && topY <= Biome.waterLevel)) allWater = false;
+
+                    if (!allAir && !allStone && !allSoil && !allWater)
                     {
-                        allStone = false;
-                    }
-
-                    bool stoneIntrudes = hasStoneSpan && p.StoneEnd >= baseY; // any stone cell at/above baseY breaks pure soil
-                    if (!(soilCoversSlab && !stoneIntrudes))
-                    {
-                        allSoil = false;
-                    }
-
-                    if (!allAir && !allStone && !allSoil)
-                    {
-                        kind = UniformKind.None;
-                        return true;
+                        kind = UniformKind.None; return true; // early exit
                     }
                 }
             }
 
+            // Precedence: AllAir > AllWater > AllStone > AllSoil (air above everything, then water layer, then solid materials)
             if (allAir) kind = UniformKind.AllAir;
+            else if (allWater) kind = UniformKind.AllWater;
             else if (allStone) kind = UniformKind.AllStone;
             else if (allSoil) kind = UniformKind.AllSoil;
             else kind = UniformKind.None;
@@ -701,11 +697,9 @@ namespace MVGE_GEN.Terrain
             }
             if (!_seedSet) { _seed = seed; _seedSet = true; }
 
-            // Build aggregated profile for this column.
-            EnsureAggregatedProfile(cx, cz);
+            EnsureAggregatedProfile(cx, cz); // ensure aggregated surface/stone/soil ready
 
             bool aggregatedComplete = _profilesBuilt; // grid ready for uniform range overrides
-
             bool haveUniformStone = aggregatedComplete && _uniformStoneFirstCy <= _uniformStoneLastCy;
             bool haveUniformSoil = aggregatedComplete && _uniformSoilFirstCy <= _uniformSoilLastCy;
             bool haveUniformAir = aggregatedComplete && _uniformAirFirstCy != int.MaxValue;
@@ -723,47 +717,44 @@ namespace MVGE_GEN.Terrain
             for (int cy = vMin; cy <= vMax; cy++)
             {
                 if (TryGetChunk(cx, cy, cz, out _)) continue;
-
                 Chunk.UniformOverride overrideKind = Chunk.UniformOverride.None;
 
-                // Priority: AllAir > AllStone > AllSoil (above-surface emptiness first, then solid stone, then soil)
                 if (haveUniformAir && cy >= _uniformAirFirstCy)
                 {
                     overrideKind = Chunk.UniformOverride.AllAir;
                 }
-                else if (haveUniformStone && cy >= _uniformStoneFirstCy && cy <= _uniformStoneLastCy)
-                {
-                    overrideKind = Chunk.UniformOverride.AllStone;
-                }
-                else if (haveUniformSoil && cy >= _uniformSoilFirstCy && cy <= _uniformSoilLastCy)
-                {
-                    overrideKind = Chunk.UniformOverride.AllSoil;
-                }
                 else if (aggregatedComplete)
                 {
-                    // Fallback to full quadrant classification only when not covered by the precomputed stone range.
+                    // (Air > Water > Stone > Soil).
                     if (ClassifyVerticalChunk(cy, sizeY, out var classified))
                     {
-                        if (classified == UniformKind.AllAir) overrideKind = Chunk.UniformOverride.AllAir;
+                        if (classified == UniformKind.AllWater) overrideKind = Chunk.UniformOverride.AllWater;
                         else if (classified == UniformKind.AllStone) overrideKind = Chunk.UniformOverride.AllStone;
                         else if (classified == UniformKind.AllSoil) overrideKind = Chunk.UniformOverride.AllSoil;
+                        else if (classified == UniformKind.AllAir) overrideKind = Chunk.UniformOverride.AllAir; // fallback safety
                     }
                 }
 
                 // Build per-column span map only if needed for non-uniform generation path.
                 if (overrideKind == Chunk.UniformOverride.None)
                 {
-                    columnHeightmap ??= GetOrCreateHeightmap(seed, columnBaseX, columnBaseZ);
-                    spanMap ??= GetOrBuildColumnSpanMap(cx, cz, sizeY, regionLimit);
+                    if (haveUniformStone && cy >= _uniformStoneFirstCy && cy <= _uniformStoneLastCy)
+                        overrideKind = Chunk.UniformOverride.AllStone;
+                    else if (haveUniformSoil && cy >= _uniformSoilFirstCy && cy <= _uniformSoilLastCy)
+                        overrideKind = Chunk.UniformOverride.AllSoil;
+                }
+
+                if (overrideKind == Chunk.UniformOverride.None)
+                {
+                    columnHeightmap ??= GetOrCreateHeightmap(seed, columnBaseX, columnBaseZ); // retained (may be used elsewhere)
+                    spanMap ??= GetOrBuildColumnSpanMap(cx, cz, sizeY, regionLimit); // includes water spans now
                 }
 
                 var worldPos = new Vector3(columnBaseX, cy * sizeY, columnBaseZ);
                 var chunk = new Chunk(worldPos, seed, chunkSaveDirectory, autoGenerate: true, uniformOverride: overrideKind, columnSpanMap: spanMap);
                 AddOrReplaceChunk(chunk, cx, cy, cz);
 
-                bool insideLod1 = Math.Abs(cx - playerCx) <= lodDist &&
-                                  Math.Abs(cz - playerCz) <= lodDist &&
-                                  Math.Abs(cy - playerCy) <= verticalRange;
+                bool insideLod1 = Math.Abs(cx - playerCx) <= lodDist && Math.Abs(cz - playerCz) <= lodDist && Math.Abs(cy - playerCy) <= verticalRange;
                 registrar((cx, cy, cz), chunk, insideLod1);
             }
         }
