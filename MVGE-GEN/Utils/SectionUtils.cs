@@ -29,7 +29,7 @@ namespace MVGE_GEN.Utils
             {
                 case ChunkSection.RepresentationKind.Uniform:
                     return sec.UniformBlockId;
-                case ChunkSection.RepresentationKind.DenseExpanded:
+                case ChunkSection.RepresentationKind.Expanded:
                     return sec.ExpandedDense[linear];
                 case ChunkSection.RepresentationKind.Sparse:
                     // simple linear search (sparse rarely queried per-voxel outside flatten). Could optimize with dictionary if needed.
@@ -224,7 +224,7 @@ namespace MVGE_GEN.Utils
 
         private static void ExpandToDense(ChunkSection sec)
         {
-            if (sec.Kind == ChunkSection.RepresentationKind.DenseExpanded) return;
+            if (sec.Kind == ChunkSection.RepresentationKind.Expanded) return;
             var arr = new ushort[VOXELS_PER_SECTION];
             for (int z = 0; z < SECTION_SIZE; z++)
                 for (int x = 0; x < SECTION_SIZE; x++)
@@ -235,7 +235,7 @@ namespace MVGE_GEN.Utils
                         if (pi != 0) arr[li] = sec.Palette[pi];
                     }
             sec.ExpandedDense = arr;
-            sec.Kind = ChunkSection.RepresentationKind.DenseExpanded;
+            sec.Kind = ChunkSection.RepresentationKind.Expanded;
         }
 
         private static void BuildMetadataUniform(ChunkSection sec)
@@ -717,7 +717,7 @@ namespace MVGE_GEN.Utils
                 return;
             }
             // For Sparse / DenseExpanded fallback: rebuild packed from existing data
-            if (sec.Kind == ChunkSection.RepresentationKind.DenseExpanded)
+            if (sec.Kind == ChunkSection.RepresentationKind.Expanded)
             {
                 // Repack dense expanded
                 ushort[] dense = sec.ExpandedDense;

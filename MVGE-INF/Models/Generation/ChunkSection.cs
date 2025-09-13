@@ -15,7 +15,7 @@ namespace MVGE_INF.Generation.Models
             Empty = 0,          // All air (IsAllAir == true, no storage)
             Uniform = 1,        // Single non-air block fills all voxels (uniformBlockId)
             Sparse = 2,         // Few voxels: sparse indices list with associated block ids
-            DenseExpanded = 3,  // Expanded per-voxel block ids (ushort[] expandedDense)
+            Expanded = 3,  // Expanded per-voxel block ids (ushort[] expandedDense)
             Packed = 4,         // Single-id packed (also used for 1-bit partial fill)
             MultiPacked = 5     // Multi-id low-entropy packed (palette + variable bits per index)
         }
@@ -40,6 +40,7 @@ namespace MVGE_INF.Generation.Models
         // Sparse representation (threshold-based). We store linear indices and block ids parallel arrays to avoid dictionary lookups.
         public int[] SparseIndices;   // linear voxel indices (0..4095) of non-air voxels
         public ushort[] SparseBlocks; // same length as SparseIndices
+        public static int SparseThreshold = 2048; // when NonAirCount exceeds this we switch to sparse representation
 
         // Dense expanded representation: direct block ids per voxel (length == VoxelCount)
         public ushort[] ExpandedDense; // valid when Kind==DenseExpanded

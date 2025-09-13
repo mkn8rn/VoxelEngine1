@@ -297,7 +297,7 @@ namespace MVGE_GEN.Utils
                 }
 
                 if (sec.Kind == ChunkSection.RepresentationKind.Sparse ||
-                    sec.Kind == ChunkSection.RepresentationKind.DenseExpanded ||
+                    sec.Kind == ChunkSection.RepresentationKind.Expanded ||
                     sec.Kind == ChunkSection.RepresentationKind.MultiPacked)
                 {
                     sec.MetadataBuilt = true;
@@ -341,7 +341,7 @@ namespace MVGE_GEN.Utils
                         sec.IdMapDirty = false;
                         FinalizeTransparentAndEmptyMasks(sec);
                         return;
-                    case ChunkSection.RepresentationKind.DenseExpanded:
+                    case ChunkSection.RepresentationKind.Expanded:
                         BuildMetadataDense(sec);
                         sec.StructuralDirty = false;
                         sec.IdMapDirty = false;

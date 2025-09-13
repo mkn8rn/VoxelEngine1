@@ -280,7 +280,7 @@ namespace MVGE_GEN
                                         }
                                     }
                                     break;
-                                case ChunkSection.RepresentationKind.DenseExpanded when sec != null:
+                                case ChunkSection.RepresentationKind.Expanded when sec != null:
                                     if (sec.ExpandedDense != null && sec.ExpandedDense.Length == denseVoxelCount)
                                     {
                                         var raw = MemoryMarshal.AsBytes(sec.ExpandedDense.AsSpan());
@@ -623,7 +623,7 @@ namespace MVGE_GEN
                     case ChunkSection.RepresentationKind.Sparse:
                         if (ms.Position + 2 <= ms.Length){ int scount = br.ReadUInt16(); if (scount>=0 && scount<=4096 && ms.Position + scount*4 <= ms.Length){ sec.SparseIndices = new int[scount]; sec.SparseBlocks = new ushort[scount]; for(int i=0;i<scount;i++){ sec.SparseIndices[i]=br.ReadUInt16(); sec.SparseBlocks[i]=br.ReadUInt16(); } } }
                         break;
-                    case ChunkSection.RepresentationKind.DenseExpanded:
+                    case ChunkSection.RepresentationKind.Expanded:
                         int expectedBytes = sec.VoxelCount * 2; if (ms.Position + expectedBytes <= ms.Length){ sec.ExpandedDense = new ushort[sec.VoxelCount]; var raw = br.ReadBytes(expectedBytes); MemoryMarshal.Cast<byte,ushort>(raw).CopyTo(sec.ExpandedDense); }
                         break;
                     case ChunkSection.RepresentationKind.Packed:

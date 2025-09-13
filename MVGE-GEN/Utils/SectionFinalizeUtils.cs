@@ -153,7 +153,7 @@ namespace MVGE_GEN.Utils
         // Representation selection rules (updated):
         //  - Empty (no non‑air)
         //  - Uniform (single id fills all 4096) – opaque or transparent
-        //  - Sparse: total non‑air (opaque + transparent) <= 128 -> store ALL non‑air voxels (was opaque only)
+        //  - Sparse: total non‑air (opaque + transparent) <= 2048 -> store ALL non‑air voxels (was opaque only)
         //  - Packed (single id partial) – opaque only or transparent only (1‑bit form). Transparent only now supported.
         //  - MultiPacked: multiple ids (opaque and/or transparent) with palette size <= 64 (includes all non‑air ids)
         //  - DenseExpanded: fallback storing all non‑air ids
@@ -453,8 +453,8 @@ namespace MVGE_GEN.Utils
                 return;
             }
 
-            // Sparse threshold now based on total non‑air (opaque + transparent) <= 128
-            if (totalNonAir <= 128)
+            // Sparse threshold now based on total non‑air (opaque + transparent) <= 2048
+            if (totalNonAir <= ChunkSection.SparseThreshold)
             {
                 var idxArr = new List<int>(totalNonAir);
                 var blkArr = new List<ushort>(totalNonAir);
@@ -521,7 +521,7 @@ namespace MVGE_GEN.Utils
                 sec.Palette = new List<ushort> { ChunkSection.AIR, only };
                 sec.PaletteLookup = new Dictionary<ushort, int>(2) { { ChunkSection.AIR, 0 }, { only, 1 } };
                 sec.BitsPerIndex = 1;
-                sec.BitData = RentBitData(128);
+                sec.BitData = RentBitData(2048);
                 Array.Clear(sec.BitData, 0, sec.BitData.Length);
 
                 ulong[] opaqueBits = op ? new ulong[64] : null;
@@ -608,7 +608,7 @@ namespace MVGE_GEN.Utils
             else
             {
                 // DenseExpanded fallback: store ALL ids (opaque + transparent)
-                sec.Kind = ChunkSection.RepresentationKind.DenseExpanded;
+                sec.Kind = ChunkSection.RepresentationKind.Expanded;
                 var denseArr = RentDense();
                 ulong[] opaqueBits = opaqueCount > 0 ? new ulong[64] : null;
                 ulong[] transparentBitsMask = transparentCount > 0 ? new ulong[64] : null;
@@ -786,7 +786,7 @@ namespace MVGE_GEN.Utils
             }
 
             // Build final representation (DenseExpanded) + metadata.
-            sec.Kind = ChunkSection.RepresentationKind.DenseExpanded;
+            sec.Kind = ChunkSection.RepresentationKind.Expanded;
             sec.ExpandedDense = dense;
             sec.OpaqueVoxelCount = opaqueCount;              // opaque voxel count only
             sec.TransparentCount = transparentCount;    // transparent voxel count
