@@ -176,11 +176,53 @@ namespace MVGE_GEN.Terrain
                             arr[idx] = default;
                             continue;
                         }
+
+                        // Build transparent palette index list (fast classification set for renderer). Only when palette present.
+                        int[] transparentPaletteIndices = null;
+                        if (sec.Palette != null && sec.Palette.Count > 0)
+                        {
+                            List<int> tpi = null;
+                            for (int pi = 1; pi < sec.Palette.Count; pi++) // skip air index 0
+                            {
+                                ushort bid = sec.Palette[pi];
+                                if (bid != ChunkSection.AIR && !TerrainLoader.IsOpaque(bid))
+                                {
+                                    (tpi ??= new List<int>(4)).Add(pi);
+                                }
+                            }
+                            if (tpi != null) transparentPaletteIndices = tpi.ToArray();
+                        }
+
+                        // Build transparent-only sparse index list for sparse representation (avoids per-voxel palette decode later).
+                        int[] transparentSparseIndices = null;
+                        if (sec.Kind == ChunkSection.RepresentationKind.Sparse && sec.SparseIndices != null && sec.SparseBlocks != null)
+                        {
+                            var si = sec.SparseIndices; var sb = sec.SparseBlocks; List<int> tsi = null;
+                            for (int i = 0; i < si.Length; i++)
+                            {
+                                ushort bid = sb[i];
+                                if (bid != ChunkSection.AIR && !TerrainLoader.IsOpaque(bid))
+                                {
+                                    (tsi ??= new List<int>(8)).Add(si[i]);
+                                }
+                            }
+                            if (tsi != null) transparentSparseIndices = tsi.ToArray();
+                        }
+
+                        // For uniform transparent sections ensure TransparentBits allocated (all 4096 bits set) for direct bit iteration.
+                        ulong[] uniformTransparentBits = null;
+                        if (sec.Kind == ChunkSection.RepresentationKind.Uniform && sec.UniformBlockId != ChunkSection.AIR && !TerrainLoader.IsOpaque(sec.UniformBlockId))
+                        {
+                            uniformTransparentBits = new ulong[64];
+                            // Set all 4096 bits -> each ulong to all ones
+                            for (int w = 0; w < 64; w++) uniformTransparentBits[w] = ulong.MaxValue;
+                        }
+
                         arr[idx] = new SectionPrerenderDesc
                         {
                             Kind = (byte)sec.Kind,
                             UniformBlockId = sec.UniformBlockId,
-                            OpaqueCount = sec.NonAirCount,
+                            OpaqueCount = sec.OpaqueVoxelCount,
                             SparseIndices = sec.SparseIndices,
                             SparseBlocks = sec.SparseBlocks,
                             ExpandedDense = sec.ExpandedDense,
@@ -196,13 +238,15 @@ namespace MVGE_GEN.Terrain
                             FacePosZBits = sec.FacePosZBits,
                             // transparent tracking propagated (may be null if not built yet)
                             TransparentCount = sec.TransparentCount,
-                            TransparentBits = sec.TransparentBits,
+                            TransparentBits = uniformTransparentBits ?? sec.TransparentBits,
                             TransparentFaceNegXBits = sec.TransparentFaceNegXBits,
                             TransparentFacePosXBits = sec.TransparentFacePosXBits,
                             TransparentFaceNegYBits = sec.TransparentFaceNegYBits,
                             TransparentFacePosYBits = sec.TransparentFacePosYBits,
                             TransparentFaceNegZBits = sec.TransparentFaceNegZBits,
                             TransparentFacePosZBits = sec.TransparentFacePosZBits,
+                            TransparentPaletteIndices = transparentPaletteIndices,
+                            TransparentSparseIndices = transparentSparseIndices,
                             // empty (air) tracking propagated (may be null)
                             EmptyCount = sec.EmptyCount,
                             EmptyBits = sec.EmptyBits,
@@ -266,8 +310,8 @@ namespace MVGE_GEN.Terrain
                     for (int sz = 0; sz < sectionsZ; sz++)
                     {
                         var sec = sections[sx, sy, sz];
-                        if (sec == null || sec.NonAirCount == 0) continue; // NonAirCount holds opaque count
-                        totalOpaque += sec.NonAirCount;
+                        if (sec == null || sec.OpaqueVoxelCount == 0) continue; // NonAirCount holds opaque count
+                        totalOpaque += sec.OpaqueVoxelCount;
                         internalExposureSum += sec.InternalExposure;
                         if (sec.HasBounds)
                         {

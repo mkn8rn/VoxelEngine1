@@ -31,7 +31,8 @@ namespace MVGE_INF.Generation.Models
         public uint[] BitData; // packed storage
         public int BitsPerIndex;
         public int VoxelCount;
-        public int NonAirCount; // opaque voxel count
+        public int OpaqueVoxelCount; // used to be non air count
+        public int NonAirCount;      // includes transparent
 
         // Uniform representation
         public ushort UniformBlockId; // valid when Kind==Uniform
@@ -56,8 +57,8 @@ namespace MVGE_INF.Generation.Models
         public byte MinLX, MinLY, MinLZ, MaxLX, MaxLY, MaxLZ;
         public bool MetadataBuilt;
 
-        // ---- transparent voxel tracking (non-opaque, non-air). Populated in future finalize step. ----
-        public ulong[] TransparentBits;            // bits set where voxel is transparent (e.g. water, glass)
+        // ---- transparent voxel tracking (non-opaque, non-air). Populated in finalize steps.
+        public ulong[] TransparentBits;            // bits set where voxel is transparent (e.g. water, glass). Uniform transparent fills all bits.
         public int TransparentCount;               // count of transparent voxels
         public ulong[] TransparentFaceNegXBits;    // optional per-face transparent boundary masks (same layout as opaque)
         public ulong[] TransparentFacePosXBits;
@@ -65,14 +66,16 @@ namespace MVGE_INF.Generation.Models
         public ulong[] TransparentFacePosYBits;
         public ulong[] TransparentFaceNegZBits;
         public ulong[] TransparentFacePosZBits;
+        public int[] TransparentPaletteIndices;    // palette indices whose block ids are transparent (non-air)
+        public int[] TransparentSparseIndices;     // transparent-only indices for sparse sections (built on demand)
 
         // ---- explicit air (empty) tracking convenience (id == 0) ----
         public ulong[] EmptyBits;                  // bits set where voxel is air
         public int EmptyCount;                     // number of air voxels
 
-        // Convenience flags (do not drive logic yet)
-        public bool HasTransparent => TransparentCount > 0;
-        public bool HasAir => EmptyCount > 0;
+        // Convenience flags
+        public bool HasTransparent;
+        public bool HasAir;
 
         // Strongly-typed two-phase build scratch (internal use by SectionUtils)
         public SectionBuildScratch BuildScratch;

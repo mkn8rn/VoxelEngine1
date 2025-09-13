@@ -28,13 +28,15 @@ namespace MVGE_INF.Models.Generation
 
         // ---- transparent voxel data (non-opaque, non-air) ----
         public int TransparentCount;
-        public ulong[] TransparentBits;
+        public ulong[] TransparentBits;               // bit set == transparent voxel (always allocated for uniform transparent)
         public ulong[] TransparentFaceNegXBits;
         public ulong[] TransparentFacePosXBits;
         public ulong[] TransparentFaceNegYBits;
         public ulong[] TransparentFacePosYBits;
         public ulong[] TransparentFaceNegZBits;
         public ulong[] TransparentFacePosZBits;
+        public int[] TransparentPaletteIndices;       // palette indices whose block ids are transparent (non-air)
+        public int[] TransparentSparseIndices;        // compact transparent-only linear indices for sparse sections
 
         // ---- explicit air tracking ----
         public int EmptyCount;        // air voxel count

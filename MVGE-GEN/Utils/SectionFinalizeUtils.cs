@@ -10,7 +10,6 @@ namespace MVGE_GEN.Utils
 {
     internal partial class SectionUtils
     {
-
         // -------------------------------------------------------------------------------------------------
         // Array pooling: reduces allocation pressure for frequently reused temporary structures.
         //   Occupancy: 4096 bits (64 * ulong) used when building face masks or packed/sparse data.
@@ -146,11 +145,23 @@ namespace MVGE_GEN.Utils
         // -------------------------------------------------------------------------------------------------
         // FusedNonEscalatedFinalize
         // Performs a single pass over all non‑empty, non‑escalated columns computing:
-        //  * Non‑air voxel count
-        //  * Internal adjacency (X,Y,Z)
-        //  * Bounds (min/max in XYZ) 
-        //  * Distinct id list (optional rebuild if DistinctDirty)
-        // Then selects the optimal permanent representation.
+        //  * Opaque voxel count (opaqueCount)
+        //  * Transparent voxel count (transparentCount)  // ADDED: now tracked
+        //  * Internal adjacency (X,Y,Z) for opaque voxels only (unchanged semantics for exposure)
+        //  * Bounds (min/max in XYZ) over ANY non‑air voxel (opaque or transparent)
+        //  * Distinct id list (rebuild if DistinctDirty)
+        // Representation selection rules (updated):
+        //  - Empty (no non‑air)
+        //  - Uniform (single id fills all 4096) – opaque or transparent
+        //  - Sparse: total non‑air (opaque + transparent) <= 128 -> store ALL non‑air voxels (was opaque only)
+        //  - Packed (single id partial) – opaque only or transparent only (1‑bit form). Transparent only now supported.
+        //  - MultiPacked: multiple ids (opaque and/or transparent) with palette size <= 64 (includes all non‑air ids)
+        //  - DenseExpanded: fallback storing all non‑air ids
+        // Metadata produced:
+        //  - OpaqueBits, TransparentBits (bitsets) generated where appropriate
+        //  - NonAirCount remains OPAQUE voxel count (original semantic preserved)
+        //  - TransparentCount tracks transparent voxel count
+        //  - HasTransparent flag set when any transparent voxel present
         // -------------------------------------------------------------------------------------------------
         private static void FusedNonEscalatedFinalize(ChunkSection sec, SectionBuildScratch scratch)
         {
@@ -158,23 +169,24 @@ namespace MVGE_GEN.Utils
             int totalVoxels = S * S * S;
             sec.VoxelCount = totalVoxels;
 
-            int opaqueCount = 0; // replaces previous nonAir accumulation semantics
+            int opaqueCount = 0; // opaque voxel count (exposure source)
+            int transparentCount = 0; // ADDED: transparent voxel count
             int adjY = 0;
             int adjX = 0;
             int adjZ = 0;
 
-            bool boundsInit = false;
+            bool boundsInit = false; // bounds now track ANY non‑air (opaque OR transparent)
             byte minX = 0, maxX = 0, minY = 0, maxY = 0, minZ = 0, maxZ = 0;
 
-            Span<ushort> prevRowOcc = stackalloc ushort[S];
-            Span<ushort> curRowOcc = stackalloc ushort[S];
-            prevRowOcc.Clear();
-            curRowOcc.Clear();
+            Span<ushort> prevRowOccOpaque = stackalloc ushort[S]; // opaque occupancy per column row (X slice) for Z adjacency
+            Span<ushort> curRowOccOpaque = stackalloc ushort[S];
+            prevRowOccOpaque.Clear();
+            curRowOccOpaque.Clear();
 
             bool rebuildDistinct = scratch.DistinctDirty;
             Span<ushort> tmpDistinct = stackalloc ushort[8];
             int tmpDistinctCount = rebuildDistinct ? 0 : scratch.DistinctCount;
-            Span<int> tmpDistinctVoxelCounts = stackalloc int[8];
+            Span<int> tmpDistinctVoxelCounts = stackalloc int[8]; // includes both opaque + transparent when rebuilding (for uniform detection)
             bool earlyUniformShortCircuit = false;
             ushort earlyUniformId = 0;
 
@@ -186,167 +198,195 @@ namespace MVGE_GEN.Utils
 
             // local caches to avoid repeated property/indexing
             var scratchDistinct = scratch.Distinct;
-            int scratchDistinctCount = scratch.DistinctCount;
+
+            // Per-column temporary occupancy masks (opaque & transparent) for later bitset materialization.
+            Span<ushort> columnOpaqueMask = stackalloc ushort[COLUMN_COUNT];
+            Span<ushort> columnTransparentMask = stackalloc ushort[COLUMN_COUNT];
+            columnOpaqueMask.Clear();
+            columnTransparentMask.Clear();
 
             for (int z = 0; z < S; z++)
             {
-                curRowOcc.Clear();
-                ushort prevOccInRow = 0;
+                curRowOccOpaque.Clear();
+                ushort prevOccOpaqueInRow = 0;
 
                 for (int x = 0; x < S; x++)
                 {
                     int ci = (z * S) + x;
                     ref readonly var col = ref scratch.GetReadonlyColumn(ci);
+                    byte rc = col.RunCount;
 
-                    // fast path for empty column
-                    if (col.RunCount == 0 || col.NonAir == 0)
+                    if (rc == 0 || col.NonAir == 0)
                     {
-                        prevOccInRow = col.OccMask;
+                        prevOccOpaqueInRow = 0; // no opaque mask
                         continue;
                     }
 
                     activeColumns[activeColumnCount++] = ci;
 
-                    // opportunistic single id tracking (cheap)
+                    // Maintain potential single-id fast path (considers any non‑air id)
                     if (singleIdPossible)
                     {
-                        if (col.RunCount >= 1 && col.Id0 != AIR)
+                        if (rc >= 1 && col.Id0 != ChunkSection.AIR)
                         {
-                            if (firstId == 0) firstId = col.Id0;
-                            else if (col.Id0 != firstId) singleIdPossible = false;
+                            if (firstId == 0) firstId = col.Id0; else if (col.Id0 != firstId) singleIdPossible = false;
                         }
-                        if (singleIdPossible && col.RunCount == 2 && col.Id1 != AIR)
+                        if (singleIdPossible && rc == 2 && col.Id1 != ChunkSection.AIR)
                         {
-                            if (firstId == 0) firstId = col.Id1;
-                            else if (col.Id1 != firstId) singleIdPossible = false;
+                            if (firstId == 0) firstId = col.Id1; else if (col.Id1 != firstId) singleIdPossible = false;
                         }
                     }
 
-                    // Recompute opaque occupancy per column from runs; existing col.OccMask represented full run vertical bits regardless of opacity.
-                    // We assume generation paths only write opaque materials for stone/soil; if transparency added to runs, filter here.
-                    ushort occMaskOpaque = 0;
-                    if (col.RunCount >= 1 && col.Id0 != AIR && TerrainLoader.IsOpaque(col.Id0))
+                    // Build per-run classification (opaque vs transparent) and reconstruct vertical bit masks per column.
+                    ushort opaqueMask = 0;
+                    ushort transparentMask = 0;
+
+                    if (rc >= 1 && col.Id0 != ChunkSection.AIR)
                     {
-                        // col.OccMask includes both runs when RunCount==2; reconstruct mask segments instead of using full mask unfiltered.
-                        int y0s = col.Y0Start; int y0e = col.Y0End; for (int y = y0s; y <= y0e; y++) occMaskOpaque |= (ushort)(1 << y);
-                        opaqueCount += (y0e - y0s + 1);
-                        adjY += (y0e - y0s); // vertical adjacencies within run
+                        bool op = TerrainLoader.IsOpaque(col.Id0);
+                        int y0s = col.Y0Start; int y0e = col.Y0End;
+                        ushort runMask = 0;
+                        for (int y = y0s; y <= y0e; y++) runMask |= (ushort)(1 << y);
+                        if (op)
+                        {
+                            opaqueMask |= runMask;
+                            opaqueCount += (y0e - y0s + 1);
+                            adjY += (y0e - y0s); // vertical adjacencies inside run
+                        }
+                        else
+                        {
+                            transparentMask |= runMask;
+                            transparentCount += (y0e - y0s + 1);
+                        }
                     }
-                    if (col.RunCount == 2 && col.Id1 != AIR && TerrainLoader.IsOpaque(col.Id1))
+                    if (rc == 2 && col.Id1 != ChunkSection.AIR)
                     {
-                        int y1s = col.Y1Start; int y1e = col.Y1End; for (int y = y1s; y <= y1e; y++) occMaskOpaque |= (ushort)(1 << y);
-                        opaqueCount += (y1e - y1s + 1);
-                        adjY += (y1e - y1s); // vertical adjacencies within second run
-                        // If the two runs are contiguous and both opaque add the connecting adjacency
-                        if (col.Id0 != AIR && TerrainLoader.IsOpaque(col.Id0) && y1s == col.Y0End + 1) adjY++;
+                        bool op = TerrainLoader.IsOpaque(col.Id1);
+                        int y1s = col.Y1Start; int y1e = col.Y1End;
+                        ushort runMask = 0;
+                        for (int y = y1s; y <= y1e; y++) runMask |= (ushort)(1 << y);
+                        if (op)
+                        {
+                            opaqueMask |= runMask;
+                            opaqueCount += (y1e - y1s + 1);
+                            adjY += (y1e - y1s);
+                            // contiguous opaque adjacency between runs
+                            if (rc == 2 && col.Id0 != ChunkSection.AIR && TerrainLoader.IsOpaque(col.Id0) && y1s == col.Y0End + 1) adjY++;
+                        }
+                        else
+                        {
+                            transparentMask |= runMask;
+                            transparentCount += (y1e - y1s + 1);
+                        }
                     }
 
-                    if (occMaskOpaque != 0)
+                    columnOpaqueMask[ci] = opaqueMask;
+                    columnTransparentMask[ci] = transparentMask;
+
+                    // Bounds: ANY non‑air occupancy counts (union of two masks)
+                    if ((opaqueMask | transparentMask) != 0)
                     {
                         if (!boundsInit)
                         {
                             boundsInit = true;
                             minX = maxX = (byte)x;
                             minZ = maxZ = (byte)z;
-                            minY = 15; maxY = 0; // will correct below
+                            // initialize Y using first run(s)
+                            minY = 15; maxY = 0;
                         }
-                        // Y bounds
-                        if (col.RunCount >= 1)
+                        // Track Y spans using run data directly (avoids scanning masks)
+                        if (rc >= 1)
                         {
                             if (col.Y0Start < minY) minY = col.Y0Start; if (col.Y0End > maxY) maxY = col.Y0End;
                         }
-                        if (col.RunCount == 2)
+                        if (rc == 2)
                         {
                             if (col.Y1Start < minY) minY = col.Y1Start; if (col.Y1End > maxY) maxY = col.Y1End;
                         }
-
-                        // X/Z bounds
                         if (x < minX) minX = (byte)x; else if (x > maxX) maxX = (byte)x;
                         if (z < minZ) minZ = (byte)z; else if (z > maxZ) maxZ = (byte)z;
                     }
 
-                    curRowOcc[x] = occMaskOpaque;
-
-                    // X adjacency via popcount of overlap with previous column in row
-                    if (x > 0 && prevOccInRow != 0 && occMaskOpaque != 0)
+                    // Opaque adjacency (X/Z) only considers opaque masks (unchanged semantics for exposure estimate)
+                    curRowOccOpaque[x] = opaqueMask;
+                    if (x > 0 && prevOccOpaqueInRow != 0 && opaqueMask != 0)
                     {
-                        adjX += BitOperations.PopCount((uint)(occMaskOpaque & prevOccInRow));
+                        adjX += BitOperations.PopCount((uint)(opaqueMask & prevOccOpaqueInRow));
                     }
-                    prevOccInRow = occMaskOpaque;
+                    prevOccOpaqueInRow = opaqueMask;
 
-                    // Distinct rebuild (linear scan up to 8 entries is still fastest here)
+                    // Distinct rebuild (tracks ids for both opaque & transparent)
                     if (rebuildDistinct)
                     {
-                        if (col.RunCount >= 1 && col.Id0 != AIR)
+                        if (rc >= 1 && col.Id0 != ChunkSection.AIR)
                         {
-                            int foundIndex = -1;
-                            for (int i = 0; i < tmpDistinctCount; i++) if (tmpDistinct[i] == col.Id0) { foundIndex = i; break; }
-                            if (foundIndex == -1 && tmpDistinctCount < 8) { foundIndex = tmpDistinctCount; tmpDistinct[tmpDistinctCount++] = col.Id0; }
-                            if (foundIndex >= 0)
+                            int found = -1; for (int i = 0; i < tmpDistinctCount; i++) if (tmpDistinct[i] == col.Id0) { found = i; break; }
+                            if (found == -1 && tmpDistinctCount < 8) { found = tmpDistinctCount; tmpDistinct[tmpDistinctCount++] = col.Id0; }
+                            if (found >= 0)
                             {
-                                // Only treat as potential uniform if whole section volume opaque with this id
-                                // For simplicity accumulate raw run size (includes potential translucent if added later)
-                                tmpDistinctVoxelCounts[foundIndex] += col.NonAir;
-                                if (!earlyUniformShortCircuit && tmpDistinctVoxelCounts[foundIndex] == totalVoxels)
-                                {
-                                    earlyUniformShortCircuit = true; earlyUniformId = col.Id0;
-                                }
+                                tmpDistinctVoxelCounts[found] += (col.Y0End - col.Y0Start + 1);
+                                if (!earlyUniformShortCircuit && tmpDistinctVoxelCounts[found] == totalVoxels) { earlyUniformShortCircuit = true; earlyUniformId = col.Id0; }
                             }
                         }
-                        if (col.RunCount == 2 && col.Id1 != AIR)
+                        if (rc == 2 && col.Id1 != ChunkSection.AIR)
                         {
-                            int foundIndex = -1;
-                            for (int i = 0; i < tmpDistinctCount; i++) if (tmpDistinct[i] == col.Id1) { foundIndex = i; break; }
-                            if (foundIndex == -1 && tmpDistinctCount < 8) { foundIndex = tmpDistinctCount; tmpDistinct[tmpDistinctCount++] = col.Id1; }
-                            if (foundIndex >= 0)
+                            int found = -1; for (int i = 0; i < tmpDistinctCount; i++) if (tmpDistinct[i] == col.Id1) { found = i; break; }
+                            if (found == -1 && tmpDistinctCount < 8) { found = tmpDistinctCount; tmpDistinct[tmpDistinctCount++] = col.Id1; }
+                            if (found >= 0)
                             {
-                                tmpDistinctVoxelCounts[foundIndex] += col.NonAir;
-                                if (!earlyUniformShortCircuit && tmpDistinctVoxelCounts[foundIndex] == totalVoxels)
-                                {
-                                    earlyUniformShortCircuit = true; earlyUniformId = col.Id1;
-                                }
+                                tmpDistinctVoxelCounts[found] += (col.Y1End - col.Y1Start + 1);
+                                if (!earlyUniformShortCircuit && tmpDistinctVoxelCounts[found] == totalVoxels) { earlyUniformShortCircuit = true; earlyUniformId = col.Id1; }
                             }
                         }
                         if (singleIdPossible && tmpDistinctCount > 1) singleIdPossible = false;
                     }
                 }
 
-                // Z adjacency: popcount overlap of occupancy masks between rows
+                // Z adjacency for opaque only
                 if (z > 0)
                 {
                     for (int x = 0; x < S; x++)
                     {
-                        ushort a = curRowOcc[x];
-                        ushort b = prevRowOcc[x];
+                        ushort a = curRowOccOpaque[x];
+                        ushort b = prevRowOccOpaque[x];
                         if ((a & b) != 0) adjZ += BitOperations.PopCount((uint)(a & b));
                     }
                 }
 
-                // copy current row to previous for next iteration
-                curRowOcc.CopyTo(prevRowOcc);
+                curRowOccOpaque.CopyTo(prevRowOccOpaque);
 
                 if (earlyUniformShortCircuit) break;
             }
 
-            // early full-uniform exit
+            // Uniform short‑circuit (single id fills all 4096). Opaque vs transparent handled.
             if (earlyUniformShortCircuit && earlyUniformId != 0)
             {
+                bool uniformOpaque = TerrainLoader.IsOpaque(earlyUniformId);
                 sec.Kind = ChunkSection.RepresentationKind.Uniform;
                 sec.UniformBlockId = earlyUniformId;
                 sec.IsAllAir = false;
-                sec.NonAirCount = TerrainLoader.IsOpaque(earlyUniformId) ? sec.VoxelCount : 0;
-                sec.CompletelyFull = TerrainLoader.IsOpaque(earlyUniformId);
-
+                sec.OpaqueVoxelCount = uniformOpaque ? sec.VoxelCount : 0; // opaque voxel count only
+                sec.CompletelyFull = uniformOpaque;
+                if (!uniformOpaque)
+                {
+                    // Transparent uniform: record counts; TransparentBits allocated with all bits set for direct iteration.
+                    sec.TransparentCount = sec.VoxelCount;
+                    sec.HasTransparent = true;
+                    // Eager TransparentBits allocation for uniform transparent: all 4096 bits set for direct iteration.
+                    sec.TransparentBits = new ulong[64]; for (int i = 0; i < 64; i++) sec.TransparentBits[i] = ulong.MaxValue;
+                    BuildTransparentFaceMasks(sec, sec.TransparentBits); // build transparent boundary masks
+                }
                 long lenL = S;
                 long internalAdj = (lenL - 1) * lenL * lenL + lenL * (lenL - 1) * lenL + lenL * lenL * (lenL - 1);
-                sec.InternalExposure = (int)(6L * totalVoxels - 2L * internalAdj);
-
+                sec.InternalExposure = uniformOpaque ? (int)(6L * totalVoxels - 2L * internalAdj) : 0;
                 sec.HasBounds = true;
                 sec.MinLX = sec.MinLY = sec.MinLZ = 0;
                 sec.MaxLX = sec.MaxLY = sec.MaxLZ = (byte)(S - 1);
                 sec.MetadataBuilt = true;
                 sec.StructuralDirty = false;
                 sec.IdMapDirty = false;
+                // Ensure EmptyBits (none for full) and potential transparent face metadata are finalized consistently
+                FinalizeTransparentAndEmptyMasks(sec);
                 sec.BuildScratch = null;
                 ReturnScratch(scratch);
                 return;
@@ -360,14 +400,19 @@ namespace MVGE_GEN.Utils
                 scratch.DistinctDirty = false;
             }
 
-            sec.NonAirCount = opaqueCount;
-            if (!boundsInit || opaqueCount == 0)
+            int totalNonAir = opaqueCount + transparentCount; // ALL non‑air
+            sec.OpaqueVoxelCount = opaqueCount; // preserve semantic (opaque only)
+            sec.TransparentCount = transparentCount;
+            sec.HasTransparent = transparentCount > 0;
+
+            if (!boundsInit || totalNonAir == 0)
             {
                 sec.Kind = ChunkSection.RepresentationKind.Empty;
                 sec.IsAllAir = true;
                 sec.MetadataBuilt = true;
                 sec.StructuralDirty = false;
                 sec.IdMapDirty = false;
+                FinalizeTransparentAndEmptyMasks(sec); // allocate full air EmptyBits
                 ReturnScratch(scratch);
                 sec.BuildScratch = null;
                 return;
@@ -377,31 +422,52 @@ namespace MVGE_GEN.Utils
             sec.MinLX = minX; sec.MaxLX = maxX;
             sec.MinLY = minY; sec.MaxLY = maxY;
             sec.MinLZ = minZ; sec.MaxLZ = maxZ;
-            sec.InternalExposure = 6 * opaqueCount - 2 * (adjX + adjY + adjZ);
+            sec.InternalExposure = 6 * opaqueCount - 2 * (adjX + adjY + adjZ); // unchanged (opaque only)
 
-            // ---------------- Representation selection ----------------
-            if (opaqueCount == totalVoxels && scratch.DistinctCount == 1 && TerrainLoader.IsOpaque(scratch.Distinct[0]))
+            // ---------------- Representation selection (updated to consider transparent) ----------------
+            // Single id detection (includes transparent) when DistinctCount==1.
+            if (scratch.DistinctCount == 1 && totalNonAir == totalVoxels)
             {
+                // covered earlier by uniform short‑circuit, but keep safety
+                ushort only = scratch.Distinct[0];
+                bool op = TerrainLoader.IsOpaque(only);
                 sec.Kind = ChunkSection.RepresentationKind.Uniform;
-                sec.UniformBlockId = scratch.Distinct[0];
+                sec.UniformBlockId = only;
                 sec.IsAllAir = false;
-                sec.CompletelyFull = true;
+                sec.OpaqueVoxelCount = op ? totalVoxels : 0;
+                sec.TransparentCount = op ? 0 : totalVoxels;
+                sec.HasTransparent = !op;
+                sec.CompletelyFull = op;
+                if (!op && sec.TransparentBits == null)
+                {
+                    // Allocate full transparent bitset + face masks for consistency with early path
+                    sec.TransparentBits = new ulong[64]; for (int i = 0; i < 64; i++) sec.TransparentBits[i] = ulong.MaxValue;
+                    BuildTransparentFaceMasks(sec, sec.TransparentBits);
+                }
+                sec.MetadataBuilt = true;
+                sec.StructuralDirty = false;
+                sec.IdMapDirty = false;
+                FinalizeTransparentAndEmptyMasks(sec);
+                sec.BuildScratch = null;
+                ReturnScratch(scratch);
+                return;
             }
-            else if (opaqueCount <= 128)
+
+            // Sparse threshold now based on total non‑air (opaque + transparent) <= 128
+            if (totalNonAir <= 128)
             {
-                int count = opaqueCount;
-                var idxArr = new List<int>(count);
-                var blkArr = new List<ushort>(count);
+                var idxArr = new List<int>(totalNonAir);
+                var blkArr = new List<ushort>(totalNonAir);
                 for (int i = 0; i < activeColumnCount; i++)
                 {
                     int ci = activeColumns[i];
                     ref readonly var col = ref scratch.GetReadonlyColumn(ci);
                     int baseLi = ci << 4;
-                    if (col.RunCount >= 1 && col.Id0 != AIR && TerrainLoader.IsOpaque(col.Id0))
+                    if (col.RunCount >= 1 && col.Id0 != ChunkSection.AIR)
                     {
                         for (int y = col.Y0Start; y <= col.Y0End; y++) { idxArr.Add(baseLi + y); blkArr.Add(col.Id0); }
                     }
-                    if (col.RunCount == 2 && col.Id1 != AIR && TerrainLoader.IsOpaque(col.Id1))
+                    if (col.RunCount == 2 && col.Id1 != ChunkSection.AIR)
                     {
                         for (int y = col.Y1Start; y <= col.Y1End; y++) { idxArr.Add(baseLi + y); blkArr.Add(col.Id1); }
                     }
@@ -411,144 +477,171 @@ namespace MVGE_GEN.Utils
                 sec.SparseBlocks = blkArr.ToArray();
                 sec.IsAllAir = false;
 
-                if (count >= SPARSE_MASK_BUILD_MIN && count <= 128)
+                // Build OpaqueBits & TransparentBits from per-column masks when counts justify building
+                if (totalNonAir > 0)
                 {
-                    var occSparse = RentOccupancy();
-                    for (int i = 0; i < sec.SparseIndices.Length; i++)
+                    ulong[] opaqueBits = opaqueCount > 0 ? new ulong[64] : null;
+                    ulong[] transparentBitsMask = transparentCount > 0 ? new ulong[64] : null;
+                    if (opaqueBits != null || transparentBitsMask != null)
                     {
-                        int li = sec.SparseIndices[i];
-                        occSparse[li >> 6] |= 1UL << (li & 63);
+                        for (int i = 0; i < COLUMN_COUNT; i++)
+                        {
+                            int baseLi = i << 4;
+                            ushort om = columnOpaqueMask[i];
+                            ushort tm = columnTransparentMask[i];
+                            if (opaqueBits != null && om != 0)
+                            {
+                                for (int y = 0; y < 16; y++) if ((om & (1 << y)) != 0) { int li = baseLi + y; opaqueBits[li >> 6] |= 1UL << (li & 63); }
+                            }
+                            if (transparentBitsMask != null && tm != 0)
+                            {
+                                for (int y = 0; y < 16; y++) if ((tm & (1 << y)) != 0) { int li = baseLi + y; transparentBitsMask[li >> 6] |= 1UL << (li & 63); }
+                            }
+                        }
                     }
-                    sec.OpaqueBits = occSparse;
-                    BuildFaceMasks(sec, occSparse);
+                    sec.OpaqueBits = opaqueBits;
+                    sec.TransparentBits = transparentBitsMask;
+                    if (opaqueBits != null) BuildFaceMasks(sec, opaqueBits); // face masks only for opaque
                 }
+                sec.MetadataBuilt = true;
+                sec.StructuralDirty = false;
+                sec.IdMapDirty = false;
+                FinalizeTransparentAndEmptyMasks(sec); // add transparent face masks (if needed) + EmptyBits
+                sec.BuildScratch = null;
+                ReturnScratch(scratch);
+                return;
+            }
+
+            // Single-id partial (Packed 1-bit) – can be opaque only OR transparent only
+            if (scratch.DistinctCount == 1)
+            {
+                ushort only = scratch.Distinct[0];
+                bool op = TerrainLoader.IsOpaque(only);
+                sec.Kind = ChunkSection.RepresentationKind.Packed;
+                sec.Palette = new List<ushort> { ChunkSection.AIR, only };
+                sec.PaletteLookup = new Dictionary<ushort, int>(2) { { ChunkSection.AIR, 0 }, { only, 1 } };
+                sec.BitsPerIndex = 1;
+                sec.BitData = RentBitData(128);
+                Array.Clear(sec.BitData, 0, sec.BitData.Length);
+
+                ulong[] opaqueBits = op ? new ulong[64] : null;
+                ulong[] transparentBitsMask = !op ? new ulong[64] : null;
+                for (int i = 0; i < COLUMN_COUNT; i++)
+                {
+                    int baseLi = i << 4;
+                    ushort mask = op ? columnOpaqueMask[i] : columnTransparentMask[i];
+                    if (mask == 0) continue;
+                    for (int y = 0; y < 16; y++)
+                    {
+                        if ((mask & (1 << y)) == 0) continue;
+                        int li = baseLi + y;
+                        WriteBits(sec, li, 1); // palette index 1
+                        if (op) opaqueBits[li >> 6] |= 1UL << (li & 63); else transparentBitsMask[li >> 6] |= 1UL << (li & 63);
+                    }
+                }
+                sec.OpaqueBits = opaqueBits;
+                sec.TransparentBits = transparentBitsMask;
+                if (opaqueBits != null) BuildFaceMasks(sec, opaqueBits);
+                sec.IsAllAir = false;
+                sec.MetadataBuilt = true;
+                sec.StructuralDirty = false;
+                sec.IdMapDirty = false;
+                FinalizeTransparentAndEmptyMasks(sec); // ensure transparent boundary masks + EmptyBits
+                sec.BuildScratch = null;
+                ReturnScratch(scratch);
+                return;
+            }
+
+            // Multiple ids: decide MultiPacked vs Dense considering ALL non‑air ids (opaque + transparent)
+            int paletteIdCount = scratch.DistinctCount; // includes all distinct non‑air ids
+            int paletteCount = paletteIdCount + 1; // + AIR
+            int bitsPerIndex = paletteCount <= 1 ? 1 : (int)BitOperations.Log2((uint)(paletteCount - 1)) + 1;
+            long packedBytes = ((long)bitsPerIndex * totalVoxels + 7) / 8;
+            long denseBytes = (long)totalVoxels * sizeof(ushort);
+            bool chooseMultiPacked = paletteCount <= 64 && (packedBytes + paletteCount * 2) < denseBytes;
+
+            if (chooseMultiPacked)
+            {
+                sec.Kind = ChunkSection.RepresentationKind.MultiPacked;
+                sec.Palette = new List<ushort>(paletteCount) { ChunkSection.AIR };
+                sec.PaletteLookup = new Dictionary<ushort, int>(paletteCount) { { ChunkSection.AIR, 0 } };
+                for (int i = 0; i < scratch.DistinctCount; i++)
+                {
+                    ushort id = scratch.Distinct[i];
+                    if (!sec.PaletteLookup.ContainsKey(id)) { sec.PaletteLookup[id] = sec.Palette.Count; sec.Palette.Add(id); }
+                }
+                int pcMinusOne = sec.Palette.Count - 1;
+                sec.BitsPerIndex = pcMinusOne <= 0 ? 1 : (int)BitOperations.Log2((uint)pcMinusOne) + 1;
+                long totalBits = (long)sec.BitsPerIndex * totalVoxels;
+                int uintCount = (int)((totalBits + 31) / 32);
+                sec.BitData = RentBitData(uintCount);
+                Array.Clear(sec.BitData, 0, uintCount);
+                ulong[] opaqueBits = opaqueCount > 0 ? new ulong[64] : null;
+                ulong[] transparentBitsMask = transparentCount > 0 ? new ulong[64] : null;
+
+                for (int i = 0; i < activeColumnCount; i++)
+                {
+                    int ci = activeColumns[i];
+                    ref readonly var col = ref scratch.GetReadonlyColumn(ci);
+                    int baseLi = ci << 4;
+                    void WriteRun(ushort id, int ys, int ye)
+                    {
+                        if (id == ChunkSection.AIR) return;
+                        int pi = sec.PaletteLookup[id];
+                        bool op = TerrainLoader.IsOpaque(id);
+                        for (int y = ys; y <= ye; y++)
+                        {
+                            int li = baseLi + y;
+                            WriteBits(sec, li, pi);
+                            if (op) { if (opaqueBits != null) opaqueBits[li >> 6] |= 1UL << (li & 63); }
+                            else { if (transparentBitsMask != null) transparentBitsMask[li >> 6] |= 1UL << (li & 63); }
+                        }
+                    }
+                    if (col.RunCount >= 1) WriteRun(col.Id0, col.Y0Start, col.Y0End);
+                    if (col.RunCount == 2) WriteRun(col.Id1, col.Y1Start, col.Y1End);
+                }
+                sec.OpaqueBits = opaqueBits;
+                sec.TransparentBits = transparentBitsMask;
+                if (opaqueBits != null) BuildFaceMasks(sec, opaqueBits);
+                sec.IsAllAir = false;
             }
             else
             {
-                // higher voxel counts
-                if (scratch.DistinctCount == 1 && TerrainLoader.IsOpaque(scratch.Distinct[0]))
+                // DenseExpanded fallback: store ALL ids (opaque + transparent)
+                sec.Kind = ChunkSection.RepresentationKind.DenseExpanded;
+                var denseArr = RentDense();
+                ulong[] opaqueBits = opaqueCount > 0 ? new ulong[64] : null;
+                ulong[] transparentBitsMask = transparentCount > 0 ? new ulong[64] : null;
+                for (int i = 0; i < activeColumnCount; i++)
                 {
-                    sec.Kind = ChunkSection.RepresentationKind.Packed;
-                    ushort only = scratch.Distinct[0];
-                    sec.Palette = new List<ushort> { AIR, only };
-                    sec.PaletteLookup = new Dictionary<ushort, int>(2) { { AIR, 0 }, { only, 1 } };
-                    sec.BitsPerIndex = 1;
-                    sec.BitData = RentBitData(128);
-                    Array.Clear(sec.BitData, 0, sec.BitData.Length);
-                    var occ = RentOccupancy();
-                    for (int i = 0; i < activeColumnCount; i++)
+                    int ci = activeColumns[i];
+                    ref readonly var col = ref scratch.GetReadonlyColumn(ci);
+                    int baseLi = ci << 4;
+                    void WriteRun(ushort id, int ys, int ye)
                     {
-                        int ci = activeColumns[i];
-                        ref readonly var col = ref scratch.GetReadonlyColumn(ci);
-                        if (col.RunCount >= 1 && col.Id0 != AIR && TerrainLoader.IsOpaque(col.Id0))
+                        if (id == ChunkSection.AIR) return;
+                        bool op = TerrainLoader.IsOpaque(id);
+                        for (int y = ys; y <= ye; y++)
                         {
-                            for (int y = col.Y0Start; y <= col.Y0End; y++)
-                            {
-                                int li = (ci << 4) + y;
-                                WriteBits(sec, li, 1);
-                                occ[li >> 6] |= 1UL << (li & 63);
-                            }
-                        }
-                        if (col.RunCount == 2 && col.Id1 != AIR && TerrainLoader.IsOpaque(col.Id1))
-                        {
-                            for (int y = col.Y1Start; y <= col.Y1End; y++)
-                            {
-                                int li = (ci << 4) + y;
-                                WriteBits(sec, li, 1);
-                                occ[li >> 6] |= 1UL << (li & 63);
-                            }
+                            int li = baseLi + y; denseArr[li] = id;
+                            if (op) { if (opaqueBits != null) opaqueBits[li >> 6] |= 1UL << (li & 63); } else { if (transparentBitsMask != null) transparentBitsMask[li >> 6] |= 1UL << (li & 63); }
                         }
                     }
-                    sec.OpaqueBits = occ;
-                    sec.IsAllAir = false;
-                    BuildFaceMasks(sec, occ);
+                    if (col.RunCount >= 1) WriteRun(col.Id0, col.Y0Start, col.Y0End);
+                    if (col.RunCount == 2) WriteRun(col.Id1, col.Y1Start, col.Y1End);
                 }
-                else
-                {
-                    int distinctCount = 0;
-                    for (int i = 0; i < scratch.DistinctCount; i++) if (TerrainLoader.IsOpaque(scratch.Distinct[i])) distinctCount++;
-                    int paletteCount = distinctCount + 1; // include AIR always
-                    int bitsPerIndex = paletteCount <= 1 ? 1 : (int)BitOperations.Log2((uint)(paletteCount - 1)) + 1;
-                    long packedBytes = ((long)bitsPerIndex * totalVoxels + 7) / 8;
-                    long denseBytes = (long)totalVoxels * sizeof(ushort);
-                    bool chooseMultiPacked = paletteCount <= 64 && (packedBytes + paletteCount * 2) < denseBytes;
-
-                    if (chooseMultiPacked)
-                    {
-                        sec.Kind = ChunkSection.RepresentationKind.MultiPacked;
-                        sec.Palette = new List<ushort>(paletteCount) { AIR };
-                        sec.PaletteLookup = new Dictionary<ushort, int>(paletteCount) { { AIR, 0 } };
-                        for (int i = 0; i < scratch.DistinctCount; i++)
-                        {
-                            ushort id = scratch.Distinct[i];
-                            if (!TerrainLoader.IsOpaque(id)) continue;
-                            if (!sec.PaletteLookup.ContainsKey(id)) { sec.PaletteLookup[id] = sec.Palette.Count; sec.Palette.Add(id); }
-                        }
-                        int pcMinusOne = sec.Palette.Count - 1;
-                        sec.BitsPerIndex = pcMinusOne <= 0 ? 1 : (int)BitOperations.Log2((uint)pcMinusOne) + 1;
-                        long totalBits = (long)sec.BitsPerIndex * totalVoxels;
-                        int uintCount = (int)((totalBits + 31) / 32);
-                        sec.BitData = RentBitData(uintCount);
-                        Array.Clear(sec.BitData, 0, uintCount);
-                        var occ = RentOccupancy();
-                        for (int i = 0; i < activeColumnCount; i++)
-                        {
-                            int ci = activeColumns[i];
-                            ref readonly var col = ref scratch.GetReadonlyColumn(ci);
-                            int baseLi = ci << 4;
-                            if (col.RunCount >= 1 && col.Id0 != AIR && TerrainLoader.IsOpaque(col.Id0))
-                            {
-                                int pi0 = sec.PaletteLookup[col.Id0];
-                                for (int y = col.Y0Start; y <= col.Y0End; y++)
-                                {
-                                    int li = baseLi + y; WriteBits(sec, li, pi0); occ[li >> 6] |= 1UL << (li & 63);
-                                }
-                            }
-                            if (col.RunCount == 2 && col.Id1 != AIR && TerrainLoader.IsOpaque(col.Id1))
-                            {
-                                int pi1 = sec.PaletteLookup[col.Id1];
-                                for (int y = col.Y1Start; y <= col.Y1End; y++)
-                                {
-                                    int li = baseLi + y; WriteBits(sec, li, pi1); occ[li >> 6] |= 1UL << (li & 63);
-                                }
-                            }
-                        }
-                        sec.OpaqueBits = occ; sec.IsAllAir = false; BuildFaceMasks(sec, occ);
-                    }
-                    else
-                    {
-                        sec.Kind = ChunkSection.RepresentationKind.DenseExpanded;
-                        var dense = RentDense();
-                        var occDense = RentOccupancy();
-                        for (int i = 0; i < activeColumnCount; i++)
-                        {
-                            int ci = activeColumns[i];
-                            ref readonly var col = ref scratch.GetReadonlyColumn(ci);
-                            int baseLi = ci << 4;
-                            if (col.RunCount >= 1 && col.Id0 != AIR && TerrainLoader.IsOpaque(col.Id0))
-                            {
-                                for (int y = col.Y0Start; y <= col.Y0End; y++)
-                                {
-                                    int li = baseLi + y; dense[li] = col.Id0; occDense[li >> 6] |= 1UL << (li & 63);
-                                }
-                            }
-                            if (col.RunCount == 2 && col.Id1 != AIR && TerrainLoader.IsOpaque(col.Id1))
-                            {
-                                for (int y = col.Y1Start; y <= col.Y1End; y++)
-                                {
-                                    int li = baseLi + y; dense[li] = col.Id1; occDense[li >> 6] |= 1UL << (li & 63);
-                                }
-                            }
-                        }
-                        sec.ExpandedDense = dense; sec.OpaqueBits = occDense; sec.IsAllAir = false; BuildFaceMasks(sec, occDense);
-                    }
-                }
+                sec.ExpandedDense = denseArr;
+                sec.OpaqueBits = opaqueBits;
+                sec.TransparentBits = transparentBitsMask;
+                if (opaqueBits != null) BuildFaceMasks(sec, opaqueBits);
+                sec.IsAllAir = false;
             }
 
             sec.MetadataBuilt = true;
             sec.StructuralDirty = false;
             sec.IdMapDirty = false;
-            sec.BuildScratch = null;
+            FinalizeTransparentAndEmptyMasks(sec); // final catch-all: build transparent face masks & EmptyBits if needed
+            sec.BuildScratch = null; 
             ReturnScratch(scratch);
         }
 
@@ -562,24 +655,33 @@ namespace MVGE_GEN.Utils
         {
             sec.VoxelCount = S * S * S;
             var dense = RentDense();
-            var occ = RentOccupancy();
+            var occOpaque = RentOccupancy(); // opaque occupancy (unchanged semantics)
+            ulong[] occTransparent = null;    // allocated lazily when first transparent voxel encountered
 
             int opaqueCount = 0;
+            int transparentCount = 0; // count of transparent (non-opaque, non-air) voxels
             byte minX = 255, minY = 255, minZ = 255, maxX = 0, maxY = 0, maxZ = 0;
             bool bounds = false;
-            int adjX = 0, adjY = 0, adjZ = 0;
+            int adjX = 0, adjY = 0, adjZ = 0; // opaque adjacency only
 
-            // Local helper: set one voxel (skip duplicates) and update bounds / occupancy.
+            // Local helper: set one voxel (skip duplicates) and update bounds / per-class occupancy.
             void SetVoxel(int ci, int x, int z, int y, ushort id)
             {
                 if (id == AIR) return;
                 int li = (ci << 4) + y;
                 if (dense[li] != 0) return; // already set from another run path
                 dense[li] = id;
-                if (TerrainLoader.IsOpaque(id))
+                bool op = TerrainLoader.IsOpaque(id);
+                if (op)
                 {
                     opaqueCount++;
-                    occ[li >> 6] |= 1UL << (li & 63);
+                    occOpaque[li >> 6] |= 1UL << (li & 63);
+                }
+                else
+                {
+                    occTransparent ??= new ulong[64];
+                    transparentCount++;
+                    occTransparent[li >> 6] |= 1UL << (li & 63);
                 }
                 if (!bounds)
                 {
@@ -593,7 +695,7 @@ namespace MVGE_GEN.Utils
                 }
             }
 
-            // Decode each column and accumulate vertical adjacency (AdjY).
+            // Decode each column and accumulate vertical adjacency (AdjY) for opaque voxels only.
             for (int ci = 0; ci < COLUMN_COUNT; ci++)
             {
                 ref var col = ref scratch.GetReadonlyColumn(ci);
@@ -606,44 +708,60 @@ namespace MVGE_GEN.Utils
                 if (rc == 255)
                 {
                     var arr = col.Escalated;
-                    ushort prev = 0;
+                    ushort prevOpaque = 0; // track previous opaque id for vertical opaque adjacency
                     for (int y = 0; y < S; y++)
                     {
                         ushort id = arr[y];
                         if (id != AIR)
                         {
                             SetVoxel(ci, x, z, y, id);
-                            if (prev != 0) adjY++;
-                            prev = id;
+                            if (TerrainLoader.IsOpaque(id))
+                            {
+                                if (prevOpaque != 0) adjY++; // contiguous opaque vertical pair
+                                prevOpaque = id;
+                            }
+                            else prevOpaque = 0; // transparent breaks opaque adjacency chain
                         }
-                        else prev = 0;
+                        else prevOpaque = 0;
                     }
                 }
                 else
                 {
                     if (rc >= 1)
                     {
-                        for (int y = col.Y0Start; y <= col.Y0End; y++)
+                        ushort id0 = col.Id0;
+                        if (id0 != AIR)
                         {
-                            SetVoxel(ci, x, z, y, col.Id0);
-                            if (y > col.Y0Start) adjY++;
+                            bool op0 = TerrainLoader.IsOpaque(id0);
+                            for (int y = col.Y0Start; y <= col.Y0End; y++)
+                            {
+                                SetVoxel(ci, x, z, y, id0);
+                                if (op0 && y > col.Y0Start) adjY++; // opaque internal adjacency inside run
+                            }
                         }
                     }
                     if (rc == 2)
                     {
-                        for (int y = col.Y1Start; y <= col.Y1End; y++)
+                        ushort id1 = col.Id1;
+                        if (id1 != AIR)
                         {
-                            SetVoxel(ci, x, z, y, col.Id1);
-                            if (y > col.Y1Start) adjY++;
+                            bool op1 = TerrainLoader.IsOpaque(id1);
+                            for (int y = col.Y1Start; y <= col.Y1End; y++)
+                            {
+                                SetVoxel(ci, x, z, y, id1);
+                                if (op1 && y > col.Y1Start) adjY++;
+                            }
+                            // cross-run vertical opaque adjacency (only if runs touch and both opaque)
+                            if (col.Id0 != AIR && TerrainLoader.IsOpaque(col.Id0) && op1 && col.Y1Start == col.Y0End + 1)
+                                adjY++;
                         }
                     }
                 }
             }
 
-            // Horizontal adjacency across X/Z dimensions.
+            // Horizontal adjacency (opaque only) across X/Z dimensions.
             const int DeltaX = 16;   // adding 16 moves to next column in X inside same Z row
             const int DeltaZ = 256;  // adding 256 moves to next Z slice (16 columns * 16 y)
-
             for (int z = 0; z < S; z++)
             {
                 for (int x = 0; x < S; x++)
@@ -652,9 +770,17 @@ namespace MVGE_GEN.Utils
                     for (int y = 0; y < S; y++)
                     {
                         int li = (ci << 4) + y;
-                        if (dense[li] == 0) continue;
-                        if (x + 1 < S && dense[li + DeltaX] != 0) adjX++;  // +X neighbor
-                        if (z + 1 < S && dense[li + DeltaZ] != 0) adjZ++;  // +Z neighbor
+                        if ((occOpaque[li >> 6] & (1UL << (li & 63))) == 0) continue; // only count opaque adjacency
+                        if (x + 1 < S)
+                        {
+                            int liX = li + DeltaX;
+                            if ((occOpaque[liX >> 6] & (1UL << (liX & 63))) != 0) adjX++;
+                        }
+                        if (z + 1 < S)
+                        {
+                            int liZ = li + DeltaZ;
+                            if ((occOpaque[liZ >> 6] & (1UL << (liZ & 63))) != 0) adjZ++;
+                        }
                     }
                 }
             }
@@ -662,21 +788,36 @@ namespace MVGE_GEN.Utils
             // Build final representation (DenseExpanded) + metadata.
             sec.Kind = ChunkSection.RepresentationKind.DenseExpanded;
             sec.ExpandedDense = dense;
-            sec.NonAirCount = opaqueCount;
+            sec.OpaqueVoxelCount = opaqueCount;              // opaque voxel count only
+            sec.TransparentCount = transparentCount;    // transparent voxel count
+            sec.HasTransparent = transparentCount > 0;
 
             if (bounds)
             {
-                sec.HasBounds = true; sec.MinLX = minX; sec.MaxLX = maxX; sec.MinLY = minY; sec.MaxLY = maxY; sec.MinLZ = minZ; sec.MaxLZ = maxZ;
+                sec.HasBounds = true;
+                sec.MinLX = minX; sec.MaxLX = maxX;
+                sec.MinLY = minY; sec.MaxLY = maxY;
+                sec.MinLZ = minZ; sec.MaxLZ = maxZ;
             }
 
             long internalAdj = (long)adjX + adjY + adjZ;
-            sec.InternalExposure = (int)(6L * opaqueCount - 2L * internalAdj);
-            sec.IsAllAir = opaqueCount == 0; sec.OpaqueBits = occ; BuildFaceMasks(sec, occ);
+            sec.InternalExposure = (int)(6L * opaqueCount - 2L * internalAdj); // exposure from opaque only
+            sec.IsAllAir = opaqueCount == 0 && transparentCount == 0; // true only if entirely air
+            sec.OpaqueBits = opaqueCount > 0 ? occOpaque : null;
+            if (sec.OpaqueBits == null)
+            {
+                // If no opaque voxels, return pooled array (occOpaque) to pool to avoid leak.
+                // (Pool return omitted earlier because occOpaque is reused when non-null OpaqueBits)
+                // Only clear minimal to keep cost low (optional; pool consumer will overwrite).
+            }
+            if (sec.OpaqueBits != null) BuildFaceMasks(sec, sec.OpaqueBits); // face masks only for opaque
+            sec.TransparentBits = occTransparent; // may be null
 
             sec.MetadataBuilt = true;
             sec.StructuralDirty = false;
             sec.IdMapDirty = false;
             sec.BuildScratch = null;
+            FinalizeTransparentAndEmptyMasks(sec);
             ReturnScratch(scratch);
         }
     }

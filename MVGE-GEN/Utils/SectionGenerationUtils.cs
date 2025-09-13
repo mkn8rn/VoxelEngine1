@@ -8,6 +8,7 @@ using System.Runtime.Intrinsics.X86;
 using System.Buffers;
 using MVGE_INF.Models.Generation;
 using MVGE_INF.Generation.Models;
+using MVGE_INF.Loaders;
 
 namespace MVGE_GEN.Utils
 {
@@ -27,6 +28,71 @@ namespace MVGE_GEN.Utils
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static ushort MaskRangeLutGet(int s, int e) => MaskRangeLut[s, e];
 
+        // Helper: ensure transparent boundary face masks are built (only when transparent bits exist) and build EmptyBits/EmptyCount.
+        // EmptyBits represent air voxels (bit set => air). This complements opaque + transparent occupancy and is built for
+        // all finalized representations (Empty, Sparse, Packed, MultiPacked, DenseExpanded, Uniform partial). Uniform full non‑air
+        // sections have no air so EmptyBits remain null (EmptyCount=0). Empty representation allocates a full bitset of air.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void FinalizeTransparentAndEmptyMasks(ChunkSection sec)
+        {
+            // Transparent face masks (only once; BuildTransparentFaceMasks clears if already allocated)
+            if (sec.TransparentBits != null && sec.TransparentFaceNegXBits == null)
+            {
+                BuildTransparentFaceMasks(sec, sec.TransparentBits);
+            }
+
+            // Build EmptyBits (air) tracking.
+            if (sec.Kind == ChunkSection.RepresentationKind.Empty || (sec.IsAllAir && sec.VoxelCount == 0))
+            {
+                // All air section (no voxels or empty representation): allocate full air bitset if not present.
+                if (sec.EmptyBits == null)
+                {
+                    sec.EmptyBits = new ulong[64];
+                    for (int i = 0; i < 64; i++) sec.EmptyBits[i] = ulong.MaxValue;
+                }
+                sec.EmptyCount = ChunkSection.VOXELS_PER_SECTION;
+                sec.HasAir = true;
+                return;
+            }
+
+            // Uniform non‑air full volume has no air cells.
+            if (sec.Kind == ChunkSection.RepresentationKind.Uniform && sec.UniformBlockId != AIR)
+            {
+                sec.EmptyBits = null; sec.EmptyCount = 0; sec.HasAir = false; return;
+            }
+
+            // Compute occupancy union (opaque | transparent). If neither present (should not happen except uninitialized), skip.
+            if (sec.OpaqueBits == null && sec.TransparentBits == null)
+            {
+                // Either all air already handled, or metadata not yet built; leave as-is.
+                return;
+            }
+
+            ulong[] emptyBits = new ulong[64];
+            int emptyCount = 0;
+            for (int i = 0; i < 64; i++)
+            {
+                ulong occ = 0UL;
+                if (sec.OpaqueBits != null) occ |= sec.OpaqueBits[i];
+                if (sec.TransparentBits != null) occ |= sec.TransparentBits[i];
+                ulong empty = ~occ; // bit set => air
+                emptyBits[i] = empty;
+                emptyCount += BitOperations.PopCount(empty);
+            }
+            if (emptyCount > 0)
+            {
+                sec.EmptyBits = emptyBits;
+                sec.EmptyCount = emptyCount;
+                sec.HasAir = true;
+            }
+            else
+            {
+                sec.EmptyBits = null;
+                sec.EmptyCount = 0;
+                sec.HasAir = false;
+            }
+        }
+
         // -------------------------------------------------------------------------------------------------
         // EnsureScratch: Returns a writable SectionBuildScratch for the given section.
         // Guarantees that the returned instance is initialized and ready for column writes.
@@ -41,6 +107,8 @@ namespace MVGE_GEN.Utils
         // -------------------------------------------------------------------------------------------------
         // DirectSetColumnRun1: Specialized single-run fast path using precomputed scratch and ci.
         // Overwrites a column with a single run (id, ys..ye).
+        // NOTE: At write time we do not distinguish opaque vs transparent; this is resolved during finalize
+        // using TerrainLoader.IsOpaque so generation writes remain minimal cost.
         // -------------------------------------------------------------------------------------------------
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void DirectSetColumnRun1(
@@ -89,6 +157,7 @@ namespace MVGE_GEN.Utils
         // -------------------------------------------------------------------------------------------------
         // DirectSetColumnRuns: Accepts precomputed scratch and column index with byte Y ranges.
         // Writes 0, 1, or 2 runs directly without re-fetching scratch or recomputing ci.
+        // NOTE: As with single-run writer, transparency is resolved later in finalize stage.
         // -------------------------------------------------------------------------------------------------
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void DirectSetColumnRuns(
@@ -147,61 +216,7 @@ namespace MVGE_GEN.Utils
         }
 
         // -------------------------------------------------------------------------------------------------
-        // DirectSetRowSingleRun16: Bulk single-run writer for a given Z row.
-        // Applies the same (id, yStart..yEnd) to all columns at (x,z) where xMask has a bit set.
-        // xMaskBits16[0] holds a 16-bit mask (LSB -> x=0). No-op when mask is zero.
-        // -------------------------------------------------------------------------------------------------
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static void DirectSetRowSingleRun16(
-            SectionBuildScratch scratch, int z,
-            ushort id, byte yStart, byte yEnd,
-            in ReadOnlySpan<ushort> xMaskBits16)
-        {
-            if (id == AIR || yStart > yEnd) return;
-            if (xMaskBits16.IsEmpty) return;
-            ushort xMask = xMaskBits16[0];
-            if (xMask == 0) return;
-
-            ushort occMask = MaskRangeLutGet(yStart, yEnd);
-            int len = (yEnd - yStart + 1);
-            byte nonAir = (byte)len;
-            byte adjY = (byte)(len - 1);
-
-            int baseCi = (z << 4); // z * 16
-            int w = baseCi >> 6;   // row is always contained within one 64-bit word
-            int b0 = baseCi & 63;
-
-            // Column writes
-            ushort mask = xMask;
-            while (mask != 0)
-            {
-                int x = BitOperations.TrailingZeroCount(mask);
-                mask = (ushort)(mask & (mask - 1));
-                int ci = baseCi + x;
-                ref var col = ref scratch.GetWritableColumn(ci);
-                col.RunCount = 1;
-                col.Id0 = id;
-                col.Y0Start = yStart; col.Y0End = yEnd;
-                col.Id1 = 0;
-                col.Y1Start = 0; col.Y1End = 0;
-                col.OccMask = occMask;
-                col.NonAir = nonAir;
-                col.AdjY = adjY;
-                col.Escalated = null;
-            }
-
-            // Membership bits in bulk
-            ulong prev = scratch.NonEmptyColumnBits[w];
-            ulong shifted = ((ulong)xMask) << b0;
-            ulong newlyAdded = shifted & ~prev;
-            scratch.NonEmptyColumnBits[w] = prev | shifted;
-            scratch.NonEmptyCount += BitOperations.PopCount(newlyAdded);
-            scratch.AnyNonAir = true;
-            scratch.DistinctDirty = true;
-        }
-
-        // -------------------------------------------------------------------------------------------------
-        // EscalatedFinalizeSection
+        // GenerationFinalizeSection 
         // Converts the incremental run‑based scratch (SectionBuildScratch) into a permanent section
         // representation (Uniform, Sparse, Packed, MultiPacked, DenseExpanded or Empty) and builds
         // derived metadata (occupancy masks, face masks, bounds, internal exposure metrics).
@@ -215,49 +230,72 @@ namespace MVGE_GEN.Utils
         // Fallback path:
         //   When any column escalated (RunCount==255) we rebuild a dense array (O(4096)).
         // -------------------------------------------------------------------------------------------------
-
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void GenerationFinalizeSection(ChunkSection sec)
         {
             if (sec == null) return;
 
-            // -----------------------------------
-            // 1. Cheap palette / id remap path
-            // -----------------------------------
+            // 1. Cheap palette / id remap path (no scratch)
             if (sec.BuildScratch == null && !sec.StructuralDirty && sec.IdMapDirty)
             {
-                // Uniform: nothing but id changed.
                 if (sec.Kind == ChunkSection.RepresentationKind.Uniform)
                 {
-                    sec.MetadataBuilt = true;
-                    sec.IdMapDirty = false;
-                    sec.StructuralDirty = false; // early uniform id remap
-                    return;
-                }
-
-                // Single‑id packed (AIR + single block) – occupancy unchanged. If totally full promote to Uniform.
-                if ((sec.Kind == ChunkSection.RepresentationKind.Packed || sec.Kind == ChunkSection.RepresentationKind.MultiPacked) &&
-                    sec.Palette != null && sec.Palette.Count <= 2)
-                {
-                    if (sec.Palette.Count == 2 && sec.NonAirCount == 4096)
+                    bool uniformOpaque = TerrainLoader.IsOpaque(sec.UniformBlockId);
+                    if (uniformOpaque)
                     {
-                        // Convert to Uniform for fastest downstream queries.
-                        sec.Kind = ChunkSection.RepresentationKind.Uniform;
-                        sec.UniformBlockId = sec.Palette[1];
-                        sec.CompletelyFull = true;
-                        sec.Palette = null;
-                        sec.PaletteLookup = null;
-                        ReturnBitData(sec.BitData);
-                        sec.BitData = null;
-                        sec.BitsPerIndex = 0;
+                        sec.TransparentBits = null; sec.TransparentCount = 0; sec.HasTransparent = false;
+                        // Opaque uniform: EmptyBits handled below (none)
+                    }
+                    else
+                    {
+                        sec.OpaqueBits = null; sec.OpaqueVoxelCount = 0; // transparent uniform
+                        if (sec.TransparentBits == null)
+                        {
+                            sec.TransparentBits = new ulong[64];
+                            for (int i = 0; i < 64; i++) sec.TransparentBits[i] = ulong.MaxValue;
+                        }
+                        BuildTransparentFaceMasks(sec, sec.TransparentBits); // ensure transparent face masks built here
                     }
                     sec.MetadataBuilt = true;
                     sec.IdMapDirty = false;
                     sec.StructuralDirty = false;
+                    FinalizeTransparentAndEmptyMasks(sec);
                     return;
                 }
 
-                // Other representations (Sparse / Dense / MultiPacked) – id‑only swap semantics preserved.
+                if ((sec.Kind == ChunkSection.RepresentationKind.Packed || sec.Kind == ChunkSection.RepresentationKind.MultiPacked) &&
+                    sec.Palette != null && sec.Palette.Count <= 2)
+                {
+                    ushort singleId = (sec.Palette.Count == 2) ? sec.Palette[1] : (ushort)0;
+                    bool singleOpaque = singleId != 0 && TerrainLoader.IsOpaque(singleId);
+                    if (sec.Palette.Count == 2 && sec.OpaqueVoxelCount == ChunkSection.VOXELS_PER_SECTION && singleOpaque)
+                    {
+                        sec.Kind = ChunkSection.RepresentationKind.Uniform;
+                        sec.UniformBlockId = singleId;
+                        sec.CompletelyFull = true;
+                        sec.TransparentBits = null; sec.TransparentCount = 0; sec.HasTransparent = false;
+                        sec.Palette = null; sec.PaletteLookup = null;
+                        ReturnBitData(sec.BitData); sec.BitData = null; sec.BitsPerIndex = 0;
+                    }
+                    else if (sec.Palette.Count == 2 && !singleOpaque && sec.OpaqueVoxelCount == ChunkSection.VOXELS_PER_SECTION)
+                    {
+                        sec.Kind = ChunkSection.RepresentationKind.Uniform;
+                        sec.UniformBlockId = singleId;
+                        sec.CompletelyFull = true;
+                        sec.OpaqueVoxelCount = 0;
+                        sec.TransparentBits = new ulong[64]; for (int i = 0; i < 64; i++) sec.TransparentBits[i] = ulong.MaxValue;
+                        sec.TransparentCount = ChunkSection.VOXELS_PER_SECTION; sec.HasTransparent = true;
+                        BuildTransparentFaceMasks(sec, sec.TransparentBits);
+                        sec.Palette = null; sec.PaletteLookup = null;
+                        ReturnBitData(sec.BitData); sec.BitData = null; sec.BitsPerIndex = 0;
+                    }
+                    sec.MetadataBuilt = true;
+                    sec.IdMapDirty = false;
+                    sec.StructuralDirty = false;
+                    FinalizeTransparentAndEmptyMasks(sec);
+                    return;
+                }
+
                 if (sec.Kind == ChunkSection.RepresentationKind.Sparse ||
                     sec.Kind == ChunkSection.RepresentationKind.DenseExpanded ||
                     sec.Kind == ChunkSection.RepresentationKind.MultiPacked)
@@ -265,65 +303,64 @@ namespace MVGE_GEN.Utils
                     sec.MetadataBuilt = true;
                     sec.IdMapDirty = false;
                     sec.StructuralDirty = false;
+                    FinalizeTransparentAndEmptyMasks(sec);
                     return;
                 }
             }
 
-            // -----------------------------------
-            // 2. No scratch: rebuild metadata only if dirty
-            // -----------------------------------
+            // 2. No scratch present: rebuild metadata only when dirty (handled by metadata builders which already build transparent masks where applicable).
             if (sec.BuildScratch == null)
             {
                 if (sec.MetadataBuilt && !sec.StructuralDirty && !sec.IdMapDirty)
                 {
-                    return; // Already valid
+                    FinalizeTransparentAndEmptyMasks(sec);
+                    return;
                 }
 
                 switch (sec.Kind)
                 {
                     case ChunkSection.RepresentationKind.Empty:
                         sec.IsAllAir = true;
-                        sec.NonAirCount = 0;
+                        sec.OpaqueVoxelCount = 0;
                         sec.InternalExposure = 0;
                         sec.HasBounds = false;
                         sec.MetadataBuilt = true;
                         sec.StructuralDirty = false;
                         sec.IdMapDirty = false;
+                        FinalizeTransparentAndEmptyMasks(sec);
                         return;
-
                     case ChunkSection.RepresentationKind.Uniform:
                         BuildMetadataUniform(sec);
                         sec.StructuralDirty = false;
                         sec.IdMapDirty = false;
+                        FinalizeTransparentAndEmptyMasks(sec);
                         return;
-
                     case ChunkSection.RepresentationKind.Sparse:
                         BuildMetadataSparse(sec);
                         sec.StructuralDirty = false;
                         sec.IdMapDirty = false;
+                        FinalizeTransparentAndEmptyMasks(sec);
                         return;
-
                     case ChunkSection.RepresentationKind.DenseExpanded:
                         BuildMetadataDense(sec);
                         sec.StructuralDirty = false;
                         sec.IdMapDirty = false;
+                        FinalizeTransparentAndEmptyMasks(sec);
                         return;
-
                     case ChunkSection.RepresentationKind.Packed:
                     case ChunkSection.RepresentationKind.MultiPacked:
                     default:
                         BuildMetadataPacked(sec);
                         sec.StructuralDirty = false;
                         sec.IdMapDirty = false;
+                        FinalizeTransparentAndEmptyMasks(sec);
                         return;
                 }
             }
 
             var scratch = sec.BuildScratch as SectionBuildScratch;
 
-            // -----------------------------------
             // 3. Empty / untouched early exit
-            // -----------------------------------
             if (scratch == null || !scratch.AnyNonAir)
             {
                 sec.Kind = ChunkSection.RepresentationKind.Empty;
@@ -332,18 +369,16 @@ namespace MVGE_GEN.Utils
                 sec.VoxelCount = S * S * S;
                 sec.StructuralDirty = false;
                 sec.IdMapDirty = false;
-
                 if (scratch != null)
                 {
                     sec.BuildScratch = null;
                     ReturnScratch(scratch);
                 }
+                FinalizeTransparentAndEmptyMasks(sec);
                 return;
             }
 
-            // -----------------------------------
             // 4. Fast run‑based path (no escalated columns)
-            // -----------------------------------
             if (!scratch.AnyEscalated)
             {
                 // 4.a Single full‑height single‑id column classification.
@@ -351,127 +386,91 @@ namespace MVGE_GEN.Utils
                 ushort candidateId = 0;
                 int filledColumns = 0;
                 Span<ushort> rowMask = stackalloc ushort[S]; // occupancy per z row (16 bits for x)
-
-                // Track bounds while scanning (saves a second pass)
-                byte fMinX = 15, fMaxX = 0, fMinZ = 15, fMaxZ = 0;
+                byte fMinX = 15, fMaxX = 0, fMinZ = 15, fMaxZ = 0; // bounds
                 bool any = false;
 
                 for (int z = 0; z < S && singleIdFullHeightCandidate; z++)
                 {
                     ushort maskRow = 0;
-
                     for (int x = 0; x < S; x++)
                     {
                         int ci = z * S + x;
                         ref var col = ref scratch.GetReadonlyColumn(ci);
                         byte rc = col.RunCount;
-
-                        if (rc == 0)
-                        {
-                            continue; // empty column
-                        }
-
-                        // Must be exactly one run spanning full height [0..15]
+                        if (rc == 0) continue; // empty column
                         if (rc != 1 || col.Y0Start != 0 || col.Y0End != 15)
                         {
                             singleIdFullHeightCandidate = false;
                             break;
                         }
-
                         ushort id = col.Id0;
-                        if (candidateId == 0) candidateId = id; // first id
-                        else if (id != candidateId)
-                        {
-                            singleIdFullHeightCandidate = false;
-                            break;
-                        }
-
+                        if (candidateId == 0) candidateId = id; else if (id != candidateId) { singleIdFullHeightCandidate = false; break; }
                         maskRow |= (ushort)(1 << x);
                         filledColumns++;
                     }
-
                     rowMask[z] = maskRow;
                     if (maskRow != 0)
                     {
-                        if (!any)
-                        {
-                            any = true;
-                            fMinZ = fMaxZ = (byte)z;
-                        }
-                        else
-                        {
-                            if (z < fMinZ) fMinZ = (byte)z;
-                            else if (z > fMaxZ) fMaxZ = (byte)z;
-                        }
-
-                        // Leading/trailing set bit indices for min/max X bounds.
+                        if (!any) { any = true; fMinZ = fMaxZ = (byte)z; }
+                        else { if (z < fMinZ) fMinZ = (byte)z; else if (z > fMaxZ) fMaxZ = (byte)z; }
                         int first = BitOperations.TrailingZeroCount(maskRow);
                         int last = 15 - BitOperations.LeadingZeroCount((uint)maskRow << 16);
-                        if (first < fMinX) fMinX = (byte)first;
-                        if (last > fMaxX) fMaxX = (byte)last;
+                        if (first < fMinX) fMinX = (byte)first; if (last > fMaxX) fMaxX = (byte)last;
                     }
                 }
 
                 if (singleIdFullHeightCandidate && candidateId != 0)
                 {
-                    // Compute exposure analytically using column adjacency counts.
                     int C = filledColumns;
-                    int fastNonAir = C * 16; // 16 voxels per column
-
-                    int adj2D = 0; // adjacency pairs in X and Z planes collapsed into 2D patterns
-                    for (int z = 0; z < S; z++)
-                    {
-                        ushort m = rowMask[z];
-                        if (m == 0) continue;
-                        adj2D += BitOperations.PopCount((uint)(m & (m << 1))); // X direction
-                    }
-                    for (int z = 0; z < S - 1; z++)
-                    {
-                        ushort inter = (ushort)(rowMask[z] & rowMask[z + 1]);
-                        if (inter != 0) adj2D += BitOperations.PopCount(inter); // Z direction
-                    }
-
-                    int verticalAdj = 15 * C;      // each full column has 15 internal vertical adjacencies
-                    int lateralAdj = 16 * adj2D;   // each horizontal adjacency spans 16 vertical cells
+                    int fastNonAir = C * 16;
+                    int adj2D = 0;
+                    for (int z = 0; z < S; z++) { ushort m = rowMask[z]; if (m != 0) adj2D += BitOperations.PopCount((uint)(m & (m << 1))); }
+                    for (int z = 0; z < S - 1; z++) { ushort inter = (ushort)(rowMask[z] & rowMask[z + 1]); if (inter != 0) adj2D += BitOperations.PopCount(inter); }
+                    int verticalAdj = 15 * C;
+                    int lateralAdj = 16 * adj2D;
                     int exposure = 6 * fastNonAir - 2 * (verticalAdj + lateralAdj);
-
-                    sec.InternalExposure = exposure;
-                    sec.NonAirCount = fastNonAir;
-                    sec.VoxelCount = S * S * S;
-
+                    bool candidateOpaque = TerrainLoader.IsOpaque(candidateId);
                     if (!any)
                     {
-                        // Degenerate (all air) – classify empty.
                         sec.Kind = ChunkSection.RepresentationKind.Empty;
                         sec.IsAllAir = true;
                         sec.MetadataBuilt = true;
                         sec.StructuralDirty = false;
                         sec.IdMapDirty = false;
-                        sec.BuildScratch = null;
-                        ReturnScratch(scratch);
+                        sec.BuildScratch = null; ReturnScratch(scratch);
+                        FinalizeTransparentAndEmptyMasks(sec);
                         return;
                     }
-
                     sec.HasBounds = true;
-                    sec.MinLX = fMinX; sec.MaxLX = fMaxX;
-                    sec.MinLY = 0; sec.MaxLY = 15;
-                    sec.MinLZ = fMinZ; sec.MaxLZ = fMaxZ;
-
+                    sec.MinLX = fMinX; sec.MaxLX = fMaxX; sec.MinLY = 0; sec.MaxLY = 15; sec.MinLZ = fMinZ; sec.MaxLZ = fMaxZ;
+                    if (candidateOpaque)
+                    {
+                        sec.InternalExposure = exposure; sec.OpaqueVoxelCount = fastNonAir;
+                    }
+                    else
+                    {
+                        sec.InternalExposure = 0; sec.OpaqueVoxelCount = 0; sec.TransparentCount = fastNonAir; sec.HasTransparent = true;
+                    }
+                    sec.VoxelCount = S * S * S;
                     if (C == 256)
                     {
-                        // Entire section filled with same id – Uniform.
+                        // Entire section filled with same id – build full uniform including transparent bits if needed.
                         sec.Kind = ChunkSection.RepresentationKind.Uniform;
                         sec.UniformBlockId = candidateId;
                         sec.IsAllAir = false;
                         sec.CompletelyFull = true;
+                        if (!candidateOpaque)
+                        {
+                            sec.TransparentBits = new ulong[64]; for (int i = 0; i < 64; i++) sec.TransparentBits[i] = ulong.MaxValue;
+                            BuildTransparentFaceMasks(sec, sec.TransparentBits); // uniform transparent face masks
+                        }
                         sec.MetadataBuilt = true;
                         sec.StructuralDirty = false;
                         sec.IdMapDirty = false;
-                        sec.BuildScratch = null;
-                        ReturnScratch(scratch);
+                        sec.BuildScratch = null; ReturnScratch(scratch);
+                        FinalizeTransparentAndEmptyMasks(sec);
                         return;
                     }
-
                     // Partial fill single id -> 1‑bit packed form (palette [AIR, id]).
                     sec.Kind = ChunkSection.RepresentationKind.Packed;
                     sec.Palette = new List<ushort> { AIR, candidateId };
@@ -479,7 +478,6 @@ namespace MVGE_GEN.Utils
                     sec.BitsPerIndex = 1;
                     sec.BitData = RentBitData(128); // 4096 bits / 32
                     Array.Clear(sec.BitData, 0, 128);
-
                     var occ = RentOccupancy();
                     if (filledColumns > 0)
                     {
@@ -493,27 +491,28 @@ namespace MVGE_GEN.Utils
                             }
                         }
                     }
-                    sec.OpaqueBits = occ;
-                    BuildFaceMasks(sec, occ);
-
+                    if (candidateOpaque)
+                    {
+                        sec.OpaqueBits = occ; BuildFaceMasks(sec, occ);
+                    }
+                    else
+                    {
+                        sec.TransparentBits = occ; sec.HasTransparent = true; sec.TransparentCount = fastNonAir; BuildTransparentFaceMasks(sec, occ);
+                    }
                     sec.IsAllAir = false;
-                    sec.MetadataBuilt = true;
-                    sec.StructuralDirty = false;
-                    sec.IdMapDirty = false;
-                    sec.BuildScratch = null;
-                    ReturnScratch(scratch);
+                    sec.MetadataBuilt = true; sec.StructuralDirty = false; sec.IdMapDirty = false; sec.BuildScratch = null; ReturnScratch(scratch);
+                    FinalizeTransparentAndEmptyMasks(sec);
                     return;
                 }
 
-                // 4.b Fused traversal: counts + adjacency + distinct ids + bounds.
+                // 4.b Fused traversal path (delegates to helper for representation decisions).
                 FusedNonEscalatedFinalize(sec, scratch);
                 return;
             }
 
-            // -----------------------------------
             // 5. Escalated fallback (dense reconstruction)
-            // -----------------------------------
             DenseExpandedFinaliseSection(sec, scratch);
+            // DenseExpandedFinaliseSection will perform mask finalization.
         }
     }
 }

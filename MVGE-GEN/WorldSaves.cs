@@ -212,7 +212,7 @@ namespace MVGE_GEN
                         using var ms = new MemoryStream(512);
                         using (var ps = new BinaryWriter(ms, System.Text.Encoding.UTF8, leaveOpen: true))
                         {
-                            ushort nonAir = (ushort)(sec?.NonAirCount ?? 0);
+                            ushort nonAir = (ushort)(sec?.OpaqueVoxelCount ?? 0);
                             ps.Write(nonAir);
                             ps.Write(sec?.InternalExposure ?? 0);
                             bool hasBounds = sec?.HasBounds == true;
@@ -611,7 +611,7 @@ namespace MVGE_GEN
                 using var br = new BinaryReader(ms);
                 if (payload.Length < 7) return new ChunkSection();
                 var sec = new ChunkSection(); sec.Kind = kind; sec.VoxelCount = ChunkSection.SECTION_SIZE*ChunkSection.SECTION_SIZE*ChunkSection.SECTION_SIZE;
-                sec.NonAirCount = br.ReadUInt16(); sec.InternalExposure = br.ReadInt32(); byte metaFlags = br.ReadByte();
+                sec.OpaqueVoxelCount = br.ReadUInt16(); sec.InternalExposure = br.ReadInt32(); byte metaFlags = br.ReadByte();
                 bool hasBounds = (metaFlags & 1)!=0; bool hasOcc = (metaFlags & 2)!=0;
                 if (hasBounds && ms.Position + 6 <= ms.Length){ sec.HasBounds=true; sec.MinLX=br.ReadByte(); sec.MinLY=br.ReadByte(); sec.MinLZ=br.ReadByte(); sec.MaxLX=br.ReadByte(); sec.MaxLY=br.ReadByte(); sec.MaxLZ=br.ReadByte(); }
                 if (hasOcc){ ulong[] ReadOcc(){ if (ms.Position>=ms.Length) return null; int len = br.ReadByte(); if (len<=0 || ms.Position + len*8 > ms.Length) return null; var arr=new ulong[len]; for(int i=0;i<len;i++) arr[i]=br.ReadUInt64(); return arr; } sec.OpaqueBits=ReadOcc(); sec.FaceNegXBits=ReadOcc(); sec.FacePosXBits=ReadOcc(); sec.FaceNegYBits=ReadOcc(); sec.FacePosYBits=ReadOcc(); sec.FaceNegZBits=ReadOcc(); sec.FacePosZBits=ReadOcc(); }

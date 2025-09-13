@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using MVGE_GEN.Utils; // added for transparent face mask building
 
 namespace MVGE_GEN.Terrain
 {
@@ -353,6 +354,7 @@ namespace MVGE_GEN.Terrain
         {
             int S = ChunkSection.SECTION_SIZE;
             int voxelsPerSection = S * S * S;
+            bool isTransparentUniform = blockId != ChunkSection.AIR && !TerrainLoader.IsOpaque(blockId); // water / glass etc.
             for (int sx = 0; sx < sectionsX; sx++)
                 for (int sy = 0; sy < sectionsY; sy++)
                     for (int sz = 0; sz < sectionsZ; sz++)
@@ -362,9 +364,9 @@ namespace MVGE_GEN.Terrain
                             IsAllAir = false,
                             Kind = ChunkSection.RepresentationKind.Uniform,
                             UniformBlockId = blockId,
-                            NonAirCount = voxelsPerSection,
+                            OpaqueVoxelCount = isTransparentUniform ? 0 : voxelsPerSection,
                             VoxelCount = voxelsPerSection,
-                            CompletelyFull = true,
+                            CompletelyFull = !isTransparentUniform, // only opaque uniform flagged full for fast paths
                             MetadataBuilt = true,
                             HasBounds = true,
                             MinLX = 0,
@@ -374,6 +376,17 @@ namespace MVGE_GEN.Terrain
                             MaxLY = 15,
                             MaxLZ = 15
                         };
+                        if (isTransparentUniform)
+                        {
+                            // Uniform transparent override (e.g. water): record transparent occupancy eagerly (all 4096 bits set)
+                            sec.TransparentCount = voxelsPerSection;
+                            sec.HasTransparent = true;
+                            sec.TransparentBits = new ulong[64];
+                            for (int i = 0; i < 64; i++) sec.TransparentBits[i] = ulong.MaxValue;
+                            sec.InternalExposure = 0; // no opaque exposure
+                            // Build transparent boundary face masks immediately so prerender has them without further metadata rebuild.
+                            SectionUtils.BuildTransparentFaceMasks(sec, sec.TransparentBits);
+                        }
                         sections[sx, sy, sz] = sec;
                     }
         }
