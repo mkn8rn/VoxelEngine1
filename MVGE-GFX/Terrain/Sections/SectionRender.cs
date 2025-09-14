@@ -167,12 +167,6 @@ namespace MVGE_GFX.Terrain.Sections
             {
                 case 0: return 0;                           // Empty
                 case 1: return desc.UniformBlockId;          // Uniform
-                case 2:                                     // Sparse
-                    if (desc.SparseIndices == null) return 0;
-                    int lid = ((localZ << 4) + localX) << 4 | localY;
-                    var idxArr = desc.SparseIndices; var blkArr = desc.SparseBlocks;
-                    for (int i = 0; i < idxArr.Length; i++) if (idxArr[i] == lid) return blkArr[i];
-                    return 0;
                 case 3:                                     // DenseExpanded
                     return desc.ExpandedDense == null ? (ushort)0 : desc.ExpandedDense[((localZ << 4) + localX) << 4 | localY];
                 case 4:                                     // Packed (single-id)

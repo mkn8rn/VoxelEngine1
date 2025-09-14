@@ -60,8 +60,7 @@ namespace MVGE_GEN
         //          Representation-specific data appended after metadata:
         //              Empty: (no additional)
         //              Uniform: blockId (ushort)
-        //              Sparse: count (ushort) then count * (index ushort, blockId ushort)
-        //              DenseExpanded: 4096 * 2 bytes raw voxel ids
+        //              Expanded: 4096 * 2 bytes raw voxel ids
         //              Packed / MultiPacked: bitsPerIndex (byte), paletteCount (ushort), palette ids (ushort*count), bitDataWordCount (int), bitData words (uint*wordCount)
         //                                    palette lookup mapping present flag (byte 0/1) then if 1: ushort mappingCount then mappingCount*(blockId ushort, index ushort)
         // Footer (version >=2 only, appended AFTER all section payloads & after offset table has been backfilled):
@@ -78,7 +77,7 @@ namespace MVGE_GEN
         // 24+ : if MeshStatsPresent -> 11 * 4-byte ints (SolidCount, ExposureEstimate, MinX,MinY,MinZ,MaxX,MaxY,MaxZ, XNonEmpty,YNonEmpty,ZNonEmpty) + 1 byte HasStats flag (for clarity)
         //  ... : 6 * (int length + ulong[length] data) for PlaneNegX,PlanePosX,PlaneNegY,PlanePosY,PlaneNegZ,PlanePosZ
 
-        private const ushort CHUNK_SAVE_VERSION = 1; // legacy chunk format version retained
+        private const ushort CHUNK_SAVE_VERSION = 1; // chunk format version retained
         private static readonly byte[] CHUNK_MAGIC = new byte[] { (byte)'M', (byte)'V', (byte)'C', (byte)'H' }; // "MVCH"
         private static readonly byte[] CHUNK_FOOTER_MAGIC = new byte[] { (byte)'C', (byte)'M', (byte)'D'};      // "CMD" footer marker
 
@@ -108,7 +107,7 @@ namespace MVGE_GEN
         }
 
         // --------------------- Batch Save ---------------------
-        // Writes an entire batch file with inline legacy chunk payloads. Any existing file is replaced.
+        // Writes an entire batch file with inline chunk payloads. Any existing file is replaced.
         private void SaveBatch(int bx,int bz)
         {
             if (!loadedBatches.TryGetValue((bx,bz), out var batch)) return;
@@ -129,7 +128,7 @@ namespace MVGE_GEN
                 foreach (var _ in chunkList) count++;
                 bw.Write(count);
 
-                // Serialize each chunk using legacy layout into an in-memory buffer then emit
+                // Serialize each chunk into an in-memory buffer then emit
                 foreach (var ch in chunkList)
                 {
                     int sizeX = GameManager.settings.chunkMaxX;
@@ -202,11 +201,13 @@ namespace MVGE_GEN
                         if (sectionOffset > uint.MaxValue)
                         {
                             Console.WriteLine("[World] Chunk inline payload exceeded 4GB offset range; aborting chunk write.");
-                            return; // abort entire chunk write (corrupt prevention)
+                            return; // abort entire chunk write
                         }
                         offsets[sectionLinear] = (uint)sectionOffset;
 
                         var kind = sec?.Kind ?? Section.RepresentationKind.Empty;
+                        // Coerce unsupported kinds to Expanded
+                        if (kind == (Section.RepresentationKind)2) kind = Section.RepresentationKind.Expanded;
                         bw.Write((byte)kind);
 
                         using var ms = new MemoryStream(512);
@@ -316,7 +317,7 @@ namespace MVGE_GEN
                 for (int i = 0; i < sectionCount; i++) bw.Write(offsets[i]);
                 bw.BaseStream.Position = endPos;
 
-                // Footer (legacy exact format)
+                // Footer
                 bw.Write(CHUNK_FOOTER_MAGIC);
                 bw.Write((float)chunk.chunkData.temperature);
                 bw.Write((float)chunk.chunkData.humidity);
@@ -369,7 +370,7 @@ namespace MVGE_GEN
 
         // --------------------- Batch Load ---------------------
         // Loads a batch file (if present) and materializes all chunk payloads into unbuiltChunks dictionary.
-        // Returns the specific requested chunk if present, else null. Granular error handling mirrors legacy style.
+        // Returns the specific requested chunk if present, else null.
         private Chunk LoadBatchForChunk(int targetCx,int targetCy,int targetCz)
         {
             var (bx,bz) = BatchKeyFromChunk(targetCx, targetCz);
@@ -427,7 +428,7 @@ namespace MVGE_GEN
             return requested;
         }
 
-        // Parses one inline chunk payload (legacy format) with granular defensive checks mirroring original loader.
+        // Parses one inline chunk payload with defensive checks.
         private Chunk ParseInlineChunkPayload(int cx,int cy,int cz, byte[] payload)
         {
             string phase = "Start";
@@ -492,6 +493,7 @@ namespace MVGE_GEN
                                 ms.Position = off;
                                 byte kindByte = br.ReadByte();
                                 var kind = (Section.RepresentationKind)kindByte;
+                                if (kind == (Section.RepresentationKind)2) kind = Section.RepresentationKind.Expanded; // coerce unsupported
                                 ushort payloadLen = br.ReadUInt16();
                                 if (payloadLen==0 || ms.Position + payloadLen > ms.Length) { chunk.sections[sx,sy,sz] = new Section(); continue; }
                                 phase = $"ReadSectionPayload:{sectionTag}";
@@ -581,7 +583,7 @@ namespace MVGE_GEN
         }
 
         // --------------------- ChunkSection Payload Parser ---------------------
-        // Reused section payload parser (unchanged from inline adaptation earlier)
+        // Reused section payload parser
         private Section ParseSectionFromPayload(Section.RepresentationKind kind, byte[] payload)
         {
             try

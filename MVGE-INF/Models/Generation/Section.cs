@@ -14,7 +14,6 @@ namespace MVGE_INF.Generation.Models
         {
             Empty = 0,          // All air (IsAllAir == true, no storage)
             Uniform = 1,        // Single non-air block fills all voxels (uniformBlockId)
-            Sparse = 2,         // Few voxels: sparse indices list with associated block ids
             Expanded = 3,  // Expanded per-voxel block ids (ushort[] expandedDense)
             Packed = 4,         // Single-id packed (also used for 1-bit partial fill)
             MultiPacked = 5     // Multi-id low-entropy packed (palette + variable bits per index)

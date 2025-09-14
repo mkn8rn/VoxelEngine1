@@ -551,14 +551,6 @@ namespace MVGE_GFX.Terrain.Sections
             {
                 case 1: // Uniform
                     return TerrainLoader.IsOpaque(n.UniformBlockId);
-                case 2: // Sparse (indices list opaque voxels only after pipeline refactor)
-                    if (n.SparseIndices != null)
-                    {
-                        int li = ((lz * 16 + lx) * 16) + ly;
-                        var arr = n.SparseIndices;
-                        for (int i = 0; i < arr.Length; i++) if (arr[i] == li) return true;
-                    }
-                    return false;
                 case 3: // DenseExpanded
                     if (n.ExpandedDense != null)
                     {

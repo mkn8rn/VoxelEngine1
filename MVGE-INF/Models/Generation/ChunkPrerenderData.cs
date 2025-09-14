@@ -9,16 +9,14 @@ namespace MVGE_INF.Models.Generation
 {
     public struct SectionPrerenderDesc
     {
-        public byte Kind; // mirrors ChunkSection.RepresentationKind
+        public byte Kind; // representation kind (0 Empty,1 Uniform,3 Expanded,4 Packed,5 MultiPacked)
         public ushort UniformBlockId;
         public int OpaqueCount;
-        public int[] SparseIndices;
-        public ushort[] SparseBlocks;
         public ushort[] ExpandedDense;
         public uint[] PackedBitData;
         public List<ushort> Palette;
         public int BitsPerIndex;
-        public ulong[] OpaqueBits; // Previously named OccupancyBits
+        public ulong[] OpaqueBits; // opaque voxel occupancy
         public ulong[] FaceNegXBits;
         public ulong[] FacePosXBits;
         public ulong[] FaceNegYBits;
@@ -36,7 +34,6 @@ namespace MVGE_INF.Models.Generation
         public ulong[] TransparentFaceNegZBits;
         public ulong[] TransparentFacePosZBits;
         public int[] TransparentPaletteIndices;       // palette indices whose block ids are transparent (non-air)
-        public int[] TransparentSparseIndices;        // compact transparent-only linear indices for sparse sections
 
         // ---- explicit air tracking ----
         public int EmptyCount;        // air voxel count
@@ -86,7 +83,7 @@ namespace MVGE_INF.Models.Generation
         public ulong[] NeighborPlaneNegZ; // neighbor at -Z, its +Z face
         public ulong[] NeighborPlanePosZ; // neighbor at +Z, its -Z face
 
-        // Self plane caches (this chunk's boundary planes) always using same layouts.
+        // Self plane caches (this chunk's boundary planes)
         public ulong[] SelfPlaneNegX;
         public ulong[] SelfPlanePosX;
         public ulong[] SelfPlaneNegY;
@@ -96,13 +93,10 @@ namespace MVGE_INF.Models.Generation
 
         public ChunkData chunkData;
 
-        // Replaces legacy flattened block array; holds a section-based renderer description.
-        // Stored as object to avoid tight coupling between INF models and GFX assembly at compile time.
-        public object SectionRender; // MVGE_GFX.Terrain.Sections.SectionRender instance
+        public object SectionRender;
 
         public SectionPrerenderDesc[] SectionDescs;
         public int sectionsX, sectionsY, sectionsZ, sectionSize;
-
         public int maxX;
         public int maxY;
         public int maxZ;

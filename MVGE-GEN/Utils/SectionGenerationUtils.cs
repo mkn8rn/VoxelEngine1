@@ -296,8 +296,7 @@ namespace MVGE_GEN.Utils
                     return;
                 }
 
-                if (sec.Kind == Section.RepresentationKind.Sparse ||
-                    sec.Kind == Section.RepresentationKind.Expanded ||
+                if (sec.Kind == Section.RepresentationKind.Expanded ||
                     sec.Kind == Section.RepresentationKind.MultiPacked)
                 {
                     sec.MetadataBuilt = true;
