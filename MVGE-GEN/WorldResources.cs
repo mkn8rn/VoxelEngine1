@@ -76,7 +76,7 @@ namespace MVGE_GEN
             set { playerChunkX = value.cx; playerChunkY = value.cy; playerChunkZ = value.cz; }
         }
 
-        // ---------------- Intra-batch parallel generation state ----------------
+        // ---------------- Intra-quad parallel generation state ----------------
         private sealed class BatchGenerationState
         {
             public readonly ConcurrentQueue<(int cx,int cz)> Columns = new();
@@ -86,13 +86,13 @@ namespace MVGE_GEN
         }
 
 
-        // ---------------- BATCH STORAGE (32x32 horizontal groups) ----------------
-        // A batch groups chunks for all vertical layers sharing a 32x32 (cx,cz) footprint.
-        // When any chunk in a batch is requested (load or generation), the whole batch
-        // is loaded (from batch file if present) or generated on-demand over time.
+        // ---------------- QUAD STORAGE (16x16 chunk column groups) ----------------
+        // A quad groups chunks for all vertical layers sharing a 16x16 (cx,cz) footprint.
+        // When any chunk in a quad is requested (load or generation), the whole quad
+        // is loaded (from quad file if present) or generated on-demand over time.
         private readonly ConcurrentDictionary<(int bx, int bz), Quadrant> loadedBatches = new();
 
-        // Track batches currently being generated. Value holds queue/state instead of a simple byte now.
+        // Track quads currently being generated. Value holds queue/state instead of a simple byte now.
         private readonly ConcurrentDictionary<(int bx,int bz), BatchGenerationState> generatingBatches = new();
 
         public WorldResources()
@@ -243,14 +243,14 @@ namespace MVGE_GEN
             Console.WriteLine("[World] Waiting for initial chunk + buffer generation...");
             var sw = Stopwatch.StartNew();
 
-            // Progress loop now also waits for any in‑flight batch (generatingBatches)
+            // Progress loop now also waits for any in‑flight quad (generatingBatches)
             while (chunkGenSchedule.Count > 0 || bufferGenSchedule.Count > 0 || generatingBatches.Count > 0)
             {
                 int remainingActive = chunkGenSchedule.Count;
                 int remainingBuffer = bufferGenSchedule.Count;
                 int inflightBatches = generatingBatches.Count;
                 int generatedChunks = unbuiltChunks.Count + activeChunks.Count; // passive excluded from initial LoD1 mesh requirement
-                Console.WriteLine($"[World] Initial generation progress: scheduledActive={remainingActive}, scheduledBuffer={remainingBuffer}, inFlightBatches={inflightBatches}, generatedChunks={generatedChunks}");
+                Console.WriteLine($"[World] Initial generation progress: scheduledActive={remainingActive}, scheduledBuffer={remainingBuffer}, inFlightQuads={inflightBatches}, generatedChunks={generatedChunks}");
                 Thread.Sleep(500);
             }
             sw.Stop();
@@ -354,7 +354,7 @@ namespace MVGE_GEN
                         if (!intersects)
                         { if (isBuffer) bufferGenSchedule.TryRemove(key, out _); else chunkGenSchedule.TryRemove(key, out _); continue; }
 
-                        // Acquire or create generation state for this batch
+                        // Acquire or create generation state for this quad
                         var state = generatingBatches.GetOrAdd((bx, bz), _ => new BatchGenerationState());
                         // Seed columns if first initializer
                         if (!state.Initialized)
@@ -375,10 +375,10 @@ namespace MVGE_GEN
                             }
                         }
 
-                        // Worker joins this batch: allocate / get batch object
+                        // Worker joins this quad: allocate / get quad object
                         var batch = existingBatch ?? GetOrCreateBatch(bx, bz);
 
-                        // New batch-centric generation: drain column queue invoking batch.GenerateOrLoadColumn
+                        // New quad-centric generation: drain column queue invoking GenerateOrLoadColumn
                         Interlocked.Increment(ref state.ActiveWorkers);
                         int verticalRange = lodDist; // reuse heuristic
 
@@ -409,7 +409,7 @@ namespace MVGE_GEN
                         if (isBuffer) bufferGenSchedule.TryRemove(key, out _); else chunkGenSchedule.TryRemove(key, out _);
                     }
                     catch (Exception exIter)
-                    { Console.WriteLine($"[World] Batch-oriented generation error at pos={lastPos}: {exIter}"); }
+                    { Console.WriteLine($"[World] Quad-oriented generation error at pos={lastPos}: {exIter}"); }
                 }
             }
             catch (OperationCanceledException) { }
@@ -638,7 +638,7 @@ namespace MVGE_GEN
             catch { }
             finally
             {
-                // Force save all dirty batches on shutdown
+                // Force save all dirty quads on shutdown
                 SaveAllBatches(force:true);
                 schedulingCts?.Dispose();
                 generationCts?.Dispose();
@@ -745,16 +745,16 @@ namespace MVGE_GEN
             }
         }
 
-        // Returns existing batch or creates placeholder (without populating chunks yet).
+        // Returns existing quad or creates placeholder (without populating chunks yet).
         private Quadrant GetOrCreateBatch(int bx, int bz)
         {
             return loadedBatches.GetOrAdd((bx, bz), key => new Quadrant(key.bx, key.bz));
         }
 
-        // Compute batch indices from chunk indices.
+        // Compute quad indices from chunk indices.
         private static (int bx, int bz) BatchKeyFromChunk(int cx, int cz) => Quadrant.GetBatchIndices(cx, cz);
 
-        // Ensure the batch containing (cx,cz) is loaded from disk (if present) into memory.
+        // Ensure the quad containing (cx,cz) is loaded from disk (if present) into memory.
         // If already loaded, no-op. Returns true if target chunk present after call.
         private bool EnsureBatchLoadedForChunk(int cx, int cy, int cz)
         {
@@ -763,12 +763,12 @@ namespace MVGE_GEN
             {
                 return activeChunks.ContainsKey((cx, cy, cz)) || unbuiltChunks.ContainsKey((cx, cy, cz)) || passiveChunks.ContainsKey((cx, cy, cz));
             }
-            // Attempt to load batch file
-            var chunk = LoadBatchForChunk(cx, cy, cz); // will populate batch + dictionaries if file exists
+            // Attempt to load quad file
+            var chunk = LoadBatchForChunk(cx, cy, cz); // will populate quad + dictionaries if file exists
             return chunk != null;
         }
 
-        // Schedules mesh builds for all chunks in a batch that fall inside the current active LoD radius.
+        // Schedules mesh builds for all chunks in a quad that fall inside the current active LoD radius.
         private void ScheduleVisibleChunksInBatch(int bx, int bz)
         {
             int lodDist = GameManager.settings.lod1RenderDistance;
