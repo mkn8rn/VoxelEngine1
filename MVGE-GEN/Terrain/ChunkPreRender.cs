@@ -20,12 +20,25 @@ namespace MVGE_GEN.Terrain
         //  Neg/Pos X: YZ plane (index = z * dimY + y)
         //  Neg/Pos Y: XZ plane (index = x * dimZ + z)
         //  Neg/Pos Z: XY plane (index = x * dimY + y)
-        internal ulong[] PlaneNegX; // this chunk's -X face
-        internal ulong[] PlanePosX; // +X face
-        internal ulong[] PlaneNegY; // -Y face
-        internal ulong[] PlanePosY; // +Y face
-        internal ulong[] PlaneNegZ; // -Z face
-        internal ulong[] PlanePosZ; // +Z face
+        internal ulong[] PlaneNegX; // this chunk's -X face (opaque occupancy bits)
+        internal ulong[] PlanePosX; // +X face (opaque occupancy bits)
+        internal ulong[] PlaneNegY; // -Y face (opaque occupancy bits)
+        internal ulong[] PlanePosY; // +Y face (opaque occupancy bits)
+        internal ulong[] PlaneNegZ; // -Z face (opaque occupancy bits)
+        internal ulong[] PlanePosZ; // +Z face (opaque occupancy bits)
+
+        // Transparent boundary id maps. Each array stores per-boundary-cell transparent block ids (ushort) or 0 when absent.
+        // Allocated only when at least one transparent (non-air, non-opaque) voxel exists on that face.
+        // Layouts mirror the opaque plane layouts above for direct index reuse:
+        //  Neg/Pos X: size dimY * dimZ (index = z * dimY + y)
+        //  Neg/Pos Y: size dimX * dimZ (index = x * dimZ + z)
+        //  Neg/Pos Z: size dimX * dimY (index = x * dimY + y)
+        internal ushort[] TransparentPlaneNegX; // transparent ids along -X boundary
+        internal ushort[] TransparentPlanePosX; // transparent ids along +X boundary
+        internal ushort[] TransparentPlaneNegY; // transparent ids along -Y boundary
+        internal ushort[] TransparentPlanePosY; // transparent ids along +Y boundary
+        internal ushort[] TransparentPlaneNegZ; // transparent ids along -Z boundary
+        internal ushort[] TransparentPlanePosZ; // transparent ids along +Z boundary
 
         // Neighbor plane caches (populated by WorldResources just before BuildRender)
         internal ulong[] NeighborPlaneNegXFace; // neighbor at -X (+X face of neighbor)
@@ -34,6 +47,14 @@ namespace MVGE_GEN.Terrain
         internal ulong[] NeighborPlanePosYFace; // neighbor at +Y (-Y face)
         internal ulong[] NeighborPlaneNegZFace; // neighbor at -Z (+Z face)
         internal ulong[] NeighborPlanePosZFace; // neighbor at +Z (-Z face)
+
+        // Neighbor transparent boundary id maps (mirroring opaque neighbor plane conventions)
+        internal ushort[] NeighborTransparentPlaneNegXFace; // neighbor -X +X transparent ids
+        internal ushort[] NeighborTransparentPlanePosXFace; // neighbor +X -X transparent ids
+        internal ushort[] NeighborTransparentPlaneNegYFace; // neighbor -Y +Y transparent ids
+        internal ushort[] NeighborTransparentPlanePosYFace; // neighbor +Y -Y transparent ids
+        internal ushort[] NeighborTransparentPlaneNegZFace; // neighbor -Z +Z transparent ids
+        internal ushort[] NeighborTransparentPlanePosZFace; // neighbor +Z -Z transparent ids
 
         private void EnsurePlaneArrays()
         {
@@ -146,6 +167,20 @@ namespace MVGE_GEN.Terrain
                 NeighborPlanePosY = NeighborPlanePosYFace,
                 NeighborPlaneNegZ = NeighborPlaneNegZFace,
                 NeighborPlanePosZ = NeighborPlanePosZFace,
+                // self transparent planes
+                SelfTransparentPlaneNegX = TransparentPlaneNegX,
+                SelfTransparentPlanePosX = TransparentPlanePosX,
+                SelfTransparentPlaneNegY = TransparentPlaneNegY,
+                SelfTransparentPlanePosY = TransparentPlanePosY,
+                SelfTransparentPlaneNegZ = TransparentPlaneNegZ,
+                SelfTransparentPlanePosZ = TransparentPlanePosZ,
+                // neighbor transparent planes
+                NeighborTransparentPlaneNegX = NeighborTransparentPlaneNegXFace,
+                NeighborTransparentPlanePosX = NeighborTransparentPlanePosXFace,
+                NeighborTransparentPlaneNegY = NeighborTransparentPlaneNegYFace,
+                NeighborTransparentPlanePosY = NeighborTransparentPlanePosYFace,
+                NeighborTransparentPlaneNegZ = NeighborTransparentPlaneNegZFace,
+                NeighborTransparentPlanePosZ = NeighborTransparentPlanePosZFace,
                 chunkData = chunkData,
                 SectionDescs = sectionDescs,
                 sectionsX = sectionsX,

@@ -491,12 +491,12 @@ namespace MVGE_GEN
             }
         }
 
-        private static readonly (int dx,int dy,int dz)[] NeighborDirs = new (int,int,int)[]
+        private static readonly (int dx, int dy, int dz)[] NeighborDirs = new (int, int, int)[]
         {
             (-1,0,0),(1,0,0),(0,-1,0),(0,1,0),(0,0,-1),(0,0,1)
         };
 
-        private bool HasAnySolidOnBoundary(Chunk chunk, (int dx,int dy,int dz) dir)
+        private bool HasAnySolidOnBoundary(Chunk chunk, (int dx, int dy, int dz) dir)
         {
             int sizeX = GameManager.settings.chunkMaxX;
             int sizeY = GameManager.settings.chunkMaxY;
@@ -530,45 +530,75 @@ namespace MVGE_GEN
             return false;
         }
 
-        private void PopulateNeighborFaceFlags((int cx,int cy,int cz) key, Chunk ch)
+        private void PopulateNeighborFaceFlags((int cx, int cy, int cz) key, Chunk ch)
         {
-            // Attempt to set neighbor face solidity flags. Missing neighbors -> leave false.
+            // Reset all neighbor-derived state first to avoid stale references causing false seam suppression.
             if (ch == null) return;
+
+            ch.NeighborNegXFaceSolidPosX = false;
+            ch.NeighborPosXFaceSolidNegX = false;
+            ch.NeighborNegYFaceSolidPosY = false;
+            ch.NeighborPosYFaceSolidNegY = false;
+            ch.NeighborNegZFaceSolidPosZ = false;
+            ch.NeighborPosZFaceSolidNegZ = false;
+
+            ch.NeighborPlaneNegXFace = null;
+            ch.NeighborPlanePosXFace = null;
+            ch.NeighborPlaneNegYFace = null;
+            ch.NeighborPlanePosYFace = null;
+            ch.NeighborPlaneNegZFace = null;
+            ch.NeighborPlanePosZFace = null;
+
+            ch.NeighborTransparentPlaneNegXFace = null;
+            ch.NeighborTransparentPlanePosXFace = null;
+            ch.NeighborTransparentPlaneNegYFace = null;
+            ch.NeighborTransparentPlanePosYFace = null;
+            ch.NeighborTransparentPlaneNegZFace = null;
+            ch.NeighborTransparentPlanePosZFace = null;
+
+            // Fetch current neighbors
             TryGetChunk((key.cx - 1, key.cy, key.cz), out var left);
             TryGetChunk((key.cx + 1, key.cy, key.cz), out var right);
             TryGetChunk((key.cx, key.cy - 1, key.cz), out var down);
             TryGetChunk((key.cx, key.cy + 1, key.cz), out var up);
             TryGetChunk((key.cx, key.cy, key.cz - 1), out var back);
             TryGetChunk((key.cx, key.cy, key.cz + 1), out var front);
+
             if (left != null)
             {
                 ch.NeighborNegXFaceSolidPosX = left.FaceSolidPosX;
-                ch.NeighborPlaneNegXFace = left.PlanePosX; // neighbor +X face
+                ch.NeighborPlaneNegXFace = left.PlanePosX;                 // opaque
+                ch.NeighborTransparentPlaneNegXFace = left.TransparentPlanePosX;
             }
             if (right != null)
             {
                 ch.NeighborPosXFaceSolidNegX = right.FaceSolidNegX;
                 ch.NeighborPlanePosXFace = right.PlaneNegX;
+                ch.NeighborTransparentPlanePosXFace = right.TransparentPlaneNegX;
             }
             if (down != null)
             {
                 ch.NeighborNegYFaceSolidPosY = down.FaceSolidPosY;
                 ch.NeighborPlaneNegYFace = down.PlanePosY;
+                ch.NeighborTransparentPlaneNegYFace = down.TransparentPlanePosY;
             }
             if (up != null)
             {
                 ch.NeighborPosYFaceSolidNegY = up.FaceSolidNegY;
                 ch.NeighborPlanePosYFace = up.PlaneNegY;
+                ch.NeighborTransparentPlanePosYFace = up.TransparentPlaneNegY;
             }
             if (back != null)
             {
                 ch.NeighborNegZFaceSolidPosZ = back.FaceSolidPosZ;
                 ch.NeighborPlaneNegZFace = back.PlanePosZ;
+                ch.NeighborTransparentPlaneNegZFace = back.TransparentPlanePosZ;
             }
             if (front != null)
             {
                 ch.NeighborPosZFaceSolidNegZ = front.FaceSolidNegZ;
                 ch.NeighborPlanePosZFace = front.PlaneNegZ;
+                ch.NeighborTransparentPlanePosZFace = front.TransparentPlaneNegZ;
             }
         }
 

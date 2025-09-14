@@ -25,24 +25,43 @@ namespace MVGE_GFX.Terrain.Sections
             _fallbackTileCache = new TileIndexCache();
         }
 
-        // Builds: one instance per emitted face
-        // uses per-section specialized paths and a fallback per-section brute scan.
+        // Builds: one instance per emitted face for both opaque and (future) transparent passes.
+        // Uses per-section specialized paths and a fallback per-section brute scan for opaque faces.
+        // Transparent faces are emitted ONLY for sections that actually fall through to the fallback path.
         // Outputs:
-        //  faceCount: number of faces (instances)
-        //  offsets:  faceCount * 3 bytes (x,y,z) block coordinates
-        //  tileIndices: faceCount uint tile index into atlas
-        //  faceDirs: faceCount bytes (0..5) orientation (LEFT,RIGHT,BOTTOM,TOP,BACK,FRONT)
-        public void Build(out int faceCount, out byte[] offsets, out uint[] tileIndices, out byte[] faceDirs)
+        //  opaqueFaceCount: number of opaque faces (instances)
+        //  opaqueOffsets:   opaqueFaceCount * 3 bytes (x,y,z) block coordinates
+        //  opaqueTileIndices: opaqueFaceCount uint tile index into atlas
+        //  opaqueFaceDirs:  opaqueFaceCount bytes (0..5) orientation (LEFT,RIGHT,BOTTOM,TOP,BACK,FRONT)
+        //  transparentFaceCount: number of transparent faces (instances) (placeholder for future logic)
+        //  transparentOffsets / transparentTileIndices / transparentFaceDirs: empty or populated later
+        public void Build(
+            out int opaqueFaceCount,
+            out byte[] opaqueOffsets,
+            out uint[] opaqueTileIndices,
+            out byte[] opaqueFaceDirs,
+            out int transparentFaceCount,
+            out byte[] transparentOffsets,
+            out uint[] transparentTileIndices,
+            out byte[] transparentFaceDirs)
         {
             int maxX = data.maxX; int maxY = data.maxY; int maxZ = data.maxZ;
             if (maxX == 0 || maxY == 0 || maxZ == 0 || data.SectionDescs == null)
             {
-                faceCount = 0; offsets = Array.Empty<byte>(); tileIndices = Array.Empty<uint>(); faceDirs = Array.Empty<byte>(); return;
+                opaqueFaceCount = 0; opaqueOffsets = Array.Empty<byte>(); opaqueTileIndices = Array.Empty<uint>(); opaqueFaceDirs = Array.Empty<byte>();
+                transparentFaceCount = 0; transparentOffsets = Array.Empty<byte>(); transparentTileIndices = Array.Empty<uint>(); transparentFaceDirs = Array.Empty<byte>();
+                return;
             }
 
-            var offsetList = new List<byte>(2048);
-            var tileIndexList = new List<uint>(1024);
-            var faceDirList = new List<byte>(1024);
+            // Opaque accumulation lists
+            var opaqueOffsetList = new List<byte>(2048);
+            var opaqueTileIndexList = new List<uint>(1024);
+            var opaqueFaceDirList = new List<byte>(1024);
+
+            // Transparent accumulation lists (future use – capacity reserved conservatively when TransparentCount>0).
+            var transparentOffsetList = new List<byte>();
+            var transparentTileIndexList = new List<uint>();
+            var transparentFaceDirList = new List<byte>();
 
             int S = data.sectionSize;
 
@@ -54,40 +73,56 @@ namespace MVGE_GFX.Terrain.Sections
                     {
                         int si = ((sx * data.sectionsY) + sy) * data.sectionsZ + sz;
                         ref var desc = ref data.SectionDescs[si];
-                        if (desc.Kind == 0 || desc.OpaqueCount == 0) continue; // empty / no opaque content
 
+                        bool fallbackOnly = true; // only set true for debug purposes
                         bool specializedHandled = false;
-                        switch (desc.Kind)
-                        {
-                            case 0: // Empty
-                                specializedHandled = EmitEmptySectionInstances(); // no-op placeholder for potential future use
-                                break;
-                            case 1: // Uniform
-                                specializedHandled = EmitUniformSectionInstances(ref desc, sx, sy, sz, S, offsetList, tileIndexList, faceDirList);
-                                break;
-                            case 3: // DenseExpanded
-                                specializedHandled = EmitExpandedSectionInstances(ref desc, sx, sy, sz, S, offsetList, tileIndexList, faceDirList);
-                                break;
-                            case 4: // Packed (single-id)
-                                specializedHandled = EmitSinglePackedSectionInstances(ref desc, sx, sy, sz, S, offsetList, tileIndexList, faceDirList);
-                                break;
-                            case 5: // MultiPacked (multi-id packed)
-                                specializedHandled = EmitMultiPackedSectionInstances(ref desc, sx, sy, sz, S, offsetList, tileIndexList, faceDirList);
-                                break;
-                        }
-                        if (!specializedHandled)
+                        if (fallbackOnly)
                         {
                             FallbackSectionScan(ref desc, sx, sy, sz, S, maxX, maxY, maxZ,
-                                offsetList, tileIndexList, faceDirList);
+                                opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList,
+                                transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
+                        } else
+                        {
+                            switch (desc.Kind)
+                            {
+                                case 0: // Empty
+                                    specializedHandled = EmitEmptySectionInstances(); // no-op placeholder
+                                    break;
+                                case 1: // Uniform
+                                    specializedHandled = EmitUniformSectionInstances(ref desc, sx, sy, sz, S, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
+                                    break;
+                                case 3: // DenseExpanded
+                                    specializedHandled = EmitExpandedSectionInstances(ref desc, sx, sy, sz, S, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
+                                    break;
+                                case 4: // Packed (single-id)
+                                    specializedHandled = EmitSinglePackedSectionInstances(ref desc, sx, sy, sz, S, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
+                                    break;
+                                case 5: // MultiPacked (multi-id)
+                                    specializedHandled = EmitMultiPackedSectionInstances(ref desc, sx, sy, sz, S, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
+                                    break;
+                            }
+                            if (!specializedHandled)
+                            {
+                                FallbackSectionScan(ref desc, sx, sy, sz, S, maxX, maxY, maxZ,
+                                    opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList,
+                                    transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
+                            }
                         }
                     }
                 }
             }
 
-            faceCount = faceDirList.Count;
-            offsets = offsetList.ToArray();
-            tileIndices = tileIndexList.ToArray();
-            faceDirs = faceDirList.ToArray();
+            // Assign opaque outputs
+            opaqueFaceCount = opaqueFaceDirList.Count;
+            opaqueOffsets = opaqueOffsetList.ToArray();
+            opaqueTileIndices = opaqueTileIndexList.ToArray();
+            opaqueFaceDirs = opaqueFaceDirList.ToArray();
+
+            // Assign transparent outputs (currently emitted only by fallback path for transparent rules)
+            transparentFaceCount = transparentFaceDirList.Count;
+            transparentOffsets = transparentOffsetList.ToArray();
+            transparentTileIndices = transparentTileIndexList.ToArray();
+            transparentFaceDirs = transparentFaceDirList.ToArray();
         }
 
         // Fallback brute-force scan emitting face instances only
@@ -146,6 +181,7 @@ namespace MVGE_GFX.Terrain.Sections
                 }
             }
         }
+
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void EmitFaceInstance(ushort block, byte faceDir, int x, int y, int z,

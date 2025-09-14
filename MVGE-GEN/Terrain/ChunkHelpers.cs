@@ -7,7 +7,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
-using MVGE_GEN.Utils; // added for transparent face mask building
+using MVGE_GEN.Utils;
 
 namespace MVGE_GEN.Terrain
 {
@@ -70,6 +70,14 @@ namespace MVGE_GEN.Terrain
             Array.Clear(PlaneNegZ);
             Array.Clear(PlanePosZ);
 
+            // Reset transparent id boundary maps (only allocate on demand below)
+            TransparentPlaneNegX = null;
+            TransparentPlanePosX = null;
+            TransparentPlaneNegY = null;
+            TransparentPlanePosY = null;
+            TransparentPlaneNegZ = null;
+            TransparentPlanePosZ = null;
+
             const int S = Section.SECTION_SIZE;
 
             // Helpers: set one bit in a plane
@@ -80,6 +88,26 @@ namespace MVGE_GEN.Terrain
                 int b = index & 63;
                 plane[w] |= 1UL << b;
             }
+
+            // Local helper to lazily ensure transparent boundary id arrays
+            void EnsureTransparentArrays()
+            {
+                if (TransparentPlaneNegX == null) TransparentPlaneNegX = new ushort[dimY * dimZ];
+                if (TransparentPlanePosX == null) TransparentPlanePosX = new ushort[dimY * dimZ];
+                if (TransparentPlaneNegY == null) TransparentPlaneNegY = new ushort[dimX * dimZ];
+                if (TransparentPlanePosY == null) TransparentPlanePosY = new ushort[dimX * dimZ];
+                if (TransparentPlaneNegZ == null) TransparentPlaneNegZ = new ushort[dimX * dimY];
+                if (TransparentPlanePosZ == null) TransparentPlanePosZ = new ushort[dimX * dimY];
+            }
+
+            // Helper to record a transparent id into a boundary map (0 retains existing value, last writer wins otherwise)
+            static void RecordTransparent(ushort[] arr, int index, ushort id)
+            {
+                if (arr == null || id == 0) return;
+                arr[index] = id; // store id directly
+            }
+
+            bool anyTransparentBoundary = false; // track if we actually encountered any transparent boundary voxels
 
             // --- -X / +X (YZ planes) ---
             if (sectionsX > 0)
@@ -129,6 +157,61 @@ namespace MVGE_GEN.Terrain
                                 }
                             }
 
+                            // Transparent boundary ids on -X face
+                            if (secNeg != null)
+                            {
+                                // iterate voxels at x=0 for transparent ids
+                                bool uniformTransparent = secNeg.Kind == Section.RepresentationKind.Uniform && secNeg.UniformBlockId != Section.AIR && !TerrainLoader.IsOpaque(secNeg.UniformBlockId);
+                                if (uniformTransparent || secNeg.TransparentFaceNegXBits != null)
+                                {
+                                    EnsureTransparentArrays();
+                                    anyTransparentBoundary = true;
+                                    if (uniformTransparent)
+                                    {
+                                        // fill all entries with uniform id
+                                        for (int localZ = 0; localZ < S; localZ++)
+                                            for (int localY = 0; localY < S; localY++)
+                                            {
+                                                int globalZ = sz * S + localZ;
+                                                int globalY = sy * S + localY;
+                                                int globalIdx = globalZ * dimY + globalY;
+                                                RecordTransparent(TransparentPlaneNegX, globalIdx, secNeg.UniformBlockId);
+                                            }
+                                    }
+                                    else if (secNeg.TransparentFaceNegXBits != null)
+                                    {
+                                        var tBits = secNeg.TransparentFaceNegXBits;
+                                        for (int wi = 0; wi < tBits.Length; wi++)
+                                        {
+                                            ulong word = tBits[wi];
+                                            while (word != 0)
+                                            {
+                                                int tz = System.Numerics.BitOperations.TrailingZeroCount(word);
+                                                int localIndex = wi * 64 + tz;
+                                                if (localIndex >= 256) break;
+                                                int localZ = localIndex / S;
+                                                int localY = localIndex % S;
+                                                int globalZ = sz * S + localZ;
+                                                int globalY = sy * S + localY;
+                                                int globalIdx = globalZ * dimY + globalY;
+                                                // decode id (opaque mask excludes transparent; need voxel decode path)
+                                                ushort id = 0;
+                                                if (secNeg.Kind == Section.RepresentationKind.Uniform)
+                                                    id = secNeg.UniformBlockId;
+                                                else if (secNeg.Kind == Section.RepresentationKind.Expanded && secNeg.ExpandedDense != null)
+                                                {
+                                                    int li = ((localZ * 16 + 0) * 16) + localY; // x fixed at 0
+                                                    id = secNeg.ExpandedDense[li];
+                                                }
+                                                // For packed/multipacked we skip precise decode keeping zero if not resolvable.
+                                                if (id != 0 && !TerrainLoader.IsOpaque(id))
+                                                    RecordTransparent(TransparentPlaneNegX, globalIdx, id);
+                                                word &= word - 1;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
 
                         // Pos X: section local face at x=15 contributes to global plane x==dimX-1
@@ -164,6 +247,55 @@ namespace MVGE_GEN.Terrain
                                         int globalIdx = globalZ * dimY + globalY;
                                         SetPlaneBit(PlanePosX, globalIdx);
                                         word &= word - 1;
+                                    }
+                                }
+                            }
+
+                            // Transparent boundary ids on +X face
+                            bool uniformTransparentPos = secPos.Kind == Section.RepresentationKind.Uniform && secPos.UniformBlockId != Section.AIR && !TerrainLoader.IsOpaque(secPos.UniformBlockId);
+                            if (uniformTransparentPos || secPos.TransparentFacePosXBits != null)
+                            {
+                                EnsureTransparentArrays();
+                                anyTransparentBoundary = true;
+                                if (uniformTransparentPos)
+                                {
+                                    for (int localZ = 0; localZ < S; localZ++)
+                                        for (int localY = 0; localY < S; localY++)
+                                        {
+                                            int globalZ = sz * S + localZ;
+                                            int globalY = sy * S + localY;
+                                            int globalIdx = globalZ * dimY + globalY;
+                                            RecordTransparent(TransparentPlanePosX, globalIdx, secPos.UniformBlockId);
+                                        }
+                                }
+                                else if (secPos.TransparentFacePosXBits != null)
+                                {
+                                    var tBits = secPos.TransparentFacePosXBits;
+                                    for (int wi = 0; wi < tBits.Length; wi++)
+                                    {
+                                        ulong word = tBits[wi];
+                                        while (word != 0)
+                                        {
+                                            int tz = System.Numerics.BitOperations.TrailingZeroCount(word);
+                                            int localIndex = wi * 64 + tz;
+                                            if (localIndex >= 256) break;
+                                            int localZ = localIndex / S;
+                                            int localY = localIndex % S;
+                                            int globalZ = sz * S + localZ;
+                                            int globalY = sy * S + localY;
+                                            int globalIdx = globalZ * dimY + globalY;
+                                            ushort id = 0;
+                                            if (secPos.Kind == Section.RepresentationKind.Uniform)
+                                                id = secPos.UniformBlockId;
+                                            else if (secPos.Kind == Section.RepresentationKind.Expanded && secPos.ExpandedDense != null)
+                                            {
+                                                int li = ((localZ * 16 + 15) * 16) + localY; // x fixed at 15
+                                                id = secPos.ExpandedDense[li];
+                                            }
+                                            if (id != 0 && !TerrainLoader.IsOpaque(id))
+                                                RecordTransparent(TransparentPlanePosX, globalIdx, id);
+                                            word &= word - 1;
+                                        }
                                     }
                                 }
                             }
@@ -217,6 +349,55 @@ namespace MVGE_GEN.Terrain
                                     }
                                 }
                             }
+
+                            // Transparent -Y
+                            bool uniformTransparentNegY = secNeg.Kind == Section.RepresentationKind.Uniform && secNeg.UniformBlockId != Section.AIR && !TerrainLoader.IsOpaque(secNeg.UniformBlockId);
+                            if (uniformTransparentNegY || secNeg.TransparentFaceNegYBits != null)
+                            {
+                                EnsureTransparentArrays();
+                                anyTransparentBoundary = true;
+                                if (uniformTransparentNegY)
+                                {
+                                    for (int localX = 0; localX < S; localX++)
+                                        for (int localZ = 0; localZ < S; localZ++)
+                                        {
+                                            int globalX = sx * S + localX;
+                                            int globalZ = sz * S + localZ;
+                                            int globalIdx = globalX * dimZ + globalZ;
+                                            RecordTransparent(TransparentPlaneNegY, globalIdx, secNeg.UniformBlockId);
+                                        }
+                                }
+                                else if (secNeg.TransparentFaceNegYBits != null)
+                                {
+                                    var tBits = secNeg.TransparentFaceNegYBits;
+                                    for (int wi = 0; wi < tBits.Length; wi++)
+                                    {
+                                        ulong word = tBits[wi];
+                                        while (word != 0)
+                                        {
+                                            int tz = System.Numerics.BitOperations.TrailingZeroCount(word);
+                                            int localIndex = wi * 64 + tz;
+                                            if (localIndex >= 256) break;
+                                            int localX = localIndex / S;
+                                            int localZ = localIndex % S;
+                                            int globalX = sx * S + localX;
+                                            int globalZ = sz * S + localZ;
+                                            int globalIdx = globalX * dimZ + globalZ;
+                                            ushort id = 0;
+                                            if (secNeg.Kind == Section.RepresentationKind.Uniform)
+                                                id = secNeg.UniformBlockId;
+                                            else if (secNeg.Kind == Section.RepresentationKind.Expanded && secNeg.ExpandedDense != null)
+                                            {
+                                                int li = ((localZ * 16 + localX) * 16) + 0; // y fixed at 0
+                                                id = secNeg.ExpandedDense[li];
+                                            }
+                                            if (id != 0 && !TerrainLoader.IsOpaque(id))
+                                                RecordTransparent(TransparentPlaneNegY, globalIdx, id);
+                                            word &= word - 1;
+                                        }
+                                    }
+                                }
+                            }
                         }
 
                         var secPos = sections[sx, syPos, sz];
@@ -251,6 +432,55 @@ namespace MVGE_GEN.Terrain
                                         int globalIdx = globalX * dimZ + globalZ;
                                         SetPlaneBit(PlanePosY, globalIdx);
                                         word &= word - 1;
+                                    }
+                                }
+                            }
+
+                            // Transparent +Y
+                            bool uniformTransparentPosY = secPos.Kind == Section.RepresentationKind.Uniform && secPos.UniformBlockId != Section.AIR && !TerrainLoader.IsOpaque(secPos.UniformBlockId);
+                            if (uniformTransparentPosY || secPos.TransparentFacePosYBits != null)
+                            {
+                                EnsureTransparentArrays();
+                                anyTransparentBoundary = true;
+                                if (uniformTransparentPosY)
+                                {
+                                    for (int localX = 0; localX < S; localX++)
+                                        for (int localZ = 0; localZ < S; localZ++)
+                                        {
+                                            int globalX = sx * S + localX;
+                                            int globalZ = sz * S + localZ;
+                                            int globalIdx = globalX * dimZ + globalZ;
+                                            RecordTransparent(TransparentPlanePosY, globalIdx, secPos.UniformBlockId);
+                                        }
+                                }
+                                else if (secPos.TransparentFacePosYBits != null)
+                                {
+                                    var tBits = secPos.TransparentFacePosYBits;
+                                    for (int wi = 0; wi < tBits.Length; wi++)
+                                    {
+                                        ulong word = tBits[wi];
+                                        while (word != 0)
+                                        {
+                                            int tz = System.Numerics.BitOperations.TrailingZeroCount(word);
+                                            int localIndex = wi * 64 + tz;
+                                            if (localIndex >= 256) break;
+                                            int localX = localIndex / S;
+                                            int localZ = localIndex % S;
+                                            int globalX = sx * S + localX;
+                                            int globalZ = sz * S + localZ;
+                                            int globalIdx = globalX * dimZ + globalZ;
+                                            ushort id = 0;
+                                            if (secPos.Kind == Section.RepresentationKind.Uniform)
+                                                id = secPos.UniformBlockId;
+                                            else if (secPos.Kind == Section.RepresentationKind.Expanded && secPos.ExpandedDense != null)
+                                            {
+                                                int li = ((localZ * 16 + localX) * 16) + 15; // y fixed at 15
+                                                id = secPos.ExpandedDense[li];
+                                            }
+                                            if (id != 0 && !TerrainLoader.IsOpaque(id))
+                                                RecordTransparent(TransparentPlanePosY, globalIdx, id);
+                                            word &= word - 1;
+                                        }
                                     }
                                 }
                             }
@@ -304,6 +534,55 @@ namespace MVGE_GEN.Terrain
                                     }
                                 }
                             }
+
+                            // Transparent -Z
+                            bool uniformTransparentNegZ = secNeg.Kind == Section.RepresentationKind.Uniform && secNeg.UniformBlockId != Section.AIR && !TerrainLoader.IsOpaque(secNeg.UniformBlockId);
+                            if (uniformTransparentNegZ || secNeg.TransparentFaceNegZBits != null)
+                            {
+                                EnsureTransparentArrays();
+                                anyTransparentBoundary = true;
+                                if (uniformTransparentNegZ)
+                                {
+                                    for (int localX = 0; localX < S; localX++)
+                                        for (int localY = 0; localY < S; localY++)
+                                        {
+                                            int globalX = sx * S + localX;
+                                            int globalY = sy * S + localY;
+                                            int globalIdx = globalX * dimY + globalY;
+                                            RecordTransparent(TransparentPlaneNegZ, globalIdx, secNeg.UniformBlockId);
+                                        }
+                                }
+                                else if (secNeg.TransparentFaceNegZBits != null)
+                                {
+                                    var tBits = secNeg.TransparentFaceNegZBits;
+                                    for (int wi = 0; wi < tBits.Length; wi++)
+                                    {
+                                        ulong word = tBits[wi];
+                                        while (word != 0)
+                                        {
+                                            int tz = System.Numerics.BitOperations.TrailingZeroCount(word);
+                                            int localIndex = wi * 64 + tz;
+                                            if (localIndex >= 256) break;
+                                            int localX = localIndex / S;
+                                            int localY = localIndex % S;
+                                            int globalX = sx * S + localX;
+                                            int globalY = sy * S + localY;
+                                            int globalIdx = globalX * dimY + globalY;
+                                            ushort id = 0;
+                                            if (secNeg.Kind == Section.RepresentationKind.Uniform)
+                                                id = secNeg.UniformBlockId;
+                                            else if (secNeg.Kind == Section.RepresentationKind.Expanded && secNeg.ExpandedDense != null)
+                                            {
+                                                int li = ((0 * 16 + localX) * 16) + localY; // z fixed at 0
+                                                id = secNeg.ExpandedDense[li];
+                                            }
+                                            if (id != 0 && !TerrainLoader.IsOpaque(id))
+                                                RecordTransparent(TransparentPlaneNegZ, globalIdx, id);
+                                            word &= word - 1;
+                                        }
+                                    }
+                                }
+                            }
                         }
 
                         var secPos = sections[sx, sy, szPos];
@@ -341,12 +620,62 @@ namespace MVGE_GEN.Terrain
                                     }
                                 }
                             }
+
+                            // Transparent +Z
+                            bool uniformTransparentPosZ = secPos.Kind == Section.RepresentationKind.Uniform && secPos.UniformBlockId != Section.AIR && !TerrainLoader.IsOpaque(secPos.UniformBlockId);
+                            if (uniformTransparentPosZ || secPos.TransparentFacePosZBits != null)
+                            {
+                                EnsureTransparentArrays();
+                                anyTransparentBoundary = true;
+                                if (uniformTransparentPosZ)
+                                {
+                                    for (int localX = 0; localX < S; localX++)
+                                        for (int localY = 0; localY < S; localY++)
+                                        {
+                                            int globalX = sx * S + localX;
+                                            int globalY = sy * S + localY;
+                                            int globalIdx = globalX * dimY + globalY;
+                                            RecordTransparent(TransparentPlanePosZ, globalIdx, secPos.UniformBlockId);
+                                        }
+                                }
+                                else if (secPos.TransparentFacePosZBits != null)
+                                {
+                                    var tBits = secPos.TransparentFacePosZBits;
+                                    for (int wi = 0; wi < tBits.Length; wi++)
+                                    {
+                                        ulong word = tBits[wi];
+                                        while (word != 0)
+                                        {
+                                            int tz = System.Numerics.BitOperations.TrailingZeroCount(word);
+                                            int localIndex = wi * 64 + tz;
+                                            if (localIndex >= 256) break;
+                                            int localX = localIndex / S;
+                                            int localY = localIndex % S;
+                                            int globalX = sx * S + localX; 
+                                            int globalY = sy * S + localY;
+                                            int globalIdx = globalX * dimY + globalY;
+                                            ushort id = 0;
+                                            if (secPos.Kind == Section.RepresentationKind.Uniform)
+                                                id = secPos.UniformBlockId;
+                                            else if (secPos.Kind == Section.RepresentationKind.Expanded && secPos.ExpandedDense != null)
+                                            {
+                                                // localX/localY already decoded above
+                                                int li = ((15 * 16 + localX) * 16) + localY; // z fixed at 15
+                                                id = secPos.ExpandedDense[li];
+                                            }
+                                            if (id != 0 && !TerrainLoader.IsOpaque(id))
+                                                RecordTransparent(TransparentPlanePosZ, globalIdx, id);
+                                            word &= word - 1;
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
 
-            // Derive per-face solidity flags from planes
+            // Derive per-face solidity flags from planes (opaque only tracking)
             SetFaceSolidFromPlanes();
         }
 

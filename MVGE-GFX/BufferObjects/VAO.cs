@@ -9,6 +9,7 @@ namespace MVGE_GFX.BufferObjects
 {
     public class VAO
     {
+        // OpenGL vertex array object id
         public int ID;
         public VAO()
         {
@@ -16,6 +17,9 @@ namespace MVGE_GFX.BufferObjects
             GL.BindVertexArray(ID);
         }
 
+        // Link a floating-point / normalized attribute to this VAO for a given render pass.
+        // The pass parameter is informational only (VAO state itself is pass-agnostic) and allows
+        // calling code to express intent clearly when organizing opaque vs transparent attribute sets.
         public void LinkToVAO(int location, int numComponents, VertexAttribPointerType type, bool normalized, VBO vbo)
         {
             Bind();
@@ -25,6 +29,7 @@ namespace MVGE_GFX.BufferObjects
             Unbind();
         }
 
+        // Link an integer attribute (no normalization) to this VAO.
         public void LinkIntegerToVAO(int location, int numComponents, VertexAttribIntegerType type, VBO vbo)
         {
             Bind();
@@ -34,6 +39,7 @@ namespace MVGE_GFX.BufferObjects
             Unbind();
         }
 
+        // Set instancing divisor for an attribute location (used for per-instance data in both passes).
         public void SetDivisor(int location, int divisor)
         {
             Bind();
@@ -41,16 +47,19 @@ namespace MVGE_GFX.BufferObjects
             Unbind();
         }
 
+        // Bind this VAO.
         public void Bind()
         {
             GL.BindVertexArray(ID);
         }
 
+        // Unbind any VAO.
         public void Unbind()
         {
             GL.BindVertexArray(0);
         }
 
+        // Delete this VAO.
         public void Delete()
         {
             GL.DeleteVertexArray(ID);
