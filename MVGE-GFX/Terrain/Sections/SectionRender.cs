@@ -65,9 +65,6 @@ namespace MVGE_GFX.Terrain.Sections
                             case 1: // Uniform
                                 specializedHandled = EmitUniformSectionInstances(ref desc, sx, sy, sz, S, offsetList, tileIndexList, faceDirList);
                                 break;
-                            case 2: // Sparse
-                                specializedHandled = EmitSparseSectionInstances(ref desc, sx, sy, sz, S, offsetList, tileIndexList, faceDirList);
-                                break;
                             case 3: // DenseExpanded
                                 specializedHandled = EmitExpandedSectionInstances(ref desc, sx, sy, sz, S, offsetList, tileIndexList, faceDirList);
                                 break;

@@ -27,7 +27,7 @@ namespace MVGE_GEN.Terrain
         public string saveDirectory;
         public long generationSeed;
 
-        public ChunkSection[,,] sections;
+        public Section[,,] sections;
         public int sectionsX;
         public int sectionsY;
         public int sectionsZ;
@@ -144,16 +144,16 @@ namespace MVGE_GEN.Terrain
 
         public void InitializeSectionGrid()
         {
-            int S = ChunkSection.SECTION_SIZE;
+            int S = Section.SECTION_SIZE;
             if (dimX % S != 0 || dimY % S != 0 || dimZ % S != 0)
             {
                 throw new InvalidOperationException(
-                    "Chunk dimensions must be multiples of section size: " + ChunkSection.SECTION_SIZE);
+                    "Chunk dimensions must be multiples of section size: " + Section.SECTION_SIZE);
             }
             sectionsX = dimX / S;
             sectionsY = dimY / S;
             sectionsZ = dimZ / S;
-            sections = new ChunkSection[sectionsX, sectionsY, sectionsZ];
+            sections = new Section[sectionsX, sectionsY, sectionsZ];
         }
 
         internal void InitializeChunkData(BlockColumnProfile[] columnSpanMap)
@@ -191,12 +191,12 @@ namespace MVGE_GEN.Terrain
 
         public void Render(ShaderProgram shader) => chunkRender?.Render(shader);
 
-        public ChunkSection GetOrCreateSection(int sx, int sy, int sz)
+        public Section GetOrCreateSection(int sx, int sy, int sz)
         {
             var sec = sections[sx, sy, sz];
             if (sec == null)
             {
-                sec = new ChunkSection();
+                sec = new Section();
                 sections[sx, sy, sz] = sec;
             }
             return sec;

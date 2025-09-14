@@ -6,7 +6,7 @@ namespace MVGE_INF.Generation.Models
     // Scratch structures for two-phase build
     public sealed class SectionBuildScratch
     {
-        private const int COLUMN_COUNT = ChunkSection.SECTION_SIZE * ChunkSection.SECTION_SIZE; // 256 columns
+        private const int COLUMN_COUNT = Section.SECTION_SIZE * Section.SECTION_SIZE; // 256 columns
         public ColumnData[] Columns = new ColumnData[COLUMN_COUNT];
         // Per-column stamps so we can lazily treat stale columns as empty without writing RunCount=0 every reset.
         private ushort[] _columnStamps = new ushort[COLUMN_COUNT];

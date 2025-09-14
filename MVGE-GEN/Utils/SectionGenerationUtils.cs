@@ -14,8 +14,8 @@ namespace MVGE_GEN.Utils
 {
     internal static partial class SectionUtils
     {
-        private const int S = ChunkSection.SECTION_SIZE;          // Section linear dimension (16)
-        private const int AIR = ChunkSection.AIR;                  // Block id representing empty space
+        private const int S = Section.SECTION_SIZE;          // Section linear dimension (16)
+        private const int AIR = Section.AIR;                  // Block id representing empty space
         private const int COLUMN_COUNT = S * S;                    // 256 vertical columns (z * S + x)
         private const int SPARSE_MASK_BUILD_MIN = 33;              // Threshold for building face masks in sparse form
         private static readonly ushort[,] MaskRangeLut = BuildMaskRangeLut();
@@ -33,7 +33,7 @@ namespace MVGE_GEN.Utils
         // all finalized representations (Empty, Sparse, Packed, MultiPacked, DenseExpanded, Uniform partial). Uniform full non‑air
         // sections have no air so EmptyBits remain null (EmptyCount=0). Empty representation allocates a full bitset of air.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void FinalizeTransparentAndEmptyMasks(ChunkSection sec)
+        private static void FinalizeTransparentAndEmptyMasks(Section sec)
         {
             // Transparent face masks (only once; BuildTransparentFaceMasks clears if already allocated)
             if (sec.TransparentBits != null && sec.TransparentFaceNegXBits == null)
@@ -42,7 +42,7 @@ namespace MVGE_GEN.Utils
             }
 
             // Build EmptyBits (air) tracking.
-            if (sec.Kind == ChunkSection.RepresentationKind.Empty || (sec.IsAllAir && sec.VoxelCount == 0))
+            if (sec.Kind == Section.RepresentationKind.Empty || (sec.IsAllAir && sec.VoxelCount == 0))
             {
                 // All air section (no voxels or empty representation): allocate full air bitset if not present.
                 if (sec.EmptyBits == null)
@@ -50,13 +50,13 @@ namespace MVGE_GEN.Utils
                     sec.EmptyBits = new ulong[64];
                     for (int i = 0; i < 64; i++) sec.EmptyBits[i] = ulong.MaxValue;
                 }
-                sec.EmptyCount = ChunkSection.VOXELS_PER_SECTION;
+                sec.EmptyCount = Section.VOXELS_PER_SECTION;
                 sec.HasAir = true;
                 return;
             }
 
             // Uniform non‑air full volume has no air cells.
-            if (sec.Kind == ChunkSection.RepresentationKind.Uniform && sec.UniformBlockId != AIR)
+            if (sec.Kind == Section.RepresentationKind.Uniform && sec.UniformBlockId != AIR)
             {
                 sec.EmptyBits = null; sec.EmptyCount = 0; sec.HasAir = false; return;
             }
@@ -98,7 +98,7 @@ namespace MVGE_GEN.Utils
         // Guarantees that the returned instance is initialized and ready for column writes.
         // -------------------------------------------------------------------------------------------------
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static SectionBuildScratch EnsureScratch(ChunkSection sec)
+        public static SectionBuildScratch EnsureScratch(Section sec)
         {
             // Reuse existing helper to obtain a writable scratch. Assumes generation-time access.
             return GetScratch(sec);
@@ -231,14 +231,14 @@ namespace MVGE_GEN.Utils
         //   When any column escalated (RunCount==255) we rebuild a dense array (O(4096)).
         // -------------------------------------------------------------------------------------------------
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static void GenerationFinalizeSection(ChunkSection sec)
+        public static void GenerationFinalizeSection(Section sec)
         {
             if (sec == null) return;
 
             // 1. Cheap palette / id remap path (no scratch)
             if (sec.BuildScratch == null && !sec.StructuralDirty && sec.IdMapDirty)
             {
-                if (sec.Kind == ChunkSection.RepresentationKind.Uniform)
+                if (sec.Kind == Section.RepresentationKind.Uniform)
                 {
                     bool uniformOpaque = TerrainLoader.IsOpaque(sec.UniformBlockId);
                     if (uniformOpaque)
@@ -263,28 +263,28 @@ namespace MVGE_GEN.Utils
                     return;
                 }
 
-                if ((sec.Kind == ChunkSection.RepresentationKind.Packed || sec.Kind == ChunkSection.RepresentationKind.MultiPacked) &&
+                if ((sec.Kind == Section.RepresentationKind.Packed || sec.Kind == Section.RepresentationKind.MultiPacked) &&
                     sec.Palette != null && sec.Palette.Count <= 2)
                 {
                     ushort singleId = (sec.Palette.Count == 2) ? sec.Palette[1] : (ushort)0;
                     bool singleOpaque = singleId != 0 && TerrainLoader.IsOpaque(singleId);
-                    if (sec.Palette.Count == 2 && sec.OpaqueVoxelCount == ChunkSection.VOXELS_PER_SECTION && singleOpaque)
+                    if (sec.Palette.Count == 2 && sec.OpaqueVoxelCount == Section.VOXELS_PER_SECTION && singleOpaque)
                     {
-                        sec.Kind = ChunkSection.RepresentationKind.Uniform;
+                        sec.Kind = Section.RepresentationKind.Uniform;
                         sec.UniformBlockId = singleId;
                         sec.CompletelyFull = true;
                         sec.TransparentBits = null; sec.TransparentCount = 0; sec.HasTransparent = false;
                         sec.Palette = null; sec.PaletteLookup = null;
                         ReturnBitData(sec.BitData); sec.BitData = null; sec.BitsPerIndex = 0;
                     }
-                    else if (sec.Palette.Count == 2 && !singleOpaque && sec.OpaqueVoxelCount == ChunkSection.VOXELS_PER_SECTION)
+                    else if (sec.Palette.Count == 2 && !singleOpaque && sec.OpaqueVoxelCount == Section.VOXELS_PER_SECTION)
                     {
-                        sec.Kind = ChunkSection.RepresentationKind.Uniform;
+                        sec.Kind = Section.RepresentationKind.Uniform;
                         sec.UniformBlockId = singleId;
                         sec.CompletelyFull = true;
                         sec.OpaqueVoxelCount = 0;
                         sec.TransparentBits = new ulong[64]; for (int i = 0; i < 64; i++) sec.TransparentBits[i] = ulong.MaxValue;
-                        sec.TransparentCount = ChunkSection.VOXELS_PER_SECTION; sec.HasTransparent = true;
+                        sec.TransparentCount = Section.VOXELS_PER_SECTION; sec.HasTransparent = true;
                         BuildTransparentFaceMasks(sec, sec.TransparentBits);
                         sec.Palette = null; sec.PaletteLookup = null;
                         ReturnBitData(sec.BitData); sec.BitData = null; sec.BitsPerIndex = 0;
@@ -296,9 +296,9 @@ namespace MVGE_GEN.Utils
                     return;
                 }
 
-                if (sec.Kind == ChunkSection.RepresentationKind.Sparse ||
-                    sec.Kind == ChunkSection.RepresentationKind.Expanded ||
-                    sec.Kind == ChunkSection.RepresentationKind.MultiPacked)
+                if (sec.Kind == Section.RepresentationKind.Sparse ||
+                    sec.Kind == Section.RepresentationKind.Expanded ||
+                    sec.Kind == Section.RepresentationKind.MultiPacked)
                 {
                     sec.MetadataBuilt = true;
                     sec.IdMapDirty = false;
@@ -319,7 +319,7 @@ namespace MVGE_GEN.Utils
 
                 switch (sec.Kind)
                 {
-                    case ChunkSection.RepresentationKind.Empty:
+                    case Section.RepresentationKind.Empty:
                         sec.IsAllAir = true;
                         sec.OpaqueVoxelCount = 0;
                         sec.InternalExposure = 0;
@@ -329,26 +329,20 @@ namespace MVGE_GEN.Utils
                         sec.IdMapDirty = false;
                         FinalizeTransparentAndEmptyMasks(sec);
                         return;
-                    case ChunkSection.RepresentationKind.Uniform:
+                    case Section.RepresentationKind.Uniform:
                         BuildMetadataUniform(sec);
                         sec.StructuralDirty = false;
                         sec.IdMapDirty = false;
                         FinalizeTransparentAndEmptyMasks(sec);
                         return;
-                    case ChunkSection.RepresentationKind.Sparse:
-                        BuildMetadataSparse(sec);
-                        sec.StructuralDirty = false;
-                        sec.IdMapDirty = false;
-                        FinalizeTransparentAndEmptyMasks(sec);
-                        return;
-                    case ChunkSection.RepresentationKind.Expanded:
+                    case Section.RepresentationKind.Expanded:
                         BuildMetadataDense(sec);
                         sec.StructuralDirty = false;
                         sec.IdMapDirty = false;
                         FinalizeTransparentAndEmptyMasks(sec);
                         return;
-                    case ChunkSection.RepresentationKind.Packed:
-                    case ChunkSection.RepresentationKind.MultiPacked:
+                    case Section.RepresentationKind.Packed:
+                    case Section.RepresentationKind.MultiPacked:
                     default:
                         BuildMetadataPacked(sec);
                         sec.StructuralDirty = false;
@@ -363,7 +357,7 @@ namespace MVGE_GEN.Utils
             // 3. Empty / untouched early exit
             if (scratch == null || !scratch.AnyNonAir)
             {
-                sec.Kind = ChunkSection.RepresentationKind.Empty;
+                sec.Kind = Section.RepresentationKind.Empty;
                 sec.IsAllAir = true;
                 sec.MetadataBuilt = true;
                 sec.VoxelCount = S * S * S;
@@ -432,7 +426,7 @@ namespace MVGE_GEN.Utils
                     bool candidateOpaque = TerrainLoader.IsOpaque(candidateId);
                     if (!any)
                     {
-                        sec.Kind = ChunkSection.RepresentationKind.Empty;
+                        sec.Kind = Section.RepresentationKind.Empty;
                         sec.IsAllAir = true;
                         sec.MetadataBuilt = true;
                         sec.StructuralDirty = false;
@@ -455,7 +449,7 @@ namespace MVGE_GEN.Utils
                     if (C == 256)
                     {
                         // Entire section filled with same id – build full uniform including transparent bits if needed.
-                        sec.Kind = ChunkSection.RepresentationKind.Uniform;
+                        sec.Kind = Section.RepresentationKind.Uniform;
                         sec.UniformBlockId = candidateId;
                         sec.IsAllAir = false;
                         sec.CompletelyFull = true;
@@ -472,7 +466,7 @@ namespace MVGE_GEN.Utils
                         return;
                     }
                     // Partial fill single id -> 1‑bit packed form (palette [AIR, id]).
-                    sec.Kind = ChunkSection.RepresentationKind.Packed;
+                    sec.Kind = Section.RepresentationKind.Packed;
                     sec.Palette = new List<ushort> { AIR, candidateId };
                     sec.PaletteLookup = new Dictionary<ushort, int> { { AIR, 0 }, { candidateId, 1 } };
                     sec.BitsPerIndex = 1;

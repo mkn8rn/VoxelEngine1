@@ -70,7 +70,7 @@ namespace MVGE_GEN.Terrain
             Array.Clear(PlaneNegZ);
             Array.Clear(PlanePosZ);
 
-            const int S = ChunkSection.SECTION_SIZE;
+            const int S = Section.SECTION_SIZE;
 
             // Helpers: set one bit in a plane
             static void SetPlaneBit(ulong[] plane, int index)
@@ -96,7 +96,7 @@ namespace MVGE_GEN.Terrain
                         if (secNeg != null)
                         {
                             // Uniform opaque sections (non-air and IsOpaque) intentionally leave Face*Bits null but imply fully solid face
-                            if (secNeg.Kind == ChunkSection.RepresentationKind.Uniform && secNeg.UniformBlockId != ChunkSection.AIR && TerrainLoader.IsOpaque(secNeg.UniformBlockId))
+                            if (secNeg.Kind == Section.RepresentationKind.Uniform && secNeg.UniformBlockId != Section.AIR && TerrainLoader.IsOpaque(secNeg.UniformBlockId))
                             {
                                 for (int localZ = 0; localZ < S; localZ++)
                                     for (int localY = 0; localY < S; localY++)
@@ -135,7 +135,7 @@ namespace MVGE_GEN.Terrain
                         var secPos = sections[sxPos, sy, sz];
                         if (secPos != null)
                         {
-                            if (secPos.Kind == ChunkSection.RepresentationKind.Uniform && secPos.UniformBlockId != ChunkSection.AIR && TerrainLoader.IsOpaque(secPos.UniformBlockId))
+                            if (secPos.Kind == Section.RepresentationKind.Uniform && secPos.UniformBlockId != Section.AIR && TerrainLoader.IsOpaque(secPos.UniformBlockId))
                             {
                                 for (int localZ = 0; localZ < S; localZ++)
                                     for (int localY = 0; localY < S; localY++)
@@ -185,7 +185,7 @@ namespace MVGE_GEN.Terrain
                         var secNeg = sections[sx, syNeg, sz];
                         if (secNeg != null)
                         {
-                            if (secNeg.Kind == ChunkSection.RepresentationKind.Uniform && secNeg.UniformBlockId != ChunkSection.AIR && TerrainLoader.IsOpaque(secNeg.UniformBlockId))
+                            if (secNeg.Kind == Section.RepresentationKind.Uniform && secNeg.UniformBlockId != Section.AIR && TerrainLoader.IsOpaque(secNeg.UniformBlockId))
                             {
                                 for (int localX = 0; localX < S; localX++)
                                     for (int localZ = 0; localZ < S; localZ++)
@@ -222,7 +222,7 @@ namespace MVGE_GEN.Terrain
                         var secPos = sections[sx, syPos, sz];
                         if (secPos != null)
                         {
-                            if (secPos.Kind == ChunkSection.RepresentationKind.Uniform && secPos.UniformBlockId != ChunkSection.AIR && TerrainLoader.IsOpaque(secPos.UniformBlockId))
+                            if (secPos.Kind == Section.RepresentationKind.Uniform && secPos.UniformBlockId != Section.AIR && TerrainLoader.IsOpaque(secPos.UniformBlockId))
                             {
                                 for (int localX = 0; localX < S; localX++)
                                     for (int localZ = 0; localZ < S; localZ++)
@@ -272,7 +272,7 @@ namespace MVGE_GEN.Terrain
                         var secNeg = sections[sx, sy, szNeg];
                         if (secNeg != null)
                         {
-                            if (secNeg.Kind == ChunkSection.RepresentationKind.Uniform && secNeg.UniformBlockId != ChunkSection.AIR && TerrainLoader.IsOpaque(secNeg.UniformBlockId))
+                            if (secNeg.Kind == Section.RepresentationKind.Uniform && secNeg.UniformBlockId != Section.AIR && TerrainLoader.IsOpaque(secNeg.UniformBlockId))
                             {
                                 for (int localX = 0; localX < S; localX++)
                                     for (int localY = 0; localY < S; localY++)
@@ -309,7 +309,7 @@ namespace MVGE_GEN.Terrain
                         var secPos = sections[sx, sy, szPos];
                         if (secPos != null)
                         {
-                            if (secPos.Kind == ChunkSection.RepresentationKind.Uniform && secPos.UniformBlockId != ChunkSection.AIR && TerrainLoader.IsOpaque(secPos.UniformBlockId))
+                            if (secPos.Kind == Section.RepresentationKind.Uniform && secPos.UniformBlockId != Section.AIR && TerrainLoader.IsOpaque(secPos.UniformBlockId))
                             {
                                 for (int localX = 0; localX < S; localX++)
                                     for (int localY = 0; localY < S; localY++)
@@ -352,17 +352,17 @@ namespace MVGE_GEN.Terrain
 
         private void CreateUniformSections(ushort blockId)
         {
-            int S = ChunkSection.SECTION_SIZE;
+            int S = Section.SECTION_SIZE;
             int voxelsPerSection = S * S * S;
-            bool isTransparentUniform = blockId != ChunkSection.AIR && !TerrainLoader.IsOpaque(blockId); // water / glass etc.
+            bool isTransparentUniform = blockId != Section.AIR && !TerrainLoader.IsOpaque(blockId); // water / glass etc.
             for (int sx = 0; sx < sectionsX; sx++)
                 for (int sy = 0; sy < sectionsY; sy++)
                     for (int sz = 0; sz < sectionsZ; sz++)
                     {
-                        var sec = new ChunkSection
+                        var sec = new Section
                         {
                             IsAllAir = false,
-                            Kind = ChunkSection.RepresentationKind.Uniform,
+                            Kind = Section.RepresentationKind.Uniform,
                             UniformBlockId = blockId,
                             OpaqueVoxelCount = isTransparentUniform ? 0 : voxelsPerSection,
                             VoxelCount = voxelsPerSection,

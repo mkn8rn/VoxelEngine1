@@ -186,7 +186,7 @@ namespace MVGE_GEN
             for (int i = 0; i < sectionCount; i++) bw.Write(0u); // placeholder offsets
 
             Span<uint> offsets = sectionCount <= 1024 ? stackalloc uint[sectionCount] : new uint[sectionCount];
-            int S = ChunkSection.SECTION_SIZE;
+            int S = Section.SECTION_SIZE;
             int denseVoxelCount = S * S * S;
             Span<ushort> denseBuffer = stackalloc ushort[denseVoxelCount];
 
@@ -206,7 +206,7 @@ namespace MVGE_GEN
                         }
                         offsets[sectionLinear] = (uint)sectionOffset;
 
-                        var kind = sec?.Kind ?? ChunkSection.RepresentationKind.Empty;
+                        var kind = sec?.Kind ?? Section.RepresentationKind.Empty;
                         bw.Write((byte)kind);
 
                         using var ms = new MemoryStream(512);
@@ -254,33 +254,12 @@ namespace MVGE_GEN
 
                             switch (kind)
                             {
-                                case ChunkSection.RepresentationKind.Empty:
+                                case Section.RepresentationKind.Empty:
                                     break;
-                                case ChunkSection.RepresentationKind.Uniform when sec != null:
+                                case Section.RepresentationKind.Uniform when sec != null:
                                     ps.Write(sec.UniformBlockId);
                                     break;
-                                case ChunkSection.RepresentationKind.Sparse when sec != null:
-                                    if (sec.SparseIndices == null || sec.SparseBlocks == null)
-                                    {
-                                        ps.Write((ushort)0);
-                                    }
-                                    else
-                                    {
-                                        int scount = sec.SparseIndices.Length;
-                                        if (scount > ushort.MaxValue) scount = ushort.MaxValue;
-                                        ps.Write((ushort)scount);
-                                        for (int i = 0; i < scount; i++)
-                                        {
-                                            int idx = sec.SparseIndices[i];
-                                            if ((uint)idx <= 4095)
-                                            {
-                                                ps.Write((ushort)idx);
-                                                ps.Write(sec.SparseBlocks[i]);
-                                            }
-                                        }
-                                    }
-                                    break;
-                                case ChunkSection.RepresentationKind.Expanded when sec != null:
+                                case Section.RepresentationKind.Expanded when sec != null:
                                     if (sec.ExpandedDense != null && sec.ExpandedDense.Length == denseVoxelCount)
                                     {
                                         var raw = MemoryMarshal.AsBytes(sec.ExpandedDense.AsSpan());
@@ -293,8 +272,8 @@ namespace MVGE_GEN
                                         ps.Write(raw);
                                     }
                                     break;
-                                case ChunkSection.RepresentationKind.Packed when sec != null:
-                                case ChunkSection.RepresentationKind.MultiPacked when sec != null:
+                                case Section.RepresentationKind.Packed when sec != null:
+                                case Section.RepresentationKind.MultiPacked when sec != null:
                                     ps.Write((byte)sec.BitsPerIndex);
                                     ushort paletteCount = (ushort)(sec.Palette?.Count ?? 0);
                                     ps.Write(paletteCount);
@@ -468,9 +447,9 @@ namespace MVGE_GEN
                 int sxCount = br.ReadInt32(); int syCount = br.ReadInt32(); int szCount = br.ReadInt32(); int sectionCount = br.ReadInt32();
 
                 phase = "ValidateSectionGrid";
-                int expectedSX = GameManager.settings.chunkMaxX / ChunkSection.SECTION_SIZE;
-                int expectedSY = GameManager.settings.chunkMaxY / ChunkSection.SECTION_SIZE;
-                int expectedSZ = GameManager.settings.chunkMaxZ / ChunkSection.SECTION_SIZE;
+                int expectedSX = GameManager.settings.chunkMaxX / Section.SECTION_SIZE;
+                int expectedSY = GameManager.settings.chunkMaxY / Section.SECTION_SIZE;
+                int expectedSZ = GameManager.settings.chunkMaxZ / Section.SECTION_SIZE;
                 if (fileCx!=cx || fileCy!=cy || fileCz!=cz) return null;
                 if (sxCount!=expectedSX || syCount!=expectedSY || szCount!=expectedSZ) return null;
                 if (sectionCount != sxCount*syCount*szCount) return null;
@@ -493,7 +472,7 @@ namespace MVGE_GEN
                     return null;
                 }
                 if (chunk.sections == null || chunk.sections.GetLength(0)!=sxCount)
-                    chunk.sections = new ChunkSection[sxCount, syCount, szCount];
+                    chunk.sections = new Section[sxCount, syCount, szCount];
 
                 phase = "ParseSections";
                 int linear=0;
@@ -505,27 +484,27 @@ namespace MVGE_GEN
                         {
                             uint off = offsets[linear];
                             string sectionTag = $"sec({sx},{sy},{sz})";
-                            if (off==0) { chunk.sections[sx,sy,sz] = new ChunkSection(); continue; }
+                            if (off==0) { chunk.sections[sx,sy,sz] = new Section(); continue; }
                             try
                             {
                                 phase = $"SeekSection:{sectionTag}";
-                                if (off + 3 > ms.Length) { chunk.sections[sx,sy,sz] = new ChunkSection(); continue; }
+                                if (off + 3 > ms.Length) { chunk.sections[sx,sy,sz] = new Section(); continue; }
                                 ms.Position = off;
                                 byte kindByte = br.ReadByte();
-                                var kind = (ChunkSection.RepresentationKind)kindByte;
+                                var kind = (Section.RepresentationKind)kindByte;
                                 ushort payloadLen = br.ReadUInt16();
-                                if (payloadLen==0 || ms.Position + payloadLen > ms.Length) { chunk.sections[sx,sy,sz] = new ChunkSection(); continue; }
+                                if (payloadLen==0 || ms.Position + payloadLen > ms.Length) { chunk.sections[sx,sy,sz] = new Section(); continue; }
                                 phase = $"ReadSectionPayload:{sectionTag}";
                                 byte[] spayload = br.ReadBytes(payloadLen);
-                                if (spayload.Length != payloadLen) { chunk.sections[sx,sy,sz] = new ChunkSection(); continue; }
+                                if (spayload.Length != payloadLen) { chunk.sections[sx,sy,sz] = new Section(); continue; }
                                 phase = $"ParseSectionPayload:{sectionTag}";
                                 var sec = ParseSectionFromPayload(kind, spayload);
-                                chunk.sections[sx,sy,sz] = sec ?? new ChunkSection();
+                                chunk.sections[sx,sy,sz] = sec ?? new Section();
                             }
                             catch (Exception exSection)
                             {
                                 Console.WriteLine($"[World] Exception parsing {sectionTag} c=({cx},{cy},{cz}) phase={phase}: {exSection.Message}");
-                                chunk.sections[sx,sy,sz] = new ChunkSection();
+                                chunk.sections[sx,sy,sz] = new Section();
                             }
                         }
                     }
@@ -603,14 +582,14 @@ namespace MVGE_GEN
 
         // --------------------- ChunkSection Payload Parser ---------------------
         // Reused section payload parser (unchanged from inline adaptation earlier)
-        private ChunkSection ParseSectionFromPayload(ChunkSection.RepresentationKind kind, byte[] payload)
+        private Section ParseSectionFromPayload(Section.RepresentationKind kind, byte[] payload)
         {
             try
             {
                 using var ms = new MemoryStream(payload,false);
                 using var br = new BinaryReader(ms);
-                if (payload.Length < 7) return new ChunkSection();
-                var sec = new ChunkSection(); sec.Kind = kind; sec.VoxelCount = ChunkSection.SECTION_SIZE*ChunkSection.SECTION_SIZE*ChunkSection.SECTION_SIZE;
+                if (payload.Length < 7) return new Section();
+                var sec = new Section(); sec.Kind = kind; sec.VoxelCount = Section.SECTION_SIZE*Section.SECTION_SIZE*Section.SECTION_SIZE;
                 sec.OpaqueVoxelCount = br.ReadUInt16(); sec.InternalExposure = br.ReadInt32(); byte metaFlags = br.ReadByte();
                 bool hasBounds = (metaFlags & 1)!=0; bool hasOcc = (metaFlags & 2)!=0;
                 if (hasBounds && ms.Position + 6 <= ms.Length){ sec.HasBounds=true; sec.MinLX=br.ReadByte(); sec.MinLY=br.ReadByte(); sec.MinLZ=br.ReadByte(); sec.MaxLX=br.ReadByte(); sec.MaxLY=br.ReadByte(); sec.MaxLZ=br.ReadByte(); }
@@ -618,26 +597,23 @@ namespace MVGE_GEN
                 sec.CompletelyFull = (metaFlags & (1<<2))!=0; sec.MetadataBuilt = (metaFlags & (1<<3))!=0; sec.IsAllAir = (metaFlags & (1<<4))!=0; sec.StructuralDirty = (metaFlags & (1<<5))!=0; sec.IdMapDirty = (metaFlags & (1<<6))!=0; sec.BoundingBoxDirty = (metaFlags & (1<<7))!=0;
                 switch(kind)
                 {
-                    case ChunkSection.RepresentationKind.Empty: sec.IsAllAir = true; break;
-                    case ChunkSection.RepresentationKind.Uniform: if (ms.Position + 2 <= ms.Length) sec.UniformBlockId = br.ReadUInt16(); break;
-                    case ChunkSection.RepresentationKind.Sparse:
-                        if (ms.Position + 2 <= ms.Length){ int scount = br.ReadUInt16(); if (scount>=0 && scount<=4096 && ms.Position + scount*4 <= ms.Length){ sec.SparseIndices = new int[scount]; sec.SparseBlocks = new ushort[scount]; for(int i=0;i<scount;i++){ sec.SparseIndices[i]=br.ReadUInt16(); sec.SparseBlocks[i]=br.ReadUInt16(); } } }
-                        break;
-                    case ChunkSection.RepresentationKind.Expanded:
+                    case Section.RepresentationKind.Empty: sec.IsAllAir = true; break;
+                    case Section.RepresentationKind.Uniform: if (ms.Position + 2 <= ms.Length) sec.UniformBlockId = br.ReadUInt16(); break;
+                    case Section.RepresentationKind.Expanded:
                         int expectedBytes = sec.VoxelCount * 2; if (ms.Position + expectedBytes <= ms.Length){ sec.ExpandedDense = new ushort[sec.VoxelCount]; var raw = br.ReadBytes(expectedBytes); MemoryMarshal.Cast<byte,ushort>(raw).CopyTo(sec.ExpandedDense); }
                         break;
-                    case ChunkSection.RepresentationKind.Packed:
-                    case ChunkSection.RepresentationKind.MultiPacked:
+                    case Section.RepresentationKind.Packed:
+                    case Section.RepresentationKind.MultiPacked:
                         if (ms.Position < ms.Length){ sec.BitsPerIndex = br.ReadByte(); if (ms.Position + 2 <= ms.Length){ int paletteCount = br.ReadUInt16(); if (paletteCount>=0 && paletteCount<=4096 && ms.Position + paletteCount*2 <= ms.Length){ sec.Palette = new List<ushort>(paletteCount); for(int i=0;i<paletteCount;i++) sec.Palette.Add(br.ReadUInt16()); if (ms.Position +4 <= ms.Length){ int wordCount = br.ReadInt32(); if (wordCount>=0 && ms.Position + wordCount*4 <= ms.Length){ if (wordCount>0){ sec.BitData = new uint[wordCount]; for(int i=0;i<wordCount;i++) sec.BitData[i]=br.ReadUInt32(); } } if (ms.Position < ms.Length){ byte mapPresent = br.ReadByte(); if (mapPresent!=0 && ms.Position + 2 <= ms.Length){ int mapCount = br.ReadUInt16(); if (mapCount>=0 && mapCount<=4096 && ms.Position + mapCount*4 <= ms.Length){ sec.PaletteLookup = new Dictionary<ushort,int>(mapCount); for(int mi=0;mi<mapCount;mi++){ ushort bid=br.ReadUInt16(); ushort idx=br.ReadUInt16(); sec.PaletteLookup[bid]=idx; } } } else if (sec.Palette!=null){ sec.PaletteLookup = new Dictionary<ushort,int>(sec.Palette.Count); for(int ii=0;ii<sec.Palette.Count;ii++) sec.PaletteLookup[sec.Palette[ii]]=ii; } } } } } }
                         break;
                 }
-                if ((kind==ChunkSection.RepresentationKind.Packed || kind==ChunkSection.RepresentationKind.MultiPacked) && sec.Palette!=null && sec.PaletteLookup==null){ sec.PaletteLookup = new Dictionary<ushort,int>(sec.Palette.Count); for(int i=0;i<sec.Palette.Count;i++) sec.PaletteLookup[sec.Palette[i]]=i; }
+                if ((kind==Section.RepresentationKind.Packed || kind==Section.RepresentationKind.MultiPacked) && sec.Palette!=null && sec.PaletteLookup==null){ sec.PaletteLookup = new Dictionary<ushort,int>(sec.Palette.Count); for(int i=0;i<sec.Palette.Count;i++) sec.PaletteLookup[sec.Palette[i]]=i; }
                 return sec;
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"[World] Section payload parse error kind={kind}: {ex.Message}");
-                return new ChunkSection();
+                return new Section();
             }
         }
 

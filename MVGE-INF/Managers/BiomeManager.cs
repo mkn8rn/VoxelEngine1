@@ -240,7 +240,7 @@ namespace MVGE_INF.Managers
 
             // Vertical bucketing by section Y (assuming fixed 16-high sections). Determine vertical span using game settings.
             int chunkMaxY = GameManager.settings.chunkMaxY; // world vertical size per chunk
-            int sectionSize = ChunkSection.SECTION_SIZE;
+            int sectionSize = Section.SECTION_SIZE;
             int sectionCountY = chunkMaxY / sectionSize;
             var buckets = new int[sectionCountY][]; // fill lazily
             var tempLists = new List<int>[sectionCountY];

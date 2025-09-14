@@ -15,60 +15,52 @@ namespace MVGE_GEN.Utils
         private static void ReturnBitData(uint[] data) { if (data != null) ArrayPool<uint>.Shared.Return(data, clearArray: false); }
 
         public const int SPARSE_THRESHOLD = 512; // currently unused in classification (optimization gate only)
-        private const int SECTION_SIZE = ChunkSection.SECTION_SIZE;
+        private const int SECTION_SIZE = Section.SECTION_SIZE;
         private const int VOXELS_PER_SECTION = SECTION_SIZE * SECTION_SIZE * SECTION_SIZE; // 4096
         private const int PACKED_MULTI_ID_MAX = 64; // max distinct ids (including AIR) to qualify for MultiPacked finalize path
 
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static ushort GetBlock(ChunkSection sec, int x, int y, int z)
+        public static ushort GetBlock(Section sec, int x, int y, int z)
         {
-            if (sec == null || sec.IsAllAir || sec.Kind == ChunkSection.RepresentationKind.Empty) return ChunkSection.AIR;
+            if (sec == null || sec.IsAllAir || sec.Kind == Section.RepresentationKind.Empty) return Section.AIR;
             int linear = LinearIndex(x, y, z);
             switch (sec.Kind)
             {
-                case ChunkSection.RepresentationKind.Uniform:
+                case Section.RepresentationKind.Uniform:
                     return sec.UniformBlockId;
-                case ChunkSection.RepresentationKind.Expanded:
+                case Section.RepresentationKind.Expanded:
                     return sec.ExpandedDense[linear];
-                case ChunkSection.RepresentationKind.Sparse:
-                    // simple linear search (sparse rarely queried per-voxel outside flatten). Could optimize with dictionary if needed.
-                    var idxArr = sec.SparseIndices;
-                    if (idxArr != null)
-                    {
-                        for (int i = 0; i < idxArr.Length; i++) if (idxArr[i] == linear) return sec.SparseBlocks[i];
-                    }
-                    return ChunkSection.AIR;
-                case ChunkSection.RepresentationKind.Packed:
-                case ChunkSection.RepresentationKind.MultiPacked:
+                case Section.RepresentationKind.Packed:
+                case Section.RepresentationKind.MultiPacked:
                 default:
                     int paletteIndex = ReadBits(sec, linear); return sec.Palette[paletteIndex];
             }
         }
 
-        public static void SetBlock(ChunkSection sec, int x, int y, int z, ushort blockId)
+        public static void SetBlock(Section sec, int x, int y, int z, ushort blockId)
         {
             if (sec == null) return;
             // Any mutation invalidates metadata
             sec.MetadataBuilt = false;
 
-            if (sec.Kind == ChunkSection.RepresentationKind.Uniform && blockId != sec.UniformBlockId)
+            if (sec.Kind == Section.RepresentationKind.Uniform && blockId != sec.UniformBlockId)
             {
                 EnsurePacked(sec); // convert uniform to packed to allow mutation
             }
-            if (sec.Kind != ChunkSection.RepresentationKind.Packed && sec.Kind != ChunkSection.RepresentationKind.MultiPacked && sec.Kind != ChunkSection.RepresentationKind.Empty)
+            if (sec.Kind != Section.RepresentationKind.Packed && sec.Kind != Section.RepresentationKind.MultiPacked && sec.Kind != Section.RepresentationKind.Empty)
             {
                 EnsurePacked(sec);
             }
 
             int linear = LinearIndex(x, y, z);
 
-            if (blockId == ChunkSection.AIR)
+            if (blockId == Section.AIR)
             {
                 if (sec.IsAllAir) return;
                 int oldIdxAir = ReadBits(sec, linear);
                 ushort oldBlockIdAir = sec.Palette[oldIdxAir];
-                bool oldOpaqueAir = oldBlockIdAir != ChunkSection.AIR && TerrainLoader.IsOpaque(oldBlockIdAir);
+                bool oldOpaqueAir = oldBlockIdAir != Section.AIR && TerrainLoader.IsOpaque(oldBlockIdAir);
                 if (oldIdxAir == 0) return; // already air
                 WriteBits(sec, linear, 0);
                 if (oldOpaqueAir) sec.OpaqueVoxelCount--; // NonAirCount now tracks opaque voxels only
@@ -78,7 +70,7 @@ namespace MVGE_GEN.Utils
                     // Collapse only if no opaque voxels AND all are air; transparent-only content not collapsed here (still represented)
                     // We rely on IsAllAir flag for total emptiness; do not set IsAllAir unless palette reduces to just AIR.
                     bool onlyAirLeft = true;
-                    if (sec.Kind == ChunkSection.RepresentationKind.Packed || sec.Kind == ChunkSection.RepresentationKind.MultiPacked)
+                    if (sec.Kind == Section.RepresentationKind.Packed || sec.Kind == Section.RepresentationKind.MultiPacked)
                     {
                         for (int i = 0; i < sec.VoxelCount; i++)
                         {
@@ -88,7 +80,7 @@ namespace MVGE_GEN.Utils
                     if (onlyAirLeft)
                     {
                         Collapse(sec);
-                        sec.Kind = ChunkSection.RepresentationKind.Empty;
+                        sec.Kind = Section.RepresentationKind.Empty;
                     }
                 }
                 return;
@@ -97,15 +89,15 @@ namespace MVGE_GEN.Utils
             if (sec.IsAllAir)
             {
                 Initialize(sec);
-                sec.Kind = ChunkSection.RepresentationKind.Packed; // start as packed (may later promote to MultiPacked)
+                sec.Kind = Section.RepresentationKind.Packed; // start as packed (may later promote to MultiPacked)
             }
 
             int existingPaletteIndex = ReadBits(sec, linear);
             ushort existingBlock = sec.Palette[existingPaletteIndex];
             if (existingBlock == blockId) return;
 
-            bool existingOpaque = existingBlock != ChunkSection.AIR && TerrainLoader.IsOpaque(existingBlock);
-            bool newOpaque = blockId != ChunkSection.AIR && TerrainLoader.IsOpaque(blockId);
+            bool existingOpaque = existingBlock != Section.AIR && TerrainLoader.IsOpaque(existingBlock);
+            bool newOpaque = blockId != Section.AIR && TerrainLoader.IsOpaque(blockId);
 
             int newPaletteIndex = GetOrAddPaletteIndex(sec, blockId);
             if (newPaletteIndex >= (1 << sec.BitsPerIndex))
@@ -125,13 +117,13 @@ namespace MVGE_GEN.Utils
             }
         }
 
-        public static void ClassifyRepresentation(ChunkSection sec)
+        public static void ClassifyRepresentation(Section sec)
         {
             if (sec == null) return;
             // Emptiness now determined by IsAllAir (all air) – NonAirCount tracks opaque voxels only.
             if (sec.IsAllAir)
             {
-                sec.Kind = ChunkSection.RepresentationKind.Empty;
+                sec.Kind = Section.RepresentationKind.Empty;
                 sec.MetadataBuilt = true; // trivial
                 return;
             }
@@ -139,27 +131,19 @@ namespace MVGE_GEN.Utils
             if (total == 0) total = VOXELS_PER_SECTION;
 
             // Uniform (full volume single id) – still based on palette fullness, independent of opacity tracking.
-            if (sec.CompletelyFull && sec.Palette != null && sec.Palette.Count == 2 && sec.Palette[0] == ChunkSection.AIR)
+            if (sec.CompletelyFull && sec.Palette != null && sec.Palette.Count == 2 && sec.Palette[0] == Section.AIR)
             {
-                sec.Kind = ChunkSection.RepresentationKind.Uniform;
+                sec.Kind = Section.RepresentationKind.Uniform;
                 sec.UniformBlockId = sec.Palette[1];
                 BuildMetadataUniform(sec);
                 return;
             }
-            if (sec.Palette != null && sec.Palette.Count == 2 && sec.Palette[0] == ChunkSection.AIR && sec.OpaqueVoxelCount == total)
+            if (sec.Palette != null && sec.Palette.Count == 2 && sec.Palette[0] == Section.AIR && sec.OpaqueVoxelCount == total)
             {
                 sec.CompletelyFull = true;
-                sec.Kind = ChunkSection.RepresentationKind.Uniform;
+                sec.Kind = Section.RepresentationKind.Uniform;
                 sec.UniformBlockId = sec.Palette[1];
                 BuildMetadataUniform(sec);
-                return;
-            }
-
-            // Sparse threshold (kept) – uses opaque voxel count now.
-            if (sec.OpaqueVoxelCount <= 128)
-            {
-                ExpandToSparse(sec);
-                BuildMetadataSparse(sec);
                 return;
             }
 
@@ -171,7 +155,7 @@ namespace MVGE_GEN.Utils
                 if (distinctNonAir + 1 /*include AIR*/ <= PACKED_MULTI_ID_MAX)
                 {
                     // Keep as general packed form (MultiPacked) – metadata builder identical
-                    sec.Kind = ChunkSection.RepresentationKind.MultiPacked;
+                    sec.Kind = Section.RepresentationKind.MultiPacked;
                     BuildMetadataPacked(sec);
                 }
                 else
@@ -183,48 +167,13 @@ namespace MVGE_GEN.Utils
             }
 
             // Single non-air id but partial occupancy
-            sec.Kind = ChunkSection.RepresentationKind.Packed;
+            sec.Kind = Section.RepresentationKind.Packed;
             BuildMetadataPacked(sec);
         }
 
-        private static void ExpandToSparse(ChunkSection sec)
+        private static void ExpandToDense(Section sec)
         {
-            if (sec.Kind == ChunkSection.RepresentationKind.Sparse) return;
-            int count = 0; // still collect all non-air (including transparent) for fidelity
-            for (int z = 0; z < SECTION_SIZE; z++)
-                for (int x = 0; x < SECTION_SIZE; x++)
-                    for (int y = 0; y < SECTION_SIZE; y++)
-                    {
-                        int li = LinearIndex(x, y, z);
-                        int pi = ReadBits(sec, li);
-                        if (pi != 0) count++;
-                    }
-            var idx = new int[count];
-            var blocks = new ushort[count];
-            int write = 0;
-            for (int z = 0; z < SECTION_SIZE; z++)
-            {
-                for (int x = 0; x < SECTION_SIZE; x++)
-                {
-                    for (int y = 0; y < SECTION_SIZE; y++)
-                    {
-                        int li = LinearIndex(x, y, z);
-                        int pi = ReadBits(sec, li);
-                        if (pi == 0) continue;
-                        idx[write] = li;
-                        blocks[write] = sec.Palette[pi];
-                        write++;
-                    }
-                }
-            }
-            sec.SparseIndices = idx;
-            sec.SparseBlocks = blocks;
-            sec.Kind = ChunkSection.RepresentationKind.Sparse;
-        }
-
-        private static void ExpandToDense(ChunkSection sec)
-        {
-            if (sec.Kind == ChunkSection.RepresentationKind.Expanded) return;
+            if (sec.Kind == Section.RepresentationKind.Expanded) return;
             var arr = new ushort[VOXELS_PER_SECTION];
             for (int z = 0; z < SECTION_SIZE; z++)
                 for (int x = 0; x < SECTION_SIZE; x++)
@@ -235,14 +184,14 @@ namespace MVGE_GEN.Utils
                         if (pi != 0) arr[li] = sec.Palette[pi];
                     }
             sec.ExpandedDense = arr;
-            sec.Kind = ChunkSection.RepresentationKind.Expanded;
+            sec.Kind = Section.RepresentationKind.Expanded;
         }
 
-        private static void BuildMetadataUniform(ChunkSection sec)
+        private static void BuildMetadataUniform(Section sec)
         {
             sec.OpaqueBits = null; // not needed
             sec.FaceNegXBits = sec.FacePosXBits = sec.FaceNegYBits = sec.FacePosYBits = sec.FaceNegZBits = sec.FacePosZBits = null; // opaque faces implicit
-            if (sec.UniformBlockId != ChunkSection.AIR && !TerrainLoader.IsOpaque(sec.UniformBlockId))
+            if (sec.UniformBlockId != Section.AIR && !TerrainLoader.IsOpaque(sec.UniformBlockId))
             {
                 // Uniform transparent: ensure TransparentBits + face masks
                 if (sec.TransparentBits == null)
@@ -260,60 +209,7 @@ namespace MVGE_GEN.Utils
             sec.MetadataBuilt = true;
         }
 
-        private static void BuildMetadataSparse(ChunkSection sec)
-        {
-            // Build bounds + opaque internal exposure from scratch using sparse indices.
-            var idx = sec.SparseIndices; var blocks = sec.SparseBlocks; int count = idx.Length;
-            if (count == 0) { sec.InternalExposure = 0; sec.MetadataBuilt = true; return; }
-            byte minx = 255, miny = 255, minz = 255, maxx = 0, maxy = 0, maxz = 0;
-            // Occupancy split into opaque / transparent. Bits length always 64 when allocated (4096/64).
-            ulong[] opaqueBits = null; // allocate lazily
-            ulong[] transparentBits = null; // allocate lazily
-            int transparentCount = 0; int opaqueCount = 0;
-            for (int i = 0; i < count; i++)
-            {
-                int li = idx[i];
-                ushort id = blocks[i];
-                DecodeLinear(li, out int x, out int y, out int z);
-                // bounds track any non-air (including transparent)
-                if (x < minx) minx = (byte)x; if (x > maxx) maxx = (byte)x;
-                if (y < miny) miny = (byte)y; if (y > maxy) maxy = (byte)y;
-                if (z < minz) minz = (byte)z; if (z > maxz) maxz = (byte)z;
-                if (id != ChunkSection.AIR)
-                {
-                    if (TerrainLoader.IsOpaque(id))
-                    {
-                        opaqueBits ??= new ulong[64];
-                        opaqueBits[li >> 6] |= 1UL << (li & 63);
-                        opaqueCount++;
-                    }
-                    else
-                    {
-                        transparentBits ??= new ulong[64];
-                        transparentBits[li >> 6] |= 1UL << (li & 63);
-                        transparentCount++;
-                    }
-                }
-            }
-            if (opaqueBits != null)
-                ComputeInternalExposure(opaqueBits, out sec.InternalExposure);
-            else
-                sec.InternalExposure = 0; // no opaque voxels
-            sec.OpaqueBits = opaqueBits; // may be null when only transparent content
-            if (opaqueBits != null) BuildFaceMasks(sec, opaqueBits); // face masks only for opaque occupancy
-            sec.TransparentBits = transparentBits; sec.TransparentCount = transparentCount; sec.HasTransparent = transparentCount > 0;
-            if (transparentBits != null) BuildTransparentFaceMasks(sec, transparentBits); // build transparent boundary masks when present
-            // Update opaque voxel count (NonAirCount) from opaqueCount to ensure accuracy.
-            sec.OpaqueVoxelCount = opaqueCount;
-            sec.HasBounds = minx != 255; // if any non-air (including transparent)
-            if (sec.HasBounds)
-            {
-                sec.MinLX = minx; sec.MinLY = miny; sec.MinLZ = minz; sec.MaxLX = maxx; sec.MaxLY = maxy; sec.MaxLZ = maxz;
-            }
-            sec.MetadataBuilt = true;
-        }
-
-        private static void BuildMetadataDense(ChunkSection sec)
+        private static void BuildMetadataDense(Section sec)
         {
             // Split classification into opaque and transparent bitsets. Internal exposure only considers opaque.
             ulong[] opaqueBits = null; // allocate lazily
@@ -324,7 +220,7 @@ namespace MVGE_GEN.Utils
             for (int li = 0; li < VOXELS_PER_SECTION; li++)
             {
                 ushort id = arr[li];
-                if (id == ChunkSection.AIR) continue; // skip air entirely
+                if (id == Section.AIR) continue; // skip air entirely
                 DecodeLinear(li, out int x, out int y, out int z);
                 if (x < minx) minx = (byte)x; if (x > maxx) maxx = (byte)x;
                 if (y < miny) miny = (byte)y; if (y > maxy) maxy = (byte)y;
@@ -347,18 +243,19 @@ namespace MVGE_GEN.Utils
             else
                 sec.InternalExposure = 0;
             sec.OpaqueBits = opaqueBits; if (opaqueBits != null) BuildFaceMasks(sec, opaqueBits);
-            sec.TransparentBits = transparentBits; sec.TransparentCount = transparentCount; sec.HasTransparent = transparentCount > 0;
-            if (transparentBits != null) BuildTransparentFaceMasks(sec, transparentBits);
+            sec.TransparentBits = transparentBits; sec.TransparentCount = transparentCount; sec.HasTransparent = transparentCount > 0; if (transparentBits != null) BuildTransparentFaceMasks(sec, transparentBits);
             sec.OpaqueVoxelCount = opaqueCount; // opaque voxel count
             sec.HasBounds = minx != 255; // if any non-air (including transparent)
             if (sec.HasBounds)
             {
-                sec.MinLX = minx; sec.MinLY = miny; sec.MinLZ = minz; sec.MaxLX = maxx; sec.MaxLY = maxy; sec.MaxLZ = maxz;
+                sec.MinLX = minx; sec.MaxLX = maxx;
+                sec.MinLY = miny; sec.MaxLY = maxy;
+                sec.MinLZ = minz; sec.MaxLZ = maxz;
             }
             sec.MetadataBuilt = true;
         }
 
-        private static void BuildMetadataPacked(ChunkSection sec)
+        private static void BuildMetadataPacked(Section sec)
         {
             // Packed / MultiPacked classification: decode palette indices, split into opaque vs transparent bitsets.
             ulong[] opaqueBits = null;
@@ -392,13 +289,14 @@ namespace MVGE_GEN.Utils
             else
                 sec.InternalExposure = 0;
             sec.OpaqueBits = opaqueBits; if (opaqueBits != null) BuildFaceMasks(sec, opaqueBits);
-            sec.TransparentBits = transparentBits; sec.TransparentCount = transparentCount; sec.HasTransparent = transparentCount > 0;
-            if (transparentBits != null) BuildTransparentFaceMasks(sec, transparentBits);
+            sec.TransparentBits = transparentBits; sec.TransparentCount = transparentCount; sec.HasTransparent = transparentCount > 0; if (transparentBits != null) BuildTransparentFaceMasks(sec, transparentBits);
             sec.OpaqueVoxelCount = opaqueCount;
             sec.HasBounds = minx != 255; // if any non-air (including transparent)
             if (sec.HasBounds)
             {
-                sec.MinLX = minx; sec.MinLY = miny; sec.MinLZ = minz; sec.MaxLX = maxx; sec.MaxLY = maxy; sec.MaxLZ = maxz;
+                sec.MinLX = minx; sec.MaxLX = maxx;
+                sec.MinLY = miny; sec.MaxLY = maxy;
+                sec.MinLZ = minz; sec.MaxLZ = maxz;
             }
             sec.MetadataBuilt = true;
         }
@@ -447,7 +345,7 @@ namespace MVGE_GEN.Utils
         //  Neg/Pos Y: XZ plane  index = x*16 + z
         //  Neg/Pos Z: XY plane  index = x*16 + y
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void BuildFaceMasks(ChunkSection sec, ulong[] occ)
+        private static void BuildFaceMasks(Section sec, ulong[] occ)
         {
             const int S = 16;
             if (occ == null) return;
@@ -524,7 +422,7 @@ namespace MVGE_GEN.Utils
                 }
             }
         }
-        internal static void BuildTransparentFaceMasks(ChunkSection sec, ulong[] occ)
+        internal static void BuildTransparentFaceMasks(Section sec, ulong[] occ)
         {
             // Builds transparent boundary face masks (one 256-bit mask per face) using the transparent occupancy bitset.
             // Layout matches opaque face masks: indices map to 16x16 planes as documented in BuildFaceMasks.
@@ -586,10 +484,10 @@ namespace MVGE_GEN.Utils
             z = columnIndex >> 4;
         }
 
-        private static int ReadBits(ChunkSection sec, int voxelIndex)
+        private static int ReadBits(Section sec, int voxelIndex)
             => ReadBits(sec.BitData, sec.BitsPerIndex, voxelIndex);
 
-        private static void GrowBits(ChunkSection sec)
+        private static void GrowBits(Section sec)
         {
             int paletteCountMinusOne = sec.Palette.Count - 1;
             int needed = paletteCountMinusOne <= 0 ? 1 : (int)BitOperations.Log2((uint)paletteCountMinusOne) + 1;
@@ -607,7 +505,7 @@ namespace MVGE_GEN.Utils
             }
         }
 
-        private static void AllocateBitData(ChunkSection sec)
+        private static void AllocateBitData(Section sec)
         {
             if (sec.BitsPerIndex <= 0)
             {
@@ -636,7 +534,7 @@ namespace MVGE_GEN.Utils
             return (int)(value & (uint)mask);
         }
 
-        private static void WriteBits(ChunkSection sec, int voxelIndex, int paletteIndex)
+        private static void WriteBits(Section sec, int voxelIndex, int paletteIndex)
         {
             long bitPos = (long)voxelIndex * sec.BitsPerIndex;
             int dataIndex = (int)(bitPos >> 5);
@@ -656,7 +554,7 @@ namespace MVGE_GEN.Utils
             }
         }
 
-        private static void Collapse(ChunkSection sec)
+        private static void Collapse(Section sec)
         {
             sec.IsAllAir = true;
             sec.Palette = null;
@@ -668,7 +566,7 @@ namespace MVGE_GEN.Utils
             sec.CompletelyFull = false;
         }
 
-        private static int GetOrAddPaletteIndex(ChunkSection sec, ushort blockId)
+        private static int GetOrAddPaletteIndex(Section sec, ushort blockId)
         {
             if (sec.PaletteLookup.TryGetValue(blockId, out int idx))
                 return idx;
@@ -678,12 +576,12 @@ namespace MVGE_GEN.Utils
             return idx;
         }
 
-        private static void Initialize(ChunkSection sec)
+        private static void Initialize(Section sec)
         {
             sec.IsAllAir = false;
             sec.VoxelCount = VOXELS_PER_SECTION;
-            sec.Palette = new List<ushort>(8) { ChunkSection.AIR };
-            sec.PaletteLookup = new Dictionary<ushort, int> { { ChunkSection.AIR, 0 } };
+            sec.Palette = new List<ushort>(8) { Section.AIR };
+            sec.PaletteLookup = new Dictionary<ushort, int> { { Section.AIR, 0 } };
             sec.BitsPerIndex = 1;
             AllocateBitData(sec);
             sec.OpaqueVoxelCount = 0; // opaque count starts at 0
@@ -691,20 +589,20 @@ namespace MVGE_GEN.Utils
             sec.MetadataBuilt = false;
         }
 
-        private static void EnsurePacked(ChunkSection sec)
+        private static void EnsurePacked(Section sec)
         {
-            if (sec.Kind == ChunkSection.RepresentationKind.Packed || sec.Kind == ChunkSection.RepresentationKind.MultiPacked) return;
-            if (sec.Kind == ChunkSection.RepresentationKind.Empty)
+            if (sec.Kind == Section.RepresentationKind.Packed || sec.Kind == Section.RepresentationKind.MultiPacked) return;
+            if (sec.Kind == Section.RepresentationKind.Empty)
             {
                 sec.IsAllAir = true; sec.Palette = null; sec.PaletteLookup = null; sec.BitData = null; sec.BitsPerIndex = 0; sec.OpaqueVoxelCount = 0; sec.CompletelyFull = false; return;
             }
-            if (sec.Kind == ChunkSection.RepresentationKind.Uniform)
+            if (sec.Kind == Section.RepresentationKind.Uniform)
             {
                 ushort blockId = sec.UniformBlockId;
                 sec.IsAllAir = false;
-                sec.VoxelCount = ChunkSection.SECTION_SIZE * ChunkSection.SECTION_SIZE * ChunkSection.SECTION_SIZE;
-                sec.Palette = new List<ushort> { ChunkSection.AIR, blockId };
-                sec.PaletteLookup = new Dictionary<ushort, int> { { ChunkSection.AIR, 0 }, { blockId, 1 } };
+                sec.VoxelCount = Section.SECTION_SIZE * Section.SECTION_SIZE * Section.SECTION_SIZE;
+                sec.Palette = new List<ushort> { Section.AIR, blockId };
+                sec.PaletteLookup = new Dictionary<ushort, int> { { Section.AIR, 0 }, { blockId, 1 } };
                 sec.BitsPerIndex = 1;
                 long totalBits = (long)sec.VoxelCount * sec.BitsPerIndex;
                 int uintCount = (int)((totalBits + 31) / 32);
@@ -712,21 +610,21 @@ namespace MVGE_GEN.Utils
                 for (int i = 0; i < uintCount; i++) sec.BitData[i] = 0xFFFFFFFFu;
                 sec.OpaqueVoxelCount = TerrainLoader.IsOpaque(blockId) ? sec.VoxelCount : 0; // opaque voxel count
                 sec.CompletelyFull = TerrainLoader.IsOpaque(blockId);
-                sec.Kind = ChunkSection.RepresentationKind.Packed;
+                sec.Kind = Section.RepresentationKind.Packed;
                 sec.MetadataBuilt = false;
                 return;
             }
             // For Sparse / DenseExpanded fallback: rebuild packed from existing data
-            if (sec.Kind == ChunkSection.RepresentationKind.Expanded)
+            if (sec.Kind == Section.RepresentationKind.Expanded)
             {
                 // Repack dense expanded
                 ushort[] dense = sec.ExpandedDense;
                 // Build palette anew
-                var palette = new List<ushort> { ChunkSection.AIR };
-                var lookup = new Dictionary<ushort, int> { { ChunkSection.AIR, 0 } };
+                var palette = new List<ushort> { Section.AIR };
+                var lookup = new Dictionary<ushort, int> { { Section.AIR, 0 } };
                 for (int i = 0; i < dense.Length; i++)
                 {
-                    ushort id = dense[i]; if (id == ChunkSection.AIR) continue;
+                    ushort id = dense[i]; if (id == Section.AIR) continue;
                     if (!lookup.ContainsKey(id)) { lookup[id] = palette.Count; palette.Add(id); }
                 }
                 sec.Palette = palette; sec.PaletteLookup = lookup;
@@ -740,39 +638,13 @@ namespace MVGE_GEN.Utils
                 for (int i = 0; i < dense.Length; i++)
                 {
                     ushort id = dense[i];
-                    if (id == ChunkSection.AIR) continue;
+                    if (id == Section.AIR) continue;
                     int pi = lookup[id];
                     WriteBits(sec, i, pi);
                     if (TerrainLoader.IsOpaque(id)) sec.OpaqueVoxelCount++;
                 }
-                sec.Kind = ChunkSection.RepresentationKind.Packed; sec.MetadataBuilt = false;
+                sec.Kind = Section.RepresentationKind.Packed; sec.MetadataBuilt = false;
                 return;
-            }
-            if (sec.Kind == ChunkSection.RepresentationKind.Sparse)
-            {
-                // Repack sparse
-                var palette = new List<ushort> { ChunkSection.AIR };
-                var lookup = new Dictionary<ushort, int> { { ChunkSection.AIR, 0 } };
-                var idx = sec.SparseIndices; var blocks = sec.SparseBlocks;
-                for (int i = 0; i < blocks.Length; i++)
-                {
-                    ushort id = blocks[i]; if (id == ChunkSection.AIR) continue;
-                    if (!lookup.ContainsKey(id)) { lookup[id] = palette.Count; palette.Add(id); }
-                }
-                sec.Palette = palette; sec.PaletteLookup = lookup;
-                int paletteCountMinusOne = palette.Count - 1;
-                int bpi = paletteCountMinusOne <= 0 ? 1 : (int)BitOperations.Log2((uint)paletteCountMinusOne) + 1;
-                sec.BitsPerIndex = bpi;
-                long totalBits2 = (long)sec.VoxelCount * bpi;
-                int uintCount2 = (int)((totalBits2 + 31) / 32);
-                sec.BitData = ArrayPool<uint>.Shared.Rent(uintCount2); Array.Clear(sec.BitData, 0, uintCount2);
-                sec.OpaqueVoxelCount = 0;
-                for (int i = 0; i < idx.Length; i++)
-                {
-                    int li = idx[i]; ushort id = blocks[i]; int pi = lookup[id]; WriteBits(sec, li, pi);
-                    if (id != ChunkSection.AIR && TerrainLoader.IsOpaque(id)) sec.OpaqueVoxelCount++;
-                }
-                sec.Kind = ChunkSection.RepresentationKind.Packed; sec.MetadataBuilt = false;
             }
         }
     }

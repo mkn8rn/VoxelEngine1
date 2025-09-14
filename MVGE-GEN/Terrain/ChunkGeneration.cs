@@ -52,8 +52,8 @@ namespace MVGE_GEN.Terrain
             const ushort SoilId = (ushort)BaseBlockType.Soil;
             const ushort WaterId = (ushort)BaseBlockType.Water;       // surface fill water (now sourced from BlockColumnProfile water span)
 
-            int sectionSize = ChunkSection.SECTION_SIZE;              // expected 16
-            int sectionVolume = ChunkSection.VOXELS_PER_SECTION;      // expected 4096
+            int sectionSize = Section.SECTION_SIZE;              // expected 16
+            int sectionVolume = Section.VOXELS_PER_SECTION;      // expected 4096
             int sectionMask = sectionSize - 1;
             int sectionsYLocal = sectionsY;
             int columnCount = maxX * maxZ;                            // 256
@@ -259,10 +259,10 @@ namespace MVGE_GEN.Terrain
                     for (int sx = 0; sx < sectionsX; sx++)
                         for (int sz = 0; sz < sectionsZ; sz++)
                             if (sections[sx, sy, sz] == null)
-                                sections[sx, sy, sz] = new ChunkSection
+                                sections[sx, sy, sz] = new Section
                                 {
                                     IsAllAir = false,
-                                    Kind = ChunkSection.RepresentationKind.Uniform,
+                                    Kind = Section.RepresentationKind.Uniform,
                                     UniformBlockId = StoneId,
                                     OpaqueVoxelCount = sectionVolume,
                                     VoxelCount = sectionVolume,
@@ -282,10 +282,10 @@ namespace MVGE_GEN.Terrain
                     for (int sx = 0; sx < sectionsX; sx++)
                         for (int sz = 0; sz < sectionsZ; sz++)
                             if (sections[sx, sy, sz] == null)
-                                sections[sx, sy, sz] = new ChunkSection
+                                sections[sx, sy, sz] = new Section
                                 {
                                     IsAllAir = false,
-                                    Kind = ChunkSection.RepresentationKind.Uniform,
+                                    Kind = Section.RepresentationKind.Uniform,
                                     UniformBlockId = SoilId,
                                     OpaqueVoxelCount = sectionVolume,
                                     VoxelCount = sectionVolume,
@@ -390,7 +390,7 @@ namespace MVGE_GEN.Terrain
                             var secRef = sections[sxIndex, sy, szIndex];
                             if (secRef == null)
                             {
-                                secRef = new ChunkSection();
+                                secRef = new Section();
                                 sections[sxIndex, sy, szIndex] = secRef;
                             }
                             var scratch = SectionUtils.EnsureScratch(secRef);
@@ -481,7 +481,7 @@ namespace MVGE_GEN.Terrain
                         var secRef = sections[sxIndex, sy, szIndex];
                         if (secRef == null)
                         {
-                            secRef = new ChunkSection();
+                            secRef = new Section();
                             sections[sxIndex, sy, szIndex] = secRef;
                         }
 
@@ -538,7 +538,7 @@ namespace MVGE_GEN.Terrain
                     {
                         var sec = sections[sx, sy, sz];
                         if (sec == null) continue;
-                        if (sec.Kind != ChunkSection.RepresentationKind.Uniform || sec.UniformBlockId == ChunkSection.AIR) { allUniformSame = false; break; }
+                        if (sec.Kind != Section.RepresentationKind.Uniform || sec.UniformBlockId == Section.AIR) { allUniformSame = false; break; }
                         if (uniformId == 0) uniformId = sec.UniformBlockId; else if (uniformId != sec.UniformBlockId) { allUniformSame = false; break; }
                     }
             if (allUniformSame && uniformId != 0)
@@ -549,7 +549,7 @@ namespace MVGE_GEN.Terrain
                         for (int sz = 0; sz < sectionsZ; sz++)
                         {
                             var sec = sections[sx, sy, sz]; if (sec == null) continue;
-                            if (sec.Kind == ChunkSection.RepresentationKind.Uniform) { sec.IdMapDirty = false; sec.StructuralDirty = false; sec.MetadataBuilt = true; }
+                            if (sec.Kind == Section.RepresentationKind.Uniform) { sec.IdMapDirty = false; sec.StructuralDirty = false; sec.MetadataBuilt = true; }
                         }
             }
 

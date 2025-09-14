@@ -3,7 +3,7 @@ using System.Runtime.CompilerServices;
 
 namespace MVGE_INF.Generation.Models
 {
-    public sealed class ChunkSection
+    public sealed class Section
     {
         public const int SECTION_SIZE = 16;
         public const int VOXELS_PER_SECTION = SECTION_SIZE * SECTION_SIZE * SECTION_SIZE;
@@ -36,11 +36,6 @@ namespace MVGE_INF.Generation.Models
 
         // Uniform representation
         public ushort UniformBlockId; // valid when Kind==Uniform
-
-        // Sparse representation (threshold-based). We store linear indices and block ids parallel arrays to avoid dictionary lookups.
-        public int[] SparseIndices;   // linear voxel indices (0..4095) of non-air voxels
-        public ushort[] SparseBlocks; // same length as SparseIndices
-        public static int SparseThreshold = 256; // when NonAirCount is less than this we switch to sparse representation
 
         // Dense expanded representation: direct block ids per voxel (length == VoxelCount)
         public ushort[] ExpandedDense; // valid when Kind==DenseExpanded
