@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using MVGE_INF.Loaders;
 
 namespace MVGE_GFX.Terrain.Sections
 {
@@ -29,6 +30,7 @@ namespace MVGE_GFX.Terrain.Sections
         ///     atlas lookups for repeated block ids; if all six faces share a tile, use a fast single‑tile path.
         ///  7. Emit instances per direction. Emission no longer checks the boundary skip flags; those affected only boundary
         ///     augmentation. Internal face masks always participate in emission if they contain bits.
+        /// Transparent uniform (non‑opaque) block sections are skipped entirely (no emission) and treated as holes for neighbors.
         /// Returns true if the packed fast path handled emission; false signals caller to attempt another path.
         private bool EmitSinglePackedSectionInstances(
             ref SectionPrerenderDesc desc,
@@ -41,11 +43,13 @@ namespace MVGE_GFX.Terrain.Sections
             if (desc.OpaqueBits == null || desc.OpaqueCount == 0) return false;
             if (desc.Palette == null || desc.Palette.Count < 2 || desc.BitsPerIndex != 1) return false;
 
+            ushort block = desc.Palette[1]; // single non-air block id
+            if (!TerrainLoader.IsOpaque(block)) return true; // transparent uniform: skip emission (treated as hole)
+
             EnsureBoundaryMasks();
             EnsureLiDecode();
 
-            var occ = desc.OpaqueBits;          // 64 ulongs (4096 bits) occupancy
-            ushort block = desc.Palette[1];        // single non‑air block id
+            var occ = desc.OpaqueBits;          // 64 ulongs (4096 bits) occupancy (opaque only)
 
             int baseX = sx * S;
             int baseY = sy * S;

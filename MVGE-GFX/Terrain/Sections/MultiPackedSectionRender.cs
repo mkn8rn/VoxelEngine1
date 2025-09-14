@@ -8,6 +8,7 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
+using MVGE_INF.Loaders;
 
 namespace MVGE_GFX.Terrain.Sections
 {
@@ -24,6 +25,7 @@ namespace MVGE_GFX.Terrain.Sections
         ///  4. For each mask/direction, decode per‑voxel block id on demand (DecodePacked) only for set bits inside bounds.
         ///  5. Use a TileIndexCache to map (block, faceDir) -> atlas tile index, avoiding repeated UV queries.
         ///  6. Emit all faces with EmitFacesFromMask supplying a per‑voxel lambda returning (block, tileIndex).
+        /// Transparent (non‑opaque) block ids are not emitted; transparent neighbors are already treated as holes via opaque-only masks.
         /// Returns true if multi‑packed emission completed; false if preconditions not met so caller can choose another path.
         private bool EmitMultiPackedSectionInstances(
             ref SectionPrerenderDesc desc,
@@ -44,7 +46,7 @@ namespace MVGE_GFX.Terrain.Sections
             EnsureBoundaryMasks();   // boundary position masks
             EnsureLiDecode();        // linear index -> (lx,ly,lz) decode tables
 
-            var occ = desc.OpaqueBits; // 64 * ulong => 4096 occupancy bits
+            var occ = desc.OpaqueBits; // 64 * ulong => 4096 occupancy bits (opaque only)
 
             // World base coordinates for this section
             int baseX = sx * S;
@@ -88,11 +90,11 @@ namespace MVGE_GFX.Terrain.Sections
             var tileCache = new TileIndexCache();
             var localDesc = desc; // copy for use inside delegate
 
-            // Per-voxel lambda used by generic EmitFacesFromMask (decodes block + tile index) 
+            // Per-voxel lambda used by generic EmitFacesFromMask (decodes block + tile index). Transparent blocks skipped.
             (ushort block, uint tileIndex) PerVoxel(int li, int lx, int ly, int lz, byte faceDir)
             {
                 ushort b = DecodePacked(ref localDesc, lx, ly, lz);
-                if (b == 0) return (0, 0);
+                if (b == 0 || !TerrainLoader.IsOpaque(b)) return (0, 0); // skip air & transparent
                 uint tIndex = tileCache.Get(atlas, b, faceDir);
                 return (b, tIndex);
             }

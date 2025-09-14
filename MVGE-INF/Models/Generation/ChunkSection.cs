@@ -40,7 +40,7 @@ namespace MVGE_INF.Generation.Models
         // Sparse representation (threshold-based). We store linear indices and block ids parallel arrays to avoid dictionary lookups.
         public int[] SparseIndices;   // linear voxel indices (0..4095) of non-air voxels
         public ushort[] SparseBlocks; // same length as SparseIndices
-        public static int SparseThreshold = 2048; // when NonAirCount exceeds this we switch to sparse representation
+        public static int SparseThreshold = 256; // when NonAirCount is less than this we switch to sparse representation
 
         // Dense expanded representation: direct block ids per voxel (length == VoxelCount)
         public ushort[] ExpandedDense; // valid when Kind==DenseExpanded

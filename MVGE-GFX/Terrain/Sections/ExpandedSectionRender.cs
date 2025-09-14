@@ -4,12 +4,13 @@ using System;
 using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using MVGE_INF.Loaders;
 
 namespace MVGE_GFX.Terrain.Sections
 {
     internal partial class SectionRender
     {
-        /// Emits face instances for a DenseExpanded (Kind==3) section using pre-computed
+        /// Emits face instances for a Expanded (Kind==3) section using pre-computed
         /// occupancy + boundary plane masks.
         /// Steps:
         ///  1. Produce internal face bitsets by shifting occupancy and removing occluded pairs
@@ -18,8 +19,10 @@ namespace MVGE_GFX.Terrain.Sections
         ///     chunk neighbor planes / adjacent section voxels using AddVisibleBoundaryFaces.
         ///  3. Iterate each face direction mask and emit an instance for every surviving bit
         ///     using EmitFacesFromMask with a TileIndexCache for per-voxel tiles.
+        /// Transparent (non-opaque) blocks are skipped; transparent neighbors are inherently treated as holes
+        /// because occ / face masks contain opaque occupancy only.
         /// Returns true if handled; false signals fallback brute scan.
-        private bool EmitDenseExpandedSectionInstances(
+        private bool EmitExpandedSectionInstances(
             ref SectionPrerenderDesc desc,
             int sx, int sy, int sz, int S,
             List<byte> offsetList,
@@ -38,7 +41,7 @@ namespace MVGE_GFX.Terrain.Sections
             EnsureBoundaryMasks(); // direct call (legacy EnsureMasks retained but unused here)
             EnsureLiDecode();      // decode tables (lx, ly, lz)
 
-            var occ = desc.OpaqueBits;          // 64 ulongs for 4096 voxels
+            var occ = desc.OpaqueBits;          // 64 ulongs for 4096 voxels (opaque only)
             ushort[] dense = desc.ExpandedDense;   // dense block id array (length 4096)
 
             int baseX = sx * S;
@@ -73,12 +76,12 @@ namespace MVGE_GFX.Terrain.Sections
             var tileCache = new TileIndexCache();
             var localDense = dense; // local copy for lambda capture
 
-            // Per-voxel emission lambda used by EmitFacesFromMask (returns block + tile index). Guard for bounds and air.
+            // Per-voxel emission lambda used by EmitFacesFromMask (returns block + tile index). Guard for air & transparent.
             (ushort block, uint tileIndex) PerVoxelDense(int li, int lx, int ly, int lz, byte faceDir)
             {
                 if (localDense == null) return (0, 0);
                 ushort b = localDense[li];
-                if (b == 0) return (0, 0);
+                if (b == 0 || !TerrainLoader.IsOpaque(b)) return (0, 0); // skip air & transparent
                 uint tIndex = tileCache.Get(atlas, b, faceDir);
                 return (b, tIndex);
             }

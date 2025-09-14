@@ -69,7 +69,7 @@ namespace MVGE_GFX.Terrain.Sections
                                 specializedHandled = EmitSparseSectionInstances(ref desc, sx, sy, sz, S, offsetList, tileIndexList, faceDirList);
                                 break;
                             case 3: // DenseExpanded
-                                specializedHandled = EmitDenseExpandedSectionInstances(ref desc, sx, sy, sz, S, offsetList, tileIndexList, faceDirList);
+                                specializedHandled = EmitExpandedSectionInstances(ref desc, sx, sy, sz, S, offsetList, tileIndexList, faceDirList);
                                 break;
                             case 4: // Packed (single-id)
                                 specializedHandled = EmitSinglePackedSectionInstances(ref desc, sx, sy, sz, S, offsetList, tileIndexList, faceDirList);

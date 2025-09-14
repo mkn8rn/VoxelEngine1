@@ -1,6 +1,7 @@
 ﻿using MVGE_INF.Models.Generation;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
+using MVGE_INF.Loaders;
 
 namespace MVGE_GFX.Terrain.Sections
 {
@@ -18,6 +19,7 @@ namespace MVGE_GFX.Terrain.Sections
         ///          - Interior neighbor: check local sparse map (Local) else fall back to GetBlock for cross‑section neighbor.
         ///       c. When neighbor is air / absent, emit that face using cached tile index (TileIndexCache + EmitOneInstance).
         ///  3. Repeat until all sparse voxels processed.
+        /// Transparent (non‑opaque) blocks are skipped; transparent neighbors are treated as non‑occluding (same as air).
         /// Returns true (always handled) unless sparse arrays are null/empty (early no‑op true).
         private bool EmitSparseSectionInstances(ref SectionPrerenderDesc desc, int sx, int sy, int sz, int S,
             List<byte> offsetList, List<uint> tileIndexList, List<byte> faceDirList)
@@ -52,12 +54,18 @@ namespace MVGE_GFX.Terrain.Sections
                 return map.TryGetValue(li, out var v) ? v : (ushort)0;
             }
 
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            bool IsAirOrTransparent(ushort bid) => bid == 0 || !TerrainLoader.IsOpaque(bid);
+
             // Tile index cache (shared helper) to avoid recomputing atlas lookups for repeated block ids per face direction.
             var tileCache = new TileIndexCache();
 
             for (int i = 0; i < indices.Length; i++)
             {
-                int li = indices[i]; ushort block = blocks[i]; if (block == 0) continue; // skip air
+                int li = indices[i]; ushort block = blocks[i];
+                if (block == 0) continue; // skip air
+                if (!TerrainLoader.IsOpaque(block)) continue; // skip transparent (non-opaque) blocks entirely
+
                 DecodeIndex(li, out int lx, out int ly, out int lz); // shared helper from common
                 int wx = baseX + lx; int wy = baseY + ly; int wz = baseZ + lz;
 
@@ -69,10 +77,14 @@ namespace MVGE_GFX.Terrain.Sections
                         if (!PlaneBit(planeNegX, wz * maxY + wy))
                             EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 0), 0, offsetList, tileIndexList, faceDirList);
                     }
-                    else if (GetBlock(wx - 1, wy, wz) == 0)
-                        EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 0), 0, offsetList, tileIndexList, faceDirList);
+                    else
+                    {
+                        ushort nb = GetBlock(wx - 1, wy, wz);
+                        if (IsAirOrTransparent(nb))
+                            EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 0), 0, offsetList, tileIndexList, faceDirList);
+                    }
                 }
-                else if (Local(lx - 1, ly, lz, localMap) == 0)
+                else if (IsAirOrTransparent(Local(lx - 1, ly, lz, localMap)))
                     EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 0), 0, offsetList, tileIndexList, faceDirList);
 
                 // RIGHT (+X)
@@ -83,10 +95,14 @@ namespace MVGE_GFX.Terrain.Sections
                         if (!PlaneBit(planePosX, wz * maxY + wy))
                             EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 1), 1, offsetList, tileIndexList, faceDirList);
                     }
-                    else if (GetBlock(wx + 1, wy, wz) == 0)
-                        EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 1), 1, offsetList, tileIndexList, faceDirList);
+                    else
+                    {
+                        ushort nb = GetBlock(wx + 1, wy, wz);
+                        if (IsAirOrTransparent(nb))
+                            EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 1), 1, offsetList, tileIndexList, faceDirList);
+                    }
                 }
-                else if (Local(lx + 1, ly, lz, localMap) == 0)
+                else if (IsAirOrTransparent(Local(lx + 1, ly, lz, localMap)))
                     EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 1), 1, offsetList, tileIndexList, faceDirList);
 
                 // BOTTOM (-Y)
@@ -97,10 +113,14 @@ namespace MVGE_GFX.Terrain.Sections
                         if (!PlaneBit(planeNegY, wx * maxZ + wz))
                             EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 2), 2, offsetList, tileIndexList, faceDirList);
                     }
-                    else if (GetBlock(wx, wy - 1, wz) == 0)
-                        EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 2), 2, offsetList, tileIndexList, faceDirList);
+                    else
+                    {
+                        ushort nb = GetBlock(wx, wy - 1, wz);
+                        if (IsAirOrTransparent(nb))
+                            EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 2), 2, offsetList, tileIndexList, faceDirList);
+                    }
                 }
-                else if (Local(lx, ly - 1, lz, localMap) == 0)
+                else if (IsAirOrTransparent(Local(lx, ly - 1, lz, localMap)))
                     EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 2), 2, offsetList, tileIndexList, faceDirList);
 
                 // TOP (+Y)
@@ -111,10 +131,14 @@ namespace MVGE_GFX.Terrain.Sections
                         if (!PlaneBit(planePosY, wx * maxZ + wz))
                             EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 3), 3, offsetList, tileIndexList, faceDirList);
                     }
-                    else if (GetBlock(wx, wy + 1, wz) == 0)
-                        EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 3), 3, offsetList, tileIndexList, faceDirList);
+                    else
+                    {
+                        ushort nb = GetBlock(wx, wy + 1, wz);
+                        if (IsAirOrTransparent(nb))
+                            EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 3), 3, offsetList, tileIndexList, faceDirList);
+                    }
                 }
-                else if (Local(lx, ly + 1, lz, localMap) == 0)
+                else if (IsAirOrTransparent(Local(lx, ly + 1, lz, localMap)))
                     EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 3), 3, offsetList, tileIndexList, faceDirList);
 
                 // BACK (-Z)
@@ -125,10 +149,14 @@ namespace MVGE_GFX.Terrain.Sections
                         if (!PlaneBit(planeNegZ, wx * maxY + wy))
                             EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 4), 4, offsetList, tileIndexList, faceDirList);
                     }
-                    else if (GetBlock(wx, wy, wz - 1) == 0)
-                        EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 4), 4, offsetList, tileIndexList, faceDirList);
+                    else
+                    {
+                        ushort nb = GetBlock(wx, wy, wz - 1);
+                        if (IsAirOrTransparent(nb))
+                            EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 4), 4, offsetList, tileIndexList, faceDirList);
+                    }
                 }
-                else if (Local(lx, ly, lz - 1, localMap) == 0)
+                else if (IsAirOrTransparent(Local(lx, ly, lz - 1, localMap)))
                     EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 4), 4, offsetList, tileIndexList, faceDirList);
 
                 // FRONT (+Z)
@@ -139,10 +167,14 @@ namespace MVGE_GFX.Terrain.Sections
                         if (!PlaneBit(planePosZ, wx * maxY + wy))
                             EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 5), 5, offsetList, tileIndexList, faceDirList);
                     }
-                    else if (GetBlock(wx, wy, wz + 1) == 0)
-                        EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 5), 5, offsetList, tileIndexList, faceDirList);
+                    else
+                    {
+                        ushort nb = GetBlock(wx, wy, wz + 1);
+                        if (IsAirOrTransparent(nb))
+                            EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 5), 5, offsetList, tileIndexList, faceDirList);
+                    }
                 }
-                else if (Local(lx, ly, lz + 1, localMap) == 0)
+                else if (IsAirOrTransparent(Local(lx, ly, lz + 1, localMap)))
                     EmitOneInstance(wx, wy, wz, tileCache.Get(atlas, block, 5), 5, offsetList, tileIndexList, faceDirList);
             }
             return true;
