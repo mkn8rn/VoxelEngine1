@@ -7,7 +7,7 @@
   "blockTileWidth": 32,
   "blockTileHeight": 32,
   "textureFileExtension": ".png",
-  "lod1RenderDistance": 12,
+  "lod1RenderDistance": 3,
   "lod2RenderDistance": 18,
   "lod3RenderDistance": 36,
   "lod4RenderDistance": 54,

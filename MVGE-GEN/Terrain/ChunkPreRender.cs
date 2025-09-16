@@ -314,11 +314,12 @@ namespace MVGE_GEN.Terrain
                 return;
             }
 
-            // Aggregate opaque stats directly from sections (no flatten)
+            // Aggregate opaque stats directly from sections (no flatten) and detect any transparent content.
             long internalExposureSum = 0;
             int totalOpaque = 0;
             bool boundsInit = false;
             int gMinX = 0, gMinY = 0, gMinZ = 0, gMaxX = 0, gMaxY = 0, gMaxZ = 0;
+            bool anyTransparent = false;
             for (int sx = 0; sx < sectionsX; sx++)
             {
                 for (int sy = 0; sy < sectionsY; sy++)
@@ -326,10 +327,14 @@ namespace MVGE_GEN.Terrain
                     for (int sz = 0; sz < sectionsZ; sz++)
                     {
                         var sec = sections[sx, sy, sz];
-                        if (sec == null || sec.OpaqueVoxelCount == 0) continue; // NonAirCount holds opaque count
-                        totalOpaque += sec.OpaqueVoxelCount;
-                        internalExposureSum += sec.InternalExposure;
-                        if (sec.HasBounds)
+                        if (sec == null) continue;
+                        if (sec.OpaqueVoxelCount > 0)
+                        {
+                            totalOpaque += sec.OpaqueVoxelCount;
+                            internalExposureSum += sec.InternalExposure;
+                        }
+                        if (!anyTransparent && sec.TransparentCount > 0) anyTransparent = true;
+                        if (sec.HasBounds && sec.OpaqueVoxelCount > 0)
                         {
                             int baseX = sx * Section.SECTION_SIZE;
                             int baseY = sy * Section.SECTION_SIZE;
@@ -362,7 +367,8 @@ namespace MVGE_GEN.Terrain
                 ZNonEmpty = totalOpaque > 0 ? dimZ : 0,
                 HasStats = boundsInit
             };
-            if (totalOpaque == 0) return;
+            if (totalOpaque == 0 && !anyTransparent) return;
+
             var prerender = BuildPrerenderData(BuildSectionDescriptors());
             chunkRender = new ChunkRender(prerender);
         }

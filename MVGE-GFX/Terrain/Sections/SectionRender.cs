@@ -33,8 +33,8 @@ namespace MVGE_GFX.Terrain.Sections
         //  opaqueOffsets:   opaqueFaceCount * 3 bytes (x,y,z) block coordinates
         //  opaqueTileIndices: opaqueFaceCount uint tile index into atlas
         //  opaqueFaceDirs:  opaqueFaceCount bytes (0..5) orientation (LEFT,RIGHT,BOTTOM,TOP,BACK,FRONT)
-        //  transparentFaceCount: number of transparent faces (instances) (placeholder for future logic)
-        //  transparentOffsets / transparentTileIndices / transparentFaceDirs: empty or populated later
+        //  transparentFaceCount: number of transparent faces (instances)
+        //  transparentOffsets / transparentTileIndices / transparentFaceDirs
         public void Build(
             out int opaqueFaceCount,
             out byte[] opaqueOffsets,
@@ -125,10 +125,15 @@ namespace MVGE_GFX.Terrain.Sections
             transparentFaceDirs = transparentFaceDirList.ToArray();
         }
 
-        // Fallback brute-force scan emitting face instances only
+        // Fallback brute-force scan emitting face instances for opaque AND (new) transparent blocks.
+        // Transparent emission rules (current commit placeholder):
+        //   * A transparent block emits a face only when adjacent cell is air (0) or a *different* transparent block id.
+        //   * Faces against opaque neighbors are culled (opaque occludes).
+        //   * Faces shared between identical transparent ids are culled.
         private void FallbackSectionScan(ref SectionPrerenderDesc desc, int sx, int sy, int sz, int S,
                                          int maxX, int maxY, int maxZ,
-                                         List<byte> offsetList, List<uint> tileIndexList, List<byte> faceDirList)
+                                         List<byte> opaqueOffsetList, List<uint> opaqueTileIndexList, List<byte> opaqueFaceDirList,
+                                         List<byte> transparentOffsetList, List<uint> transparentTileIndexList, List<byte> transparentFaceDirList)
         {
             int baseX = sx * S; int baseY = sy * S; int baseZ = sz * S;
             int endX = Math.Min(baseX + S, maxX);
@@ -150,6 +155,7 @@ namespace MVGE_GFX.Terrain.Sections
             var nNegY = data.NeighborPlaneNegY; var nPosY = data.NeighborPlanePosY;
             var nNegZ = data.NeighborPlaneNegZ; var nPosZ = data.NeighborPlanePosZ;
 
+            // ---------------- OPAQUE PASS ----------------
             for (int x = baseX; x < endX; x++)
             {
                 for (int y = baseY; y < endY; y++)
@@ -157,26 +163,117 @@ namespace MVGE_GFX.Terrain.Sections
                     for (int z = baseZ; z < endZ; z++)
                     {
                         ushort block = GetBlock(x, y, z);
-                        if (!Occludes(block)) continue; // only opaque block faces emitted in fallback
+                        if (!Occludes(block)) continue;
 
                         // LEFT (-X)
                         if ((x == 0 && !PlaneBit(nNegX, z * maxY + y)) || (x > 0 && !Occludes(GetBlock(x - 1, y, z))))
-                            EmitFaceInstance(block, 0, x, y, z, offsetList, tileIndexList, faceDirList);
+                            EmitFaceInstance(block, 0, x, y, z, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
                         // RIGHT (+X)
                         if ((x == maxX - 1 && !PlaneBit(nPosX, z * maxY + y)) || (x < maxX - 1 && !Occludes(GetBlock(x + 1, y, z))))
-                            EmitFaceInstance(block, 1, x, y, z, offsetList, tileIndexList, faceDirList);
+                            EmitFaceInstance(block, 1, x, y, z, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
                         // BOTTOM (-Y)
                         if ((y == 0 && !PlaneBit(nNegY, x * maxZ + z)) || (y > 0 && !Occludes(GetBlock(x, y - 1, z))))
-                            EmitFaceInstance(block, 2, x, y, z, offsetList, tileIndexList, faceDirList);
+                            EmitFaceInstance(block, 2, x, y, z, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
                         // TOP (+Y)
                         if ((y == maxY - 1 && !PlaneBit(nPosY, x * maxZ + z)) || (y < maxY - 1 && !Occludes(GetBlock(x, y + 1, z))))
-                            EmitFaceInstance(block, 3, x, y, z, offsetList, tileIndexList, faceDirList);
+                            EmitFaceInstance(block, 3, x, y, z, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
                         // BACK (-Z)
                         if ((z == 0 && !PlaneBit(nNegZ, x * maxY + y)) || (z > 0 && !Occludes(GetBlock(x, y, z - 1))))
-                            EmitFaceInstance(block, 4, x, y, z, offsetList, tileIndexList, faceDirList);
+                            EmitFaceInstance(block, 4, x, y, z, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
                         // FRONT (+Z)
                         if ((z == maxZ - 1 && !PlaneBit(nPosZ, x * maxY + y)) || (z < maxZ - 1 && !Occludes(GetBlock(x, y, z + 1))))
-                            EmitFaceInstance(block, 5, x, y, z, offsetList, tileIndexList, faceDirList);
+                            EmitFaceInstance(block, 5, x, y, z, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
+                    }
+                }
+            }
+
+            // Neighbor transparent planes (ids) for boundary suppression
+            var tNegX = data.NeighborTransparentPlaneNegX; var tPosX = data.NeighborTransparentPlanePosX;
+            var tNegY = data.NeighborTransparentPlaneNegY; var tPosY = data.NeighborTransparentPlanePosY;
+            var tNegZ = data.NeighborTransparentPlaneNegZ; var tPosZ = data.NeighborTransparentPlanePosZ;
+
+            // ---------------- TRANSPARENT PASS ----------------
+            for (int x = baseX; x < endX; x++)
+            {
+                for (int y = baseY; y < endY; y++)
+                {
+                    for (int z = baseZ; z < endZ; z++)
+                    {
+                        ushort block = GetBlock(x, y, z);
+                        if (block == 0 || TerrainLoader.IsOpaque(block)) continue; // only non-air transparent blocks
+
+                        // Helper local function for transparency visibility rule.
+                        bool TransparentFaceVisible(int nx, int ny, int nz)
+                        {
+                            if (nx < 0)
+                            {
+                                int idx = z * maxY + y;
+                                if (PlaneBit(nNegX, idx)) return false; // opaque neighbor
+                                if (tNegX != null && (uint)idx < (uint)tNegX.Length && tNegX[idx] == block) return false; // same transparent id
+                                return true;
+                            }
+                            if (nx >= maxX)
+                            {
+                                int idx = z * maxY + y;
+                                if (PlaneBit(nPosX, idx)) return false;
+                                if (tPosX != null && (uint)idx < (uint)tPosX.Length && tPosX[idx] == block) return false;
+                                return true;
+                            }
+                            if (ny < 0)
+                            {
+                                int idx = x * maxZ + z;
+                                if (PlaneBit(nNegY, idx)) return false;
+                                if (tNegY != null && (uint)idx < (uint)tNegY.Length && tNegY[idx] == block) return false;
+                                return true;
+                            }
+                            if (ny >= maxY)
+                            {
+                                int idx = x * maxZ + z;
+                                if (PlaneBit(nPosY, idx)) return false;
+                                if (tPosY != null && (uint)idx < (uint)tPosY.Length && tPosY[idx] == block) return false;
+                                return true;
+                            }
+                            if (nz < 0)
+                            {
+                                int idx = x * maxY + y;
+                                if (PlaneBit(nNegZ, idx)) return false;
+                                if (tNegZ != null && (uint)idx < (uint)tNegZ.Length && tNegZ[idx] == block) return false;
+                                return true;
+                            }
+                            if (nz >= maxZ)
+                            {
+                                int idx = x * maxY + y;
+                                if (PlaneBit(nPosZ, idx)) return false;
+                                if (tPosZ != null && (uint)idx < (uint)tPosZ.Length && tPosZ[idx] == block) return false;
+                                return true;
+                            }
+                            // inside chunk: reuse local neighbor logic
+                            ushort nb = GetBlock(nx, ny, nz);
+                            if (nb == 0) return true; // air
+                            bool nbTransparent = !TerrainLoader.IsOpaque(nb);
+                            if (!nbTransparent) return false; // opaque neighbor hides
+                            if (nb == block) return false; // same transparent id (culled)
+                            return true; // different transparent id -> visible seam
+                        }
+
+                        // -X
+                        if (TransparentFaceVisible(x - 1, y, z))
+                            EmitFaceInstance(block, 0, x, y, z, transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
+                        // +X
+                        if (TransparentFaceVisible(x + 1, y, z))
+                            EmitFaceInstance(block, 1, x, y, z, transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
+                        // -Y
+                        if (TransparentFaceVisible(x, y - 1, z))
+                            EmitFaceInstance(block, 2, x, y, z, transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
+                        // +Y
+                        if (TransparentFaceVisible(x, y + 1, z))
+                            EmitFaceInstance(block, 3, x, y, z, transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
+                        // -Z
+                        if (TransparentFaceVisible(x, y, z - 1))
+                            EmitFaceInstance(block, 4, x, y, z, transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
+                        // +Z
+                        if (TransparentFaceVisible(x, y, z + 1))
+                            EmitFaceInstance(block, 5, x, y, z, transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
                     }
                 }
             }
