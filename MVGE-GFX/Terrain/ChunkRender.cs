@@ -36,8 +36,9 @@ namespace MVGE_GFX.Terrain
         private byte[] transparentInstanceFaceDirBuffer;   // 1 byte per face (transparent)
         private int transparentInstanceCount;              // transparent instance count
 
-        private VAO chunkVAO;
-        private VBO quadPosVBO;
+        private VAO opaqueVAO;                // opaque pass VAO
+        private VAO transparentVAO;           // transparent pass VAO
+        private VBO quadPosVBO;               // shared static quad positions (attrib 0)
         private VBO instanceOffsetVBO;        // opaque offsets (attrib 2)
         private VBO instanceTileIndexVBO;     // opaque tile indices (attrib 3)
         private VBO instanceFaceDirVBO;       // opaque face dirs (attrib 4)
@@ -45,6 +46,18 @@ namespace MVGE_GFX.Terrain
         private VBO transparentTileIndexVBO;  // transparent tile indices (attrib 6)
         private VBO transparentFaceDirVBO;    // transparent face dirs (attrib 7)
         private IBO quadIndexIBO; // index buffer for the shared quad
+
+        // Built flags for each buffer object; ensure deletion only when created.
+        private bool opaqueVaoBuilt;
+        private bool transparentVaoBuilt;
+        private bool quadPosBuilt;
+        private bool instanceOffsetBuilt;
+        private bool instanceTileIndexBuilt;
+        private bool instanceFaceDirBuilt;
+        private bool transparentOffsetBuilt;
+        private bool transparentTileIndexBuilt;
+        private bool transparentFaceDirBuilt;
+        private bool quadIndexBuilt;
 
         public static BlockTextureAtlas terrainTextureAtlas { get; set; }
 
@@ -101,21 +114,32 @@ namespace MVGE_GFX.Terrain
         public void Build()
         {
             if (isBuilt) return;
-            chunkVAO = new VAO(); chunkVAO.Bind();
 
-            // Static quad position VBO (location 0)
-            quadPosVBO = new VBO(QuadPositions, QuadPositions.Length); quadPosVBO.Bind();
-            chunkVAO.LinkToVAO(0, 3, VertexAttribPointerType.UnsignedByte, false, quadPosVBO);
+            // Shared index buffer (bind per-VAO after VAO bind to attach)
+            quadIndexIBO = new IBO(QuadIndices, QuadIndices.Length);
+            quadIndexBuilt = true;
 
-            // Opaque instance attributes (only if there are opaque instances)
+            // Shared static quad position VBO
+            quadPosVBO = new VBO(QuadPositions, QuadPositions.Length);
+            quadPosBuilt = true;
+
+            // ----- OPAQUE VAO -----
             if (instanceCount > 0)
             {
-                // Instance offsets (opaque, location 2)
-                instanceOffsetVBO = new VBO(instanceOffsetBuffer ?? Array.Empty<byte>(), instanceOffsetBuffer?.Length ?? 0); instanceOffsetVBO.Bind();
-                chunkVAO.LinkToVAO(2, 3, VertexAttribPointerType.UnsignedByte, false, instanceOffsetVBO);
-                chunkVAO.SetDivisor(2, 1);
+                opaqueVAO = new VAO();
+                opaqueVAO.Bind();
 
-                // Instance tile indices (opaque, location 3) - pack uints into byte[] for VBO
+                // position (location 0)
+                quadPosVBO.Bind();
+                opaqueVAO.LinkToVAO(0, 3, VertexAttribPointerType.UnsignedByte, false, quadPosVBO);
+
+                // Instance offsets (location 2)
+                instanceOffsetVBO = new VBO(instanceOffsetBuffer ?? Array.Empty<byte>(), instanceOffsetBuffer?.Length ?? 0);
+                opaqueVAO.LinkToVAO(2, 3, VertexAttribPointerType.UnsignedByte, false, instanceOffsetVBO);
+                opaqueVAO.SetDivisor(2, 1);
+                instanceOffsetBuilt = true;
+
+                // Tile indices (location 3)
                 byte[] tileBytes;
                 if (instanceTileIndexBuffer == null || instanceTileIndexBuffer.Length == 0)
                 {
@@ -126,26 +150,42 @@ namespace MVGE_GFX.Terrain
                     tileBytes = new byte[instanceTileIndexBuffer.Length * sizeof(uint)];
                     System.Buffer.BlockCopy(instanceTileIndexBuffer, 0, tileBytes, 0, tileBytes.Length);
                 }
-                instanceTileIndexVBO = new VBO(tileBytes, tileBytes.Length); instanceTileIndexVBO.Bind();
-                chunkVAO.LinkIntegerToVAO(3, 1, VertexAttribIntegerType.UnsignedInt, instanceTileIndexVBO);
-                chunkVAO.SetDivisor(3, 1);
+                instanceTileIndexVBO = new VBO(tileBytes, tileBytes.Length);
+                opaqueVAO.LinkIntegerToVAO(3, 1, VertexAttribIntegerType.UnsignedInt, instanceTileIndexVBO);
+                opaqueVAO.SetDivisor(3, 1);
+                instanceTileIndexBuilt = true;
 
-                // Instance face directions (opaque, location 4) 
+                // Face dirs (location 4)
                 var faceDirBytes = instanceFaceDirBuffer ?? Array.Empty<byte>();
-                instanceFaceDirVBO = new VBO(faceDirBytes, faceDirBytes.Length); instanceFaceDirVBO.Bind();
-                chunkVAO.LinkIntegerToVAO(4, 1, VertexAttribIntegerType.UnsignedByte, instanceFaceDirVBO);
-                chunkVAO.SetDivisor(4, 1);
+                instanceFaceDirVBO = new VBO(faceDirBytes, faceDirBytes.Length);
+                opaqueVAO.LinkIntegerToVAO(4, 1, VertexAttribIntegerType.UnsignedByte, instanceFaceDirVBO);
+                opaqueVAO.SetDivisor(4, 1);
+                instanceFaceDirBuilt = true;
+
+                // Attach IBO to this VAO
+                quadIndexIBO.Bind();
+
+                // Mark this VAO as built for safe deletion later.
+                opaqueVaoBuilt = true;
             }
 
-            // Transparent instance attribute set (locations 5,6,7) only when we actually have transparent faces.
+            // ----- TRANSPARENT VAO -----
             if (transparentInstanceCount > 0)
             {
-                // Offsets (transparent, location 5)
-                transparentOffsetVBO = new VBO(transparentInstanceOffsetBuffer ?? Array.Empty<byte>(), transparentInstanceOffsetBuffer?.Length ?? 0); transparentOffsetVBO.Bind();
-                chunkVAO.LinkToVAO(5, 3, VertexAttribPointerType.UnsignedByte, false, transparentOffsetVBO);
-                chunkVAO.SetDivisor(5, 1);
+                transparentVAO = new VAO();
+                transparentVAO.Bind();
 
-                // Tile indices (transparent, location 6)
+                // position (location 0)
+                quadPosVBO.Bind();
+                transparentVAO.LinkToVAO(0, 3, VertexAttribPointerType.UnsignedByte, false, quadPosVBO);
+
+                // Offsets (location 5)
+                transparentOffsetVBO = new VBO(transparentInstanceOffsetBuffer ?? Array.Empty<byte>(), transparentInstanceOffsetBuffer?.Length ?? 0);
+                transparentVAO.LinkToVAO(5, 3, VertexAttribPointerType.UnsignedByte, false, transparentOffsetVBO);
+                transparentVAO.SetDivisor(5, 1);
+                transparentOffsetBuilt = true;
+
+                // Tile indices (location 6)
                 byte[] tTileBytes;
                 if (transparentInstanceTileIndexBuffer == null || transparentInstanceTileIndexBuffer.Length == 0)
                 {
@@ -156,19 +196,24 @@ namespace MVGE_GFX.Terrain
                     tTileBytes = new byte[transparentInstanceTileIndexBuffer.Length * sizeof(uint)];
                     System.Buffer.BlockCopy(transparentInstanceTileIndexBuffer, 0, tTileBytes, 0, tTileBytes.Length);
                 }
-                transparentTileIndexVBO = new VBO(tTileBytes, tTileBytes.Length); transparentTileIndexVBO.Bind();
-                chunkVAO.LinkIntegerToVAO(6, 1, VertexAttribIntegerType.UnsignedInt, transparentTileIndexVBO);
-                chunkVAO.SetDivisor(6, 1);
+                transparentTileIndexVBO = new VBO(tTileBytes, tTileBytes.Length);
+                transparentVAO.LinkIntegerToVAO(6, 1, VertexAttribIntegerType.UnsignedInt, transparentTileIndexVBO);
+                transparentVAO.SetDivisor(6, 1);
+                transparentTileIndexBuilt = true;
 
-                // Face dirs (transparent, location 7)
+                // Face dirs (location 7)
                 var tFaceDirBytes = transparentInstanceFaceDirBuffer ?? Array.Empty<byte>();
-                transparentFaceDirVBO = new VBO(tFaceDirBytes, tFaceDirBytes.Length); transparentFaceDirVBO.Bind();
-                chunkVAO.LinkIntegerToVAO(7, 1, VertexAttribIntegerType.UnsignedByte, transparentFaceDirVBO);
-                chunkVAO.SetDivisor(7, 1);
-            }
+                transparentFaceDirVBO = new VBO(tFaceDirBytes, tFaceDirBytes.Length);
+                transparentVAO.LinkIntegerToVAO(7, 1, VertexAttribIntegerType.UnsignedByte, transparentFaceDirVBO);
+                transparentVAO.SetDivisor(7, 1);
+                transparentFaceDirBuilt = true;
 
-            // Index buffer for quad
-            quadIndexIBO = new IBO(QuadIndices, QuadIndices.Length);
+                // Attach IBO to this VAO
+                quadIndexIBO.Bind();
+
+                // Mark this VAO as built for safe deletion later.
+                transparentVaoBuilt = true;
+            }
 
             isBuilt = true;
         }
@@ -178,8 +223,6 @@ namespace MVGE_GFX.Terrain
             ProcessPendingDeletes();
             if (!isBuilt) Build();
 
-            // Only skip when there is nothing at all to draw (no opaque AND no transparent),
-            // or when the chunk was classified as fully occluded.
             if (fullyOccluded || (instanceCount == 0 && transparentInstanceCount == 0))
                 return;
 
@@ -188,23 +231,27 @@ namespace MVGE_GFX.Terrain
             program.SetUniform("chunkPosition", adjustedChunkPosition);
             program.SetUniform("tilesX", terrainTextureAtlas.tilesX);
             program.SetUniform("tilesY", terrainTextureAtlas.tilesY);
-            chunkVAO.Bind();
-            quadIndexIBO.Bind();
 
-            // ----- OPAQUE PASS (only if we actually have opaque instances) -----
-            if (instanceCount > 0)
+            // ----- OPAQUE PASS -----
+            if (instanceCount > 0 && opaqueVAO != null)
             {
-                program.SetUniform("useTransparentList", 0); // use opaque attribute set (locations 2,3,4)
+                opaqueVAO.Bind();
+                quadIndexIBO.Bind(); // ensure IBO bound to this VAO if driver disassociates
+
+                program.SetUniform("useTransparentList", 0f);
                 GL.DrawElementsInstanced(PrimitiveType.Triangles, 6, DrawElementsType.UnsignedShort, IntPtr.Zero, instanceCount);
             }
 
             // ----- TRANSPARENT PASS -----
-            if (transparentInstanceCount > 0)
+            if (transparentInstanceCount > 0 && transparentVAO != null)
             {
+                transparentVAO.Bind();
+                quadIndexIBO.Bind(); // ensure IBO bound to this VAO
+
                 GL.Enable(EnableCap.Blend);
                 GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
                 GL.DepthMask(false);
-                program.SetUniform("useTransparentList", 1); // use transparent attribute set (locations 5,6,7)
+                program.SetUniform("useTransparentList", 1f);
                 GL.DrawElementsInstanced(PrimitiveType.Triangles, 6, DrawElementsType.UnsignedShort, IntPtr.Zero, transparentInstanceCount);
                 GL.DepthMask(true);
                 GL.Disable(EnableCap.Blend);
@@ -225,15 +272,18 @@ namespace MVGE_GFX.Terrain
         private void DeleteGL()
         {
             if (!isBuilt) return;
-            chunkVAO.Delete();
-            quadPosVBO.Delete();
-            instanceOffsetVBO?.Delete();
-            instanceTileIndexVBO?.Delete();
-            instanceFaceDirVBO?.Delete();
-            transparentOffsetVBO?.Delete();
-            transparentTileIndexVBO?.Delete();
-            transparentFaceDirVBO?.Delete();
-            quadIndexIBO.Delete();
+
+            if (opaqueVaoBuilt) { opaqueVAO.Delete(); opaqueVAO = null; opaqueVaoBuilt = false; }
+            if (transparentVaoBuilt) { transparentVAO.Delete(); transparentVAO = null; transparentVaoBuilt = false; }
+            if (quadPosBuilt) { quadPosVBO.Delete(); quadPosVBO = null; quadPosBuilt = false; }
+            if (instanceOffsetBuilt) { instanceOffsetVBO.Delete(); instanceOffsetVBO = null; instanceOffsetBuilt = false; }
+            if (instanceTileIndexBuilt) { instanceTileIndexVBO.Delete(); instanceTileIndexVBO = null; instanceTileIndexBuilt = false; }
+            if (instanceFaceDirBuilt) { instanceFaceDirVBO.Delete(); instanceFaceDirVBO = null; instanceFaceDirBuilt = false; }
+            if (transparentOffsetBuilt) { transparentOffsetVBO.Delete(); transparentOffsetVBO = null; transparentOffsetBuilt = false; }
+            if (transparentTileIndexBuilt) { transparentTileIndexVBO.Delete(); transparentTileIndexVBO = null; transparentTileIndexBuilt = false; }
+            if (transparentFaceDirBuilt) { transparentFaceDirVBO.Delete(); transparentFaceDirVBO = null; transparentFaceDirBuilt = false; }
+            if (quadIndexBuilt) { quadIndexIBO.Delete(); quadIndexIBO = null; quadIndexBuilt = false; }
+
             isBuilt = false;
         }
     }

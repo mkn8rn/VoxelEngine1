@@ -47,6 +47,15 @@ namespace MVGE_GFX.BufferObjects
             Unbind();
         }
 
+        // enable/disable a vertex attribute array on this VAO.
+        public void SetAttribEnabled(int location, bool enabled)
+        {
+            Bind();
+            if (enabled) GL.EnableVertexAttribArray(location);
+            else GL.DisableVertexAttribArray(location);
+            Unbind();
+        }
+
         // Bind this VAO.
         public void Bind()
         {

@@ -9,9 +9,6 @@ layout (location = 3) in uint iTileIndex;   // tile index in atlas
 layout (location = 4) in uint iFaceDir;     // face orientation: 0=L,1=R,2=Bottom,3=Top,4=Back,5=Front
 
 // Transparent per-instance attributes
-// These are optional; when not used they can be left unbound. The CPU can set
-// useTransparentList=true and bind buffers to locations 5/6/7 to draw the
-// transparent instance set without rebinding the opaque buffers.
 layout (location = 5) in vec3 tOffset;      // transparent face position
 layout (location = 6) in uint tTileIndex;   // transparent tile index
 layout (location = 7) in uint tFaceDir;     // transparent face orientation
@@ -27,7 +24,8 @@ uniform float tilesX;       // atlas tiles horizontally
 uniform float tilesY;       // atlas tiles vertically
 
 // Switch selecting which instance attribute list to use this draw call.
-uniform bool useTransparentList = false;
+// 0.0 => opaque attribute set (2/3/4). Non-zero => transparent set (5/6/7).
+uniform float useTransparentList; // 0.0 or 1.0
 
 // Outward orientation mapping
 // FRONT(+Z)=5, BACK(-Z)=4, RIGHT(+X)=1, LEFT(-X)=0, TOP(+Y)=3, BOTTOM(-Y)=2
@@ -50,10 +48,11 @@ void main()
     vec2 baseUV = aPosition.xy;
 
     // Select attribute set based on uniform
-    uint tileIndex = useTransparentList ? tTileIndex : iTileIndex;
-    uint faceDir = useTransparentList ? tFaceDir : iFaceDir;
-    vec3 instanceOffset = useTransparentList ? tOffset : iOffset;
-
+    bool useT = (useTransparentList > 0.5);
+    uint tileIndex = useT ? tTileIndex : iTileIndex;
+    uint faceDir = useT ? tFaceDir : iFaceDir;
+    vec3 instanceOffset = useT ? tOffset : iOffset;
+    
     uint tx = tileIndex % uint(tilesX);
     uint ty = tileIndex / uint(tilesX);
     vec2 tileOffset = vec2(float(tx), float(ty));
