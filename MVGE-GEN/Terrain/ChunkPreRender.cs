@@ -56,6 +56,16 @@ namespace MVGE_GEN.Terrain
         internal ushort[] NeighborTransparentPlaneNegZFace; // neighbor -Z +Z transparent ids
         internal ushort[] NeighborTransparentPlanePosZFace; // neighbor +Z -Z transparent ids
 
+        const int S = Section.SECTION_SIZE;
+
+        static void SetPlaneBit(ulong[] plane, int index)
+        {
+            if (plane == null) return;
+            int w = index >> 6;
+            int b = index & 63;
+            plane[w] |= 1UL << b;
+        }
+
         private void EnsurePlaneArrays()
         {
             // allocate only once; lengths fixed by dimensions

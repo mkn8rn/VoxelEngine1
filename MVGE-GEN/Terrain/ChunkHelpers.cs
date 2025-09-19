@@ -107,7 +107,47 @@ namespace MVGE_GEN.Terrain
                 arr[index] = id; // store id directly
             }
 
-            bool anyTransparentBoundary = false; // track if we actually encountered any transparent boundary voxels
+            // Decode a voxel id at (lx,ly,lz) for any section representation
+            static ushort GetSectionVoxelId(Section sec, int lx, int ly, int lz)
+            {
+                if (sec == null) return 0;
+                switch (sec.Kind)
+                {
+                    case Section.RepresentationKind.Empty:
+                        return 0;
+                    case Section.RepresentationKind.Uniform:
+                        return sec.UniformBlockId;
+                    case Section.RepresentationKind.Expanded:
+                        {
+                            var dense = sec.ExpandedDense;
+                            if (dense == null) return 0;
+                            int li = ((lz * 16 + lx) * 16) + ly;
+                            return dense[li];
+                        }
+                    case Section.RepresentationKind.Packed:
+                    case Section.RepresentationKind.MultiPacked:
+                        {
+                            var bits = sec.BitData;
+                            var pal = sec.Palette;
+                            int bpi = sec.BitsPerIndex;
+                            if (bits == null || pal == null || pal.Count == 0 || bpi <= 0) return 0;
+                            int li = ((lz * 16 + lx) * 16) + ly;
+                            long bitPos = (long)li * bpi;
+                            int w = (int)(bitPos >> 5);
+                            int off = (int)(bitPos & 31);
+                            if ((uint)w >= (uint)bits.Length) return 0;
+                            uint v = bits[w] >> off;
+                            int rem = 32 - off;
+                            if (rem < bpi && w + 1 < bits.Length) v |= bits[w + 1] << rem;
+                            int mask = (1 << bpi) - 1;
+                            int pi = (int)(v & (uint)mask);
+                            if ((uint)pi >= (uint)pal.Count) return 0;
+                            return pal[pi];
+                        }
+                    default:
+                        return 0;
+                }
+            }
 
             // --- -X / +X (YZ planes) ---
             if (sectionsX > 0)
@@ -156,60 +196,82 @@ namespace MVGE_GEN.Terrain
                                     }
                                 }
                             }
+                            else
+                            {
+                                // Fallback: per-voxel decode for boundary occupancy (-X) to ensure correctness for all kinds
+                                for (int localZ = 0; localZ < S; localZ++)
+                                {
+                                    for (int localY = 0; localY < S; localY++)
+                                    {
+                                        ushort id = GetSectionVoxelId(secNeg, 0, localY, localZ);
+                                        if (id != 0 && TerrainLoader.IsOpaque(id))
+                                        {
+                                            int globalZ = sz * S + localZ;
+                                            int globalY = sy * S + localY;
+                                            int globalIdx = globalZ * dimY + globalY;
+                                            SetPlaneBit(PlaneNegX, globalIdx);
+                                        }
+                                    }
+                                }
+                            }
 
-                            // Transparent boundary ids on -X face
-                            if (secNeg != null)
+                            // Transparent boundary ids on -X face (always derived for any representation)
                             {
                                 // iterate voxels at x=0 for transparent ids
                                 bool uniformTransparent = secNeg.Kind == Section.RepresentationKind.Uniform && secNeg.UniformBlockId != Section.AIR && !TerrainLoader.IsOpaque(secNeg.UniformBlockId);
-                                if (uniformTransparent || secNeg.TransparentFaceNegXBits != null)
+                                if (uniformTransparent)
                                 {
                                     EnsureTransparentArrays();
-                                    anyTransparentBoundary = true;
-                                    if (uniformTransparent)
-                                    {
-                                        // fill all entries with uniform id
-                                        for (int localZ = 0; localZ < S; localZ++)
-                                            for (int localY = 0; localY < S; localY++)
-                                            {
-                                                int globalZ = sz * S + localZ;
-                                                int globalY = sy * S + localY;
-                                                int globalIdx = globalZ * dimY + globalY;
-                                                RecordTransparent(TransparentPlaneNegX, globalIdx, secNeg.UniformBlockId);
-                                            }
-                                    }
-                                    else if (secNeg.TransparentFaceNegXBits != null)
-                                    {
-                                        var tBits = secNeg.TransparentFaceNegXBits;
-                                        for (int wi = 0; wi < tBits.Length; wi++)
+                                    for (int localZ = 0; localZ < S; localZ++)
+                                        for (int localY = 0; localY < S; localY++)
                                         {
-                                            ulong word = tBits[wi];
-                                            while (word != 0)
-                                            {
-                                                int tz = System.Numerics.BitOperations.TrailingZeroCount(word);
-                                                int localIndex = wi * 64 + tz;
-                                                if (localIndex >= 256) break;
-                                                int localZ = localIndex / S;
-                                                int localY = localIndex % S;
-                                                int globalZ = sz * S + localZ;
-                                                int globalY = sy * S + localY;
-                                                int globalIdx = globalZ * dimY + globalY;
-                                                // decode id (opaque mask excludes transparent; need voxel decode path)
-                                                ushort id = 0;
-                                                if (secNeg.Kind == Section.RepresentationKind.Uniform)
-                                                    id = secNeg.UniformBlockId;
-                                                else if (secNeg.Kind == Section.RepresentationKind.Expanded && secNeg.ExpandedDense != null)
-                                                {
-                                                    int li = ((localZ * 16 + 0) * 16) + localY; // x fixed at 0
-                                                    id = secNeg.ExpandedDense[li];
-                                                }
-                                                // For packed/multipacked we skip precise decode keeping zero if not resolvable.
-                                                if (id != 0 && !TerrainLoader.IsOpaque(id))
-                                                    RecordTransparent(TransparentPlaneNegX, globalIdx, id);
-                                                word &= word - 1;
-                                            }
+                                            int globalZ = sz * S + localZ;
+                                            int globalY = sy * S + localY;
+                                            int globalIdx = globalZ * dimY + globalY;
+                                            RecordTransparent(TransparentPlaneNegX, globalIdx, secNeg.UniformBlockId);
+                                        }
+                                }
+                                else if (secNeg?.TransparentFaceNegXBits != null)
+                                {
+                                    EnsureTransparentArrays();
+                                    var tBits = secNeg.TransparentFaceNegXBits;
+                                    for (int wi = 0; wi < tBits.Length; wi++)
+                                    {
+                                        ulong word = tBits[wi];
+                                        while (word != 0)
+                                        {
+                                            int tz = System.Numerics.BitOperations.TrailingZeroCount(word);
+                                            int localIndex = wi * 64 + tz;
+                                            if (localIndex >= 256) break;
+                                            int localZ = localIndex / S;
+                                            int localY = localIndex % S;
+                                            int globalZ = sz * S + localZ;
+                                            int globalY = sy * S + localY;
+                                            int globalIdx = globalZ * dimY + globalY;
+
+                                            ushort id = GetSectionVoxelId(secNeg, 0, localY, localZ); // x fixed at 0
+                                            if (id != 0 && !TerrainLoader.IsOpaque(id))
+                                                RecordTransparent(TransparentPlaneNegX, globalIdx, id);
+                                            word &= word - 1;
                                         }
                                     }
+                                }
+                                else
+                                {
+                                    // Fallback: per-voxel decode boundary transparency when no mask exists
+                                    for (int localZ = 0; localZ < S; localZ++)
+                                        for (int localY = 0; localY < S; localY++)
+                                        {
+                                            ushort id = GetSectionVoxelId(secNeg, 0, localY, localZ);
+                                            if (id != 0 && !TerrainLoader.IsOpaque(id))
+                                            {
+                                                EnsureTransparentArrays();
+                                                int globalZ = sz * S + localZ;
+                                                int globalY = sy * S + localY;
+                                                int globalIdx = globalZ * dimY + globalY;
+                                                RecordTransparent(TransparentPlaneNegX, globalIdx, id);
+                                            }
+                                        }
                                 }
                             }
                         }
@@ -250,15 +312,31 @@ namespace MVGE_GEN.Terrain
                                     }
                                 }
                             }
+                            else
+                            {
+                                // Fallback: per-voxel decode for boundary occupancy (+X)
+                                for (int localZ = 0; localZ < S; localZ++)
+                                {
+                                    for (int localY = 0; localY < S; localY++)
+                                    {
+                                        ushort id = GetSectionVoxelId(secPos, 15, localY, localZ);
+                                        if (id != 0 && TerrainLoader.IsOpaque(id))
+                                        {
+                                            int globalZ = sz * S + localZ;
+                                            int globalY = sy * S + localY;
+                                            int globalIdx = globalZ * dimY + globalY;
+                                            SetPlaneBit(PlanePosX, globalIdx);
+                                        }
+                                    }
+                                }
+                            }
 
                             // Transparent boundary ids on +X face
-                            bool uniformTransparentPos = secPos.Kind == Section.RepresentationKind.Uniform && secPos.UniformBlockId != Section.AIR && !TerrainLoader.IsOpaque(secPos.UniformBlockId);
-                            if (uniformTransparentPos || secPos.TransparentFacePosXBits != null)
                             {
-                                EnsureTransparentArrays();
-                                anyTransparentBoundary = true;
+                                bool uniformTransparentPos = secPos.Kind == Section.RepresentationKind.Uniform && secPos.UniformBlockId != Section.AIR && !TerrainLoader.IsOpaque(secPos.UniformBlockId);
                                 if (uniformTransparentPos)
                                 {
+                                    EnsureTransparentArrays();
                                     for (int localZ = 0; localZ < S; localZ++)
                                         for (int localY = 0; localY < S; localY++)
                                         {
@@ -270,6 +348,7 @@ namespace MVGE_GEN.Terrain
                                 }
                                 else if (secPos.TransparentFacePosXBits != null)
                                 {
+                                    EnsureTransparentArrays();
                                     var tBits = secPos.TransparentFacePosXBits;
                                     for (int wi = 0; wi < tBits.Length; wi++)
                                     {
@@ -284,19 +363,29 @@ namespace MVGE_GEN.Terrain
                                             int globalZ = sz * S + localZ;
                                             int globalY = sy * S + localY;
                                             int globalIdx = globalZ * dimY + globalY;
-                                            ushort id = 0;
-                                            if (secPos.Kind == Section.RepresentationKind.Uniform)
-                                                id = secPos.UniformBlockId;
-                                            else if (secPos.Kind == Section.RepresentationKind.Expanded && secPos.ExpandedDense != null)
-                                            {
-                                                int li = ((localZ * 16 + 15) * 16) + localY; // x fixed at 15
-                                                id = secPos.ExpandedDense[li];
-                                            }
+
+                                            ushort id = GetSectionVoxelId(secPos, 15, localY, localZ); // x fixed at 15
                                             if (id != 0 && !TerrainLoader.IsOpaque(id))
                                                 RecordTransparent(TransparentPlanePosX, globalIdx, id);
                                             word &= word - 1;
                                         }
                                     }
+                                }
+                                else
+                                {
+                                    for (int localZ = 0; localZ < S; localZ++)
+                                        for (int localY = 0; localY < S; localY++)
+                                        {
+                                            ushort id = GetSectionVoxelId(secPos, 15, localY, localZ);
+                                            if (id != 0 && !TerrainLoader.IsOpaque(id))
+                                            {
+                                                EnsureTransparentArrays();
+                                                int globalZ = sz * S + localZ;
+                                                int globalY = sy * S + localY;
+                                                int globalIdx = globalZ * dimY + globalY;
+                                                RecordTransparent(TransparentPlanePosX, globalIdx, id);
+                                            }
+                                        }
                                 }
                             }
                         }
@@ -349,15 +438,31 @@ namespace MVGE_GEN.Terrain
                                     }
                                 }
                             }
+                            else
+                            {
+                                // Fallback: per-voxel decode for boundary occupancy (-Y)
+                                for (int localX = 0; localX < S; localX++)
+                                {
+                                    for (int localZ = 0; localZ < S; localZ++)
+                                    {
+                                        ushort id = GetSectionVoxelId(secNeg, localX, 0, localZ);
+                                        if (id != 0 && TerrainLoader.IsOpaque(id))
+                                        {
+                                            int globalX = sx * S + localX;
+                                            int globalZ = sz * S + localZ;
+                                            int globalIdx = globalX * dimZ + globalZ;
+                                            SetPlaneBit(PlaneNegY, globalIdx);
+                                        }
+                                    }
+                                }
+                            }
 
                             // Transparent -Y
-                            bool uniformTransparentNegY = secNeg.Kind == Section.RepresentationKind.Uniform && secNeg.UniformBlockId != Section.AIR && !TerrainLoader.IsOpaque(secNeg.UniformBlockId);
-                            if (uniformTransparentNegY || secNeg.TransparentFaceNegYBits != null)
                             {
-                                EnsureTransparentArrays();
-                                anyTransparentBoundary = true;
+                                bool uniformTransparentNegY = secNeg.Kind == Section.RepresentationKind.Uniform && secNeg.UniformBlockId != Section.AIR && !TerrainLoader.IsOpaque(secNeg.UniformBlockId);
                                 if (uniformTransparentNegY)
                                 {
+                                    EnsureTransparentArrays();
                                     for (int localX = 0; localX < S; localX++)
                                         for (int localZ = 0; localZ < S; localZ++)
                                         {
@@ -369,6 +474,7 @@ namespace MVGE_GEN.Terrain
                                 }
                                 else if (secNeg.TransparentFaceNegYBits != null)
                                 {
+                                    EnsureTransparentArrays();
                                     var tBits = secNeg.TransparentFaceNegYBits;
                                     for (int wi = 0; wi < tBits.Length; wi++)
                                     {
@@ -383,19 +489,29 @@ namespace MVGE_GEN.Terrain
                                             int globalX = sx * S + localX;
                                             int globalZ = sz * S + localZ;
                                             int globalIdx = globalX * dimZ + globalZ;
-                                            ushort id = 0;
-                                            if (secNeg.Kind == Section.RepresentationKind.Uniform)
-                                                id = secNeg.UniformBlockId;
-                                            else if (secNeg.Kind == Section.RepresentationKind.Expanded && secNeg.ExpandedDense != null)
-                                            {
-                                                int li = ((localZ * 16 + localX) * 16) + 0; // y fixed at 0
-                                                id = secNeg.ExpandedDense[li];
-                                            }
+
+                                            ushort id = GetSectionVoxelId(secNeg, localX, 0, localZ); // y fixed at 0
                                             if (id != 0 && !TerrainLoader.IsOpaque(id))
                                                 RecordTransparent(TransparentPlaneNegY, globalIdx, id);
                                             word &= word - 1;
                                         }
                                     }
+                                }
+                                else
+                                {
+                                    for (int localX = 0; localX < S; localX++)
+                                        for (int localZ = 0; localZ < S; localZ++)
+                                        {
+                                            ushort id = GetSectionVoxelId(secNeg, localX, 0, localZ);
+                                            if (id != 0 && !TerrainLoader.IsOpaque(id))
+                                            {
+                                                EnsureTransparentArrays();
+                                                int globalX = sx * S + localX;
+                                                int globalZ = sz * S + localZ;
+                                                int globalIdx = globalX * dimZ + globalZ;
+                                                RecordTransparent(TransparentPlaneNegY, globalIdx, id);
+                                            }
+                                        }
                                 }
                             }
                         }
@@ -435,15 +551,31 @@ namespace MVGE_GEN.Terrain
                                     }
                                 }
                             }
+                            else
+                            {
+                                // Fallback: per-voxel decode for boundary occupancy (+Y)
+                                for (int localX = 0; localX < S; localX++)
+                                {
+                                    for (int localZ = 0; localZ < S; localZ++)
+                                    {
+                                        ushort id = GetSectionVoxelId(secPos, localX, 15, localZ);
+                                        if (id != 0 && TerrainLoader.IsOpaque(id))
+                                        {
+                                            int globalX = sx * S + localX;
+                                            int globalZ = sz * S + localZ;
+                                            int globalIdx = globalX * dimZ + globalZ;
+                                            SetPlaneBit(PlanePosY, globalIdx);
+                                        }
+                                    }
+                                }
+                            }
 
                             // Transparent +Y
-                            bool uniformTransparentPosY = secPos.Kind == Section.RepresentationKind.Uniform && secPos.UniformBlockId != Section.AIR && !TerrainLoader.IsOpaque(secPos.UniformBlockId);
-                            if (uniformTransparentPosY || secPos.TransparentFacePosYBits != null)
                             {
-                                EnsureTransparentArrays();
-                                anyTransparentBoundary = true;
+                                bool uniformTransparentPosY = secPos.Kind == Section.RepresentationKind.Uniform && secPos.UniformBlockId != Section.AIR && !TerrainLoader.IsOpaque(secPos.UniformBlockId);
                                 if (uniformTransparentPosY)
                                 {
+                                    EnsureTransparentArrays();
                                     for (int localX = 0; localX < S; localX++)
                                         for (int localZ = 0; localZ < S; localZ++)
                                         {
@@ -455,6 +587,7 @@ namespace MVGE_GEN.Terrain
                                 }
                                 else if (secPos.TransparentFacePosYBits != null)
                                 {
+                                    EnsureTransparentArrays();
                                     var tBits = secPos.TransparentFacePosYBits;
                                     for (int wi = 0; wi < tBits.Length; wi++)
                                     {
@@ -469,19 +602,29 @@ namespace MVGE_GEN.Terrain
                                             int globalX = sx * S + localX;
                                             int globalZ = sz * S + localZ;
                                             int globalIdx = globalX * dimZ + globalZ;
-                                            ushort id = 0;
-                                            if (secPos.Kind == Section.RepresentationKind.Uniform)
-                                                id = secPos.UniformBlockId;
-                                            else if (secPos.Kind == Section.RepresentationKind.Expanded && secPos.ExpandedDense != null)
-                                            {
-                                                int li = ((localZ * 16 + localX) * 16) + 15; // y fixed at 15
-                                                id = secPos.ExpandedDense[li];
-                                            }
+
+                                            ushort id = GetSectionVoxelId(secPos, localX, 15, localZ); // y fixed at 15
                                             if (id != 0 && !TerrainLoader.IsOpaque(id))
                                                 RecordTransparent(TransparentPlanePosY, globalIdx, id);
                                             word &= word - 1;
                                         }
                                     }
+                                }
+                                else
+                                {
+                                    for (int localX = 0; localX < S; localX++)
+                                        for (int localZ = 0; localZ < S; localZ++)
+                                        {
+                                            ushort id = GetSectionVoxelId(secPos, localX, 15, localZ);
+                                            if (id != 0 && !TerrainLoader.IsOpaque(id))
+                                            {
+                                                EnsureTransparentArrays();
+                                                int globalX = sx * S + localX;
+                                                int globalZ = sz * S + localZ;
+                                                int globalIdx = globalX * dimZ + globalZ;
+                                                RecordTransparent(TransparentPlanePosY, globalIdx, id);
+                                            }
+                                        }
                                 }
                             }
                         }
@@ -534,15 +677,31 @@ namespace MVGE_GEN.Terrain
                                     }
                                 }
                             }
+                            else
+                            {
+                                // Fallback: per-voxel decode for boundary occupancy (-Z)
+                                for (int localX = 0; localX < S; localX++)
+                                {
+                                    for (int localY = 0; localY < S; localY++)
+                                    {
+                                        ushort id = GetSectionVoxelId(secNeg, localX, localY, 0);
+                                        if (id != 0 && TerrainLoader.IsOpaque(id))
+                                        {
+                                            int globalX = sx * S + localX;
+                                            int globalY = sy * S + localY;
+                                            int globalIdx = globalX * dimY + globalY;
+                                            SetPlaneBit(PlaneNegZ, globalIdx);
+                                        }
+                                    }
+                                }
+                            }
 
                             // Transparent -Z
-                            bool uniformTransparentNegZ = secNeg.Kind == Section.RepresentationKind.Uniform && secNeg.UniformBlockId != Section.AIR && !TerrainLoader.IsOpaque(secNeg.UniformBlockId);
-                            if (uniformTransparentNegZ || secNeg.TransparentFaceNegZBits != null)
                             {
-                                EnsureTransparentArrays();
-                                anyTransparentBoundary = true;
+                                bool uniformTransparentNegZ = secNeg.Kind == Section.RepresentationKind.Uniform && secNeg.UniformBlockId != Section.AIR && !TerrainLoader.IsOpaque(secNeg.UniformBlockId);
                                 if (uniformTransparentNegZ)
                                 {
+                                    EnsureTransparentArrays();
                                     for (int localX = 0; localX < S; localX++)
                                         for (int localY = 0; localY < S; localY++)
                                         {
@@ -554,6 +713,7 @@ namespace MVGE_GEN.Terrain
                                 }
                                 else if (secNeg.TransparentFaceNegZBits != null)
                                 {
+                                    EnsureTransparentArrays();
                                     var tBits = secNeg.TransparentFaceNegZBits;
                                     for (int wi = 0; wi < tBits.Length; wi++)
                                     {
@@ -568,19 +728,29 @@ namespace MVGE_GEN.Terrain
                                             int globalX = sx * S + localX;
                                             int globalY = sy * S + localY;
                                             int globalIdx = globalX * dimY + globalY;
-                                            ushort id = 0;
-                                            if (secNeg.Kind == Section.RepresentationKind.Uniform)
-                                                id = secNeg.UniformBlockId;
-                                            else if (secNeg.Kind == Section.RepresentationKind.Expanded && secNeg.ExpandedDense != null)
-                                            {
-                                                int li = ((0 * 16 + localX) * 16) + localY; // z fixed at 0
-                                                id = secNeg.ExpandedDense[li];
-                                            }
+
+                                            ushort id = GetSectionVoxelId(secNeg, localX, localY, 0); // z fixed at 0
                                             if (id != 0 && !TerrainLoader.IsOpaque(id))
                                                 RecordTransparent(TransparentPlaneNegZ, globalIdx, id);
                                             word &= word - 1;
                                         }
                                     }
+                                }
+                                else
+                                {
+                                    for (int localX = 0; localX < S; localX++)
+                                        for (int localY = 0; localY < S; localY++)
+                                        {
+                                            ushort id = GetSectionVoxelId(secNeg, localX, localY, 0);
+                                            if (id != 0 && !TerrainLoader.IsOpaque(id))
+                                            {
+                                                EnsureTransparentArrays();
+                                                int globalX = sx * S + localX;
+                                                int globalY = sy * S + localY;
+                                                int globalIdx = globalX * dimY + globalY;
+                                                RecordTransparent(TransparentPlaneNegZ, globalIdx, id);
+                                            }
+                                        }
                                 }
                             }
                         }
@@ -620,15 +790,31 @@ namespace MVGE_GEN.Terrain
                                     }
                                 }
                             }
+                            else
+                            {
+                                // Fallback: per-voxel decode for boundary occupancy (+Z)
+                                for (int localX = 0; localX < S; localX++)
+                                {
+                                    for (int localY = 0; localY < S; localY++)
+                                    {
+                                        ushort id = GetSectionVoxelId(secPos, localX, localY, 15);
+                                        if (id != 0 && TerrainLoader.IsOpaque(id))
+                                        {
+                                            int globalX = sx * S + localX;
+                                            int globalY = sy * S + localY;
+                                            int globalIdx = globalX * dimY + globalY;
+                                            SetPlaneBit(PlanePosZ, globalIdx);
+                                        }
+                                    }
+                                }
+                            }
 
                             // Transparent +Z
-                            bool uniformTransparentPosZ = secPos.Kind == Section.RepresentationKind.Uniform && secPos.UniformBlockId != Section.AIR && !TerrainLoader.IsOpaque(secPos.UniformBlockId);
-                            if (uniformTransparentPosZ || secPos.TransparentFacePosZBits != null)
                             {
-                                EnsureTransparentArrays();
-                                anyTransparentBoundary = true;
+                                bool uniformTransparentPosZ = secPos.Kind == Section.RepresentationKind.Uniform && secPos.UniformBlockId != Section.AIR && !TerrainLoader.IsOpaque(secPos.UniformBlockId);
                                 if (uniformTransparentPosZ)
                                 {
+                                    EnsureTransparentArrays();
                                     for (int localX = 0; localX < S; localX++)
                                         for (int localY = 0; localY < S; localY++)
                                         {
@@ -640,6 +826,7 @@ namespace MVGE_GEN.Terrain
                                 }
                                 else if (secPos.TransparentFacePosZBits != null)
                                 {
+                                    EnsureTransparentArrays();
                                     var tBits = secPos.TransparentFacePosZBits;
                                     for (int wi = 0; wi < tBits.Length; wi++)
                                     {
@@ -651,23 +838,32 @@ namespace MVGE_GEN.Terrain
                                             if (localIndex >= 256) break;
                                             int localX = localIndex / S;
                                             int localY = localIndex % S;
-                                            int globalX = sx * S + localX; 
+                                            int globalX = sx * S + localX;
                                             int globalY = sy * S + localY;
                                             int globalIdx = globalX * dimY + globalY;
-                                            ushort id = 0;
-                                            if (secPos.Kind == Section.RepresentationKind.Uniform)
-                                                id = secPos.UniformBlockId;
-                                            else if (secPos.Kind == Section.RepresentationKind.Expanded && secPos.ExpandedDense != null)
-                                            {
-                                                // localX/localY already decoded above
-                                                int li = ((15 * 16 + localX) * 16) + localY; // z fixed at 15
-                                                id = secPos.ExpandedDense[li];
-                                            }
+
+                                            ushort id = GetSectionVoxelId(secPos, localX, localY, 15); // z fixed at 15
                                             if (id != 0 && !TerrainLoader.IsOpaque(id))
                                                 RecordTransparent(TransparentPlanePosZ, globalIdx, id);
                                             word &= word - 1;
                                         }
                                     }
+                                }
+                                else
+                                {
+                                    for (int localX = 0; localX < S; localX++)
+                                        for (int localY = 0; localY < S; localY++)
+                                        {
+                                            ushort id = GetSectionVoxelId(secPos, localX, localY, 15);
+                                            if (id != 0 && !TerrainLoader.IsOpaque(id))
+                                            {
+                                                EnsureTransparentArrays();
+                                                int globalX = sx * S + localX;
+                                                int globalY = sy * S + localY;
+                                                int globalIdx = globalX * dimY + globalY;
+                                                RecordTransparent(TransparentPlanePosZ, globalIdx, id);
+                                            }
+                                        }
                                 }
                             }
                         }
