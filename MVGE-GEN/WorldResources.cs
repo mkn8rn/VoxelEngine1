@@ -535,6 +535,23 @@ namespace MVGE_GEN
             // Reset all neighbor-derived state first to avoid stale references causing false seam suppression.
             if (ch == null) return;
 
+            // Ensure transparent boundary planes exist on self and neighbors before mapping
+            ch.EnsureTransparentBoundaryPlanesBuilt();
+
+            TryGetChunk((key.cx - 1, key.cy, key.cz), out var left);
+            TryGetChunk((key.cx + 1, key.cy, key.cz), out var right);
+            TryGetChunk((key.cx, key.cy - 1, key.cz), out var down);
+            TryGetChunk((key.cx, key.cy + 1, key.cz), out var up);
+            TryGetChunk((key.cx, key.cy, key.cz - 1), out var back);
+            TryGetChunk((key.cx, key.cy, key.cz + 1), out var front);
+
+            left?.EnsureTransparentBoundaryPlanesBuilt();
+            right?.EnsureTransparentBoundaryPlanesBuilt();
+            down?.EnsureTransparentBoundaryPlanesBuilt();
+            up?.EnsureTransparentBoundaryPlanesBuilt();
+            back?.EnsureTransparentBoundaryPlanesBuilt();
+            front?.EnsureTransparentBoundaryPlanesBuilt();
+
             ch.NeighborNegXFaceSolidPosX = false;
             ch.NeighborPosXFaceSolidNegX = false;
             ch.NeighborNegYFaceSolidPosY = false;
@@ -555,14 +572,6 @@ namespace MVGE_GEN
             ch.NeighborTransparentPlanePosYFace = null;
             ch.NeighborTransparentPlaneNegZFace = null;
             ch.NeighborTransparentPlanePosZFace = null;
-
-            // Fetch current neighbors
-            TryGetChunk((key.cx - 1, key.cy, key.cz), out var left);
-            TryGetChunk((key.cx + 1, key.cy, key.cz), out var right);
-            TryGetChunk((key.cx, key.cy - 1, key.cz), out var down);
-            TryGetChunk((key.cx, key.cy + 1, key.cz), out var up);
-            TryGetChunk((key.cx, key.cy, key.cz - 1), out var back);
-            TryGetChunk((key.cx, key.cy, key.cz + 1), out var front);
 
             if (left != null)
             {

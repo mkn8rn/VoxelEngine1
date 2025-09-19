@@ -140,7 +140,11 @@ namespace MVGE_GFX.Terrain.Sections
             int endY = Math.Min(baseY + S, maxY);
             int endZ = Math.Min(baseZ + S, maxZ);
 
-            // Clamp to bounds (bounds track any content; opaque emission still guarded by GetBlock+Occludes)
+            // Preserve original section extents for the transparent pass.
+            int tBaseX = baseX, tBaseY = baseY, tBaseZ = baseZ;
+            int tEndX = endX, tEndY = endY, tEndZ = endZ;
+
+            // Clamp to bounds (intended to track any content; opaque emission still guarded by GetBlock+Occludes)
             if (desc.HasBounds)
             {
                 int bMinX = baseX + desc.MinLX; int bMaxX = baseX + desc.MaxLX;
@@ -186,6 +190,11 @@ namespace MVGE_GFX.Terrain.Sections
                     }
                 }
             }
+
+            // ---------------- TRANSPARENT PASS ----------------
+            // Use full section extents for transparent scan so transparent voxels outside opaque bounds are not skipped.
+            baseX = tBaseX; baseY = tBaseY; baseZ = tBaseZ;
+            endX = tEndX; endY = tEndY; endZ = tEndZ;
 
             // Neighbor transparent planes (ids) for boundary suppression
             var tNegX = data.NeighborTransparentPlaneNegX; var tPosX = data.NeighborTransparentPlanePosX;

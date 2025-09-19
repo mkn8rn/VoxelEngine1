@@ -70,6 +70,86 @@ namespace MVGE_GEN.Terrain
             PlanePosZ ??= new ulong[xyWC];
         }
 
+        // Allocate transparent boundary ID arrays with proper per-cell sizes (not bit-word counts).
+        private void EnsureTransparentPlaneArrays()
+        {
+            int yzCells = dimY * dimZ;
+            int xzCells = dimX * dimZ;
+            int xyCells = dimX * dimY;
+
+            TransparentPlaneNegX ??= new ushort[yzCells];
+            TransparentPlanePosX ??= new ushort[yzCells];
+            TransparentPlaneNegY ??= new ushort[xzCells];
+            TransparentPlanePosY ??= new ushort[xzCells];
+            TransparentPlaneNegZ ??= new ushort[xyCells];
+            TransparentPlanePosZ ??= new ushort[xyCells];
+        }
+
+        // Build transparent boundary planes from current voxel data. Non-air, non-opaque block ids are written; others are 0.
+        internal void EnsureTransparentBoundaryPlanesBuilt()
+        {
+            EnsureTransparentPlaneArrays();
+
+            // Clear previous content to avoid stale suppression or false seams.
+            Array.Clear(TransparentPlaneNegX, 0, TransparentPlaneNegX.Length);
+            Array.Clear(TransparentPlanePosX, 0, TransparentPlanePosX.Length);
+            Array.Clear(TransparentPlaneNegY, 0, TransparentPlaneNegY.Length);
+            Array.Clear(TransparentPlanePosY, 0, TransparentPlanePosY.Length);
+            Array.Clear(TransparentPlaneNegZ, 0, TransparentPlaneNegZ.Length);
+            Array.Clear(TransparentPlanePosZ, 0, TransparentPlanePosZ.Length);
+
+            // -X / +X faces (YZ layout: index = z * dimY + y)
+            for (int y = 0; y < dimY; y++)
+            {
+                for (int z = 0; z < dimZ; z++)
+                {
+                    int idxYZ = z * dimY + y;
+
+                    ushort idNX = GetBlockLocal(0, y, z);
+                    if (idNX != 0 && !TerrainLoader.IsOpaque(idNX))
+                        TransparentPlaneNegX[idxYZ] = idNX;
+
+                    ushort idPX = GetBlockLocal(dimX - 1, y, z);
+                    if (idPX != 0 && !TerrainLoader.IsOpaque(idPX))
+                        TransparentPlanePosX[idxYZ] = idPX;
+                }
+            }
+
+            // -Y / +Y faces (XZ layout: index = x * dimZ + z)
+            for (int x = 0; x < dimX; x++)
+            {
+                for (int z = 0; z < dimZ; z++)
+                {
+                    int idxXZ = x * dimZ + z;
+
+                    ushort idNY = GetBlockLocal(x, 0, z);
+                    if (idNY != 0 && !TerrainLoader.IsOpaque(idNY))
+                        TransparentPlaneNegY[idxXZ] = idNY;
+
+                    ushort idPY = GetBlockLocal(x, dimY - 1, z);
+                    if (idPY != 0 && !TerrainLoader.IsOpaque(idPY))
+                        TransparentPlanePosY[idxXZ] = idPY;
+                }
+            }
+
+            // -Z / +Z faces (XY layout: index = x * dimY + y)
+            for (int x = 0; x < dimX; x++)
+            {
+                for (int y = 0; y < dimY; y++)
+                {
+                    int idxXY = x * dimY + y;
+
+                    ushort idNZ = GetBlockLocal(x, y, 0);
+                    if (idNZ != 0 && !TerrainLoader.IsOpaque(idNZ))
+                        TransparentPlaneNegZ[idxXY] = idNZ;
+
+                    ushort idPZ = GetBlockLocal(x, y, dimZ - 1);
+                    if (idPZ != 0 && !TerrainLoader.IsOpaque(idPZ))
+                        TransparentPlanePosZ[idxXY] = idPZ;
+                }
+            }
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void UpdateBoundaryPlaneBit(int lx, int ly, int lz, ushort blockId)
         {
