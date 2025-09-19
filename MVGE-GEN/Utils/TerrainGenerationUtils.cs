@@ -122,12 +122,28 @@ namespace MVGE_GEN.Terrain
                 }
             }
 
-            // ---- Water span (above surface up to biome water level) ----
+            // ---- Water span (fill from actual top solid up to biome water level) ----
+            // If soil lowering created air under the analytic surface and the column is underwater,
+            // we must start water right above the true top solid, not at surfaceY+1.
             int waterStart = -1, waterEnd = -1;
-            if (biome.waterLevel > surfaceY)
             {
-                waterStart = surfaceY + 1; // starts immediately above surface
-                waterEnd = biome.waterLevel; // inclusive
+                int topSolidForWater;
+                if (soilEnd >= 0 || stoneEnd >= 0)
+                {
+                    // Pick the highest existing solid in this column
+                    topSolidForWater = Math.Max(soilEnd, stoneEnd);
+                }
+                else
+                {
+                    // No solids produced by spans; fall back to the analytic surface
+                    topSolidForWater = surfaceY;
+                }
+
+                if (biome.waterLevel > topSolidForWater)
+                {
+                    waterStart = topSolidForWater + 1; // starts immediately above the actual top solid (or surface fallback)
+                    waterEnd = biome.waterLevel;       // inclusive
+                }
             }
 
             return (stoneStart, stoneEnd, soilStart, soilEnd, waterStart, waterEnd);
