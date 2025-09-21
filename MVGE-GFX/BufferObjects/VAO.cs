@@ -29,6 +29,17 @@ namespace MVGE_GFX.BufferObjects
             Unbind();
         }
 
+        // Link a floating-point / normalized attribute with explicit stride and offset (bytes).
+        // Use when attribute elements are padded for alignment (e.g., 4-byte stride for 3-byte values).
+        public void LinkToVAO(int location, int numComponents, VertexAttribPointerType type, bool normalized, VBO vbo, int stride, int offset)
+        {
+            Bind();
+            vbo.Bind();
+            GL.VertexAttribPointer(location, numComponents, type, normalized, stride, offset);
+            GL.EnableVertexAttribArray(location);
+            Unbind();
+        }
+
         // Link an integer attribute (no normalization) to this VAO.
         public void LinkIntegerToVAO(int location, int numComponents, VertexAttribIntegerType type, VBO vbo)
         {
