@@ -96,7 +96,7 @@ namespace MVGE_GEN.Terrain
         }
 
         // Build transparent boundary planes from current voxel data. Non-air, non-opaque block ids are written; others are 0.
-        internal void EnsureTransparentBoundaryPlanesBuilt()
+        internal void RebuildTransparentBoundaryPlanes()
         {
             EnsureTransparentPlaneArrays();
 

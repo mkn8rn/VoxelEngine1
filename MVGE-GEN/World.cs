@@ -547,13 +547,14 @@ namespace MVGE_GEN
             return false;
         }
 
+        // Helpers to snapshot neighbor planes so the renderer reads stable, per-build copies.
+        private static ushort[] SnapshotUShorts(ushort[] src) => src == null ? null : (ushort[])src.Clone();
+        private static ulong[] SnapshotULongs(ulong[] src) => src == null ? null : (ulong[])src.Clone();
+
         private void PopulateNeighborFaceFlags((int cx, int cy, int cz) key, Chunk ch)
         {
             // Reset all neighbor-derived state first to avoid stale references causing false seam suppression.
             if (ch == null) return;
-
-            // Ensure transparent boundary planes exist on self and neighbors before mapping
-            ch.EnsureTransparentBoundaryPlanesBuilt();
 
             TryGetChunk((key.cx - 1, key.cy, key.cz), out var left);
             TryGetChunk((key.cx + 1, key.cy, key.cz), out var right);
@@ -562,12 +563,6 @@ namespace MVGE_GEN
             TryGetChunk((key.cx, key.cy, key.cz - 1), out var back);
             TryGetChunk((key.cx, key.cy, key.cz + 1), out var front);
 
-            left?.EnsureTransparentBoundaryPlanesBuilt();
-            right?.EnsureTransparentBoundaryPlanesBuilt();
-            down?.EnsureTransparentBoundaryPlanesBuilt();
-            up?.EnsureTransparentBoundaryPlanesBuilt();
-            back?.EnsureTransparentBoundaryPlanesBuilt();
-            front?.EnsureTransparentBoundaryPlanesBuilt();
 
             ch.NeighborNegXFaceSolidPosX = false;
             ch.NeighborPosXFaceSolidNegX = false;
@@ -593,38 +588,38 @@ namespace MVGE_GEN
             if (left != null)
             {
                 ch.NeighborNegXFaceSolidPosX = left.FaceSolidPosX;
-                ch.NeighborPlaneNegXFace = left.PlanePosX;                 // opaque
-                ch.NeighborTransparentPlaneNegXFace = left.TransparentPlanePosX;
+                ch.NeighborPlaneNegXFace = SnapshotULongs(left.PlanePosX);                 // opaque snapshot
+                ch.NeighborTransparentPlaneNegXFace = SnapshotUShorts(left.TransparentPlanePosX); // transparent snapshot
             }
             if (right != null)
             {
                 ch.NeighborPosXFaceSolidNegX = right.FaceSolidNegX;
-                ch.NeighborPlanePosXFace = right.PlaneNegX;
-                ch.NeighborTransparentPlanePosXFace = right.TransparentPlaneNegX;
+                ch.NeighborPlanePosXFace = SnapshotULongs(right.PlaneNegX);
+                ch.NeighborTransparentPlanePosXFace = SnapshotUShorts(right.TransparentPlaneNegX);
             }
             if (down != null)
             {
                 ch.NeighborNegYFaceSolidPosY = down.FaceSolidPosY;
-                ch.NeighborPlaneNegYFace = down.PlanePosY;
-                ch.NeighborTransparentPlaneNegYFace = down.TransparentPlanePosY;
+                ch.NeighborPlaneNegYFace = SnapshotULongs(down.PlanePosY);
+                ch.NeighborTransparentPlaneNegYFace = SnapshotUShorts(down.TransparentPlanePosY);
             }
             if (up != null)
             {
                 ch.NeighborPosYFaceSolidNegY = up.FaceSolidNegY;
-                ch.NeighborPlanePosYFace = up.PlaneNegY;
-                ch.NeighborTransparentPlanePosYFace = up.TransparentPlaneNegY;
+                ch.NeighborPlanePosYFace = SnapshotULongs(up.PlaneNegY);
+                ch.NeighborTransparentPlanePosYFace = SnapshotUShorts(up.TransparentPlaneNegY);
             }
             if (back != null)
             {
                 ch.NeighborNegZFaceSolidPosZ = back.FaceSolidPosZ;
-                ch.NeighborPlaneNegZFace = back.PlanePosZ;
-                ch.NeighborTransparentPlaneNegZFace = back.TransparentPlanePosZ;
+                ch.NeighborPlaneNegZFace = SnapshotULongs(back.PlanePosZ);
+                ch.NeighborTransparentPlaneNegZFace = SnapshotUShorts(back.TransparentPlanePosZ);
             }
             if (front != null)
             {
                 ch.NeighborPosZFaceSolidNegZ = front.FaceSolidNegZ;
-                ch.NeighborPlanePosZFace = front.PlaneNegZ;
-                ch.NeighborTransparentPlanePosZFace = front.TransparentPlaneNegZ;
+                ch.NeighborPlanePosZFace = SnapshotULongs(front.PlaneNegZ);
+                ch.NeighborTransparentPlanePosZFace = SnapshotUShorts(front.TransparentPlaneNegZ);
             }
         }
 
