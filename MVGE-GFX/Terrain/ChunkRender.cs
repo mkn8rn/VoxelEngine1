@@ -258,12 +258,12 @@ namespace MVGE_GFX.Terrain
                 transparentVAO.Bind();
                 quadIndexIBO.Bind(); // ensure IBO bound to this VAO
 
+                GL.DepthMask(true);
+
                 GL.Enable(EnableCap.Blend);
                 GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
-                GL.DepthMask(false);
                 program.SetUniform("useTransparentList", 1f);
                 GL.DrawElementsInstanced(PrimitiveType.Triangles, 6, DrawElementsType.UnsignedShort, IntPtr.Zero, transparentInstanceCount);
-                GL.DepthMask(true);
                 GL.Disable(EnableCap.Blend);
             }
         }
