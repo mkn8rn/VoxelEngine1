@@ -165,6 +165,11 @@ namespace MVGE_GFX.Terrain
                 // Attach IBO to this VAO
                 quadIndexIBO.Bind();
 
+                // Explicitly disable transparent-only attributes on this VAO
+                opaqueVAO.SetAttribEnabled(5, false);
+                opaqueVAO.SetAttribEnabled(6, false);
+                opaqueVAO.SetAttribEnabled(7, false);
+
                 // Mark this VAO as built for safe deletion later.
                 opaqueVaoBuilt = true;
             }
@@ -210,6 +215,11 @@ namespace MVGE_GFX.Terrain
 
                 // Attach IBO to this VAO
                 quadIndexIBO.Bind();
+
+                // Explicitly disable opaque-only attributes on this VAO
+                transparentVAO.SetAttribEnabled(2, false);
+                transparentVAO.SetAttribEnabled(3, false);
+                transparentVAO.SetAttribEnabled(4, false);
 
                 // Mark this VAO as built for safe deletion later.
                 transparentVaoBuilt = true;
