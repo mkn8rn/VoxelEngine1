@@ -10,7 +10,7 @@ using Vector3 = OpenTK.Mathematics.Vector3;
 
 namespace MVGE_GEN
 {
-    public partial class WorldResources
+    public partial class World
     {
 
         private void EnqueueInitialChunkPositions()

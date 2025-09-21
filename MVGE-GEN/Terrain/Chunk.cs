@@ -189,7 +189,10 @@ namespace MVGE_GEN.Terrain
             GenerateInitialChunkData(columnSpanMap);
         }
 
-        public void Render(ShaderProgram shader) => chunkRender?.Render(shader);
+        // Opaque pass forwarding for this chunk's renderer.
+        public void RenderOpaque(ShaderProgram program) => chunkRender?.RenderOpaque(program);
+        // Transparent pass forwarding for this chunk's renderer.
+        public void RenderTransparent(ShaderProgram program) => chunkRender?.RenderTransparent(program);
 
         public Section GetOrCreateSection(int sx, int sy, int sz)
         {

@@ -10,7 +10,7 @@ using System.Security.Cryptography.X509Certificates;
 
 namespace MVGE_GEN
 {
-    public partial class WorldResources
+    public partial class World
     {
         // ===========================
         //  CHUNK / BATCH SERIALIZATION

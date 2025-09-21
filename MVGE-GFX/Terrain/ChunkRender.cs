@@ -228,12 +228,13 @@ namespace MVGE_GFX.Terrain
             isBuilt = true;
         }
 
-        public void Render(ShaderProgram program)
+        // Opaque pass: draws opaque face instances only. Depth test/write is managed by the caller.
+        public void RenderOpaque(ShaderProgram program)
         {
             ProcessPendingDeletes();
             if (!isBuilt) Build();
 
-            if (fullyOccluded || (instanceCount == 0 && transparentInstanceCount == 0))
+            if (fullyOccluded || instanceCount == 0)
                 return;
 
             Vector3 adjustedChunkPosition = chunkWorldPosition + new Vector3(1f, 1f, 1f);
@@ -242,8 +243,7 @@ namespace MVGE_GFX.Terrain
             program.SetUniform("tilesX", terrainTextureAtlas.tilesX);
             program.SetUniform("tilesY", terrainTextureAtlas.tilesY);
 
-            // ----- OPAQUE PASS -----
-            if (instanceCount > 0 && opaqueVAO != null)
+            if (opaqueVAO != null)
             {
                 opaqueVAO.Bind();
                 quadIndexIBO.Bind(); // ensure IBO bound to this VAO if driver disassociates
@@ -251,14 +251,28 @@ namespace MVGE_GFX.Terrain
                 program.SetUniform("useTransparentList", 0f);
                 GL.DrawElementsInstanced(PrimitiveType.Triangles, 6, DrawElementsType.UnsignedShort, IntPtr.Zero, instanceCount);
             }
+        }
 
-            // ----- TRANSPARENT PASS -----
-            if (transparentInstanceCount > 0 && transparentVAO != null)
+        // Transparent pass: draws transparent face instances only with blending enabled.
+        // Depth test is respected but this pass does not write depth; caller coordinates depth mask globally.
+        public void RenderTransparent(ShaderProgram program)
+        {
+            ProcessPendingDeletes();
+            if (!isBuilt) Build();
+
+            if (fullyOccluded || transparentInstanceCount == 0)
+                return;
+
+            Vector3 adjustedChunkPosition = chunkWorldPosition + new Vector3(1f, 1f, 1f);
+            program.Bind();
+            program.SetUniform("chunkPosition", adjustedChunkPosition);
+            program.SetUniform("tilesX", terrainTextureAtlas.tilesX);
+            program.SetUniform("tilesY", terrainTextureAtlas.tilesY);
+
+            if (transparentVAO != null)
             {
                 transparentVAO.Bind();
                 quadIndexIBO.Bind(); // ensure IBO bound to this VAO
-
-                GL.DepthMask(true);
 
                 GL.Enable(EnableCap.Blend);
                 GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);

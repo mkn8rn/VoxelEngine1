@@ -28,14 +28,14 @@ namespace MVGE_GEN.Gameplay
 
         public Camera camera;
 
-        private readonly WorldResources world; // reference to world for chunk scheduling
+        private readonly World world; // reference to world for chunk scheduling
 
         // Cache last reported chunk to avoid redundant property sets
         private int lastChunkX = int.MinValue;
         private int lastChunkY = int.MinValue;
         private int lastChunkZ = int.MinValue;
 
-        public Player(WorldResources world)
+        public Player(World world)
         {
             this.world = world;
             playerMode = PlayerState.Alive;

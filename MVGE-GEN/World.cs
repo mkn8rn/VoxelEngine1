@@ -13,10 +13,11 @@ using MVGE_INF.Loaders;
 using MVGE_GEN.Terrain;
 using MVGE_INF.Models.Terrain;
 using MVGE_INF.Models.Generation;
+using OpenTK.Graphics.OpenGL4;
 
 namespace MVGE_GEN
 {
-    public partial class WorldResources : IDisposable
+    public partial class World : IDisposable
     {
         public Guid ID { get; private set; }
         public Guid RegionID { get; private set; }
@@ -95,7 +96,7 @@ namespace MVGE_GEN
         // Track quads currently being generated. Value holds queue/state instead of a simple byte now.
         private readonly ConcurrentDictionary<(int bx,int bz), BatchGenerationState> generatingBatches = new();
 
-        public WorldResources()
+        public World()
         {
             Console.WriteLine("World manager initializing.");
 
@@ -289,7 +290,23 @@ namespace MVGE_GEN
 
         public void Render(ShaderProgram program)
         {
-            foreach (var chunk in activeChunks.Values) chunk.Render(program);
+            // We really should not be handling GL calls here, but for now it's simplest.
+            // Maybe I'll make a world render atlas at some point
+
+            // Pass 1: draw all opaque across active chunks so depth buffer contains solid surfaces.
+            GL.DepthMask(true);
+            foreach (var chunk in activeChunks.Values)
+            {
+                chunk.chunkRender?.RenderOpaque(program);
+            }
+
+            // Pass 2: draw all transparent across active chunks with blending and no depth writes.
+            GL.DepthMask(false);
+            foreach (var chunk in activeChunks.Values)
+            {
+                chunk.chunkRender?.RenderTransparent(program);
+            }
+            GL.DepthMask(true);
         }
 
         private void InitializeScheduling()

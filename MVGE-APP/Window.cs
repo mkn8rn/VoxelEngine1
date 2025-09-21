@@ -30,7 +30,7 @@ namespace MVGE_GEN
     public class Window : GameWindow
     {
         // render pipeline
-        WorldResources world = null!;
+        World world = null!;
         BlockTextureAtlas blockTextureAtlas = null!;
         ShaderProgram shaderProgram = null!;
 
@@ -102,7 +102,7 @@ namespace MVGE_GEN
             blockTextureAtlas.Bind();
 
             // Initialize the World rendering
-            world = new WorldResources() ?? throw new Exception("world is null");
+            world = new World() ?? throw new Exception("world is null");
 
             // Initialize the Player (and its Camera)
             Console.WriteLine("Initializing player.");
