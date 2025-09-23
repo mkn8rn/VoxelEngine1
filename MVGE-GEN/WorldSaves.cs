@@ -13,15 +13,15 @@ namespace MVGE_GEN
     public partial class World
     {
         // ===========================
-        //  CHUNK / BATCH SERIALIZATION
+        //  CHUNK / QUAD SERIALIZATION
         // ===========================
-        // Each batch file contains all generated chunks for a 32x32 horizontal footprint (bx,bz)
+        // Each quad file contains all generated chunks for a 16x16 horizontal footprint (bx,bz)
         // covering every generated vertical layer present during initial generation (currently LoD1+1 vertical span). 
         //
-        // A batch file layout:
+        // A quad file layout:
         //   Header:
-        //     0  : 4 bytes  BATCH_MAGIC ("MVBH")
-        //     4  : 2 bytes  BATCH_FILE_VERSION
+        //     0  : 4 bytes  QUAD_MAGIC ("MVQH")
+        //     4  : 2 bytes  QUAD_FILE_VERSION
         //     6  : 2 bytes  reserved/padding
         //     8  : 4 bytes  batchX (int)
         //    12  : 4 bytes  batchZ (int)
@@ -52,62 +52,74 @@ namespace MVGE_GEN
         //  [1]   : 2 bytes payloadLength (ushort) (length after this field)
         //  [3+]  : payload bytes:
         //          Metadata (present for all kinds):
-        //              NonAirCount (ushort)
+        //              OpaqueCount (ushort)
+        //              TransparentCount (ushort)
+        //              EmptyCount (ushort)
         //              InternalExposure (int)
-        //              MetaFlags (byte) bit0 HasBounds, bit1 HasOccupancy, bit2 CompletelyFull, bit3 MetadataBuilt, bit4 IsAllAir, bit5 StructuralDirty, bit6 IdMapDirty, bit7 BoundingBoxDirty (version >=2)
+        //              MetaFlags (byte) bit layout:
+        //                   bit0 HasBounds
+        //                   bit1 HasOpaqueMasks
+        //                   bit2 CompletelyFull
+        //                   bit3 MetadataBuilt
+        //                   bit4 IsAllAir
+        //                   bit5 HasTransparentMasks
+        //                   bit6 HasEmptyBits
+        //                   bit7 reserved
         //              (if HasBounds) 6 bytes: MinLX,MinLY,MinLZ,MaxLX,MaxLY,MaxLZ
-        //              (if HasOccupancy)  (OccupancyBits 4*8) + 6 faces * (4*8) = 25 * 8 = 200 bytes (each preceded by length byte per array)
+        //              (if HasOpaqueMasks)    OpaqueBits (len:1 byte, then ulong[len])
+        //                                       FaceNegXBits, FacePosXBits, FaceNegYBits, FacePosYBits, FaceNegZBits, FacePosZBits (each as len:1 byte + ulong[len])
+        //              (if HasTransparentMasks) TransparentBits (len:1 byte + ulong[len])
+        //                                         TransparentFaceNegXBits ... TransparentFacePosZBits (each as len:1 byte + ulong[len])
+        //              (if HasEmptyBits)       EmptyBits (len:1 byte + ulong[len])
         //          Representation-specific data appended after metadata:
         //              Empty: (no additional)
         //              Uniform: blockId (ushort)
         //              Expanded: 4096 * 2 bytes raw voxel ids
         //              Packed / MultiPacked: bitsPerIndex (byte), paletteCount (ushort), palette ids (ushort*count), bitDataWordCount (int), bitData words (uint*wordCount)
-        //                                    palette lookup mapping present flag (byte 0/1) then if 1: ushort mappingCount then mappingCount*(blockId ushort, index ushort)
-        // Footer (version >=2 only, appended AFTER all section payloads & after offset table has been backfilled):
-        //  0  : 4 bytes CHUNK_FOOTER_MAGIC (CMD2)
-        //  4  : float temperature
-        //  8  : float humidity
-        // 12  : uint FlagsA bitfield: 0 AllAirChunk,1 AllStoneChunk,2 AllSoilChunk,3 AllOneBlockChunk,4 FullyBuried,5 BuriedByNeighbors
-        // 16  : byte FaceFlags bit0..5 = FaceSolidNegX..FaceSolidPosZ
-        // 17  : byte OcclusionStatus
-        // 18  : reserved / alignment (2 bytes)
-        // 20  : ushort AllOneBlockBlockId
-        // 22  : byte MeshStatsPresent (0/1)
-        // 23  : reserved
-        // 24+ : if MeshStatsPresent -> 11 * 4-byte ints (SolidCount, ExposureEstimate, MinX,MinY,MinZ,MaxX,MaxY,MaxZ, XNonEmpty,YNonEmpty,ZNonEmpty) + 1 byte HasStats flag (for clarity)
+        // ===========================
+        // Footer (appended AFTER all section payloads & after offset table has been backfilled):
+        //  0  : 3 bytes CHUNK_FOOTER_MAGIC ("CMD")
+        //  3  : float temperature
+        //  7  : float humidity
+        //  11 : uint FlagsA bitfield: 0 AllAirChunk,1 AllStoneChunk,2 AllSoilChunk,3 AllOneBlockChunk,4 FullyBuried,5 BuriedByNeighbors,6 AllWaterChunk
+        //  15 : byte FaceFlags bit0..5 = FaceSolidNegX..FaceSolidPosZ
+        //  16 : byte OcclusionStatus
+        //  17 : reserved / alignment (1 byte)
+        //  18 : ushort AllOneBlockBlockId
         //  ... : 6 * (int length + ulong[length] data) for PlaneNegX,PlanePosX,PlaneNegY,PlanePosY,PlaneNegZ,PlanePosZ
+        //  ... : 6 * (int length + ushort[length] data) for TransparentPlaneNegX,TransparentPlanePosX,TransparentPlaneNegY,TransparentPlanePosY,TransparentPlaneNegZ,TransparentPlanePosZ
 
         private const ushort CHUNK_SAVE_VERSION = 1; // chunk format version retained
         private static readonly byte[] CHUNK_MAGIC = new byte[] { (byte)'M', (byte)'V', (byte)'C', (byte)'H' }; // "MVCH"
         private static readonly byte[] CHUNK_FOOTER_MAGIC = new byte[] { (byte)'C', (byte)'M', (byte)'D'};      // "CMD" footer marker
 
-        private const ushort BATCH_FILE_VERSION = 1;
-        private static readonly byte[] BATCH_MAGIC = new byte[] { (byte)'M', (byte)'V', (byte)'B', (byte)'H' }; // "MVBH" batch header
+        private const ushort QUAD_FILE_VERSION = 1;
+        private static readonly byte[] QUAD_MAGIC = new byte[] { (byte)'M', (byte)'V', (byte)'Q', (byte)'H' }; // "MVQH" quad header
 
         private DateTime lastFullWorldSave = DateTime.UtcNow;
         private int worldSaveIntervalMinutes = 12;
 
-        // --------------------- Batch File Path Helpers ---------------------
+        // --------------------- Quad File Path Helpers ---------------------
         private string GetBatchFilePath(int bx, int bz)
         {
             var settings = GameManager.settings;
             string worldRoot = Path.Combine(settings.savesWorldDirectory, loader.ID.ToString());
             string regionRoot = Path.Combine(worldRoot, loader.RegionID.ToString());
-            string batchesDir = Path.Combine(regionRoot, "batches");
-            Directory.CreateDirectory(batchesDir);
-            return Path.Combine(batchesDir, $"batch{bx}x{bz}.bin");
+            string quadsDir = Path.Combine(regionRoot, "quads");
+            Directory.CreateDirectory(quadsDir);
+            return Path.Combine(quadsDir, $"quad{bx}x{bz}.bin");
         }
         private bool BatchFileExists(int bx,int bz) => File.Exists(GetBatchFilePath(bx,bz));
 
-        // Lightweight probe: chunk considered saved if its batch file exists.
+        // Lightweight probe: chunk considered saved if its quad file exists.
         private bool ChunkFileExists(int cx,int cy,int cz)
         {
             var (bx,bz) = BatchKeyFromChunk(cx, cz);
             return BatchFileExists(bx, bz);
         }
 
-        // --------------------- Batch Save ---------------------
-        // Writes an entire batch file with inline chunk payloads. Any existing file is replaced.
+        // --------------------- Quad Save ---------------------
+        // Writes an entire quad file with inline chunk payloads. Any existing file is replaced.
         private void SaveBatch(int bx,int bz)
         {
             if (!loadedBatches.TryGetValue((bx,bz), out var batch)) return;
@@ -118,9 +130,9 @@ namespace MVGE_GEN
                 using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, 256*1024, FileOptions.None);
                 using var bw = new BinaryWriter(fs);
 
-                // Batch header
-                bw.Write(BATCH_MAGIC);
-                bw.Write(BATCH_FILE_VERSION);
+                // Quad header
+                bw.Write(QUAD_MAGIC);
+                bw.Write(QUAD_FILE_VERSION);
                 bw.Write((ushort)0); // padding
                 bw.Write(bx);
                 bw.Write(bz);
@@ -147,7 +159,7 @@ namespace MVGE_GEN
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine($"[World] Failed serializing chunk ({cx},{cy},{cz}) into batch ({bx},{bz}): {ex.Message}");
+                            Console.WriteLine($"[World] Failed serializing chunk ({cx},{cy},{cz}) into quad ({bx},{bz}): {ex.Message}");
                             continue; // skip this chunk record
                         }
                     }
@@ -159,7 +171,7 @@ namespace MVGE_GEN
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[World] Failed to save batch ({bx},{bz}): {ex.Message}");
+                Console.WriteLine($"[World] Failed to save quad ({bx},{bz}): {ex.Message}");
             }
         }
 
@@ -213,21 +225,39 @@ namespace MVGE_GEN
                         using var ms = new MemoryStream(512);
                         using (var ps = new BinaryWriter(ms, System.Text.Encoding.UTF8, leaveOpen: true))
                         {
-                            ushort nonAir = (ushort)(sec?.OpaqueVoxelCount ?? 0);
-                            ps.Write(nonAir);
+                            // Counts
+                            ushort opaqueCount = (ushort)(sec?.OpaqueVoxelCount ?? 0);
+                            ushort transparentCount = (ushort)(sec?.TransparentCount ?? 0);
+                            ushort emptyCount = (ushort)(sec?.EmptyCount ?? 0);
+                            ps.Write(opaqueCount);
+                            ps.Write(transparentCount);
+                            ps.Write(emptyCount);
+                            // Exposure
                             ps.Write(sec?.InternalExposure ?? 0);
+
+                            // Meta flags
                             bool hasBounds = sec?.HasBounds == true;
-                            bool hasOcc = sec != null && sec.OpaqueBits != null && sec.FaceNegXBits != null && sec.FacePosXBits != null && sec.FaceNegYBits != null && sec.FacePosYBits != null && sec.FaceNegZBits != null && sec.FacePosZBits != null;
+                            bool hasOpaqueMasks = sec != null && sec.OpaqueBits != null &&
+                                                  sec.FaceNegXBits != null && sec.FacePosXBits != null &&
+                                                  sec.FaceNegYBits != null && sec.FacePosYBits != null &&
+                                                  sec.FaceNegZBits != null && sec.FacePosZBits != null;
+                            bool hasTransparentMasks = sec != null && (sec.TransparentBits != null ||
+                                                     sec.TransparentFaceNegXBits != null || sec.TransparentFacePosXBits != null ||
+                                                     sec.TransparentFaceNegYBits != null || sec.TransparentFacePosYBits != null ||
+                                                     sec.TransparentFaceNegZBits != null || sec.TransparentFacePosZBits != null);
+                            bool hasEmptyBits = sec != null && sec.EmptyBits != null;
+
                             byte metaFlags = 0;
                             if (hasBounds) metaFlags |= 1;              // bit0
-                            if (hasOcc) metaFlags |= 1 << 1;            // bit1
-                            if (sec != null && sec.CompletelyFull) metaFlags |= 1 << 2;      // bit2
-                            if (sec != null && sec.MetadataBuilt) metaFlags |= 1 << 3;       // bit3
-                            if (sec != null && sec.IsAllAir) metaFlags |= 1 << 4;            // bit4
-                            if (sec != null && sec.StructuralDirty) metaFlags |= 1 << 5;     // bit5
-                            if (sec != null && sec.IdMapDirty) metaFlags |= 1 << 6;          // bit6
-                            if (sec != null && sec.BoundingBoxDirty) metaFlags |= 1 << 7;    // bit7
+                            if (hasOpaqueMasks) metaFlags |= 1 << 1;    // bit1
+                            if (sec != null && sec.CompletelyFull) metaFlags |= 1 << 2; // bit2
+                            if (sec != null && sec.MetadataBuilt) metaFlags |= 1 << 3;   // bit3
+                            if (sec != null && sec.IsAllAir) metaFlags |= 1 << 4;        // bit4
+                            if (hasTransparentMasks) metaFlags |= 1 << 5;                // bit5
+                            if (hasEmptyBits) metaFlags |= 1 << 6;                       // bit6
                             ps.Write(metaFlags);
+
+                            // Bounds
                             if (hasBounds && sec != null)
                             {
                                 ps.Write(sec.MinLX);
@@ -237,22 +267,51 @@ namespace MVGE_GEN
                                 ps.Write(sec.MaxLY);
                                 ps.Write(sec.MaxLZ);
                             }
-                            if (hasOcc && sec != null)
+
+                            // Helper to write ulong[] with a byte count prefix
+                            static void WriteUlongArray(BinaryWriter w, ulong[] arr)
                             {
-                                void WriteUlongArray(ulong[] arr)
-                                {
-                                    ps.Write((byte)arr.Length);
-                                    for (int i = 0; i < arr.Length; i++) ps.Write(arr[i]);
-                                }
-                                WriteUlongArray(sec.OpaqueBits);
-                                WriteUlongArray(sec.FaceNegXBits);
-                                WriteUlongArray(sec.FacePosXBits);
-                                WriteUlongArray(sec.FaceNegYBits);
-                                WriteUlongArray(sec.FacePosYBits);
-                                WriteUlongArray(sec.FaceNegZBits);
-                                WriteUlongArray(sec.FacePosZBits);
+                                w.Write((byte)arr.Length);
+                                for (int i = 0; i < arr.Length; i++) w.Write(arr[i]);
                             }
 
+                            // Opaque masks
+                            if (hasOpaqueMasks && sec != null)
+                            {
+                                WriteUlongArray(ps, sec.OpaqueBits);
+                                WriteUlongArray(ps, sec.FaceNegXBits);
+                                WriteUlongArray(ps, sec.FacePosXBits);
+                                WriteUlongArray(ps, sec.FaceNegYBits);
+                                WriteUlongArray(ps, sec.FacePosYBits);
+                                WriteUlongArray(ps, sec.FaceNegZBits);
+                                WriteUlongArray(ps, sec.FacePosZBits);
+                            }
+
+                            // Transparent masks
+                            if (hasTransparentMasks && sec != null)
+                            {
+                                // Some faces may be null while TransparentBits is present (or vice-versa).
+                                void MaybeWriteUlongArray(ulong[] arr)
+                                {
+                                    if (arr == null) { ps.Write((byte)0); return; }
+                                    WriteUlongArray(ps, arr);
+                                }
+                                MaybeWriteUlongArray(sec.TransparentBits);
+                                MaybeWriteUlongArray(sec.TransparentFaceNegXBits);
+                                MaybeWriteUlongArray(sec.TransparentFacePosXBits);
+                                MaybeWriteUlongArray(sec.TransparentFaceNegYBits);
+                                MaybeWriteUlongArray(sec.TransparentFacePosYBits);
+                                MaybeWriteUlongArray(sec.TransparentFaceNegZBits);
+                                MaybeWriteUlongArray(sec.TransparentFacePosZBits);
+                            }
+
+                            // Empty bits
+                            if (hasEmptyBits && sec != null)
+                            {
+                                WriteUlongArray(ps, sec.EmptyBits);
+                            }
+
+                            // Representation payload
                             switch (kind)
                             {
                                 case Section.RepresentationKind.Empty:
@@ -288,20 +347,7 @@ namespace MVGE_GEN
                                     {
                                         for (int i = 0; i < wordCount; i++) ps.Write(sec.BitData[i]);
                                     }
-                                    if (sec.PaletteLookup != null)
-                                    {
-                                        ps.Write((byte)1); // present flag
-                                        ps.Write((ushort)sec.PaletteLookup.Count);
-                                        foreach (var kv in sec.PaletteLookup)
-                                        {
-                                            ps.Write(kv.Key);
-                                            ps.Write((ushort)kv.Value);
-                                        }
-                                    }
-                                    else
-                                    {
-                                        ps.Write((byte)0); // no mapping
-                                    }
+                                    // PaletteLookup is a runtime convenience; not serialized.
                                     break;
                             }
                         }
@@ -328,6 +374,7 @@ namespace MVGE_GEN
                 if (chunk.AllOneBlockChunk) flagsA |= 1u << 3;
                 if (chunk.FullyBuried) flagsA |= 1u << 4;
                 if (chunk.BuriedByNeighbors) flagsA |= 1u << 5;
+                if (chunk.AllWaterChunk) flagsA |= 1u << 6;
                 bw.Write(flagsA);
                 byte faceFlags = 0;
                 if (chunk.FaceSolidNegX) faceFlags |= 1 << 0;
@@ -338,21 +385,10 @@ namespace MVGE_GEN
                 if (chunk.FaceSolidPosZ) faceFlags |= 1 << 5;
                 bw.Write(faceFlags);
                 bw.Write((byte)chunk.OcclusionStatus);
-                bw.Write((ushort)0); // padding
-                bw.Write(chunk.AllOneBlockBlockId);
-                bool statsPresent = chunk.MeshPrepassStats.HasStats;
-                bw.Write((byte)(statsPresent ? 1 : 0));
                 bw.Write((byte)0); // padding
-                if (statsPresent)
-                {
-                    var s = chunk.MeshPrepassStats;
-                    bw.Write(s.SolidCount);
-                    bw.Write(s.ExposureEstimate);
-                    bw.Write(s.MinX); bw.Write(s.MinY); bw.Write(s.MinZ);
-                    bw.Write(s.MaxX); bw.Write(s.MaxY); bw.Write(s.MaxZ);
-                    bw.Write(s.XNonEmpty); bw.Write(s.YNonEmpty); bw.Write(s.ZNonEmpty);
-                    bw.Write((byte)(s.HasStats ? 1 : 0));
-                }
+                bw.Write(chunk.AllOneBlockBlockId);
+
+                // Opaque boundary planes
                 void WritePlane(ulong[] plane)
                 {
                     if (plane == null) { bw.Write(0); return; }
@@ -365,11 +401,25 @@ namespace MVGE_GEN
                 WritePlane(chunk.PlanePosY);
                 WritePlane(chunk.PlaneNegZ);
                 WritePlane(chunk.PlanePosZ);
+
+                // Transparent boundary planes (ids)
+                void WriteTransparentPlane(ushort[] plane)
+                {
+                    if (plane == null) { bw.Write(0); return; }
+                    bw.Write(plane.Length);
+                    for (int i = 0; i < plane.Length; i++) bw.Write(plane[i]);
+                }
+                WriteTransparentPlane(chunk.TransparentPlaneNegX);
+                WriteTransparentPlane(chunk.TransparentPlanePosX);
+                WriteTransparentPlane(chunk.TransparentPlaneNegY);
+                WriteTransparentPlane(chunk.TransparentPlanePosY);
+                WriteTransparentPlane(chunk.TransparentPlaneNegZ);
+                WriteTransparentPlane(chunk.TransparentPlanePosZ);
             }
         }
 
-        // --------------------- Batch Load ---------------------
-        // Loads a batch file (if present) and materializes all chunk payloads into unbuiltChunks dictionary.
+        // --------------------- Quad Load ---------------------
+        // Loads a quad file (if present) and materializes all chunk payloads into unbuiltChunks dictionary.
         // Returns the specific requested chunk if present, else null.
         private Chunk LoadBatchForChunk(int targetCx,int targetCy,int targetCz)
         {
@@ -382,9 +432,9 @@ namespace MVGE_GEN
                 using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 256*1024, FileOptions.SequentialScan);
                 using var br = new BinaryReader(fs);
 
-                // Batch header
+                // Quad header
                 var magic = br.ReadBytes(4);
-                if (magic.Length != 4 || magic[0]!=BATCH_MAGIC[0] || magic[1]!=BATCH_MAGIC[1] || magic[2]!=BATCH_MAGIC[2] || magic[3]!=BATCH_MAGIC[3]) return null;
+                if (magic.Length != 4 || magic[0]!=QUAD_MAGIC[0] || magic[1]!=QUAD_MAGIC[1] || magic[2]!=QUAD_MAGIC[2] || magic[3]!=QUAD_MAGIC[3]) return null;
                 ushort ver = br.ReadUInt16(); br.ReadUInt16(); // padding
                 int fileBx = br.ReadInt32(); int fileBz = br.ReadInt32();
                 if (fileBx != bx || fileBz != bz) return null;
@@ -399,7 +449,7 @@ namespace MVGE_GEN
                     int payloadLen = br.ReadInt32();
                     if (payloadLen <= 0 || fs.Position + payloadLen > fs.Length)
                     {
-                        Console.WriteLine($"[World] Batch ({bx},{bz}) corrupt chunk payload length at index {i} (len={payloadLen}). Aborting remaining.");
+                        Console.WriteLine($"[World] Quad ({bx},{bz}) corrupt chunk payload length at index {i} (len={payloadLen}). Aborting remaining.");
                         break;
                     }
                     byte[] payload = br.ReadBytes(payloadLen);
@@ -423,7 +473,7 @@ namespace MVGE_GEN
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[World] Failed to load batch ({bx},{bz}): {ex.Message}");
+                Console.WriteLine($"[World] Failed to load quad ({bx},{bz}): {ex.Message}");
             }
             return requested;
         }
@@ -517,8 +567,7 @@ namespace MVGE_GEN
                 {
                     byte[] fmagic = br.ReadBytes(CHUNK_FOOTER_MAGIC.Length);
                     bool footerOk = fmagic.Length==CHUNK_FOOTER_MAGIC.Length && fmagic[0]==CHUNK_FOOTER_MAGIC[0] && fmagic[1]==CHUNK_FOOTER_MAGIC[1] && fmagic[2]==CHUNK_FOOTER_MAGIC[2];
-                    long minimalFooterRemainder = 4+4+4+1+1+2+2+1+1; // temperature..flags.. etc.
-                    if (footerOk && ms.Position + minimalFooterRemainder <= ms.Length)
+                    if (footerOk && ms.Position + 4 + 4 + 4 + 1 + 1 + 2 <= ms.Length)
                     {
                         try
                         {
@@ -530,34 +579,25 @@ namespace MVGE_GEN
                             uint flagsA = br.ReadUInt32();
                             byte faceFlags = br.ReadByte();
                             byte occStatus = br.ReadByte();
-                            br.ReadUInt16(); // padding
-                            chunk.AllOneBlockBlockId = br.ReadUInt16();
-                            byte statsPresent = br.ReadByte();
                             br.ReadByte(); // padding
+                            chunk.AllOneBlockBlockId = br.ReadUInt16();
+                            // Flags
                             chunk.AllAirChunk = (flagsA & (1u<<0))!=0;
                             chunk.AllStoneChunk = (flagsA & (1u<<1))!=0;
                             chunk.AllSoilChunk = (flagsA & (1u<<2))!=0;
                             chunk.AllOneBlockChunk = (flagsA & (1u<<3))!=0;
                             chunk.FullyBuried = (flagsA & (1u<<4))!=0;
                             chunk.BuriedByNeighbors = (flagsA & (1u<<5))!=0;
+                            chunk.AllWaterChunk = (flagsA & (1u<<6))!=0;
                             chunk.OcclusionStatus = (Chunk.OcclusionClass)occStatus;
+                            // Face flags
                             chunk.FaceSolidNegX = (faceFlags & (1<<0))!=0;
                             chunk.FaceSolidPosX = (faceFlags & (1<<1))!=0;
                             chunk.FaceSolidNegY = (faceFlags & (1<<2))!=0;
                             chunk.FaceSolidPosY = (faceFlags & (1<<3))!=0;
                             chunk.FaceSolidNegZ = (faceFlags & (1<<4))!=0;
                             chunk.FaceSolidPosZ = (faceFlags & (1<<5))!=0;
-                            if (statsPresent!=0 && ms.Position + (11*4)+1 <= ms.Length)
-                            {
-                                phase = "FooterStats";
-                                var stats = chunk.MeshPrepassStats;
-                                stats.SolidCount = br.ReadInt32();
-                                stats.ExposureEstimate = br.ReadInt32();
-                                stats.MinX = br.ReadInt32(); stats.MinY = br.ReadInt32(); stats.MinZ = br.ReadInt32();
-                                stats.MaxX = br.ReadInt32(); stats.MaxY = br.ReadInt32(); stats.MaxZ = br.ReadInt32();
-                                stats.XNonEmpty = br.ReadInt32(); stats.YNonEmpty = br.ReadInt32(); stats.ZNonEmpty = br.ReadInt32();
-                                byte hasStats = br.ReadByte(); stats.HasStats = hasStats!=0; chunk.MeshPrepassStats = stats;
-                            }
+
                             phase = "FooterPlanes";
                             ulong[] ReadPlane(){ if (ms.Position + 4 > ms.Length) return null; int len = br.ReadInt32(); if (len<=0 || ms.Position + len*8 > ms.Length) return null; var arr=new ulong[len]; for(int i=0;i<len;i++) arr[i]=br.ReadUInt64(); return arr; }
                             chunk.PlaneNegX = ReadPlane();
@@ -566,6 +606,15 @@ namespace MVGE_GEN
                             chunk.PlanePosY = ReadPlane();
                             chunk.PlaneNegZ = ReadPlane();
                             chunk.PlanePosZ = ReadPlane();
+
+                            // Transparent boundary planes
+                            ushort[] ReadTransparentPlane(){ if (ms.Position + 4 > ms.Length) return null; int len = br.ReadInt32(); if (len<=0 || ms.Position + len*2 > ms.Length) return null; var arr=new ushort[len]; for(int i=0;i<len;i++) arr[i]=br.ReadUInt16(); return arr; }
+                            chunk.TransparentPlaneNegX = ReadTransparentPlane();
+                            chunk.TransparentPlanePosX = ReadTransparentPlane();
+                            chunk.TransparentPlaneNegY = ReadTransparentPlane();
+                            chunk.TransparentPlanePosY = ReadTransparentPlane();
+                            chunk.TransparentPlaneNegZ = ReadTransparentPlane();
+                            chunk.TransparentPlanePosZ = ReadTransparentPlane();
                         }
                         catch (Exception fex)
                         {
@@ -590,26 +639,101 @@ namespace MVGE_GEN
             {
                 using var ms = new MemoryStream(payload,false);
                 using var br = new BinaryReader(ms);
-                if (payload.Length < 7) return new Section();
+                if (payload.Length < 9) return new Section();
                 var sec = new Section(); sec.Kind = kind; sec.VoxelCount = Section.SECTION_SIZE*Section.SECTION_SIZE*Section.SECTION_SIZE;
-                sec.OpaqueVoxelCount = br.ReadUInt16(); sec.InternalExposure = br.ReadInt32(); byte metaFlags = br.ReadByte();
-                bool hasBounds = (metaFlags & 1)!=0; bool hasOcc = (metaFlags & 2)!=0;
-                if (hasBounds && ms.Position + 6 <= ms.Length){ sec.HasBounds=true; sec.MinLX=br.ReadByte(); sec.MinLY=br.ReadByte(); sec.MinLZ=br.ReadByte(); sec.MaxLX=br.ReadByte(); sec.MaxLY=br.ReadByte(); sec.MaxLZ=br.ReadByte(); }
-                if (hasOcc){ ulong[] ReadOcc(){ if (ms.Position>=ms.Length) return null; int len = br.ReadByte(); if (len<=0 || ms.Position + len*8 > ms.Length) return null; var arr=new ulong[len]; for(int i=0;i<len;i++) arr[i]=br.ReadUInt64(); return arr; } sec.OpaqueBits=ReadOcc(); sec.FaceNegXBits=ReadOcc(); sec.FacePosXBits=ReadOcc(); sec.FaceNegYBits=ReadOcc(); sec.FacePosYBits=ReadOcc(); sec.FaceNegZBits=ReadOcc(); sec.FacePosZBits=ReadOcc(); }
-                sec.CompletelyFull = (metaFlags & (1<<2))!=0; sec.MetadataBuilt = (metaFlags & (1<<3))!=0; sec.IsAllAir = (metaFlags & (1<<4))!=0; sec.StructuralDirty = (metaFlags & (1<<5))!=0; sec.IdMapDirty = (metaFlags & (1<<6))!=0; sec.BoundingBoxDirty = (metaFlags & (1<<7))!=0;
+                // Counts
+                sec.OpaqueVoxelCount = br.ReadUInt16();
+                sec.TransparentCount = br.ReadUInt16();
+                sec.EmptyCount = br.ReadUInt16();
+                // Exposure
+                sec.InternalExposure = br.ReadInt32();
+                byte metaFlags = br.ReadByte();
+                bool hasBounds = (metaFlags & 1)!=0;
+                bool hasOpaqueMasks = (metaFlags & 2)!=0;
+                bool completelyFull = (metaFlags & 4)!=0;
+                bool metadataBuilt = (metaFlags & 8)!=0;
+                bool isAllAir = (metaFlags & 16)!=0;
+                bool hasTransparentMasks = (metaFlags & 32)!=0;
+                bool hasEmptyBits = (metaFlags & 64)!=0;
+                if (hasBounds && ms.Position + 6 <= ms.Length)
+                {
+                    sec.HasBounds=true; sec.MinLX=br.ReadByte(); sec.MinLY=br.ReadByte(); sec.MinLZ=br.ReadByte(); sec.MaxLX=br.ReadByte(); sec.MaxLY=br.ReadByte(); sec.MaxLZ=br.ReadByte();
+                }
+
+                ulong[] ReadUlongArr(){ if (ms.Position>=ms.Length) return null; int len = br.ReadByte(); if (len<=0 || ms.Position + len*8 > ms.Length) return null; var arr=new ulong[len]; for(int i=0;i<len;i++) arr[i]=br.ReadUInt64(); return arr; }
+
+                if (hasOpaqueMasks)
+                {
+                    sec.OpaqueBits = ReadUlongArr();
+                    sec.FaceNegXBits = ReadUlongArr();
+                    sec.FacePosXBits = ReadUlongArr();
+                    sec.FaceNegYBits = ReadUlongArr();
+                    sec.FacePosYBits = ReadUlongArr();
+                    sec.FaceNegZBits = ReadUlongArr();
+                    sec.FacePosZBits = ReadUlongArr();
+                }
+
+                if (hasTransparentMasks)
+                {
+                    sec.TransparentBits = ReadUlongArr();
+                    sec.TransparentFaceNegXBits = ReadUlongArr();
+                    sec.TransparentFacePosXBits = ReadUlongArr();
+                    sec.TransparentFaceNegYBits = ReadUlongArr();
+                    sec.TransparentFacePosYBits = ReadUlongArr();
+                    sec.TransparentFaceNegZBits = ReadUlongArr();
+                    sec.TransparentFacePosZBits = ReadUlongArr();
+                }
+
+                if (hasEmptyBits)
+                {
+                    sec.EmptyBits = ReadUlongArr();
+                }
+
+                sec.CompletelyFull = completelyFull; sec.MetadataBuilt = metadataBuilt; sec.IsAllAir = isAllAir;
+                sec.HasTransparent = sec.TransparentCount > 0; sec.HasAir = sec.EmptyCount > 0;
+
                 switch(kind)
                 {
-                    case Section.RepresentationKind.Empty: sec.IsAllAir = true; break;
-                    case Section.RepresentationKind.Uniform: if (ms.Position + 2 <= ms.Length) sec.UniformBlockId = br.ReadUInt16(); break;
+                    case Section.RepresentationKind.Empty:
+                        sec.IsAllAir = true;
+                        break;
+                    case Section.RepresentationKind.Uniform:
+                        if (ms.Position + 2 <= ms.Length) sec.UniformBlockId = br.ReadUInt16();
+                        break;
                     case Section.RepresentationKind.Expanded:
                         int expectedBytes = sec.VoxelCount * 2; if (ms.Position + expectedBytes <= ms.Length){ sec.ExpandedDense = new ushort[sec.VoxelCount]; var raw = br.ReadBytes(expectedBytes); MemoryMarshal.Cast<byte,ushort>(raw).CopyTo(sec.ExpandedDense); }
                         break;
                     case Section.RepresentationKind.Packed:
                     case Section.RepresentationKind.MultiPacked:
-                        if (ms.Position < ms.Length){ sec.BitsPerIndex = br.ReadByte(); if (ms.Position + 2 <= ms.Length){ int paletteCount = br.ReadUInt16(); if (paletteCount>=0 && paletteCount<=4096 && ms.Position + paletteCount*2 <= ms.Length){ sec.Palette = new List<ushort>(paletteCount); for(int i=0;i<paletteCount;i++) sec.Palette.Add(br.ReadUInt16()); if (ms.Position +4 <= ms.Length){ int wordCount = br.ReadInt32(); if (wordCount>=0 && ms.Position + wordCount*4 <= ms.Length){ if (wordCount>0){ sec.BitData = new uint[wordCount]; for(int i=0;i<wordCount;i++) sec.BitData[i]=br.ReadUInt32(); } } if (ms.Position < ms.Length){ byte mapPresent = br.ReadByte(); if (mapPresent!=0 && ms.Position + 2 <= ms.Length){ int mapCount = br.ReadUInt16(); if (mapCount>=0 && mapCount<=4096 && ms.Position + mapCount*4 <= ms.Length){ sec.PaletteLookup = new Dictionary<ushort,int>(mapCount); for(int mi=0;mi<mapCount;mi++){ ushort bid=br.ReadUInt16(); ushort idx=br.ReadUInt16(); sec.PaletteLookup[bid]=idx; } } } else if (sec.Palette!=null){ sec.PaletteLookup = new Dictionary<ushort,int>(sec.Palette.Count); for(int ii=0;ii<sec.Palette.Count;ii++) sec.PaletteLookup[sec.Palette[ii]]=ii; } } } } } }
+                        if (ms.Position < ms.Length)
+                        {
+                            sec.BitsPerIndex = br.ReadByte();
+                            if (ms.Position + 2 <= ms.Length)
+                            {
+                                int paletteCount = br.ReadUInt16();
+                                if (paletteCount>=0 && paletteCount<=4096 && ms.Position + paletteCount*2 <= ms.Length)
+                                {
+                                    sec.Palette = new List<ushort>(paletteCount);
+                                    for(int i=0;i<paletteCount;i++) sec.Palette.Add(br.ReadUInt16());
+                                    if (ms.Position +4 <= ms.Length)
+                                    {
+                                        int wordCount = br.ReadInt32();
+                                        if (wordCount>=0 && ms.Position + wordCount*4 <= ms.Length)
+                                        {
+                                            if (wordCount>0){ sec.BitData = new uint[wordCount]; for(int i=0;i<wordCount;i++) sec.BitData[i]=br.ReadUInt32(); }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // Build PaletteLookup at runtime for convenience
+                        if (sec.Palette!=null)
+                        {
+                            sec.PaletteLookup = new Dictionary<ushort,int>(sec.Palette.Count);
+                            for (int i=0;i<sec.Palette.Count;i++) sec.PaletteLookup[sec.Palette[i]] = i;
+                        }
                         break;
                 }
-                if ((kind==Section.RepresentationKind.Packed || kind==Section.RepresentationKind.MultiPacked) && sec.Palette!=null && sec.PaletteLookup==null){ sec.PaletteLookup = new Dictionary<ushort,int>(sec.Palette.Count); for(int i=0;i<sec.Palette.Count;i++) sec.PaletteLookup[sec.Palette[i]]=i; }
                 return sec;
             }
             catch (Exception ex)
@@ -635,11 +759,11 @@ namespace MVGE_GEN
             if (any)
             {
                 lastFullWorldSave = DateTime.UtcNow;
-                Console.WriteLine("[World] Saved dirty batches.");
+                Console.WriteLine("[World] Saved dirty quads.");
             }
         }
 
-        // when force==true save ALL batches regardless of Dirty flag.
+        // when force==true save ALL quads regardless of Dirty flag.
         private void SaveAllBatches(bool force)
         {
             if (!force)
