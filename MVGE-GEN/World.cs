@@ -356,10 +356,6 @@ namespace MVGE_GEN
                         var (bx, bz) = Quadrant.GetBatchIndices(cx, cz);
                         bool batchExists = loadedBatches.TryGetValue((bx, bz), out var existingBatch);
 
-                        // Quick skip if chunk already materialized
-                        if (batchExists && (existingBatch.TryGetChunk(cx, cy, cz, out _) || activeChunks.ContainsKey(key) || unbuiltChunks.ContainsKey(key) || passiveChunks.ContainsKey(key)))
-                        { if (isBuffer) bufferGenSchedule.TryRemove(key, out _); else chunkGenSchedule.TryRemove(key, out _); continue; }
-
                         int lodDist = GameManager.settings.lod1RenderDistance;
                         int playerCxSnapshot = playerChunkX; int playerCySnapshot = playerChunkY; int playerCzSnapshot = playerChunkZ;
                         int activeRadiusPlusOne = lodDist + 1;
@@ -369,6 +365,28 @@ namespace MVGE_GEN
                         int batchMaxCz = batchMinCz + Quadrant.QUAD_SIZE - 1;
                         bool intersects = !(batchMaxCx < playerCxSnapshot - activeRadiusPlusOne || batchMinCx > playerCxSnapshot + activeRadiusPlusOne || batchMaxCz < playerCzSnapshot - activeRadiusPlusOne || batchMinCz > playerCzSnapshot + activeRadiusPlusOne);
                         if (!intersects)
+                        { if (isBuffer) bufferGenSchedule.TryRemove(key, out _); else chunkGenSchedule.TryRemove(key, out _); continue; }
+
+                        // If the quad exists and already contains this chunk instance, ensure it is re-registered in world dictionaries
+                        if (batchExists && existingBatch.TryGetChunk(cx, cy, cz, out var existing))
+                        {
+                            bool insideCore = Math.Abs(cx - playerCxSnapshot) <= lodDist && Math.Abs(cz - playerCzSnapshot) <= lodDist && Math.Abs(cy - playerCySnapshot) <= lodDist;
+                            bool insidePlusOne = Math.Abs(cx - playerCxSnapshot) <= lodDist + 1 && Math.Abs(cz - playerCzSnapshot) <= lodDist + 1 && Math.Abs(cy - playerCySnapshot) <= lodDist;
+
+                            if (!activeChunks.ContainsKey(key) && !unbuiltChunks.ContainsKey(key) && !passiveChunks.ContainsKey(key))
+                            {
+                                if (insideCore) unbuiltChunks[key] = existing; else if (insidePlusOne) passiveChunks[key] = existing;
+                            }
+                            if (insideCore)
+                            {
+                                EnqueueMeshBuild(key, markDirty: false);
+                            }
+                            if (isBuffer) bufferGenSchedule.TryRemove(key, out _); else chunkGenSchedule.TryRemove(key, out _);
+                            continue;
+                        }
+
+                        // Quick skip if chunk already materialized in dictionaries
+                        if (activeChunks.ContainsKey(key) || unbuiltChunks.ContainsKey(key) || passiveChunks.ContainsKey(key))
                         { if (isBuffer) bufferGenSchedule.TryRemove(key, out _); else chunkGenSchedule.TryRemove(key, out _); continue; }
 
                         // Acquire or create generation state for this quad
@@ -862,6 +880,34 @@ namespace MVGE_GEN
                             }
                         }
                     }
+                }
+            }
+        }
+        private void EnsureBatchesForActiveArea_Rehydrate(int centerCx,int centerCz)
+        {
+            int lodDist = GameManager.settings.lod1RenderDistance + 1; // +1 ring per new design
+            for (int dx = -lodDist; dx <= lodDist; dx++)
+            {
+                for (int dz = -lodDist; dz <= lodDist; dz++)
+                {
+                    int cx = centerCx + dx;
+                    int cz = centerCz + dz;
+                    var (bx,bz) = Quadrant.GetBatchIndices(cx, cz);
+                    // Touch quad (forces placeholder creation or load if file exists)
+                    if (!loadedBatches.ContainsKey((bx,bz)))
+                    {
+                        if (BatchFileExists(bx,bz))
+                        {
+                            LoadBatchForChunk(cx, centerCz, cz); // vertical index not needed for batch load
+                        }
+                        else
+                        {
+                            // If no quad file, will be populated lazily as chunks generate.
+                            GetOrCreateBatch(bx,bz);
+                        }
+                    }
+                    // Ensure any already-loaded quad schedules visible chunks for mesh build upon entering area
+                    ScheduleVisibleChunksInBatch(bx,bz);
                 }
             }
         }
