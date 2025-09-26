@@ -74,7 +74,7 @@ namespace MVGE_GFX.Terrain.Sections
                         int si = ((sx * data.sectionsY) + sy) * data.sectionsZ + sz;
                         ref var desc = ref data.SectionDescs[si];
 
-                        bool fallbackOnly = true; // only set true for debug purposes
+                        bool fallbackOnly = false; // only set true for debug purposes
                         bool specializedHandled = false;
                         if (fallbackOnly)
                         {
@@ -90,15 +90,6 @@ namespace MVGE_GFX.Terrain.Sections
                                     break;
                                 case 1: // Uniform
                                     specializedHandled = EmitUniformSectionInstances(ref desc, sx, sy, sz, S, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
-                                    break;
-                                case 3: // DenseExpanded
-                                    specializedHandled = EmitExpandedSectionInstances(ref desc, sx, sy, sz, S, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
-                                    break;
-                                case 4: // Packed (single-id)
-                                    specializedHandled = EmitSinglePackedSectionInstances(ref desc, sx, sy, sz, S, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
-                                    break;
-                                case 5: // MultiPacked (multi-id)
-                                    specializedHandled = EmitMultiPackedSectionInstances(ref desc, sx, sy, sz, S, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
                                     break;
                             }
                             if (!specializedHandled)

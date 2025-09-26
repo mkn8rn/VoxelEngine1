@@ -1,9 +1,11 @@
 ﻿using MVGE_GFX.Models;
 using MVGE_GFX.Textures;
+using MVGE_INF.Loaders; // added for TerrainLoader.IsOpaque
 using MVGE_INF.Models.Generation;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 
@@ -233,82 +235,6 @@ namespace MVGE_GFX.Terrain.Sections
             }
         }
 
-        // single shared tile index for all bits in mask (with bounds check retained)
-        internal static void EmitFacesFromMask
-            (Span<ulong> mask, byte faceDir,
-            int baseX, int baseY, int baseZ,
-            int lxMin, int lxMax, int lyMin,
-            int lyMax, int lzMin, int lzMax, uint tileIndex,
-            List<byte> offsetList, List<uint> tileIndexList, List<byte> faceDirList)
-        {
-            EnsureLiDecode();
-            for (int wi = 0; wi < 64; wi++)
-            {
-                ulong word = mask[wi];
-                while (word != 0)
-                {
-                    int bit = System.Numerics.BitOperations.TrailingZeroCount(word);
-                    word &= word - 1;
-                    int li = (wi << 6) + bit;
-                    int ly = _lyFromLi[li];
-                    int t = li >> 4; int lx = t & 15; int lz = t >> 4;
-                    if (lx < lxMin || lx > lxMax || ly < lyMin || ly > lyMax || lz < lzMin || lz > lzMax) continue;
-                    EmitOneInstance(baseX + lx, baseY + ly, baseZ + lz, tileIndex, faceDir, offsetList, tileIndexList, faceDirList);
-                }
-            }
-        }
-
-        // No-bounds variant used after ApplyBoundsMask so per-bit coordinate comparisons are eliminated.
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static void EmitFacesFromMaskNoBounds(
-            Span<ulong> mask, byte faceDir,
-            int baseX, int baseY, int baseZ,
-            uint tileIndex,
-            List<byte> offsetList, List<uint> tileIndexList, List<byte> faceDirList)
-        {
-            EnsureLiDecode();
-            for (int wi = 0; wi < 64; wi++)
-            {
-                ulong word = mask[wi];
-                while (word != 0)
-                {
-                    int bit = System.Numerics.BitOperations.TrailingZeroCount(word);
-                    word &= word - 1;
-                    int li = (wi << 6) + bit;
-                    int ly = _lyFromLi[li];
-                    int t = li >> 4; int lx = t & 15; int lz = t >> 4;
-                    EmitOneInstance(baseX + lx, baseY + ly, baseZ + lz, tileIndex, faceDir, offsetList, tileIndexList, faceDirList);
-                }
-            }
-        }
-
-        // per-voxel tile selection (supports multi-id decoding)
-        internal static void EmitFacesFromMask(
-            Span<ulong> mask, byte faceDir,
-            int baseX, int baseY, int baseZ,
-            int lxMin, int lxMax, int lyMin, int lyMax, int lzMin, int lzMax,
-            Func<int /*li*/, int /*lx*/, int /*ly*/, int /*lz*/, (ushort block, uint tileIndex)> perVoxel,
-            List<byte> offsetList, List<uint> tileIndexList, List<byte> faceDirList)
-        {
-            EnsureLiDecode();
-            for (int wi = 0; wi < 64; wi++)
-            {
-                ulong word = mask[wi];
-                while (word != 0)
-                {
-                    int bit = BitOperations.TrailingZeroCount(word);
-                    word &= word - 1;
-                    int li = (wi << 6) + bit;
-                    int ly = _lyFromLi[li];
-                    int t = li >> 4; int lx = t & 15; int lz = t >> 4;
-                    if (lx < lxMin || lx > lxMax || ly < lyMin || ly > lyMax || lz < lzMin || lz > lzMax) continue;
-                    var (block, tileIndex) = perVoxel(li, lx, ly, lz);
-                    if (block == 0) continue; // guard
-                    EmitOneInstance(baseX + lx, baseY + ly, baseZ + lz, tileIndex, faceDir, offsetList, tileIndexList, faceDirList);
-                }
-            }
-        }
-
         // ------------------------------------------------------------------------------------
         // Bitset utilities
         // ------------------------------------------------------------------------------------
@@ -353,35 +279,6 @@ namespace MVGE_GFX.Terrain.Sections
                     }
                 }
                 dst[i] = v;
-            }
-        }
-
-        // Iterate all set bits in a 4096-bit mask (64 ulongs) and invoke a callback with the linear index (li).
-        // Optional bounds check (lx/ly/lz mins/maxs) avoids per-caller duplicate guards.
-        internal static void ForEachSetBit(
-            Span<ulong> mask,
-            int lxMin, int lxMax, int lyMin, int lyMax, int lzMin, int lzMax,
-            Action<int /*li*/, int /*lx*/, int /*ly*/, int /*lz*/> onBit)
-        {
-            // decode tables exist in the class (EnsureLiDecode defined in another partial)
-            EnsureLiDecode();
-            for (int wi = 0; wi < 64; wi++)
-            {
-                ulong word = mask[wi];
-                while (word != 0)
-                {
-                    int bit = System.Numerics.BitOperations.TrailingZeroCount(word);
-                    word &= word - 1;
-                    int li = (wi << 6) + bit;
-
-                    int ly = _lyFromLi[li];
-                    int t = li >> 4;
-                    int lx = t & 15;
-                    int lz = t >> 4;
-
-                    if (lx < lxMin || lx > lxMax || ly < lyMin || ly > lyMax || lz < lzMin || lz > lzMax) continue;
-                    onBit(li, lx, ly, lz);
-                }
             }
         }
 

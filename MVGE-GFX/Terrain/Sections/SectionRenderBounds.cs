@@ -44,6 +44,73 @@ namespace MVGE_GFX.Terrain.Sections
             new FaceDescriptor(5,  0,  0,  1, 2, false),  // +Z
         };
 
+        // Local packed (multi-id) decode (reused by MultiPacked + helpers)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static ushort DecodePackedLocal(ref SectionPrerenderDesc d, int lx, int ly, int lz)
+        {
+            if (d.PackedBitData == null || d.Palette == null || d.BitsPerIndex <= 0) return 0;
+            int li = ((lz * 16 + lx) << 4) + ly;
+            int bpi = d.BitsPerIndex;
+            long bitPos = (long)li * bpi;
+            int word = (int)(bitPos >> 5);
+            int bitOffset = (int)(bitPos & 31);
+            uint value = d.PackedBitData[word] >> bitOffset;
+            int rem = 32 - bitOffset;
+            if (rem < bpi) value |= d.PackedBitData[word + 1] << rem;
+            int mask = (1 << bpi) - 1;
+            int pi = (int)(value & mask);
+            if ((uint)pi >= (uint)d.Palette.Count) return 0;
+            return d.Palette[pi];
+        }
+
+        // Unified neighbor voxel decode with occupancy flag (uniform / expanded / packed / multi-packed)
+        // occupied == true when id != 0 and corresponding storage bit/entry is set.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static ushort DecodeNeighborVoxel(ref SectionPrerenderDesc n, int lx, int ly, int lz, out bool occupied)
+        {
+            occupied = false;
+            switch (n.Kind)
+            {
+                case 1: // Uniform
+                {
+                    ushort id = n.UniformBlockId;
+                    occupied = id != 0;
+                    return id;
+                }
+                case 3: // Expanded (dense array)
+                {
+                    if (n.ExpandedDense == null) return 0;
+                    int li = ((lz * 16 + lx) * 16) + ly;
+                    ushort id = n.ExpandedDense[li];
+                    occupied = id != 0;
+                    return id;
+                }
+                case 4: // Single packed (palette[1] holds the single non-air id).Test uses opaque OR transparent bits.
+                {
+                    if (n.Palette == null || n.Palette.Count <= 1) return 0;
+                    int li = ((lz * 16 + lx) * 16) + ly;
+                    bool bitSetOpaque = n.OpaqueBits != null && (n.OpaqueBits[li >> 6] & (1UL << (li & 63))) != 0UL;
+                    bool bitSetTransparent = n.TransparentBits != null && (n.TransparentBits[li >> 6] & (1UL << (li & 63))) != 0UL;
+                    bool occ = bitSetOpaque || bitSetTransparent;
+                    if (!occ)
+                    {
+                        occupied = false;
+                        return 0;
+                    }
+                    occupied = true;
+                    return n.Palette[1];
+                }
+                case 5: // Multi-packed
+                {
+                    ushort id = DecodePackedLocal(ref n, lx, ly, lz);
+                    occupied = id != 0;
+                    return id;
+                }
+                default:
+                    return 0;
+            }
+        }
+
         // ------------------------------------------------------------------------------------
         // Bounds helper (world-base-clamped 0..15 local bounds)
         // ------------------------------------------------------------------------------------
@@ -375,6 +442,38 @@ namespace MVGE_GFX.Terrain.Sections
             }
         }
 
+        // Build internal transparent face masks then cull adjacency to opaque.
+        private static void BuildTransparentInternalFaceMasks(
+            ReadOnlySpan<ulong> transparentOcc,
+            ReadOnlySpan<ulong> opaqueOcc,
+            Span<ulong> faceNX, Span<ulong> facePX,
+            Span<ulong> faceNY, Span<ulong> facePY,
+            Span<ulong> faceNZ, Span<ulong> facePZ)
+        {
+            BuildInternalFaceMasks(transparentOcc, faceNX, facePX, faceNY, facePY, faceNZ, facePZ);
+            Span<ulong> shift = stackalloc ulong[64];
+
+            // For each direction, construct mask of faces whose neighbor is opaque, then subtract.
+            // -X faces hidden if +X neighbor opaque
+            BitsetShiftRight(opaqueOcc, STRIDE_X, shift);
+            for (int i = 0; i < 64; i++) faceNX[i] &= ~shift[i];
+            // +X faces hidden if -X neighbor opaque
+            BitsetShiftLeft(opaqueOcc, STRIDE_X, shift);
+            for (int i = 0; i < 64; i++) facePX[i] &= ~shift[i];
+            // -Y
+            BitsetShiftRight(opaqueOcc, STRIDE_Y, shift);
+            for (int i = 0; i < 64; i++) faceNY[i] &= ~shift[i];
+            // +Y
+            BitsetShiftLeft(opaqueOcc, STRIDE_Y, shift);
+            for (int i = 0; i < 64; i++) facePY[i] &= ~shift[i];
+            // -Z
+            BitsetShiftRight(opaqueOcc, STRIDE_Z, shift);
+            for (int i = 0; i < 64; i++) faceNZ[i] &= ~shift[i];
+            // +Z
+            BitsetShiftLeft(opaqueOcc, STRIDE_Z, shift);
+            for (int i = 0; i < 64; i++) facePZ[i] &= ~shift[i];
+        }
+
         // Generalized boundary reinsertion (metadata-driven) with optional skip flags (used by packed selective path).
         // Preserves original face visibility semantics while reducing branch duplication.
         // World plane & neighbor face bit semantics: bit set == opaque voxel present; transparent blocks are treated as holes.
@@ -519,27 +618,6 @@ namespace MVGE_GFX.Terrain.Sections
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static int SecIndex(int sxL, int syL, int szL, int syCount, int szCount)
             => ((sxL * syCount) + syL) * szCount + szL;
-
-        // Returns a ref to the neighbor descriptor when in-bounds; otherwise returns ref to 'self'.
-        // 'exists' indicates whether a real neighbor exists.
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static ref SectionPrerenderDesc NeighborOrSelf(
-            SectionPrerenderDesc[] allSecs,
-            int sx, int sy, int sz,
-            int dx, int dy, int dz,
-            int sxCount, int syCount, int szCount,
-            ref SectionPrerenderDesc self,
-            out bool exists)
-        {
-            int nsx = sx + dx, nsy = sy + dy, nsz = sz + dz;
-            if ((uint)nsx < (uint)sxCount && (uint)nsy < (uint)syCount && (uint)nsz < (uint)szCount)
-            {
-                exists = true;
-                return ref allSecs[SecIndex(nsx, nsy, nsz, syCount, szCount)];
-            }
-            exists = false;
-            return ref self;
-        }
 
         // Fallback solid test against arbitrary neighbor descriptor (shared across paths).
         // Returns true only for opaque voxels (uniform transparent blocks excluded).

@@ -5,6 +5,7 @@ using MVGE_GFX.Models;
 using System.Runtime.InteropServices;
 using System;
 using System.Numerics;
+using MVGE_INF.Loaders;
 
 namespace MVGE_GFX.Terrain.Sections
 {
@@ -21,18 +22,23 @@ namespace MVGE_GFX.Terrain.Sections
         }
 
         /// Emits boundary face instances for a Uniform section (Kind==1) containing a single non‑air block id.
-        /// Only faces on the outer surface of the section that are exposed to air or world boundary are emitted.
-        /// Steps:
-        ///  1. Compute per‑face tile indices (PrecomputePerFaceTiles) OR fetch cached set; enable single‑tile fast path if all equal.
-        ///  2. Early interior occlusion fast path: if all six neighbors exist and are fully solid, skip immediately.
-        ///  3. Fast-path stratification pre-pass: classify each of the six faces into FaceState (WorldBoundary, NeighborMissing, NeighborFullSolid, NeighborMask, NeighborFallback) and compute predicted visible face count (capacity reservation uses this tighter bound instead of worst-case 6*256).
-        ///  4. Emit all guaranteed full-plane faces first (NeighborMissing) in a tight loop (reduces branching inside the main per-face loop). These are never world boundary faces with potential plane holes.
-        ///  5. Process remaining faces (WorldBoundary, NeighborMask, NeighborFallback) applying boundary plane filtering, mask-driven emission, fallback voxel checks. NeighborFullSolid faces are skipped.
-        ///  6. Return true (uniform path always handled; empty uniform returns true with no output). Existing comments retained and updated to describe functionality.
+        /// Only faces on the outer surface of the section that are exposed are emitted.
+        /// Unified path for BOTH opaque and transparent uniform blocks:
+        ///  Opaque visibility: face visible when adjacent cell (section/neighbor/world) is not opaque.
+        ///  Transparent visibility: face visible when adjacent cell is air OR a different transparent id; hidden when neighbor is opaque or same transparent id.
+        /// Steps (opaque branch preserves earlier logic / comments now describe combined behavior):
+        ///  1. Compute per‑face tile indices (cached). Detect if all faces share one tile (single-tile fast path).
+        ///  2. Early interior occlusion skip (opaque only). Transparent uniform blocks never skip: they may border opaque or air differently.
+        ///  3. (Opaque only) Stratification pre-pass classifies faces and predicts capacity.
+        ///  4. (Opaque only) Emit full-plane faces first, then partial / boundary / fallback faces.
+        ///  5. (Transparent) Direct per-face plane scan applying transparent rules (no opaque stratification overhead, bounded to 6 * 256 samples). Same-id uniform neighbor planes are skipped entirely up-front. Chunk boundary same-id uniform transparent neighbor chunks are also skipped when every opposing boundary cell matches this id.
+        ///  6. Return true (uniform path always handled; empty uniform returns true with no output).
         private bool EmitUniformSectionInstances(ref SectionPrerenderDesc desc, int sx, int sy, int sz, int S,
             List<byte> offsetList, List<uint> tileIndexList, List<byte> faceDirList)
         {
             ushort block = desc.UniformBlockId; if (block == 0) return true; // treat as empty
+            bool isOpaque = TerrainLoader.IsOpaque(block);
+
             int baseX = sx * S; int baseY = sy * S; int baseZ = sz * S;
             int maxX = data.maxX; int maxY = data.maxY; int maxZ = data.maxZ;
 
@@ -40,6 +46,11 @@ namespace MVGE_GFX.Terrain.Sections
             int endX = baseX + S; if (endX > maxX) endX = maxX;
             int endY = baseY + S; if (endY > maxY) endY = maxY;
             int endZ = baseZ + S; if (endZ > maxZ) endZ = maxZ;
+
+            // Opaque world boundary plane bitsets (used to hide faces where outside neighbor is opaque)
+            var planeNegX = data.NeighborPlaneNegX; var planePosX = data.NeighborPlanePosX;
+            var planeNegY = data.NeighborPlaneNegY; var planePosY = data.NeighborPlanePosY;
+            var planeNegZ = data.NeighborPlaneNegZ; var planePosZ = data.NeighborPlanePosZ;
 
             // Use cached uniform face tile set to avoid recomputing per-face indices for repeated block ids.
             var tileSet = GetUniformFaceTileSet(block);
@@ -52,6 +63,225 @@ namespace MVGE_GFX.Terrain.Sections
             uint rTilePZ = sameTileAllFaces ? tileSet.SingleTile : tileSet.TilePZ;
             Span<uint> faceTiles = stackalloc uint[6] { rTileNX, rTilePX, rTileNY, rTilePY, rTileNZ, rTilePZ }; // stackalloc to avoid heap alloc per section
 
+            // TRANSPARENT BRANCH (unified path): For transparent uniform blocks we bypass opaque stratification and apply transparent per-face rules.
+            if (!isOpaque)
+            {
+                // Precompute same-id uniform neighbor presence per direction to skip entire planes (avoids per-cell sampling & ensures no faces between identical transparent uniform sections).
+                bool skipNX = false, skipPX = false, skipNY = false, skipPY = false, skipNZ = false, skipPZ = false;
+                var secs = data.SectionDescs;
+                int syCount = data.sectionsY; int szCount = data.sectionsZ; int sxCount = data.sectionsX;
+
+                // Helper local to probe neighbor descriptor safely (returns true if neighbor exists AND is same uniform transparent id).
+                [MethodImpl(MethodImplOptions.AggressiveInlining)]
+                bool SameTransparentUniform(int nsx, int nsy, int nsz)
+                {
+                    if ((uint)nsx >= (uint)sxCount || (uint)nsy >= (uint)syCount || (uint)nsz >= (uint)szCount) return false;
+                    ref var nd = ref secs[((nsx * syCount) + nsy) * szCount + nsz];
+                    return nd.Kind == 1 && nd.UniformBlockId == block && !TerrainLoader.IsOpaque(block);
+                }
+                if (sx > 0) skipNX = SameTransparentUniform(sx - 1, sy, sz);
+                if (sx + 1 < sxCount) skipPX = SameTransparentUniform(sx + 1, sy, sz);
+                if (sy > 0) skipNY = SameTransparentUniform(sx, sy - 1, sz);
+                if (sy + 1 < syCount) skipPY = SameTransparentUniform(sx, sy + 1, sz);
+                if (sz > 0) skipNZ = SameTransparentUniform(sx, sy, sz - 1);
+                if (sz + 1 < szCount) skipPZ = SameTransparentUniform(sx, sy, sz + 1);
+
+                // plane skip across chunk boundaries: if at chunk boundary and every cell of the neighbor chunk's opposing transparent plane equals this id, skip emission.
+                var tNegX = data.NeighborTransparentPlaneNegX; var tPosX = data.NeighborTransparentPlanePosX;
+                var tNegY = data.NeighborTransparentPlaneNegY; var tPosY = data.NeighborTransparentPlanePosY;
+                var tNegZ = data.NeighborTransparentPlaneNegZ; var tPosZ = data.NeighborTransparentPlanePosZ;
+
+                if (baseX == 0 && !skipNX && tNegX != null) // -X world boundary
+                {
+                    bool allSame = true;
+                    for (int z = baseZ; allSame && z < endZ; z++)
+                        for (int y = baseY; y < endY; y++)
+                        {
+                            int idx = z * maxY + y;
+                            if ((uint)idx >= (uint)tNegX.Length || tNegX[idx] != block) { allSame = false; break; }
+                        }
+                    if (allSame) skipNX = true;
+                }
+                if (endX == maxX && !skipPX && tPosX != null) // +X world boundary
+                {
+                    bool allSame = true;
+                    for (int z = baseZ; allSame && z < endZ; z++)
+                        for (int y = baseY; y < endY; y++)
+                        {
+                            int idx = z * maxY + y;
+                            if ((uint)idx >= (uint)tPosX.Length || tPosX[idx] != block) { allSame = false; break; }
+                        }
+                    if (allSame) skipPX = true;
+                }
+                if (baseY == 0 && !skipNY && tNegY != null) // -Y world boundary
+                {
+                    bool allSame = true;
+                    for (int xw = baseX; allSame && xw < endX; xw++)
+                        for (int z = baseZ; z < endZ; z++)
+                        {
+                            int idx = xw * maxZ + z;
+                            if ((uint)idx >= (uint)tNegY.Length || tNegY[idx] != block) { allSame = false; break; }
+                        }
+                    if (allSame) skipNY = true;
+                }
+                if (endY == maxY && !skipPY && tPosY != null) // +Y world boundary
+                {
+                    bool allSame = true;
+                    for (int xw = baseX; allSame && xw < endX; xw++)
+                        for (int z = baseZ; z < endZ; z++)
+                        {
+                            int idx = xw * maxZ + z;
+                            if ((uint)idx >= (uint)tPosY.Length || tPosY[idx] != block) { allSame = false; break; }
+                        }
+                    if (allSame) skipPY = true;
+                }
+                if (baseZ == 0 && !skipNZ && tNegZ != null) // -Z world boundary
+                {
+                    bool allSame = true;
+                    for (int xw = baseX; allSame && xw < endX; xw++)
+                        for (int y = baseY; y < endY; y++)
+                        {
+                            int idx = xw * maxY + y;
+                            if ((uint)idx >= (uint)tNegZ.Length || tNegZ[idx] != block) { allSame = false; break; }
+                        }
+                    if (allSame) skipNZ = true;
+                }
+                if (endZ == maxZ && !skipPZ && tPosZ != null) // +Z world boundary
+                {
+                    bool allSame = true;
+                    for (int xw = baseX; allSame && xw < endX; xw++)
+                        for (int y = baseY; y < endY; y++)
+                        {
+                            int idx = xw * maxY + y;
+                            if ((uint)idx >= (uint)tPosZ.Length || tPosZ[idx] != block) { allSame = false; break; }
+                        }
+                    if (allSame) skipPZ = true;
+                }
+
+                // Capacity reserve worst-case (all six planes visible). Exact refinement not required – uniform sections are small.
+                int planeCellsXY = (endX - baseX) * (endY - baseY);
+                int planeCellsXZ = (endX - baseX) * (endZ - baseZ);
+                int planeCellsYZ = (endY - baseY) * (endZ - baseZ);
+                int predictedFaces = planeCellsYZ * 2 + planeCellsXZ * 2 + planeCellsXY * 2; // 6 planes potential
+                offsetList.EnsureCapacity(offsetList.Count + predictedFaces * 3);
+                tileIndexList.EnsureCapacity(tileIndexList.Count + predictedFaces);
+                faceDirList.EnsureCapacity(faceDirList.Count + predictedFaces);
+
+                // Transparent neighbor plane ids (used to hide faces where outside neighbor has same transparent id)
+                // (References retained above for skip and per-cell visibility tests.)
+
+                // Helper to test visibility for a candidate neighbor world coordinate.
+                [MethodImpl(MethodImplOptions.AggressiveInlining)]
+                bool TransparentFaceVisible(int nx, int ny, int nz, int curX, int curY, int curZ)
+                {
+                    // World boundary checks: index mapping same as fallback path.
+                    if (nx < 0)
+                    {
+                        int idx = curZ * maxY + curY;
+                        if (PlaneBit(planeNegX, idx)) return false; // outside opaque
+                        if (tNegX != null && (uint)idx < (uint)tNegX.Length && tNegX[idx] == block) return false; // same-id outside
+                        return true;
+                    }
+                    if (nx >= maxX)
+                    {
+                        int idx = curZ * maxY + curY;
+                        if (PlaneBit(planePosX, idx)) return false;
+                        if (tPosX != null && (uint)idx < (uint)tPosX.Length && tPosX[idx] == block) return false;
+                        return true;
+                    }
+                    if (ny < 0)
+                    {
+                        int idx = curX * maxZ + curZ;
+                        if (PlaneBit(planeNegY, idx)) return false;
+                        if (tNegY != null && (uint)idx < (uint)tNegY.Length && tNegY[idx] == block) return false;
+                        return true;
+                    }
+                    if (ny >= maxY)
+                    {
+                        int idx = curX * maxZ + curZ;
+                        if (PlaneBit(planePosY, idx)) return false;
+                        if (tPosY != null && (uint)idx < (uint)tPosY.Length && tPosY[idx] == block) return false;
+                        return true;
+                    }
+                    if (nz < 0)
+                    {
+                        int idx = curX * maxY + curY;
+                        if (PlaneBit(planeNegZ, idx)) return false;
+                        if (tNegZ != null && (uint)idx < (uint)tNegZ.Length && tNegZ[idx] == block) return false;
+                        return true;
+                    }
+                    if (nz >= maxZ)
+                    {
+                        int idx = curX * maxY + curY;
+                        if (PlaneBit(planePosZ, idx)) return false;
+                        if (tPosZ != null && (uint)idx < (uint)tPosZ.Length && tPosZ[idx] == block) return false;
+                        return true;
+                    }
+                    // Inside chunk: sample neighbor block id.
+                    ushort nb = GetBlock(nx, ny, nz);
+                    if (nb == 0) return true;               // air reveals face
+                    if (TerrainLoader.IsOpaque(nb)) return false; // opaque hides
+                    if (nb == block) return false;          // same transparent id hides seam
+                    return true;                            // different transparent id shows seam edge
+                }
+
+                // Emit faces per direction using transparent rules, skipping entire planes when same-id uniform neighbor present (section or chunk).
+                // LEFT (-X)
+                if (!skipNX)
+                {
+                    for (int y = baseY; y < endY; y++)
+                        for (int z = baseZ; z < endZ; z++)
+                            if (TransparentFaceVisible(baseX - 1, y, z, baseX, y, z))
+                                EmitOneInstance(baseX, y, z, rTileNX, 0, offsetList, tileIndexList, faceDirList);
+                }
+                // RIGHT (+X)
+                int rx = endX - 1;
+                if (!skipPX)
+                {
+                    for (int y = baseY; y < endY; y++)
+                        for (int z = baseZ; z < endZ; z++)
+                            if (TransparentFaceVisible(rx + 1, y, z, rx, y, z))
+                                EmitOneInstance(rx, y, z, rTilePX, 1, offsetList, tileIndexList, faceDirList);
+                }
+                // BOTTOM (-Y)
+                if (!skipNY)
+                {
+                    for (int xw = baseX; xw < endX; xw++)
+                        for (int z = baseZ; z < endZ; z++)
+                            if (TransparentFaceVisible(xw, baseY - 1, z, xw, baseY, z))
+                                EmitOneInstance(xw, baseY, z, rTileNY, 2, offsetList, tileIndexList, faceDirList);
+                }
+                // TOP (+Y)
+                int ty = endY - 1;
+                if (!skipPY)
+                {
+                    for (int xw = baseX; xw < endX; xw++)
+                        for (int z = baseZ; z < endZ; z++)
+                            if (TransparentFaceVisible(xw, ty + 1, z, xw, ty, z))
+                                EmitOneInstance(xw, ty, z, rTilePY, 3, offsetList, tileIndexList, faceDirList);
+                }
+                // BACK (-Z)
+                if (!skipNZ)
+                {
+                    for (int xw = baseX; xw < endX; xw++)
+                        for (int y = baseY; y < endY; y++)
+                            if (TransparentFaceVisible(xw, y, baseZ - 1, xw, y, baseZ))
+                                EmitOneInstance(xw, y, baseZ, rTileNZ, 4, offsetList, tileIndexList, faceDirList);
+                }
+                // FRONT (+Z)
+                int fz = endZ - 1;
+                if (!skipPZ)
+                {
+                    for (int xw = baseX; xw < endX; xw++)
+                        for (int y = baseY; y < endY; y++)
+                            if (TransparentFaceVisible(xw, y, fz + 1, xw, y, fz))
+                                EmitOneInstance(xw, y, fz, rTilePZ, 5, offsetList, tileIndexList, faceDirList);
+                }
+
+                return true;
+            }
+
+            // ---------------- OPAQUE PATH (original stratified fast path) ----------------
             // Early interior full-occlusion skip: check if section is interior (all neighbors exist) and every neighbor is fully solid.
             if (sx > 0 && sx < data.sectionsX - 1 && sy > 0 && sy < data.sectionsY - 1 && sz > 0 && sz < data.sectionsZ - 1)
             {
@@ -154,11 +384,6 @@ namespace MVGE_GFX.Terrain.Sections
                     }
                 }
             }
-
-            // World plane arrays (same order for convenience)
-            var planeNegX = data.NeighborPlaneNegX; var planePosX = data.NeighborPlanePosX;
-            var planeNegY = data.NeighborPlaneNegY; var planePosY = data.NeighborPlanePosY;
-            var planeNegZ = data.NeighborPlaneNegZ; var planePosZ = data.NeighborPlanePosZ;
 
             // ---------------- FAST-PATH STRATIFICATION PRE-PASS ----------------
             Span<FaceState> faceStates = stackalloc FaceState[6];
@@ -288,35 +513,35 @@ namespace MVGE_GFX.Terrain.Sections
             }
 
             // Predicted capacity (tighter than worst-case). Pessimistic for fallback faces (assume full plane). World boundary uses exact count of visible cells.
-            int predictedFaces = 0;
+            int predictedFacesOpaque = 0;
             for (int fd = 0; fd < 6; fd++)
             {
                 FaceState st = faceStates[fd];
                 switch (st)
                 {
                     case FaceState.NeighborMissing:
-                        predictedFaces += PlaneCellCount(fd);
+                        predictedFacesOpaque += PlaneCellCount(fd);
                         break;
                     case FaceState.WorldBoundary:
-                        predictedFaces += CountVisibleWorldBoundary(worldPlanes[fd], wb_startA[fd], wb_startB[fd], wb_countA[fd], wb_countB[fd], wb_strideB[fd]);
+                        predictedFacesOpaque += CountVisibleWorldBoundary(worldPlanes[fd], wb_startA[fd], wb_startB[fd], wb_countA[fd], wb_countB[fd], wb_strideB[fd]);
                         break;
                     case FaceState.NeighborMask:
                         int pcells = PlaneCellCount(fd);
                         int occ = MaskOcclusionCount(neighborMasks[fd]);
-                        int vis = pcells - occ; if (vis < 0) vis = 0; predictedFaces += vis;
+                        int vis = pcells - occ; if (vis < 0) vis = 0; predictedFacesOpaque += vis;
                         break;
                     case FaceState.NeighborFullSolid:
                         break; // zero
                     case FaceState.NeighborFallback:
-                        predictedFaces += PlaneCellCount(fd); // pessimistic
+                        predictedFacesOpaque += PlaneCellCount(fd); // pessimistic
                         break;
                 }
             }
-            if (predictedFaces < 0) predictedFaces = 0; // safety
-            if (predictedFaces > 6 * 256) predictedFaces = 6 * 256; // clamp (should not exceed)
-            offsetList.EnsureCapacity(offsetList.Count + predictedFaces * 3);
-            tileIndexList.EnsureCapacity(tileIndexList.Count + predictedFaces);
-            faceDirList.EnsureCapacity(faceDirList.Count + predictedFaces);
+            if (predictedFacesOpaque < 0) predictedFacesOpaque = 0; // safety
+            if (predictedFacesOpaque > 6 * 256) predictedFacesOpaque = 6 * 256; // clamp (should not exceed)
+            offsetList.EnsureCapacity(offsetList.Count + predictedFacesOpaque * 3);
+            tileIndexList.EnsureCapacity(tileIndexList.Count + predictedFacesOpaque);
+            faceDirList.EnsureCapacity(faceDirList.Count + predictedFacesOpaque);
 
             // ---------------- FULL-PLANE EMISSION FAST PATH ----------------
             for (int fd = 0; fd < 6; fd++)

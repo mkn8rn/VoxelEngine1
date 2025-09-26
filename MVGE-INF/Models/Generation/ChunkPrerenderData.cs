@@ -26,7 +26,7 @@ namespace MVGE_INF.Models.Generation
 
         // ---- transparent voxel data (non-opaque, non-air) ----
         public int TransparentCount;
-        public ulong[] TransparentBits;               // bit set == transparent voxel (always allocated for uniform transparent)
+        public ulong[] TransparentBits;               // bit set == transparent voxel
         public ulong[] TransparentFaceNegXBits;
         public ulong[] TransparentFacePosXBits;
         public ulong[] TransparentFaceNegYBits;
