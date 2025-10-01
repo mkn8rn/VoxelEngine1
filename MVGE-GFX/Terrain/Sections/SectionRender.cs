@@ -91,6 +91,16 @@ namespace MVGE_GFX.Terrain.Sections
                                 case 1: // Uniform
                                     specializedHandled = EmitUniformSectionInstances(ref desc, sx, sy, sz, S, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
                                     break;
+                                case 4: // Packed single-id
+                                    specializedHandled = EmitPackedSectionInstances(ref desc, sx, sy, sz, S,
+                                        opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList,
+                                        transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
+                                    break;
+                                case 5: // Packed multi-id
+                                    specializedHandled = EmitMultiPackedSectionInstances(ref desc, sx, sy, sz, S,
+                                        opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList,
+                                        transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
+                                    break;
                             }
                             if (!specializedHandled)
                             {
@@ -192,7 +202,6 @@ namespace MVGE_GFX.Terrain.Sections
             var tNegY = data.NeighborTransparentPlaneNegY; var tPosY = data.NeighborTransparentPlanePosY;
             var tNegZ = data.NeighborTransparentPlaneNegZ; var tPosZ = data.NeighborTransparentPlanePosZ;
 
-            // ---------------- TRANSPARENT PASS ----------------
             for (int x = baseX; x < endX; x++)
             {
                 for (int y = baseY; y < endY; y++)

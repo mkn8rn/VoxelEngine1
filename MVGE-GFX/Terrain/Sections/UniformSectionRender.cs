@@ -53,7 +53,7 @@ namespace MVGE_GFX.Terrain.Sections
             var planeNegZ = data.NeighborPlaneNegZ; var planePosZ = data.NeighborPlanePosZ;
 
             // Use cached uniform face tile set to avoid recomputing per-face indices for repeated block ids.
-            var tileSet = GetUniformFaceTileSet(block);
+            var tileSet = GetFaceTileSet(block);
             bool sameTileAllFaces = tileSet.AllSame;
             uint rTileNX = sameTileAllFaces ? tileSet.SingleTile : tileSet.TileNX;
             uint rTilePX = sameTileAllFaces ? tileSet.SingleTile : tileSet.TilePX;

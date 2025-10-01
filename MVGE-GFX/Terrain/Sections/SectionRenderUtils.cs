@@ -45,21 +45,21 @@ namespace MVGE_GFX.Terrain.Sections
         // share a single tile and each individual face tile index. This is global because the
         // atlas layout is global for all SectionRender instances.
         // ------------------------------------------------------------------------------------
-        private struct UniformFaceTileSet
+        private struct FaceTileSet
         {
             public bool AllSame;
             public uint SingleTile;
             public uint TileNX, TilePX, TileNY, TilePY, TileNZ, TilePZ;
         }
-        private static readonly ConcurrentDictionary<ushort, UniformFaceTileSet> _uniformFaceTileCache = new();
+        private static readonly ConcurrentDictionary<ushort, FaceTileSet> _faceTileCache = new();
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private UniformFaceTileSet GetUniformFaceTileSet(ushort blockId)
+        private FaceTileSet GetFaceTileSet(ushort blockId)
         {
-            if (_uniformFaceTileCache.TryGetValue(blockId, out var set)) return set;
+            if (_faceTileCache.TryGetValue(blockId, out var set)) return set;
             Span<uint> tmp = stackalloc uint[6];
             PrecomputePerFaceTiles(blockId, out bool allSame, out uint shared, tmp);
-            set = new UniformFaceTileSet
+            set = new FaceTileSet
             {
                 AllSame = allSame,
                 SingleTile = shared,
@@ -70,7 +70,7 @@ namespace MVGE_GFX.Terrain.Sections
                 TileNZ = tmp[4],
                 TilePZ = tmp[5]
             };
-            return _uniformFaceTileCache.GetOrAdd(blockId, set);
+            return _faceTileCache.GetOrAdd(blockId, set);
         }
 
         // ------------------------------------------------------------------------------------
