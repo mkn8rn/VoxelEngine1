@@ -20,16 +20,12 @@ namespace MVGE_GFX.Terrain.Sections
         ///   - desc.OpaqueBits (opaque occupancy) and/or desc.TransparentBits (transparent occupancy)
         /// Steps:
         ///  OPAQUE PATH (runs only when desc.OpaqueBits != null and OpaqueCount > 0):
-        ///   1. Resolve tight local bounds (ResolveLocalBounds) (lx/ly/lz min/max derived from section metadata when present).
-        ///   2. Build internal face masks from opaque occupancy (BuildOpaqueFaceMasksMultiPacked) – internal faces + boundary reinsertion + neighbor full-solid skip flags + bounds trimming in one pipeline.
-        ///   3. Popcount total visible opaque faces (CountOpaqueFaces) and reserve exact capacity for output lists.
-        ///   4. Iterate each directional face mask; for every set bit decode the voxel id (DecodePackedLocal) and emit if it is still opaque.
-        ///  TRANSPARENT PATH (runs only when desc.TransparentBits != null and TransparentCount > 0):
-        ///   5. Heuristically reserve capacity (approx 2 faces per transparent voxel) to reduce reallocations.
-        ///   6. Iterate all set bits in desc.TransparentBits inside bounds; decode id; skip if opaque or air.
-        ///   7. For each of the 6 directions apply TransparentPackedFaceVisible to decide face visibility (culls when neighbor is opaque or same transparent id, reveals against air or different transparent id, respects world boundary planes and neighbor transparent plane id maps).
-        ///   8. Emit visible transparent faces with cached per (block,face) tile indices.
-        /// Returns true (always handles multi‑packed) unless descriptor invalid -> false to allow fallback.
+        ///   1. Resolve tight local bounds (ResolveLocalBounds)
+        ///   2. Build internal face masks from opaque occupancy + boundary reinsertion + neighbor skip
+        ///   3. Popcount & emit opaque faces
+        ///  TRANSPARENT PATH:
+        ///   * Dominant single transparent id (if present) uses pre-built transparent face masks (internal + boundary) without per-voxel neighbor checks.
+        ///   * Residual transparent voxels (if any) still use existing bit iteration + adjacency tests.
         private bool EmitMultiPackedSectionInstances(ref SectionPrerenderDesc desc, int sx, int sy, int sz, int S,
             List<byte> opaqueOffsetList, List<uint> opaqueTileIndexList, List<byte> opaqueFaceDirList,
             List<byte> transparentOffsetList, List<uint> transparentTileIndexList, List<byte> transparentFaceDirList)
@@ -38,8 +34,9 @@ namespace MVGE_GFX.Terrain.Sections
                 return false; // not multi-packed – let caller fallback / other path
 
             bool hasOpaque = desc.OpaqueBits != null && desc.OpaqueCount > 0;
-            bool hasTransparent = desc.TransparentBits != null && desc.TransparentCount > 0;
-            if (!hasOpaque && !hasTransparent) return true; // handled (no faces)
+            bool hasResidualTransparent = desc.TransparentBits != null && desc.TransparentCount > 0;
+            bool hasDominantTransparent = desc.DominantTransparentBits != null && desc.DominantTransparentCount > 0;
+            if (!hasOpaque && !hasResidualTransparent && !hasDominantTransparent) return true; // nothing
 
             ResolveLocalBounds(in desc, S, out int lxMin, out int lxMax, out int lyMin, out int lyMax, out int lzMin, out int lzMax);
             int baseX = sx * S; int baseY = sy * S; int baseZ = sz * S;
@@ -48,16 +45,16 @@ namespace MVGE_GFX.Terrain.Sections
             EnsureLiDecode();
 
             // ---------------- OPAQUE PATH ----------------
-            Span<ulong> faceNX = stackalloc ulong[64];
-            Span<ulong> facePX = stackalloc ulong[64];
-            Span<ulong> faceNY = stackalloc ulong[64];
-            Span<ulong> facePY = stackalloc ulong[64];
-            Span<ulong> faceNZ = stackalloc ulong[64];
-            Span<ulong> facePZ = stackalloc ulong[64];
-            Span<bool> skipDir = stackalloc bool[6]; // initialized false
-
             if (hasOpaque)
             {
+                Span<ulong> faceNX = stackalloc ulong[64];
+                Span<ulong> facePX = stackalloc ulong[64];
+                Span<ulong> faceNY = stackalloc ulong[64];
+                Span<ulong> facePY = stackalloc ulong[64];
+                Span<ulong> faceNZ = stackalloc ulong[64];
+                Span<ulong> facePZ = stackalloc ulong[64];
+                Span<bool> skipDir = stackalloc bool[6]; // initialized false
+
                 BuildOpaqueFaceMasksMultiPacked(ref desc, sx, sy, sz, S,
                     lxMin, lxMax, lyMin, lyMax, lzMin, lzMax,
                     skipDir,
@@ -80,16 +77,34 @@ namespace MVGE_GFX.Terrain.Sections
             }
 
             // ---------------- TRANSPARENT PATH ----------------
-            if (hasTransparent)
-            {
-                // Neighbor opaque planes & transparent planes
-                var planeNegX = data.NeighborPlaneNegX; var planePosX = data.NeighborPlanePosX;
-                var planeNegY = data.NeighborPlaneNegY; var planePosY = data.NeighborPlanePosY;
-                var planeNegZ = data.NeighborPlaneNegZ; var planePosZ = data.NeighborPlanePosZ;
-                var tNegX = data.NeighborTransparentPlaneNegX; var tPosX = data.NeighborTransparentPlanePosX;
-                var tNegY = data.NeighborTransparentPlaneNegY; var tPosY = data.NeighborTransparentPlanePosY;
-                var tNegZ = data.NeighborTransparentPlaneNegZ; var tPosZ = data.NeighborTransparentPlanePosZ;
+            // Prepare neighbor planes once for residual transparent fallback
+            var planeNegX = data.NeighborPlaneNegX; var planePosX = data.NeighborPlanePosX;
+            var planeNegY = data.NeighborPlaneNegY; var planePosY = data.NeighborPlanePosY;
+            var planeNegZ = data.NeighborPlaneNegZ; var planePosZ = data.NeighborPlanePosZ;
+            var tNegX = data.NeighborTransparentPlaneNegX; var tPosX = data.NeighborTransparentPlanePosX;
+            var tNegY = data.NeighborTransparentPlaneNegY; var tPosY = data.NeighborTransparentPlanePosY;
+            var tNegZ = data.NeighborTransparentPlaneNegZ; var tPosZ = data.NeighborTransparentPlanePosZ;
 
+            // --------------- DOMINANT TRANSPARENT FAST PATH (mask based) ---------------
+            if (hasDominantTransparent)
+            {
+                // We rely on pre-built transparent face masks (internal + boundary) always available in desc.*TransparentFace* arrays.
+                // Emit only faces for dominant transparent voxels by intersecting face masks with DominantTransparentBits.
+                Span<ulong> dom = desc.DominantTransparentBits.AsSpan();
+                if (desc.TransparentFaceNegXBits != null)
+                {
+                    EmitTransparentMasked(dom, desc.TransparentFaceNegXBits, desc.DominantTransparentId, baseX, baseY, baseZ, 0, transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
+                    EmitTransparentMasked(dom, desc.TransparentFacePosXBits, desc.DominantTransparentId, baseX, baseY, baseZ, 1, transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
+                    EmitTransparentMasked(dom, desc.TransparentFaceNegYBits, desc.DominantTransparentId, baseX, baseY, baseZ, 2, transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
+                    EmitTransparentMasked(dom, desc.TransparentFacePosYBits, desc.DominantTransparentId, baseX, baseY, baseZ, 3, transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
+                    EmitTransparentMasked(dom, desc.TransparentFaceNegZBits, desc.DominantTransparentId, baseX, baseY, baseZ, 4, transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
+                    EmitTransparentMasked(dom, desc.TransparentFacePosZBits, desc.DominantTransparentId, baseX, baseY, baseZ, 5, transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
+                }
+            }
+
+            // --------------- RESIDUAL TRANSPARENT (fallback adjacency check) ---------------
+            if (hasResidualTransparent)
+            {
                 var tBits = desc.TransparentBits;
                 if (tBits != null)
                 {
@@ -172,6 +187,27 @@ namespace MVGE_GFX.Terrain.Sections
             }
 
             return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void EmitTransparentMasked(ReadOnlySpan<ulong> voxelMask, ulong[] faceMask, ushort id,
+            int baseX, int baseY, int baseZ, byte faceDir,
+            List<byte> offsets, List<uint> tiles, List<byte> dirs)
+        {
+            if (faceMask == null) return;
+            for (int w = 0; w < 64; w++)
+            {
+                ulong bits = faceMask[w] & voxelMask[w];
+                while (bits != 0)
+                {
+                    int bit = BitOperations.TrailingZeroCount(bits);
+                    bits &= bits - 1;
+                    int li = (w << 6) + bit;
+                    int lx = _lxFromLi[li]; int ly = _lyFromLi[li]; int lz = _lzFromLi[li];
+                    uint tile = _fallbackTileCache.Get(atlas, id, faceDir);
+                    EmitOneInstance(baseX + lx, baseY + ly, baseZ + lz, tile, faceDir, offsets, tiles, dirs);
+                }
+            }
         }
     }
 }

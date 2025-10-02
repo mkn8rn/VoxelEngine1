@@ -10,6 +10,8 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
 using MVGE_INF.Loaders;
+using System.Numerics;
+using MVGE_GEN.Utils;
 
 namespace MVGE_GEN.Terrain
 {
@@ -327,6 +329,90 @@ namespace MVGE_GEN.Terrain
                             for (int w = 0; w < 64; w++) uniformTransparentBits[w] = ulong.MaxValue;
                         }
 
+                        // Dominant transparent id detection (simple heuristic >=90% of transparent voxels) for multi-packed / packed representations.
+                        ushort dominantId = 0;
+                        int dominantCount = 0;
+                        ulong[] dominantBits = null;
+                        ulong[] residualBits = sec.TransparentBits;
+                        int residualCount = sec.TransparentCount;
+                        if (sec.TransparentCount > 0 && sec.Palette != null && transparentPaletteIndices != null && transparentPaletteIndices.Length > 1)
+                        {
+                            // Tally counts per transparent palette index using bit scans with on-demand decode (acceptable during prerender build).
+                            Span<int> perIdCounts = stackalloc int[transparentPaletteIndices.Length]; perIdCounts.Clear();
+                            // Build perId bitset lazily only for the candidate; we just count first.
+                            for (int w = 0; w < 64; w++)
+                            {
+                                ulong word = sec.TransparentBits?[w] ?? 0UL;
+                                while (word != 0)
+                                {
+                                    int bit = BitOperations.TrailingZeroCount(word);
+                                    word &= word - 1;
+                                    int li = (w << 6) + bit;
+                                    int ly = li & 15; int t = li >> 4; int lx = t & 15; int lz = t >> 4;
+                                    ushort id = SectionUtils.GetBlock(sec, lx, ly, lz);
+                                    if (id != 0 && !TerrainLoader.IsOpaque(id))
+                                    {
+                                        int pi = sec.PaletteLookup != null && sec.PaletteLookup.TryGetValue(id, out int pidx) ? pidx : -1;
+                                        if (pi >= 0)
+                                        {
+                                            int localListIndex = Array.IndexOf(transparentPaletteIndices, pi);
+                                            if (localListIndex >= 0) perIdCounts[localListIndex]++;
+                                        }
+                                    }
+                                }
+                            }
+                            // Find dominant
+                            int threshold = (int)(sec.TransparentCount * 0.9f);
+                            int bestIdx = -1; int best = 0;
+                            for (int i = 0; i < perIdCounts.Length; i++) if (perIdCounts[i] > best) { best = perIdCounts[i]; bestIdx = i; }
+                            if (bestIdx >= 0 && best >= threshold)
+                            {
+                                int paletteIndex = transparentPaletteIndices[bestIdx];
+                                dominantId = sec.Palette[paletteIndex];
+                                dominantCount = best;
+                                dominantBits = new ulong[64];
+                                ulong[] res = new ulong[64];
+                                for (int w = 0; w < 64; w++)
+                                {
+                                    ulong word = sec.TransparentBits[w];
+                                    ulong maskWord = 0UL;
+                                    if (word != 0)
+                                    {
+                                        ulong tmp = word;
+                                        while (tmp != 0)
+                                        {
+                                            int bit = BitOperations.TrailingZeroCount(tmp);
+                                            tmp &= tmp - 1;
+                                            int li = (w << 6) + bit;
+                                            int ly = li & 15; int t = li >> 4; int lx = t & 15; int lz = t >> 4;
+                                            ushort id = SectionUtils.GetBlock(sec, lx, ly, lz);
+                                            if (id == dominantId) maskWord |= 1UL << bit;
+                                        }
+                                    }
+                                    dominantBits[w] = maskWord;
+                                    res[w] = word & ~maskWord;
+                                }
+                                residualBits = res;
+                                residualCount = sec.TransparentCount - dominantCount;
+                            }
+                        }
+
+                        // Precompute per-face tile indices for transparent palette ids (6 each) for fast emission.
+                        uint[] transparentFaceTiles = null;
+                        if (transparentPaletteIndices != null && transparentPaletteIndices.Length > 0 && sec.Palette != null)
+                        {
+                            transparentFaceTiles = new uint[transparentPaletteIndices.Length * 6];
+                            for (int i = 0; i < transparentPaletteIndices.Length; i++)
+                            {
+                                ushort bid = sec.Palette[transparentPaletteIndices[i]];
+                                // Reuse texture atlas computation pattern used elsewhere via SectionRender.ComputeTileIndex in runtime phase.
+                                for (int face = 0; face < 6; face++)
+                                {
+                                    transparentFaceTiles[i * 6 + face] = 0; // placeholder; actual tile fill deferred to runtime SectionRender (atlas not accessible here)
+                                }
+                            }
+                        }
+
                         arr[idx] = new SectionPrerenderDesc
                         {
                             Kind = (byte)sec.Kind,
@@ -343,9 +429,8 @@ namespace MVGE_GEN.Terrain
                             FacePosYBits = sec.FacePosYBits,
                             FaceNegZBits = sec.FaceNegZBits,
                             FacePosZBits = sec.FacePosZBits,
-                            // transparent tracking propagated (may be null if not built yet)
-                            TransparentCount = sec.TransparentCount,
-                            TransparentBits = uniformTransparentBits ?? sec.TransparentBits,
+                            TransparentCount = residualCount,
+                            TransparentBits = uniformTransparentBits ?? residualBits,
                             TransparentFaceNegXBits = sec.TransparentFaceNegXBits,
                             TransparentFacePosXBits = sec.TransparentFacePosXBits,
                             TransparentFaceNegYBits = sec.TransparentFaceNegYBits,
@@ -353,7 +438,10 @@ namespace MVGE_GEN.Terrain
                             TransparentFaceNegZBits = sec.TransparentFaceNegZBits,
                             TransparentFacePosZBits = sec.TransparentFacePosZBits,
                             TransparentPaletteIndices = transparentPaletteIndices,
-                            // empty (air) tracking propagated (may be null)
+                            DominantTransparentId = dominantId,
+                            DominantTransparentCount = dominantCount,
+                            DominantTransparentBits = dominantBits,
+                            TransparentPaletteFaceTiles = transparentFaceTiles,
                             EmptyCount = sec.EmptyCount,
                             EmptyBits = sec.EmptyBits,
                             HasBounds = sec.HasBounds,

@@ -130,6 +130,8 @@ namespace MVGE_GFX.Terrain.Sections
             Span<ulong> faceMask, byte faceDir,
             List<byte> offsets, List<uint> tiles, List<byte> faceDirs)
         {
+            // Ensure decode tables available
+            EnsureLiDecode();
             for (int w = 0; w < 64; w++)
             {
                 ulong bits = faceMask[w];
@@ -154,6 +156,8 @@ namespace MVGE_GFX.Terrain.Sections
             Span<ulong> mask, byte faceDir, uint tile,
             List<byte> offsets, List<uint> tiles, List<byte> faceDirs)
         {
+            // Ensure decode tables initialized to avoid NullReferenceException.
+            EnsureLiDecode();
             for (int w = 0; w < 64; w++)
             {
                 ulong bits = mask[w];
