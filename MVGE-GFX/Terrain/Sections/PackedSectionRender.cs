@@ -23,9 +23,9 @@ namespace MVGE_GFX.Terrain.Sections
         ///       b. Popcount visible faces to reserve exact output capacity.
         ///       c. Emit faces by iterating mask bits (EmitOpaqueSinglePackedMasks) with per‑direction tile index (no per-voxel decode cost).
         ///  4. If the block id is transparent:
-        ///       a. Iterate every set bit in desc.TransparentBits within bounds (each bit = transparent voxel of this single id).
-        ///       b. For each voxel test six neighbors with TransparentPackedFaceVisible (world boundary + neighbor opaque + same‑id seam suppression rules).
-        ///       c. Emit a face for each direction whose neighbor test passes.
+        ///       a. Derive directional transparent face masks (BuildTransparentFaceMasksSingleId) using transparent and opaque bitsets (seam suppression + opaque occlusion) for the single id.
+        ///       b. Apply bounds trimming (ApplyBoundsMask) to restrict emission to tight bounds.
+        ///       c. Emit faces from masks (EmitTransparentSingleIdMasks) applying world-edge and neighbor-chunk boundary suppression only for boundary cells.
         ///  5. Return true when handled; return false only if preconditions fail (caller will fallback).
         private bool EmitPackedSectionInstances(ref SectionPrerenderDesc desc, int sx, int sy, int sz, int S,
             List<byte> opaqueOffsetList, List<uint> opaqueTileIndexList, List<byte> opaqueFaceDirList,
@@ -39,7 +39,6 @@ namespace MVGE_GFX.Terrain.Sections
             // Bounds
             ResolveLocalBounds(in desc, S, out int lxMin, out int lxMax, out int lyMin, out int lyMax, out int lzMin, out int lzMax);
             int baseX = sx * S; int baseY = sy * S; int baseZ = sz * S;
-            int maxX = data.maxX; int maxY = data.maxY; int maxZ = data.maxZ;
 
             // Precompute face tiles – reuse uniform tile cache for consistency.
             var tileSet = GetFaceTileSet(id);
@@ -98,71 +97,26 @@ namespace MVGE_GFX.Terrain.Sections
             else
             {
                 // Transparent single-id path
-                if (occTransparent == null || desc.TransparentCount == 0) return true; // nothing to emit
+                if (occTransparent == null || desc.TransparentCount == 0) return true; // no transparent content
 
-                // Neighbor plane references (opaque + transparent)
-                var planeNegX = data.NeighborPlaneNegX; var planePosX = data.NeighborPlanePosX;
-                var planeNegY = data.NeighborPlaneNegY; var planePosY = data.NeighborPlanePosY;
-                var planeNegZ = data.NeighborPlaneNegZ; var planePosZ = data.NeighborPlanePosZ;
-                var tNegX = data.NeighborTransparentPlaneNegX; var tPosX = data.NeighborTransparentPlanePosX;
-                var tNegY = data.NeighborTransparentPlaneNegY; var tPosY = data.NeighborTransparentPlanePosY;
-                var tNegZ = data.NeighborTransparentPlaneNegZ; var tPosZ = data.NeighborTransparentPlanePosZ;
+                // Build transparent face masks for this single id using seam suppression & opaque occlusion.
+                Span<ulong> tFaceNX = stackalloc ulong[64];
+                Span<ulong> tFacePX = stackalloc ulong[64];
+                Span<ulong> tFaceNY = stackalloc ulong[64];
+                Span<ulong> tFacePY = stackalloc ulong[64];
+                Span<ulong> tFaceNZ = stackalloc ulong[64];
+                Span<ulong> tFacePZ = stackalloc ulong[64];
+                BuildTransparentFaceMasksSingleId(occTransparent, occOpaque, tFaceNX, tFacePX, tFaceNY, tFacePY, tFaceNZ, tFacePZ);
+                ApplyBoundsMask(lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, tFaceNX, tFacePX, tFaceNY, tFacePY, tFaceNZ, tFacePZ);
 
-                // Iterate every occupied transparent voxel within bounds and test 6 neighbors (cheap since single id).
-                EnsureLiDecode();
-                // Heuristic capacity (transparent tends to emit fewer than opaque full masks) -> 2 faces per voxel
-                int heuristicFaces = Math.Min(desc.TransparentCount * 2, 4096 * 6);
-                if (heuristicFaces > 0)
+                int predicted = PopCountMask(tFaceNX) + PopCountMask(tFacePX) + PopCountMask(tFaceNY) + PopCountMask(tFacePY) + PopCountMask(tFaceNZ) + PopCountMask(tFacePZ);
+                if (predicted > 0)
                 {
-                    transparentOffsetList.EnsureCapacity(transparentOffsetList.Count + heuristicFaces * 3);
-                    transparentTileIndexList.EnsureCapacity(transparentTileIndexList.Count + heuristicFaces);
-                    transparentFaceDirList.EnsureCapacity(transparentFaceDirList.Count + heuristicFaces);
-                }
-
-                for (int w = 0; w < 64; w++)
-                {
-                    ulong word = occTransparent[w];
-                    while (word != 0)
-                    {
-                        int bit = BitOperations.TrailingZeroCount(word);
-                        word &= word - 1;
-                        int li = (w << 6) + bit;
-                        int lx = _lxFromLi[li]; if (lx < lxMin || lx > lxMax) continue;
-                        int ly = _lyFromLi[li]; if (ly < lyMin || ly > lyMax) continue;
-                        int lz = _lzFromLi[li]; if (lz < lzMin || lz > lzMax) continue;
-                        int wx = baseX + lx; int wy = baseY + ly; int wz = baseZ + lz;
-
-                        // -X
-                        if (TransparentPackedFaceVisible(id, wx - 1, wy, wz, wx, wy, wz, maxX, maxY, maxZ,
-                            planeNegX, planePosX, planeNegY, planePosY, planeNegZ, planePosZ,
-                            tNegX, tPosX, tNegY, tPosY, tNegZ, tPosZ))
-                            EmitOneInstance(wx, wy, wz, faceTiles[0], 0, transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
-                        // +X
-                        if (TransparentPackedFaceVisible(id, wx + 1, wy, wz, wx, wy, wz, maxX, maxY, maxZ,
-                            planeNegX, planePosX, planeNegY, planePosY, planeNegZ, planePosZ,
-                            tNegX, tPosX, tNegY, tPosY, tNegZ, tPosZ))
-                            EmitOneInstance(wx, wy, wz, faceTiles[1], 1, transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
-                        // -Y
-                        if (TransparentPackedFaceVisible(id, wx, wy - 1, wz, wx, wy, wz, maxX, maxY, maxZ,
-                            planeNegX, planePosX, planeNegY, planePosY, planeNegZ, planePosZ,
-                            tNegX, tPosX, tNegY, tPosY, tNegZ, tPosZ))
-                            EmitOneInstance(wx, wy, wz, faceTiles[2], 2, transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
-                        // +Y
-                        if (TransparentPackedFaceVisible(id, wx, wy + 1, wz, wx, wy, wz, maxX, maxY, maxZ,
-                            planeNegX, planePosX, planeNegY, planePosY, planeNegZ, planePosZ,
-                            tNegX, tPosX, tNegY, tPosY, tNegZ, tPosZ))
-                            EmitOneInstance(wx, wy, wz, faceTiles[3], 3, transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
-                        // -Z
-                        if (TransparentPackedFaceVisible(id, wx, wy, wz - 1, wx, wy, wz, maxX, maxY, maxZ,
-                            planeNegX, planePosX, planeNegY, planePosY, planeNegZ, planePosZ,
-                            tNegX, tPosX, tNegY, tPosY, tNegZ, tPosZ))
-                            EmitOneInstance(wx, wy, wz, faceTiles[4], 4, transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
-                        // +Z
-                        if (TransparentPackedFaceVisible(id, wx, wy, wz + 1, wx, wy, wz, maxX, maxY, maxZ,
-                            planeNegX, planePosX, planeNegY, planePosY, planeNegZ, planePosZ,
-                            tNegX, tPosX, tNegY, tPosY, tNegZ, tPosZ))
-                            EmitOneInstance(wx, wy, wz, faceTiles[5], 5, transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
-                    }
+                    transparentOffsetList.EnsureCapacity(transparentOffsetList.Count + predicted * 3);
+                    transparentTileIndexList.EnsureCapacity(transparentTileIndexList.Count + predicted);
+                    transparentFaceDirList.EnsureCapacity(transparentFaceDirList.Count + predicted);
+                    EmitTransparentSingleIdMasks(id, baseX, baseY, baseZ, tFaceNX, tFacePX, tFaceNY, tFacePY, tFaceNZ, tFacePZ,
+                        transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
                 }
                 return true;
             }

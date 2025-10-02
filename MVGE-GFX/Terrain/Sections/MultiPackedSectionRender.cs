@@ -25,7 +25,7 @@ namespace MVGE_GFX.Terrain.Sections
         ///   3. Popcount & emit opaque faces
         ///  TRANSPARENT PATH:
         ///   * Dominant single transparent id (if present) uses pre-built transparent face masks (internal + boundary) without per-voxel neighbor checks.
-        ///   * Residual transparent voxels (if any) still use existing bit iteration + adjacency tests.
+        ///   * Residual transparent voxels (multi-id) build per-id voxel masks then derive directional face masks via bitwise adjacency (same-id seam suppression + opaque occlusion) and emit.
         private bool EmitMultiPackedSectionInstances(ref SectionPrerenderDesc desc, int sx, int sy, int sz, int S,
             List<byte> opaqueOffsetList, List<uint> opaqueTileIndexList, List<byte> opaqueFaceDirList,
             List<byte> transparentOffsetList, List<uint> transparentTileIndexList, List<byte> transparentFaceDirList)
@@ -40,7 +40,6 @@ namespace MVGE_GFX.Terrain.Sections
 
             ResolveLocalBounds(in desc, S, out int lxMin, out int lxMax, out int lyMin, out int lyMax, out int lzMin, out int lzMax);
             int baseX = sx * S; int baseY = sy * S; int baseZ = sz * S;
-            int maxX = data.maxX; int maxY = data.maxY; int maxZ = data.maxZ;
 
             EnsureLiDecode();
 
@@ -76,15 +75,6 @@ namespace MVGE_GFX.Terrain.Sections
                 }
             }
 
-            // ---------------- TRANSPARENT PATH ----------------
-            // Prepare neighbor planes once for residual transparent fallback
-            var planeNegX = data.NeighborPlaneNegX; var planePosX = data.NeighborPlanePosX;
-            var planeNegY = data.NeighborPlaneNegY; var planePosY = data.NeighborPlanePosY;
-            var planeNegZ = data.NeighborPlaneNegZ; var planePosZ = data.NeighborPlanePosZ;
-            var tNegX = data.NeighborTransparentPlaneNegX; var tPosX = data.NeighborTransparentPlanePosX;
-            var tNegY = data.NeighborTransparentPlaneNegY; var tPosY = data.NeighborTransparentPlanePosY;
-            var tNegZ = data.NeighborTransparentPlaneNegZ; var tPosZ = data.NeighborTransparentPlanePosZ;
-
             // --------------- DOMINANT TRANSPARENT FAST PATH (mask based) ---------------
             if (hasDominantTransparent)
             {
@@ -102,112 +92,80 @@ namespace MVGE_GFX.Terrain.Sections
                 }
             }
 
-            // --------------- RESIDUAL TRANSPARENT (fallback adjacency check) ---------------
+            // --------------- RESIDUAL TRANSPARENT MULTI-ID BITSET PATH ---------------
             if (hasResidualTransparent)
             {
-                var tBits = desc.TransparentBits;
-                if (tBits != null)
+                var residualBits = desc.TransparentBits; // residual transparent occupancy (multiple ids)
+                var opaqueBits = desc.OpaqueBits;         // opaque occupancy for occlusion
+                var palette = desc.Palette;
+                var transparentPaletteIndices = desc.TransparentPaletteIndices; // indices referencing palette positions that are transparent overall
+                if (residualBits != null && transparentPaletteIndices != null && transparentPaletteIndices.Length > 0)
                 {
-                    // Worst-case prediction – each transparent voxel could emit up to 6 faces. Reserve proportional capacity (heuristic: 2 faces avg).
-                    int heuristicFaces = Math.Min(desc.TransparentCount * 2, 4096 * 6);
-                    if (heuristicFaces > 0)
+                    // Build subset map: paletteId -> slot index for residual per-id mask arrays (only for ids present in residual)
+                    // Allocate mask array per transparent palette candidate; filled only where bits decode to that id & residualBits set.
+                    int tCount = transparentPaletteIndices.Length;
+                    var perIdMasks = new ulong[tCount][]; // lazily allocate when first voxel of that id encountered
+
+                    // On-demand dictionary from blockId -> mask index (only transparent ids) for O(1) routing.
+                    var idToMaskIndex = new Dictionary<ushort, int>(tCount);
+                    for (int i = 0; i < tCount; i++)
                     {
-                        transparentOffsetList.EnsureCapacity(transparentOffsetList.Count + heuristicFaces * 3);
-                        transparentTileIndexList.EnsureCapacity(transparentTileIndexList.Count + heuristicFaces);
-                        transparentFaceDirList.EnsureCapacity(transparentFaceDirList.Count + heuristicFaces);
+                        ushort bid = palette[transparentPaletteIndices[i]];
+                        if (!idToMaskIndex.ContainsKey(bid)) idToMaskIndex.Add(bid, i);
                     }
 
+                    // Single scan of residual transparent bits; decode palette id; set bit in its per-id mask.
                     for (int w = 0; w < 64; w++)
                     {
-                        ulong word = tBits[w];
+                        ulong word = residualBits[w];
                         while (word != 0)
                         {
                             int bit = BitOperations.TrailingZeroCount(word);
                             word &= word - 1;
                             int li = (w << 6) + bit;
-                            int lx = _lxFromLi[li]; if (lx < lxMin || lx > lxMax) continue;
-                            int ly = _lyFromLi[li]; if (ly < lyMin || ly > lyMax) continue;
-                            int lz = _lzFromLi[li]; if (lz < lzMin || lz > lzMax) continue;
-                            int wx = baseX + lx; int wy = baseY + ly; int wz = baseZ + lz;
+                            int ly = li & 15; int t = li >> 4; int lx = t & 15; int lz = t >> 4;
                             ushort id = DecodePackedLocal(ref desc, lx, ly, lz);
-                            if (id == 0 || TerrainLoader.IsOpaque(id)) continue;
-
-                            // For each face direction test visibility and emit if visible.
-                            // -X
-                            if (TransparentPackedFaceVisible(id, wx - 1, wy, wz, wx, wy, wz, maxX, maxY, maxZ,
-                                planeNegX, planePosX, planeNegY, planePosY, planeNegZ, planePosZ,
-                                tNegX, tPosX, tNegY, tPosY, tNegZ, tPosZ))
-                            {
-                                uint tile = _fallbackTileCache.Get(atlas, id, 0);
-                                EmitOneInstance(wx, wy, wz, tile, 0, transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
-                            }
-                            // +X
-                            if (TransparentPackedFaceVisible(id, wx + 1, wy, wz, wx, wy, wz, maxX, maxY, maxZ,
-                                planeNegX, planePosX, planeNegY, planePosY, planeNegZ, planePosZ,
-                                tNegX, tPosX, tNegY, tPosY, tNegZ, tPosZ))
-                            {
-                                uint tile = _fallbackTileCache.Get(atlas, id, 1);
-                                EmitOneInstance(wx, wy, wz, tile, 1, transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
-                            }
-                            // -Y
-                            if (TransparentPackedFaceVisible(id, wx, wy - 1, wz, wx, wy, wz, maxX, maxY, maxZ,
-                                planeNegX, planePosX, planeNegY, planePosY, planeNegZ, planePosZ,
-                                tNegX, tPosX, tNegY, tPosY, tNegZ, tPosZ))
-                            {
-                                uint tile = _fallbackTileCache.Get(atlas, id, 2);
-                                EmitOneInstance(wx, wy, wz, tile, 2, transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
-                            }
-                            // +Y
-                            if (TransparentPackedFaceVisible(id, wx, wy + 1, wz, wx, wy, wz, maxX, maxY, maxZ,
-                                planeNegX, planePosX, planeNegY, planePosY, planeNegZ, planePosZ,
-                                tNegX, tPosX, tNegY, tPosY, tNegZ, tPosZ))
-                            {
-                                uint tile = _fallbackTileCache.Get(atlas, id, 3);
-                                EmitOneInstance(wx, wy, wz, tile, 3, transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
-                            }
-                            // -Z
-                            if (TransparentPackedFaceVisible(id, wx, wy, wz - 1, wx, wy, wz, maxX, maxY, maxZ,
-                                planeNegX, planePosX, planeNegY, planePosY, planeNegZ, planePosZ,
-                                tNegX, tPosX, tNegY, tPosY, tNegZ, tPosZ))
-                            {
-                                uint tile = _fallbackTileCache.Get(atlas, id, 4);
-                                EmitOneInstance(wx, wy, wz, tile, 4, transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
-                            }
-                            // +Z
-                            if (TransparentPackedFaceVisible(id, wx, wy, wz + 1, wx, wy, wz, maxX, maxY, maxZ,
-                                planeNegX, planePosX, planeNegY, planePosY, planeNegZ, planePosZ,
-                                tNegX, tPosX, tNegY, tPosY, tNegZ, tPosZ))
-                            {
-                                uint tile = _fallbackTileCache.Get(atlas, id, 5);
-                                EmitOneInstance(wx, wy, wz, tile, 5, transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
-                            }
+                            if (id == 0 || TerrainLoader.IsOpaque(id) || id == desc.DominantTransparentId) continue; // skip opaque or dominant already emitted
+                            if (!idToMaskIndex.TryGetValue(id, out int mi)) continue; // not in transparent palette subset (defensive)
+                            var mask = perIdMasks[mi];
+                            if (mask == null) { mask = perIdMasks[mi] = new ulong[64]; }
+                            mask[w] |= 1UL << bit;
                         }
+                    }
+
+                    // For each per-id mask build directional face masks & emit.
+                    Span<ulong> fNX = stackalloc ulong[64];
+                    Span<ulong> fPX = stackalloc ulong[64];
+                    Span<ulong> fNY = stackalloc ulong[64];
+                    Span<ulong> fPY = stackalloc ulong[64];
+                    Span<ulong> fNZ = stackalloc ulong[64];
+                    Span<ulong> fPZ = stackalloc ulong[64];
+
+                    for (int i = 0; i < tCount; i++)
+                    {
+                        var voxelMask = perIdMasks[i];
+                        if (voxelMask == null) continue; // id absent in residual
+
+                        // Clear face masks
+                        for (int j = 0; j < 64; j++) fNX[j] = fPX[j] = fNY[j] = fPY[j] = fNZ[j] = fPZ[j] = 0UL;
+
+                        BuildTransparentFaceMasksGeneric(voxelMask, opaqueBits, fNX, fPX, fNY, fPY, fNZ, fPZ);
+                        ApplyBoundsMask(lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, fNX, fPX, fNY, fPY, fNZ, fPZ);
+                        int add = PopCountMask(fNX) + PopCountMask(fPX) + PopCountMask(fNY) + PopCountMask(fPY) + PopCountMask(fNZ) + PopCountMask(fPZ);
+                        if (add == 0) continue;
+
+                        transparentOffsetList.EnsureCapacity(transparentOffsetList.Count + add * 3);
+                        transparentTileIndexList.EnsureCapacity(transparentTileIndexList.Count + add);
+                        transparentFaceDirList.EnsureCapacity(transparentFaceDirList.Count + add);
+
+                        ushort id = palette[transparentPaletteIndices[i]];
+                        EmitTransparentSingleIdMasks(id, baseX, baseY, baseZ, fNX, fPX, fNY, fPY, fNZ, fPZ,
+                            transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
                     }
                 }
             }
 
             return true;
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void EmitTransparentMasked(ReadOnlySpan<ulong> voxelMask, ulong[] faceMask, ushort id,
-            int baseX, int baseY, int baseZ, byte faceDir,
-            List<byte> offsets, List<uint> tiles, List<byte> dirs)
-        {
-            if (faceMask == null) return;
-            for (int w = 0; w < 64; w++)
-            {
-                ulong bits = faceMask[w] & voxelMask[w];
-                while (bits != 0)
-                {
-                    int bit = BitOperations.TrailingZeroCount(bits);
-                    bits &= bits - 1;
-                    int li = (w << 6) + bit;
-                    int lx = _lxFromLi[li]; int ly = _lyFromLi[li]; int lz = _lzFromLi[li];
-                    uint tile = _fallbackTileCache.Get(atlas, id, faceDir);
-                    EmitOneInstance(baseX + lx, baseY + ly, baseZ + lz, tile, faceDir, offsets, tiles, dirs);
-                }
-            }
         }
     }
 }
