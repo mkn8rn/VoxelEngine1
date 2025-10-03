@@ -14,11 +14,10 @@ namespace MVGE_GEN.Utils
         private static uint[] RentBitData(int uintCount) => ArrayPool<uint>.Shared.Rent(uintCount);
         private static void ReturnBitData(uint[] data) { if (data != null) ArrayPool<uint>.Shared.Return(data, clearArray: false); }
 
-        public const int SPARSE_THRESHOLD = 512; // currently unused in classification (optimization gate only)
         private const int SECTION_SIZE = Section.SECTION_SIZE;
         private const int VOXELS_PER_SECTION = SECTION_SIZE * SECTION_SIZE * SECTION_SIZE; // 4096
-        private const int PACKED_MULTI_ID_MAX = 64; // max distinct ids (including AIR) to qualify for MultiPacked finalize path
-
+        private const int MULTIPACKED_ID_MAX = Section.MAX_MULTIPACKED_IDS; // max distinct ids to qualify for MultiPacked finalize path
+        private const int PACKED_ID_MAX = Section.MAX_PACKED_DISTINCT_IDS; // max distinct ids to qualify for Packed finalize path
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static ushort GetBlock(Section sec, int x, int y, int z)
@@ -147,26 +146,26 @@ namespace MVGE_GEN.Utils
                 return;
             }
 
-            // Multi-id (more than one distinct non-air id) – palette includes transparent ids too; logic unchanged.
+            // Distinct non-air id count (excludes AIR). Use PACKED_ID_MAX threshold (does not include air) for escalation.
             int distinctNonAir = (sec.Palette?.Count ?? 0) - 1; // exclude air
-            if (distinctNonAir > 1)
+            if (distinctNonAir > PACKED_ID_MAX) // exceeds packed limit, consider MultiPacked or Dense
             {
-                // If still within multi-packed limit choose MultiPacked else DenseExpanded
-                if (distinctNonAir + 1 /*include AIR*/ <= PACKED_MULTI_ID_MAX)
+                if (distinctNonAir <= MULTIPACKED_ID_MAX)
                 {
-                    // Keep as general packed form (MultiPacked) – metadata builder identical
+                    // Within multi-packed limit: keep packed bitstream form with variable bpi (MultiPacked)
                     sec.Kind = Section.RepresentationKind.MultiPacked;
                     BuildMetadataPacked(sec);
                 }
                 else
                 {
+                    // Exceeds multi-packed palette capacity: expand to dense per-voxel storage
                     ExpandToDense(sec);
                     BuildMetadataDense(sec);
                 }
                 return;
             }
 
-            // Single non-air id but partial occupancy
+            // At or below PACKED_ID_MAX (currently single non-air id) but not full volume -> single-id packed (1-bit if possible)
             sec.Kind = Section.RepresentationKind.Packed;
             BuildMetadataPacked(sec);
         }

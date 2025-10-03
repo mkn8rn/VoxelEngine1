@@ -19,6 +19,10 @@ namespace MVGE_INF.Generation.Models
             MultiPacked = 5     // Multi-id low-entropy packed (palette + variable bits per index)
         }
 
+        // Thresholds for escalating representation kind
+        public const int MAX_PACKED_DISTINCT_IDS = 1; // max distinct ids (palette size) for packed representation, does not include air
+        public const int MAX_MULTIPACKED_IDS = 254; // max distinct ids (palette size) for multi-packed representation, does not include air
+
         public RepresentationKind Kind = RepresentationKind.Empty; // default
 
         public bool IsAllAir = true; // kept for backward compatibility with existing checks

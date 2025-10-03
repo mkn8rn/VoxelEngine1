@@ -17,7 +17,6 @@ namespace MVGE_GEN.Utils
         private const int S = Section.SECTION_SIZE;          // Section linear dimension (16)
         private const int AIR = Section.AIR;                  // Block id representing empty space
         private const int COLUMN_COUNT = S * S;                    // 256 vertical columns (z * S + x)
-        private const int SPARSE_MASK_BUILD_MIN = 33;              // Threshold for building face masks in sparse form
         private static readonly ushort[,] MaskRangeLut = BuildMaskRangeLut();
         private static ushort[,] BuildMaskRangeLut()
         {
@@ -499,6 +498,7 @@ namespace MVGE_GEN.Utils
                 }
 
                 // 4.b Fused traversal path (delegates to helper for representation decisions).
+                // Representation decision inside FusedNonEscalatedFinalize will apply PACKED_ID_MAX and MULTIPACKED_ID_MAX thresholds.
                 FusedNonEscalatedFinalize(sec, scratch);
                 return;
             }

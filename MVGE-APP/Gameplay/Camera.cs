@@ -28,7 +28,7 @@ namespace MVGE_GEN.Gameplay
 
         public Matrix4 GetProjectionMatrix(float aspectRatio)
         {
-            return Matrix4.CreatePerspectiveFieldOfView(MathHelper.DegreesToRadians(45.0f), aspectRatio, 0.1f, 1000.0f);
+            return Matrix4.CreatePerspectiveFieldOfView(MathHelper.DegreesToRadians(45.0f), aspectRatio, 0.1f, 1600000.0f);
         }
 
         public void UpdatePosition(Vector3 playerPosition)

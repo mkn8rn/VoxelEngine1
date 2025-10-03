@@ -495,11 +495,15 @@ namespace MVGE_GEN.Utils
 
             // Multiple ids: decide MultiPacked vs Dense considering ALL non‑air ids (opaque + transparent)
             int paletteIdCount = scratch.DistinctCount; // includes all distinct non‑air ids
-            int paletteCount = paletteIdCount + 1; // + AIR
+            // Use Section.MAX_PACKED_DISTINCT_IDS (excludes AIR) for packed vs multi‑packed escalation, and Section.MAX_MULTIPACKED_IDS as upper bound.
+            const int PACKED_ID_MAX_LOCAL = Section.MAX_PACKED_DISTINCT_IDS; // does not include AIR
+            const int MULTIPACKED_ID_MAX_LOCAL = Section.MAX_MULTIPACKED_IDS; // does not include AIR
+            bool canMultiPack = paletteIdCount > PACKED_ID_MAX_LOCAL && paletteIdCount <= MULTIPACKED_ID_MAX_LOCAL;
+            int paletteCount = paletteIdCount + 1; // + AIR slot
             int bitsPerIndex = paletteCount <= 1 ? 1 : (int)BitOperations.Log2((uint)(paletteCount - 1)) + 1;
             long packedBytes = ((long)bitsPerIndex * totalVoxels + 7) / 8;
             long denseBytes = (long)totalVoxels * sizeof(ushort);
-            bool chooseMultiPacked = paletteCount <= 64 && (packedBytes + paletteCount * 2) < denseBytes;
+            bool chooseMultiPacked = canMultiPack && (packedBytes + paletteCount * 2) < denseBytes; // keep existing size heuristic
 
             if (chooseMultiPacked)
             {
@@ -578,11 +582,12 @@ namespace MVGE_GEN.Utils
                 sec.IsAllAir = false;
             }
 
+            // Finalize metadata flags and cleanup (common path)
             sec.MetadataBuilt = true;
             sec.StructuralDirty = false;
             sec.IdMapDirty = false;
             FinalizeTransparentAndEmptyMasks(sec); // final catch-all: build transparent face masks & EmptyBits if needed
-            sec.BuildScratch = null; 
+            sec.BuildScratch = null;
             ReturnScratch(scratch);
         }
 
