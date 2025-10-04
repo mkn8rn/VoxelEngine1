@@ -43,18 +43,14 @@ namespace MVGE_GFX.Terrain.Sections
             // Precompute face tiles – reuse uniform tile cache for consistency.
             var tileSet = GetFaceTileSet(id);
             bool sameTile = tileSet.AllSame;
-            Span<uint> faceTiles = stackalloc uint[6]
-            {
-                sameTile ? tileSet.SingleTile : tileSet.TileNX,
-                sameTile ? tileSet.SingleTile : tileSet.TilePX,
-                sameTile ? tileSet.SingleTile : tileSet.TileNY,
-                sameTile ? tileSet.SingleTile : tileSet.TilePY,
-                sameTile ? tileSet.SingleTile : tileSet.TileNZ,
-                sameTile ? tileSet.SingleTile : tileSet.TilePZ
-            };
+            uint tileNX = sameTile ? tileSet.SingleTile : tileSet.TileNX;
+            uint tilePX = sameTile ? tileSet.SingleTile : tileSet.TilePX;
+            uint tileNY = sameTile ? tileSet.SingleTile : tileSet.TileNY;
+            uint tilePY = sameTile ? tileSet.SingleTile : tileSet.TilePY;
+            uint tileNZ = sameTile ? tileSet.SingleTile : tileSet.TileNZ;
+            uint tilePZ = sameTile ? tileSet.SingleTile : tileSet.TilePZ;
 
-            // Fast path occupancy sources (opaque vs transparent bitsets already built in finalize for packed)
-            // For opaque we rely on desc.OpaqueBits; for transparent we use desc.TransparentBits (all bits for uniform transparent-like case of single id spread sparsely by bitset).
+            // Fast path occupancy sources
             var occOpaque = desc.OpaqueBits;
             var occTransparent = desc.TransparentBits;
 
@@ -62,7 +58,6 @@ namespace MVGE_GFX.Terrain.Sections
             {
                 if (occOpaque == null || desc.OpaqueCount == 0) return true; // nothing opaque to emit
 
-                // Build masks (internal + boundary) with skip classification and bounds trimming
                 Span<ulong> faceNX = stackalloc ulong[64];
                 Span<ulong> facePX = stackalloc ulong[64];
                 Span<ulong> faceNY = stackalloc ulong[64];
@@ -71,12 +66,13 @@ namespace MVGE_GFX.Terrain.Sections
                 Span<ulong> facePZ = stackalloc ulong[64];
                 Span<bool> skipDir = stackalloc bool[6]; // initialized false
 
-                BuildOpaqueFaceMasksSinglePacked(ref desc, sx, sy, sz, S,
+                // Build masks using unified builder
+                BuildPackedOpaqueFaceMasks(ref desc, sx, sy, sz, S,
                     lxMin, lxMax, lyMin, lyMax, lzMin, lzMax,
                     skipDir,
+                    occOpaque.AsSpan(),
                     faceNX, facePX, faceNY, facePY, faceNZ, facePZ);
 
-                // Exact capacity reserve by popcount (only visible bits)
                 int addFaces = CountOpaqueFaces(faceNX, facePX, faceNY, facePY, faceNZ, facePZ);
                 if (addFaces > 0)
                 {
@@ -84,13 +80,25 @@ namespace MVGE_GFX.Terrain.Sections
                     opaqueTileIndexList.EnsureCapacity(opaqueTileIndexList.Count + addFaces);
                     opaqueFaceDirList.EnsureCapacity(opaqueFaceDirList.Count + addFaces);
 
-                    // Emit per direction (skip empty masks to avoid extra overhead)
-                    if (!faceNX.IsEmpty && PopCountMask(faceNX) > 0) EmitOpaqueSinglePackedMasks(baseX, baseY, baseZ, faceNX, 0, faceTiles[0], opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
-                    if (!facePX.IsEmpty && PopCountMask(facePX) > 0) EmitOpaqueSinglePackedMasks(baseX, baseY, baseZ, facePX, 1, faceTiles[1], opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
-                    if (!faceNY.IsEmpty && PopCountMask(faceNY) > 0) EmitOpaqueSinglePackedMasks(baseX, baseY, baseZ, faceNY, 2, faceTiles[2], opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
-                    if (!facePY.IsEmpty && PopCountMask(facePY) > 0) EmitOpaqueSinglePackedMasks(baseX, baseY, baseZ, facePY, 3, faceTiles[3], opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
-                    if (!faceNZ.IsEmpty && PopCountMask(faceNZ) > 0) EmitOpaqueSinglePackedMasks(baseX, baseY, baseZ, faceNZ, 4, faceTiles[4], opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
-                    if (!facePZ.IsEmpty && PopCountMask(facePZ) > 0) EmitOpaqueSinglePackedMasks(baseX, baseY, baseZ, facePZ, 5, faceTiles[5], opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
+                    // Provide a tileProvider that returns the precomputed per-face tile.
+                    uint TileProvider(ushort _id, byte faceDir) => faceDir switch
+                    {
+                        0 => tileNX,
+                        1 => tilePX,
+                        2 => tileNY,
+                        3 => tilePY,
+                        4 => tileNZ,
+                        5 => tilePZ,
+                        _ => tileNX
+                    };
+
+                    // Emit per direction
+                    if (PopCountMask(faceNX) > 0) EmitOpaqueMasks(ref desc, baseX, baseY, baseZ, faceNX, 0, id, null, TileProvider, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
+                    if (PopCountMask(facePX) > 0) EmitOpaqueMasks(ref desc, baseX, baseY, baseZ, facePX, 1, id, null, TileProvider, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
+                    if (PopCountMask(faceNY) > 0) EmitOpaqueMasks(ref desc, baseX, baseY, baseZ, faceNY, 2, id, null, TileProvider, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
+                    if (PopCountMask(facePY) > 0) EmitOpaqueMasks(ref desc, baseX, baseY, baseZ, facePY, 3, id, null, TileProvider, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
+                    if (PopCountMask(faceNZ) > 0) EmitOpaqueMasks(ref desc, baseX, baseY, baseZ, faceNZ, 4, id, null, TileProvider, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
+                    if (PopCountMask(facePZ) > 0) EmitOpaqueMasks(ref desc, baseX, baseY, baseZ, facePZ, 5, id, null, TileProvider, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
                 }
                 return true;
             }
@@ -99,14 +107,16 @@ namespace MVGE_GFX.Terrain.Sections
                 // Transparent single-id path
                 if (occTransparent == null || desc.TransparentCount == 0) return true; // no transparent content
 
-                // Build transparent face masks for this single id using seam suppression & opaque occlusion.
                 Span<ulong> tFaceNX = stackalloc ulong[64];
                 Span<ulong> tFacePX = stackalloc ulong[64];
                 Span<ulong> tFaceNY = stackalloc ulong[64];
                 Span<ulong> tFacePY = stackalloc ulong[64];
                 Span<ulong> tFaceNZ = stackalloc ulong[64];
                 Span<ulong> tFacePZ = stackalloc ulong[64];
-                BuildTransparentFaceMasksSingleId(occTransparent, occOpaque, tFaceNX, tFacePX, tFaceNY, tFacePY, tFaceNZ, tFacePZ);
+
+                BuildTransparentFaceMasks(occTransparent.AsSpan(), (occOpaque != null) ? occOpaque.AsSpan() : _zeroMask64.AsSpan(),
+                    tFaceNX, tFacePX, tFaceNY, tFacePY, tFaceNZ, tFacePZ);
+
                 ApplyBoundsMask(lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, tFaceNX, tFacePX, tFaceNY, tFacePY, tFaceNZ, tFacePZ);
 
                 int predicted = PopCountMask(tFaceNX) + PopCountMask(tFacePX) + PopCountMask(tFaceNY) + PopCountMask(tFacePY) + PopCountMask(tFaceNZ) + PopCountMask(tFacePZ);
@@ -115,7 +125,11 @@ namespace MVGE_GFX.Terrain.Sections
                     transparentOffsetList.EnsureCapacity(transparentOffsetList.Count + predicted * 3);
                     transparentTileIndexList.EnsureCapacity(transparentTileIndexList.Count + predicted);
                     transparentFaceDirList.EnsureCapacity(transparentFaceDirList.Count + predicted);
-                    EmitTransparentSingleIdMasks(id, baseX, baseY, baseZ, tFaceNX, tFacePX, tFaceNY, tFacePY, tFaceNZ, tFacePZ,
+
+                    // Emit transparent faces using unified emitter. directional masks already limited to this id.
+                    EmitTransparentMasks(id, baseX, baseY, baseZ,
+                        tFaceNX, tFacePX, tFaceNY, tFacePY, tFaceNZ, tFacePZ,
+                        default,
                         transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
                 }
                 return true;

@@ -44,73 +44,6 @@ namespace MVGE_GFX.Terrain.Sections
             new FaceDescriptor(5,  0,  0,  1, 2, false),  // +Z
         };
 
-        // Local packed (multi-id) decode (reused by MultiPacked + helpers)
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static ushort DecodePackedLocal(ref SectionPrerenderDesc d, int lx, int ly, int lz)
-        {
-            if (d.PackedBitData == null || d.Palette == null || d.BitsPerIndex <= 0) return 0;
-            int li = ((lz * 16 + lx) << 4) + ly;
-            int bpi = d.BitsPerIndex;
-            long bitPos = (long)li * bpi;
-            int word = (int)(bitPos >> 5);
-            int bitOffset = (int)(bitPos & 31);
-            uint value = d.PackedBitData[word] >> bitOffset;
-            int rem = 32 - bitOffset;
-            if (rem < bpi) value |= d.PackedBitData[word + 1] << rem;
-            int mask = (1 << bpi) - 1;
-            int pi = (int)(value & mask);
-            if ((uint)pi >= (uint)d.Palette.Count) return 0;
-            return d.Palette[pi];
-        }
-
-        // Unified neighbor voxel decode with occupancy flag (uniform / expanded / packed / multi-packed)
-        // occupied == true when id != 0 and corresponding storage bit/entry is set.
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static ushort DecodeNeighborVoxel(ref SectionPrerenderDesc n, int lx, int ly, int lz, out bool occupied)
-        {
-            occupied = false;
-            switch (n.Kind)
-            {
-                case 1: // Uniform
-                {
-                    ushort id = n.UniformBlockId;
-                    occupied = id != 0;
-                    return id;
-                }
-                case 3: // Expanded (dense array)
-                {
-                    if (n.ExpandedDense == null) return 0;
-                    int li = ((lz * 16 + lx) * 16) + ly;
-                    ushort id = n.ExpandedDense[li];
-                    occupied = id != 0;
-                    return id;
-                }
-                case 4: // Single packed (palette[1] holds the single non-air id).Test uses opaque OR transparent bits.
-                {
-                    if (n.Palette == null || n.Palette.Count <= 1) return 0;
-                    int li = ((lz * 16 + lx) * 16) + ly;
-                    bool bitSetOpaque = n.OpaqueBits != null && (n.OpaqueBits[li >> 6] & (1UL << (li & 63))) != 0UL;
-                    bool bitSetTransparent = n.TransparentBits != null && (n.TransparentBits[li >> 6] & (1UL << (li & 63))) != 0UL;
-                    bool occ = bitSetOpaque || bitSetTransparent;
-                    if (!occ)
-                    {
-                        occupied = false;
-                        return 0;
-                    }
-                    occupied = true;
-                    return n.Palette[1];
-                }
-                case 5: // Multi-packed
-                {
-                    ushort id = DecodePackedLocal(ref n, lx, ly, lz);
-                    occupied = id != 0;
-                    return id;
-                }
-                default:
-                    return 0;
-            }
-        }
-
         // ------------------------------------------------------------------------------------
         // Bounds helper (world-base-clamped 0..15 local bounds)
         // ------------------------------------------------------------------------------------
@@ -147,13 +80,6 @@ namespace MVGE_GFX.Terrain.Sections
             return (uint)(minTileY * atlas.tilesX + minTileX);
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        static void DecodeIndex(int li, out int lx, out int ly, out int lz)
-        { ly = li & 15; int rest = li >> 4; lx = rest & 15; lz = rest >> 4; }
-
-        // 1. BuildInternalFaceMasks: fills directional face masks for internal faces only (excludes boundary layers).
-        // NOTE: occ now indicates only opaque voxel occupancy; transparent blocks are excluded upstream so internal mask
-        // generation inherently ignores them without extra filtering here.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static void BuildInternalFaceMasks(ReadOnlySpan<ulong> occ,
                                                     Span<ulong> faceNX, Span<ulong> facePX,
@@ -440,38 +366,6 @@ namespace MVGE_GFX.Terrain.Sections
                     }
                 }
             }
-        }
-
-        // Build internal transparent face masks then cull adjacency to opaque.
-        private static void BuildTransparentInternalFaceMasks(
-            ReadOnlySpan<ulong> transparentOcc,
-            ReadOnlySpan<ulong> opaqueOcc,
-            Span<ulong> faceNX, Span<ulong> facePX,
-            Span<ulong> faceNY, Span<ulong> facePY,
-            Span<ulong> faceNZ, Span<ulong> facePZ)
-        {
-            BuildInternalFaceMasks(transparentOcc, faceNX, facePX, faceNY, facePY, faceNZ, facePZ);
-            Span<ulong> shift = stackalloc ulong[64];
-
-            // For each direction, construct mask of faces whose neighbor is opaque, then subtract.
-            // -X faces hidden if +X neighbor opaque
-            BitsetShiftRight(opaqueOcc, STRIDE_X, shift);
-            for (int i = 0; i < 64; i++) faceNX[i] &= ~shift[i];
-            // +X faces hidden if -X neighbor opaque
-            BitsetShiftLeft(opaqueOcc, STRIDE_X, shift);
-            for (int i = 0; i < 64; i++) facePX[i] &= ~shift[i];
-            // -Y
-            BitsetShiftRight(opaqueOcc, STRIDE_Y, shift);
-            for (int i = 0; i < 64; i++) faceNY[i] &= ~shift[i];
-            // +Y
-            BitsetShiftLeft(opaqueOcc, STRIDE_Y, shift);
-            for (int i = 0; i < 64; i++) facePY[i] &= ~shift[i];
-            // -Z
-            BitsetShiftRight(opaqueOcc, STRIDE_Z, shift);
-            for (int i = 0; i < 64; i++) faceNZ[i] &= ~shift[i];
-            // +Z
-            BitsetShiftLeft(opaqueOcc, STRIDE_Z, shift);
-            for (int i = 0; i < 64; i++) facePZ[i] &= ~shift[i];
         }
 
         // Generalized boundary reinsertion (metadata-driven) with optional skip flags (used by packed selective path).

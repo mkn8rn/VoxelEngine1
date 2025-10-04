@@ -54,10 +54,13 @@ namespace MVGE_GFX.Terrain.Sections
                 Span<ulong> facePZ = stackalloc ulong[64];
                 Span<bool> skipDir = stackalloc bool[6]; // initialized false
 
-                BuildOpaqueFaceMasksMultiPacked(ref desc, sx, sy, sz, S,
+                // New unified builder: pass occupancy mask (desc.OpaqueBits)
+                BuildPackedOpaqueFaceMasks(ref desc, sx, sy, sz, S,
                     lxMin, lxMax, lyMin, lyMax, lzMin, lzMax,
                     skipDir,
+                    desc.OpaqueBits.AsSpan(),
                     faceNX, facePX, faceNY, facePY, faceNZ, facePZ);
+
                 int opaqueFaces = CountOpaqueFaces(faceNX, facePX, faceNY, facePY, faceNZ, facePZ);
                 if (opaqueFaces > 0)
                 {
@@ -65,30 +68,63 @@ namespace MVGE_GFX.Terrain.Sections
                     opaqueTileIndexList.EnsureCapacity(opaqueTileIndexList.Count + opaqueFaces);
                     opaqueFaceDirList.EnsureCapacity(opaqueFaceDirList.Count + opaqueFaces);
 
-                    var localDesc = desc; // local copy required
-                    EmitOpaqueMultiPackedMasks(ref localDesc, baseX, baseY, baseZ, faceNX, 0, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
-                    EmitOpaqueMultiPackedMasks(ref localDesc, baseX, baseY, baseZ, facePX, 1, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
-                    EmitOpaqueMultiPackedMasks(ref localDesc, baseX, baseY, baseZ, faceNY, 2, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
-                    EmitOpaqueMultiPackedMasks(ref localDesc, baseX, baseY, baseZ, facePY, 3, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
-                    EmitOpaqueMultiPackedMasks(ref localDesc, baseX, baseY, baseZ, faceNZ, 4, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
-                    EmitOpaqueMultiPackedMasks(ref localDesc, baseX, baseY, baseZ, facePZ, 5, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
+                    var localDesc = desc; // local copy required for decoding closure
+
+                    // per-voxel decoder wrapper that avoids capturing a ref-local in a way that would be illegal.
+                    // It takes the copied descriptor by value so inner DecodePackedLocal may be called safely.
+                    ushort DecodePackedLocalValue(int lx, int ly, int lz)
+                    {
+                        var d = localDesc; // copy to local variable
+                        return DecodePackedLocal(ref d, lx, ly, lz);
+                    }
+
+                    // Use unified emitter. uniformId==0 signals per-voxel decode.
+                    EmitOpaqueMasks(ref localDesc, baseX, baseY, baseZ, faceNX, 0, 0,
+                        (lx, ly, lz) => DecodePackedLocalValue(lx, ly, lz),
+                        FallbackTileProvider,
+                        opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
+
+                    EmitOpaqueMasks(ref localDesc, baseX, baseY, baseZ, facePX, 1, 0,
+                        (lx, ly, lz) => DecodePackedLocalValue(lx, ly, lz),
+                        FallbackTileProvider,
+                        opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
+
+                    EmitOpaqueMasks(ref localDesc, baseX, baseY, baseZ, faceNY, 2, 0,
+                        (lx, ly, lz) => DecodePackedLocalValue(lx, ly, lz),
+                        FallbackTileProvider,
+                        opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
+
+                    EmitOpaqueMasks(ref localDesc, baseX, baseY, baseZ, facePY, 3, 0,
+                        (lx, ly, lz) => DecodePackedLocalValue(lx, ly, lz),
+                        FallbackTileProvider,
+                        opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
+
+                    EmitOpaqueMasks(ref localDesc, baseX, baseY, baseZ, faceNZ, 4, 0,
+                        (lx, ly, lz) => DecodePackedLocalValue(lx, ly, lz),
+                        FallbackTileProvider,
+                        opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
+
+                    EmitOpaqueMasks(ref localDesc, baseX, baseY, baseZ, facePZ, 5, 0,
+                        (lx, ly, lz) => DecodePackedLocalValue(lx, ly, lz),
+                        FallbackTileProvider,
+                        opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
                 }
             }
 
             // --------------- DOMINANT TRANSPARENT FAST PATH (mask based) ---------------
             if (hasDominantTransparent)
             {
-                // We rely on pre-built transparent face masks (internal + boundary) always available in desc.*TransparentFace* arrays.
-                // Emit only faces for dominant transparent voxels by intersecting face masks with DominantTransparentBits.
-                Span<ulong> dom = desc.DominantTransparentBits.AsSpan();
+                // Pre-built transparent directional face masks exist in desc.*TransparentFace* arrays.
+                // Emit only faces where DominantTransparentBits is set by ANDing with precomputed face masks.
+                var dom = desc.DominantTransparentBits.AsSpan();
                 if (desc.TransparentFaceNegXBits != null)
                 {
-                    EmitTransparentMasked(dom, desc.TransparentFaceNegXBits, desc.DominantTransparentId, baseX, baseY, baseZ, 0, transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
-                    EmitTransparentMasked(dom, desc.TransparentFacePosXBits, desc.DominantTransparentId, baseX, baseY, baseZ, 1, transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
-                    EmitTransparentMasked(dom, desc.TransparentFaceNegYBits, desc.DominantTransparentId, baseX, baseY, baseZ, 2, transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
-                    EmitTransparentMasked(dom, desc.TransparentFacePosYBits, desc.DominantTransparentId, baseX, baseY, baseZ, 3, transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
-                    EmitTransparentMasked(dom, desc.TransparentFaceNegZBits, desc.DominantTransparentId, baseX, baseY, baseZ, 4, transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
-                    EmitTransparentMasked(dom, desc.TransparentFacePosZBits, desc.DominantTransparentId, baseX, baseY, baseZ, 5, transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
+                    EmitTransparentMasks(desc.DominantTransparentId, baseX, baseY, baseZ,
+                        desc.TransparentFaceNegXBits.AsSpan(), desc.TransparentFacePosXBits.AsSpan(),
+                        desc.TransparentFaceNegYBits.AsSpan(), desc.TransparentFacePosYBits.AsSpan(),
+                        desc.TransparentFaceNegZBits.AsSpan(), desc.TransparentFacePosZBits.AsSpan(),
+                        dom,
+                        transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
                 }
             }
 
@@ -101,12 +137,9 @@ namespace MVGE_GFX.Terrain.Sections
                 var transparentPaletteIndices = desc.TransparentPaletteIndices; // indices referencing palette positions that are transparent overall
                 if (residualBits != null && transparentPaletteIndices != null && transparentPaletteIndices.Length > 0)
                 {
-                    // Build subset map: paletteId -> slot index for residual per-id mask arrays (only for ids present in residual)
-                    // Allocate mask array per transparent palette candidate; filled only where bits decode to that id & residualBits set.
                     int tCount = transparentPaletteIndices.Length;
                     var perIdMasks = new ulong[tCount][]; // lazily allocate when first voxel of that id encountered
 
-                    // On-demand dictionary from blockId -> mask index (only transparent ids) for O(1) routing.
                     var idToMaskIndex = new Dictionary<ushort, int>(tCount);
                     for (int i = 0; i < tCount; i++)
                     {
@@ -125,8 +158,8 @@ namespace MVGE_GFX.Terrain.Sections
                             int li = (w << 6) + bit;
                             int ly = li & 15; int t = li >> 4; int lx = t & 15; int lz = t >> 4;
                             ushort id = DecodePackedLocal(ref desc, lx, ly, lz);
-                            if (id == 0 || TerrainLoader.IsOpaque(id) || id == desc.DominantTransparentId) continue; // skip opaque or dominant already emitted
-                            if (!idToMaskIndex.TryGetValue(id, out int mi)) continue; // not in transparent palette subset (defensive)
+                            if (id == 0 || TerrainLoader.IsOpaque(id) || id == desc.DominantTransparentId) continue;
+                            if (!idToMaskIndex.TryGetValue(id, out int mi)) continue;
                             var mask = perIdMasks[mi];
                             if (mask == null) { mask = perIdMasks[mi] = new ulong[64]; }
                             mask[w] |= 1UL << bit;
@@ -144,13 +177,17 @@ namespace MVGE_GFX.Terrain.Sections
                     for (int i = 0; i < tCount; i++)
                     {
                         var voxelMask = perIdMasks[i];
-                        if (voxelMask == null) continue; // id absent in residual
+                        if (voxelMask == null) continue;
 
                         // Clear face masks
                         for (int j = 0; j < 64; j++) fNX[j] = fPX[j] = fNY[j] = fPY[j] = fNZ[j] = fPZ[j] = 0UL;
 
-                        BuildTransparentFaceMasksGeneric(voxelMask, opaqueBits, fNX, fPX, fNY, fPY, fNZ, fPZ);
+                        // Use unified transparent builder. supply opaqueBits (or zero mask) as ReadOnlySpan.
+                        BuildTransparentFaceMasks(voxelMask.AsSpan(), (opaqueBits != null) ? opaqueBits.AsSpan() : _zeroMask64.AsSpan(),
+                            fNX, fPX, fNY, fPY, fNZ, fPZ);
+
                         ApplyBoundsMask(lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, fNX, fPX, fNY, fPY, fNZ, fPZ);
+
                         int add = PopCountMask(fNX) + PopCountMask(fPX) + PopCountMask(fNY) + PopCountMask(fPY) + PopCountMask(fNZ) + PopCountMask(fPZ);
                         if (add == 0) continue;
 
@@ -159,7 +196,10 @@ namespace MVGE_GFX.Terrain.Sections
                         transparentFaceDirList.EnsureCapacity(transparentFaceDirList.Count + add);
 
                         ushort id = palette[transparentPaletteIndices[i]];
-                        EmitTransparentSingleIdMasks(id, baseX, baseY, baseZ, fNX, fPX, fNY, fPY, fNZ, fPZ,
+                        // directional masks already restricted to this id so pass an empty voxelMask.
+                        EmitTransparentMasks(id, baseX, baseY, baseZ,
+                            fNX, fPX, fNY, fPY, fNZ, fPZ,
+                            default, // no extra &-mask needed
                             transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
                     }
                 }
