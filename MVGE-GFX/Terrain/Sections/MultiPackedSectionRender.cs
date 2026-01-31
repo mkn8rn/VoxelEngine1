@@ -1,4 +1,4 @@
-﻿using MVGE_GFX.Models;
+using MVGE_GFX.Models;
 using MVGE_GFX.Textures;
 using MVGE_INF.Models.Generation;
 using System;
@@ -31,7 +31,7 @@ namespace MVGE_GFX.Terrain.Sections
             List<byte> transparentOffsetList, List<uint> transparentTileIndexList, List<byte> transparentFaceDirList)
         {
             if (desc.Kind != 5 || desc.PackedBitData == null || desc.Palette == null || desc.BitsPerIndex <= 0)
-                return false; // not multi-packed – let caller fallback / other path
+                return false; // not multi-packed � let caller fallback / other path
 
             bool hasOpaque = desc.OpaqueBits != null && desc.OpaqueCount > 0;
             bool hasResidualTransparent = desc.TransparentBits != null && desc.TransparentCount > 0;

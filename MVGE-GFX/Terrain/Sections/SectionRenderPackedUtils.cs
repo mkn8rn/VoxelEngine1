@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using MVGE_INF.Models.Generation;
@@ -160,7 +160,7 @@ namespace MVGE_GFX.Terrain.Sections
                     }
 
                     uint tile = tileProvider(id, faceDir);
-                    EmitOneInstance(baseX + lx, baseY + ly, baseZ + lz, tile, faceDir, offsets, tilesOut, faceDirs);
+                    EmitOneInstance(baseX + lx, baseY + ly, baseZ + lz, tile, faceDir, offsets, tilesOut, faceDirs, quadSizes);
                 }
             }
         }
@@ -272,7 +272,7 @@ namespace MVGE_GFX.Terrain.Sections
                     if (culled) continue;
 
                     uint tile = _fallbackTileCache.Get(atlas, uniformId, 0);
-                    EmitOneInstance(wx, wy, wz, tile, 0, offsets, tilesOut, dirs);
+                    EmitOneInstance(wx, wy, wz, tile, 0, offsets, tilesOut, dirs, quadSizes);
                 }
             }
 
@@ -304,7 +304,7 @@ namespace MVGE_GFX.Terrain.Sections
                     if (culled) continue;
 
                     uint tile = _fallbackTileCache.Get(atlas, uniformId, 1);
-                    EmitOneInstance(wx, wy, wz, tile, 1, offsets, tilesOut, dirs);
+                    EmitOneInstance(wx, wy, wz, tile, 1, offsets, tilesOut, dirs, quadSizes);
                 }
             }
 
@@ -336,7 +336,7 @@ namespace MVGE_GFX.Terrain.Sections
                     if (culled) continue;
 
                     uint tile = _fallbackTileCache.Get(atlas, uniformId, 2);
-                    EmitOneInstance(wx, wy, wz, tile, 2, offsets, tilesOut, dirs);
+                    EmitOneInstance(wx, wy, wz, tile, 2, offsets, tilesOut, dirs, quadSizes);
                 }
             }
 
@@ -368,7 +368,7 @@ namespace MVGE_GFX.Terrain.Sections
                     if (culled) continue;
 
                     uint tile = _fallbackTileCache.Get(atlas, uniformId, 3);
-                    EmitOneInstance(wx, wy, wz, tile, 3, offsets, tilesOut, dirs);
+                    EmitOneInstance(wx, wy, wz, tile, 3, offsets, tilesOut, dirs, quadSizes);
                 }
             }
 
@@ -400,7 +400,7 @@ namespace MVGE_GFX.Terrain.Sections
                     if (culled) continue;
 
                     uint tile = _fallbackTileCache.Get(atlas, uniformId, 4);
-                    EmitOneInstance(wx, wy, wz, tile, 4, offsets, tilesOut, dirs);
+                    EmitOneInstance(wx, wy, wz, tile, 4, offsets, tilesOut, dirs, quadSizes);
                 }
             }
 
@@ -432,7 +432,7 @@ namespace MVGE_GFX.Terrain.Sections
                     if (culled) continue;
 
                     uint tile = _fallbackTileCache.Get(atlas, uniformId, 5);
-                    EmitOneInstance(wx, wy, wz, tile, 5, offsets, tilesOut, dirs);
+                    EmitOneInstance(wx, wy, wz, tile, 5, offsets, tilesOut, dirs, quadSizes);
                 }
             }
         }
