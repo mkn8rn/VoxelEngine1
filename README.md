@@ -14,8 +14,18 @@ end-to-end test opens the application and requires an OpenGL GPU.
 The test loads the Default game with seed `123456`. It writes timestamped JSON
 results under `TestResults/benchmarks`.
 
-`gameLoadMilliseconds` measures the Default game data load. `buildMilliseconds`
-measures the first CPU chunk render build.
+Benchmark mode uses staged generation with `renderStreamingIfAllowed=false`.
+This mode supplies the two existing console phase measurements.
+
+`gameLoadMilliseconds` measures the Default game data load.
+
+`initialGenerationMilliseconds` matches the console initial-generation time.
+`initialChunkMeshBuildMilliseconds` matches the console chunk-mesh-build time.
+
+The diagnostics supply the same integer values to the console and benchmark
+JSON.
+
+`buildMilliseconds` measures one first-completed CPU chunk render build.
 
 `renderMilliseconds` measures the first frame that starts GPU chunk streaming.
 `cameraAppearanceMilliseconds` measures the time to the first buffer swap.
