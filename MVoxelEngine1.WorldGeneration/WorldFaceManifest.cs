@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using MVoxelEngine1.Graphics.Models;
 using MVoxelEngine1.Graphics.Terrain;
+using MVoxelEngine1.Infrastructure.Diagnostics;
 using MVoxelEngine1.Infrastructure.Loaders;
 using MVoxelEngine1.Infrastructure.Managers;
 using MVoxelEngine1.Infrastructure.Models;
@@ -557,8 +558,8 @@ namespace MVoxelEngine1.WorldGeneration
                 CaptureCenterChunkY = centerY,
                 CaptureCenterChunkZ = centerZ,
                 ActiveCoordinateSha256 = HashCoordinates(chunks),
-                GameInputSha256 = HashGameInputs(),
-                BlockRegistrySha256 = HashBlockRegistry(),
+                GameInputSha256 = RuntimeInputHasher.HashGameInputs(),
+                BlockRegistrySha256 = RuntimeInputHasher.HashBlockRegistry(),
                 Faces = faceDigest,
                 Chunks = chunkManifests
             };
@@ -842,78 +843,5 @@ namespace MVoxelEngine1.WorldGeneration
             return CanonicalRenderFaceHasher.GetHex(hash);
         }
 
-        private static string HashBlockRegistry()
-        {
-            using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-            CanonicalRenderFaceHasher.AppendString(
-                hash,
-                "MVoxelEngine1.RuntimeBlockRegistry.v1");
-            Span<byte> encoded = stackalloc byte[5];
-            Span<byte> state = stackalloc byte[4];
-            foreach (BlockType block in TerrainLoader.allBlockTypeObjects.OrderBy(block => block.ID))
-            {
-                BinaryPrimitives.WriteUInt16LittleEndian(encoded, block.ID);
-                BinaryPrimitives.WriteUInt16LittleEndian(encoded[2..], (ushort)block.BaseType);
-                encoded[4] = block.IsTransparent ? (byte)1 : (byte)0;
-                hash.AppendData(encoded);
-                CanonicalRenderFaceHasher.AppendString(hash, block.UniqueName);
-                CanonicalRenderFaceHasher.AppendString(hash, block.Name);
-                CanonicalRenderFaceHasher.AppendString(hash, block.TextureFaceBase);
-                CanonicalRenderFaceHasher.AppendString(hash, block.TextureFaceTop);
-                CanonicalRenderFaceHasher.AppendString(hash, block.TextureFaceFront);
-                CanonicalRenderFaceHasher.AppendString(hash, block.TextureFaceBack);
-                CanonicalRenderFaceHasher.AppendString(hash, block.TextureFaceLeft);
-                CanonicalRenderFaceHasher.AppendString(hash, block.TextureFaceRight);
-                CanonicalRenderFaceHasher.AppendString(hash, block.TextureFaceBottom);
-                BinaryPrimitives.WriteInt32LittleEndian(state, (int)block.StateOfMatter);
-                hash.AppendData(state);
-            }
-
-            return CanonicalRenderFaceHasher.GetHex(hash);
-        }
-
-        private static string HashGameInputs()
-        {
-            string gameDirectory = GameManager.settings.loadedGameDirectory;
-            string savesDirectory = Path.GetFullPath(
-                GameManager.settings.savesWorldDirectory);
-            string savesPrefix = savesDirectory.EndsWith(Path.DirectorySeparatorChar)
-                ? savesDirectory
-                : savesDirectory + Path.DirectorySeparatorChar;
-            string[] files = Directory.EnumerateFiles(
-                    gameDirectory,
-                    "*",
-                    SearchOption.AllDirectories)
-                .Select(Path.GetFullPath)
-                .Where(path =>
-                    !path.Equals(savesDirectory, StringComparison.OrdinalIgnoreCase) &&
-                    !path.StartsWith(savesPrefix, StringComparison.OrdinalIgnoreCase))
-                .OrderBy(
-                    path => Path.GetRelativePath(gameDirectory, path),
-                    StringComparer.Ordinal)
-                .ToArray();
-
-            using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-            CanonicalRenderFaceHasher.AppendString(
-                hash,
-                "MVoxelEngine1.GameInputs.v1");
-            byte[] buffer = new byte[128 * 1024];
-            Span<byte> length = stackalloc byte[8];
-            foreach (string path in files)
-            {
-                string relativePath = Path.GetRelativePath(gameDirectory, path)
-                    .Replace(Path.DirectorySeparatorChar, '/');
-                CanonicalRenderFaceHasher.AppendString(hash, relativePath);
-                var info = new FileInfo(path);
-                BinaryPrimitives.WriteInt64LittleEndian(length, info.Length);
-                hash.AppendData(length);
-                using FileStream stream = File.OpenRead(path);
-                int read;
-                while ((read = stream.Read(buffer, 0, buffer.Length)) != 0)
-                    hash.AppendData(buffer.AsSpan(0, read));
-            }
-
-            return CanonicalRenderFaceHasher.GetHex(hash);
-        }
     }
 }

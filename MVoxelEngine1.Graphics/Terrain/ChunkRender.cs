@@ -343,6 +343,16 @@ namespace MVoxelEngine1.Graphics.Terrain
             }
 
             isBuilt = true;
+            if (instanceCount != 0 || transparentInstanceCount != 0)
+            {
+                double? generationToRender =
+                    StartupPerformanceRecorder.RecordGenerationToRender();
+                if (generationToRender.HasValue)
+                {
+                    Console.WriteLine(FormattableString.Invariant(
+                        $"Generation to Render time (GTRT): {generationToRender.Value:R} ms."));
+                }
+            }
         }
 
         // Opaque pass: draws opaque face instances only. Depth test/write is managed by the caller.
