@@ -107,9 +107,6 @@ namespace MVoxelEngine1.Application
             GL.Enable(EnableCap.Blend);
             GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
 
-            // Garbage collection before starting the camera
-            GameDataStartup.PrepareCamera();
-
             CursorState = CursorState.Grabbed;
         }
 

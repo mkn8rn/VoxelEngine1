@@ -27,8 +27,6 @@ namespace MVoxelEngine1.Application.Simulation
             Console.WriteLine("Initializing player.");
             var player = new Player(world);
             world.PlayerChunkPosition = (0, 0, 0);
-            GameDataStartup.PrepareCamera();
-
             int windowWidth = FlagManager.flags.windowWidth
                 ?? throw new InvalidOperationException("The simulated window width is not set.");
             int windowHeight = FlagManager.flags.windowHeight
