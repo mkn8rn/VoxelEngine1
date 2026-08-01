@@ -9,7 +9,7 @@
 .vscode/
 
 # Internal Codex reports
-/docs/internal/
+/docs/internal
 
 # ASP.NET Core development server files
 *.db        # SQLite or EF Core local DBs 
