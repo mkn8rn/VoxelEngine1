@@ -73,23 +73,7 @@ namespace MVoxelEngine1.Application
         protected override void OnLoad()
         {
             base.OnLoad();
-            // Load game manager
-            Console.WriteLine("Game manager initializing.");
-            GameManager.Initialize();
-
-            // Select game
-            string game = GameManager.SelectGameFolder(FlagManager.flags.game);
-            GameManager.LoadGameDefaultSettings(game);
-
-            // Initialize the Data Loaders
-            Console.WriteLine("Data loaders initializing.");
-            blockDataLoader = new TerrainLoader() ?? throw new Exception("blockDataLoader is null");
-
-            // Load biomes after game settings
-            Console.WriteLine("Biomes loading.");
-            BiomeManager.LoadAllBiomes();
-            Console.WriteLine($"Loaded {BiomeManager.Biomes.Count} biome(s).");
-            StartupPerformanceRecorder.RecordGameLoaded();
+            blockDataLoader = GameDataStartup.Load();
 
             // Initialize the Texture Atlases
             Console.WriteLine("Texture atlases initializing.");
@@ -124,10 +108,7 @@ namespace MVoxelEngine1.Application
             GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
 
             // Garbage collection before starting the camera
-            System.Runtime.GCSettings.LargeObjectHeapCompactionMode = System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
+            GameDataStartup.PrepareCamera();
 
             CursorState = CursorState.Grabbed;
         }

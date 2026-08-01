@@ -8,6 +8,7 @@ using System.Text;
 using System.Threading.Tasks;
 using MVoxelEngine1.Infrastructure.Managers;
 using MVoxelEngine1.WorldGeneration;
+using MVoxelEngine1.Infrastructure.Models.Simulation;
 
 namespace MVoxelEngine1.Application.Gameplay
 {
@@ -24,7 +25,7 @@ namespace MVoxelEngine1.Application.Gameplay
         public Vector3 velocity = Vector3.Zero;
         public Vector3 direction = -Vector3.UnitZ; // Facing forward
 
-        private float SPEED = 60f;
+        internal const float MovementSpeed = 60f;
         private float jumpStrength = 5f;
 
         public Camera camera;
@@ -54,6 +55,13 @@ namespace MVoxelEngine1.Application.Gameplay
             UpdateWorldChunkPosition();
         }
 
+        public void Update(PlayerInputKeys input, double elapsedSeconds)
+        {
+            ApplyMovement(input, elapsedSeconds);
+            camera.UpdateDirection(direction);
+            UpdateWorldChunkPosition();
+        }
+
         private void UpdateWorldChunkPosition()
         {
             int sizeX = GameManager.settings.chunkMaxX;
@@ -78,38 +86,50 @@ namespace MVoxelEngine1.Application.Gameplay
 
         private void HandleInput(KeyboardState input, MouseState mouse, FrameEventArgs args)
         {
-            float cameraSpeed = SPEED * (float)args.Time;
+            PlayerInputKeys keys = PlayerInputKeys.None;
+            if (input.IsKeyDown(Keys.W)) keys |= PlayerInputKeys.W;
+            if (input.IsKeyDown(Keys.A)) keys |= PlayerInputKeys.A;
+            if (input.IsKeyDown(Keys.S)) keys |= PlayerInputKeys.S;
+            if (input.IsKeyDown(Keys.D)) keys |= PlayerInputKeys.D;
+            if (input.IsKeyDown(Keys.Space)) keys |= PlayerInputKeys.Space;
+            if (input.IsKeyDown(Keys.LeftShift)) keys |= PlayerInputKeys.LeftShift;
+
+            ApplyMovement(keys, args.Time);
+
+            float deltaX = mouse.Delta.X;
+            float deltaY = mouse.Delta.Y;
+            camera.ProcessMouseMovement(deltaX, deltaY);
+            direction = camera.front;
+        }
+
+        private void ApplyMovement(PlayerInputKeys input, double elapsedSeconds)
+        {
+            if (!double.IsFinite(elapsedSeconds) || elapsedSeconds < 0)
+                throw new ArgumentOutOfRangeException(nameof(elapsedSeconds));
+
+            float cameraSpeed = MovementSpeed * (float)elapsedSeconds;
             Vector3 moveDirection = Vector3.Zero;
 
-            // Forward/backward
-            if (input.IsKeyDown(Keys.W))
+            if ((input & PlayerInputKeys.W) != 0)
                 moveDirection += camera.front;
-            if (input.IsKeyDown(Keys.S))
+            if ((input & PlayerInputKeys.S) != 0)
                 moveDirection -= camera.front;
 
-            // Left/right
             Vector3 right = Vector3.Normalize(Vector3.Cross(camera.front, camera.up));
-            if (input.IsKeyDown(Keys.A))
+            if ((input & PlayerInputKeys.A) != 0)
                 moveDirection -= right;
-            if (input.IsKeyDown(Keys.D))
+            if ((input & PlayerInputKeys.D) != 0)
                 moveDirection += right;
 
-            // Up/down
-            if (input.IsKeyDown(Keys.Space))
+            if ((input & PlayerInputKeys.Space) != 0)
                 moveDirection += camera.up;
-            if (input.IsKeyDown(Keys.LeftShift))
+            if ((input & PlayerInputKeys.LeftShift) != 0)
                 moveDirection -= camera.up;
 
             if (moveDirection.LengthSquared > 0)
                 moveDirection = Vector3.Normalize(moveDirection);
 
             camera.position += moveDirection * cameraSpeed;
-
-            // Mouse look (direction)
-            float deltaX = mouse.Delta.X;
-            float deltaY = mouse.Delta.Y;
-            camera.ProcessMouseMovement(deltaX, deltaY);
-            direction = camera.front;
         }
     }
 }

@@ -13,6 +13,12 @@ using System.Threading.Tasks;
 
 namespace MVoxelEngine1.Graphics.Textures
 {
+    public enum BlockTextureAtlasUploadMode
+    {
+        OpenGl,
+        SimulatedGpuUpload
+    }
+
     public class BlockTextureAtlas
     {
         public int ID;
@@ -28,6 +34,7 @@ namespace MVoxelEngine1.Graphics.Textures
         private string fallbackTextureName = "400";
         private ImageResult missingTexture;
         private string missingTextureName = "404";
+        private readonly BlockTextureAtlasUploadMode uploadMode;
 
         //coordinates of all loaded and merged textures
         public static Dictionary<string, Vector2> textureCoordinates = new Dictionary<string, Vector2>();
@@ -109,6 +116,7 @@ namespace MVoxelEngine1.Graphics.Textures
         // Private ctor for lazy async pathway
         private BlockTextureAtlas(List<RawImage> preloaded)
         {
+            uploadMode = BlockTextureAtlasUploadMode.OpenGl;
             Console.WriteLine($"Generating terrain texture atlas (async preloaded={preloaded?.Count}).");
             string baseDir = GameManager.settings.assetsBaseBlockTexturesDirectory;
             string ext = GameManager.settings.textureFileExtension;
@@ -200,10 +208,12 @@ namespace MVoxelEngine1.Graphics.Textures
             GL.BindTexture(TextureTarget.Texture2D, 0);
         }
 
-        // Original blocking constructor remains for legacy direct call paths
-        public BlockTextureAtlas()
+        public BlockTextureAtlas(BlockTextureAtlasUploadMode uploadMode = BlockTextureAtlasUploadMode.OpenGl)
         {
-            Console.WriteLine($"Generating terrain texture atlas.");
+            this.uploadMode = uploadMode;
+            Console.WriteLine(uploadMode == BlockTextureAtlasUploadMode.OpenGl
+                ? "Generating terrain texture atlas."
+                : "Generating terrain texture atlas for simulated GPU upload.");
 
             var baseTextureFiles = Directory.GetFiles(GameManager.settings.assetsBaseBlockTexturesDirectory, "*" + GameManager.settings.textureFileExtension);
             var textureFiles = Directory.GetFiles(GameManager.settings.assetsBlockTexturesDirectory, "*" + GameManager.settings.textureFileExtension);
@@ -217,13 +227,16 @@ namespace MVoxelEngine1.Graphics.Textures
             atlasWidth = tilesX * GameManager.settings.blockTileWidth;
             atlasHeight = tilesY * GameManager.settings.blockTileHeight;
 
-            ID = GL.GenTexture();
-            GL.BindTexture(TextureTarget.Texture2D, ID);
-            GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba, atlasWidth, atlasHeight, 0, PixelFormat.Rgba, PixelType.UnsignedByte, nint.Zero);
-            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
-            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.Repeat);
-            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
-            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
+            if (uploadMode == BlockTextureAtlasUploadMode.OpenGl)
+            {
+                ID = GL.GenTexture();
+                GL.BindTexture(TextureTarget.Texture2D, ID);
+                GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba, atlasWidth, atlasHeight, 0, PixelFormat.Rgba, PixelType.UnsignedByte, nint.Zero);
+                GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
+                GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.Repeat);
+                GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
+                GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
+            }
 
             StbImage.stbi_set_flip_vertically_on_load(1);
             fallbackTexture = ImageResult.FromStream(File.OpenRead(GameManager.settings.assetsBaseBlockTexturesDirectory + fallbackTextureName + GameManager.settings.textureFileExtension),
@@ -249,11 +262,12 @@ namespace MVoxelEngine1.Graphics.Textures
             Console.WriteLine($"Number of tiles in Y direction: {tilesY}");
             Console.WriteLine($"Number of empty tiles: {emptyTiles}/{tilesY * tilesX}");
 
-            GL.BindTexture(TextureTarget.Texture2D, 0);
-            var error = GL.GetError();
-            if (error != ErrorCode.NoError)
+            if (uploadMode == BlockTextureAtlasUploadMode.OpenGl)
             {
-                Console.WriteLine($"OpenGL Error: {error}");
+                GL.BindTexture(TextureTarget.Texture2D, 0);
+                var error = GL.GetError();
+                if (error != ErrorCode.NoError)
+                    Console.WriteLine($"OpenGL error: {error}");
             }
         }
 
@@ -282,9 +296,12 @@ namespace MVoxelEngine1.Graphics.Textures
                 }
                 int tileX = currentX / GameManager.settings.blockTileWidth;
                 int tileY = currentY / GameManager.settings.blockTileHeight;
-                GL.TexSubImage2D(TextureTarget.Texture2D, 0, currentX, currentY,
-                    GameManager.settings.blockTileWidth, GameManager.settings.blockTileHeight,
-                    PixelFormat.Rgba, PixelType.UnsignedByte, loadedTexture.Data);
+                if (uploadMode == BlockTextureAtlasUploadMode.OpenGl)
+                {
+                    GL.TexSubImage2D(TextureTarget.Texture2D, 0, currentX, currentY,
+                        GameManager.settings.blockTileWidth, GameManager.settings.blockTileHeight,
+                        PixelFormat.Rgba, PixelType.UnsignedByte, loadedTexture.Data);
+                }
                 var floatCoordsX = currentX / (float)GameManager.settings.blockTileWidth;
                 var floatCoordsY = currentY / (float)GameManager.settings.blockTileHeight;
                 textureCoordinates[textureName] = new Vector2(floatCoordsX, floatCoordsY);
@@ -368,7 +385,22 @@ namespace MVoxelEngine1.Graphics.Textures
             };
         }
 
-        public void Bind() => GL.BindTexture(TextureTarget.Texture2D, ID);
-        public void Unbind() => GL.BindTexture(TextureTarget.Texture2D, 0);
+        public void Bind()
+        {
+            RequireOpenGlUpload();
+            GL.BindTexture(TextureTarget.Texture2D, ID);
+        }
+
+        public void Unbind()
+        {
+            RequireOpenGlUpload();
+            GL.BindTexture(TextureTarget.Texture2D, 0);
+        }
+
+        private void RequireOpenGlUpload()
+        {
+            if (uploadMode != BlockTextureAtlasUploadMode.OpenGl)
+                throw new InvalidOperationException("The simulated texture atlas cannot bind to OpenGL.");
+        }
     }
 }

@@ -25,6 +25,9 @@ namespace MVoxelEngine1.Infrastructure.Managers
                 worldName = PreferString(consoleFlags.worldName, envFlags.worldName),
                 seed = PreferValue(consoleFlags.seed, envFlags.seed),
                 benchmarkOutput = PreferString(consoleFlags.benchmarkOutput, envFlags.benchmarkOutput),
+                simulatedGpuUploadOutput = PreferString(consoleFlags.simulatedGpuUploadOutput, envFlags.simulatedGpuUploadOutput),
+                simulatedInput = PreferString(consoleFlags.simulatedInput, envFlags.simulatedInput),
+                simulatedFrameRate = PreferValue(consoleFlags.simulatedFrameRate, envFlags.simulatedFrameRate),
                 windowWidth = PreferValue(consoleFlags.windowWidth, envFlags.windowWidth),
                 windowHeight = PreferValue(consoleFlags.windowHeight, envFlags.windowHeight),
                 useFacePooling = PreferValue(consoleFlags.useFacePooling, envFlags.useFacePooling),
@@ -57,6 +60,12 @@ namespace MVoxelEngine1.Infrastructure.Managers
                 Console.WriteLine($"Set seed: {flags.seed.Value}");
             if (!string.IsNullOrEmpty(flags.benchmarkOutput))
                 Console.WriteLine($"Set benchmarkOutput: {flags.benchmarkOutput}");
+            if (!string.IsNullOrEmpty(flags.simulatedGpuUploadOutput))
+                Console.WriteLine($"Set simulatedGpuUploadOutput: {flags.simulatedGpuUploadOutput}");
+            if (!string.IsNullOrEmpty(flags.simulatedInput))
+                Console.WriteLine($"Set simulatedInput: {flags.simulatedInput}");
+            if (flags.simulatedFrameRate.HasValue)
+                Console.WriteLine($"Set simulatedFrameRate: {flags.simulatedFrameRate.Value}");
             if (flags.windowWidth.HasValue)
                 Console.WriteLine($"Set windowWidth: {flags.windowWidth.Value}");
             if (flags.windowHeight.HasValue)
