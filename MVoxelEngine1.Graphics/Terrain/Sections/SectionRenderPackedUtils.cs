@@ -187,33 +187,33 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             Span<ulong> tmp = stackalloc ulong[64];
 
             // -X
-            BitsetShiftRight(voxelMask, STRIDE_X, shift);
-            BitsetShiftRight(opaqueMask, STRIDE_X, tmp);
+            BitsetShiftLeft(voxelMask, STRIDE_X, shift);
+            BitsetShiftLeft(opaqueMask, STRIDE_X, tmp);
             for (int i = 0; i < 64; i++) faceNX[i] = voxelMask[i] & ~shift[i] & ~tmp[i];
 
             // +X
-            BitsetShiftLeft(voxelMask, STRIDE_X, shift);
-            BitsetShiftLeft(opaqueMask, STRIDE_X, tmp);
+            BitsetShiftRight(voxelMask, STRIDE_X, shift);
+            BitsetShiftRight(opaqueMask, STRIDE_X, tmp);
             for (int i = 0; i < 64; i++) facePX[i] = voxelMask[i] & ~shift[i] & ~tmp[i];
 
             // -Y
-            BitsetShiftRight(voxelMask, STRIDE_Y, shift);
-            BitsetShiftRight(opaqueMask, STRIDE_Y, tmp);
+            BitsetShiftLeft(voxelMask, STRIDE_Y, shift);
+            BitsetShiftLeft(opaqueMask, STRIDE_Y, tmp);
             for (int i = 0; i < 64; i++) faceNY[i] = voxelMask[i] & ~shift[i] & ~tmp[i];
 
             // +Y
-            BitsetShiftLeft(voxelMask, STRIDE_Y, shift);
-            BitsetShiftLeft(opaqueMask, STRIDE_Y, tmp);
+            BitsetShiftRight(voxelMask, STRIDE_Y, shift);
+            BitsetShiftRight(opaqueMask, STRIDE_Y, tmp);
             for (int i = 0; i < 64; i++) facePY[i] = voxelMask[i] & ~shift[i] & ~tmp[i];
 
             // -Z
-            BitsetShiftRight(voxelMask, STRIDE_Z, shift);
-            BitsetShiftRight(opaqueMask, STRIDE_Z, tmp);
+            BitsetShiftLeft(voxelMask, STRIDE_Z, shift);
+            BitsetShiftLeft(opaqueMask, STRIDE_Z, tmp);
             for (int i = 0; i < 64; i++) faceNZ[i] = voxelMask[i] & ~shift[i] & ~tmp[i];
 
             // +Z
-            BitsetShiftLeft(voxelMask, STRIDE_Z, shift);
-            BitsetShiftLeft(opaqueMask, STRIDE_Z, tmp);
+            BitsetShiftRight(voxelMask, STRIDE_Z, shift);
+            BitsetShiftRight(opaqueMask, STRIDE_Z, tmp);
             for (int i = 0; i < 64; i++) facePZ[i] = voxelMask[i] & ~shift[i] & ~tmp[i];
         }
 
@@ -257,7 +257,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     int wx = baseX + lx; int wy = baseY + ly; int wz = baseZ + lz;
 
                     bool culled = false;
-                    if (lx == 0)
+                    if (wx == 0)
                     {
                         int planeIndex = wz * maxY + wy;
                         if (PlaneBit(planeNegX, planeIndex)
@@ -289,7 +289,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     int wx = baseX + lx; int wy = baseY + ly; int wz = baseZ + lz;
 
                     bool culled = false;
-                    if (lx == 15)
+                    if (wx == maxX - 1)
                     {
                         int planeIndex = wz * maxY + wy;
                         if (PlaneBit(planePosX, planeIndex)
@@ -321,7 +321,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     int wx = baseX + lx; int wy = baseY + ly; int wz = baseZ + lz;
 
                     bool culled = false;
-                    if (ly == 0)
+                    if (wy == 0)
                     {
                         int planeIndex = (baseX + lx) * maxZ + (baseZ + lz);
                         if (PlaneBit(planeNegY, planeIndex)
@@ -353,7 +353,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     int wx = baseX + lx; int wy = baseY + ly; int wz = baseZ + lz;
 
                     bool culled = false;
-                    if (ly == 15)
+                    if (wy == maxY - 1)
                     {
                         int planeIndex = (baseX + lx) * maxZ + (baseZ + lz);
                         if (PlaneBit(planePosY, planeIndex)
@@ -385,7 +385,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     int wx = baseX + lx; int wy = baseY + ly; int wz = baseZ + lz;
 
                     bool culled = false;
-                    if (lz == 0)
+                    if (wz == 0)
                     {
                         int planeIndex = (baseX + lx) * maxY + (baseY + ly);
                         if (PlaneBit(planeNegZ, planeIndex)
@@ -417,7 +417,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     int wx = baseX + lx; int wy = baseY + ly; int wz = baseZ + lz;
 
                     bool culled = false;
-                    if (lz == maxZ - 1)
+                    if (wz == maxZ - 1)
                     {
                         int planeIndex = (baseX + lx) * maxY + (baseY + ly);
                         if (PlaneBit(planePosZ, planeIndex)
