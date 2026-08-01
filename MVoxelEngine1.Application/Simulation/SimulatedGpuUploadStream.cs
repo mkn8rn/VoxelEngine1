@@ -220,6 +220,7 @@ namespace MVoxelEngine1.Application.Simulation
             double deltaSeconds,
             PlayerInputKeys input)
         {
+            using IDisposable renderStateScope = world.AcquireRenderStateReadScope();
             IReadOnlyList<WorldRenderChunk> opaqueChunks = world.CaptureActiveRenderChunks();
             long uploadsBeforeFrame = uploadCount;
             var renderDataActiveDuringFrame = new HashSet<long>(activeRenderData);
