@@ -20,7 +20,16 @@ namespace MVoxelEngine1.Application
             if (!string.IsNullOrWhiteSpace(FlagManager.flags.faceManifestOutput))
             {
                 ValidateFaceManifestFlags();
-                FaceManifestRunner.Run(FlagManager.flags.faceManifestOutput);
+                string? inputScript = FlagManager.flags.simulatedInput;
+                IReadOnlyList<TimedPlayerInputStep> steps =
+                    string.IsNullOrWhiteSpace(inputScript)
+                        ? Array.Empty<TimedPlayerInputStep>()
+                        : TimedPlayerInputScript.Parse(inputScript);
+                FaceManifestRunner.Run(
+                    FlagManager.flags.faceManifestOutput,
+                    inputScript,
+                    steps,
+                    GetSimulatedFrameRate());
                 return;
             }
 
@@ -31,9 +40,7 @@ namespace MVoxelEngine1.Application
                     ? TimedPlayerInputScript.DefaultScript
                     : FlagManager.flags.simulatedInput;
                 IReadOnlyList<TimedPlayerInputStep> steps = TimedPlayerInputScript.Parse(inputScript);
-                int frameRate = FlagManager.flags.simulatedFrameRate ?? 60;
-                if (frameRate <= 0 || frameRate > 1000)
-                    throw new InvalidOperationException("The simulated frame rate must be from 1 through 1000.");
+                int frameRate = GetSimulatedFrameRate();
                 int writerDelayMilliseconds = FlagManager.flags.simulatedGpuWriterDelayMilliseconds ?? 0;
                 if (writerDelayMilliseconds < 0 || writerDelayMilliseconds > 1000)
                     throw new InvalidOperationException("The simulated GPU writer delay must be from 0 through 1000 milliseconds.");
@@ -67,6 +74,14 @@ namespace MVoxelEngine1.Application
             {
                 game.Run();
             }
+        }
+
+        private static int GetSimulatedFrameRate()
+        {
+            int frameRate = FlagManager.flags.simulatedFrameRate ?? 60;
+            if (frameRate <= 0 || frameRate > 1000)
+                throw new InvalidOperationException("The simulated frame rate must be from 1 through 1000.");
+            return frameRate;
         }
 
         private static void ValidateSimulatedGpuUploadFlags()

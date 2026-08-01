@@ -121,21 +121,113 @@ namespace MVoxelEngine1.Tests
                 referenceRepeat.GetProperty("faces").GetProperty("sha256").GetString());
         }
 
+        [Fact(Timeout = 160_000)]
+        [Trait("Category", "EndToEnd")]
+        [Trait("Resource", "CPU")]
+        public async Task OptimizedStreamingFacesMatchReferenceAfterTimedMovementAsync()
+        {
+            using TestWorkspace workspace = TestPaths.CreateWorkspace();
+            SimulatedGpuUploadTestSupport.ConfigureSmallWorld(
+                workspace.GameDataRoot,
+                maximumWorldHeight: 768,
+                lod1RenderDistance: 2,
+                chunkSizeY: 256,
+                chunkSizeX: 32,
+                chunkSizeZ: 32);
+            SimulatedGpuUploadTestSupport.SetWaterLevel(
+                workspace.GameDataRoot,
+                waterLevel: 551);
+            string resultsDirectory = Path.Combine(
+                TestPaths.RepositoryRoot,
+                "TestResults",
+                "face-manifests");
+            Directory.CreateDirectory(resultsDirectory);
+            string runId = DateTime.UtcNow.ToString("yyyyMMddTHHmmssfffZ");
+            string referencePath = Path.Combine(
+                resultsDirectory,
+                $"reference-movement-seed-123456-{runId}.json");
+            string optimizedPath = Path.Combine(
+                resultsDirectory,
+                $"optimized-movement-seed-123456-{runId}.json");
+            const string inputScript = "W:1.1,D:1.1,Space:4.5";
+
+            SimulatedGpuProcessResult referenceResult = await RunManifestAsync(
+                workspace,
+                referencePath,
+                "ReferenceMovementManifestWorld",
+                "Reference",
+                inputScript,
+                10);
+            SimulatedGpuProcessResult optimizedResult = await RunManifestAsync(
+                workspace,
+                optimizedPath,
+                "OptimizedMovementManifestWorld",
+                "Optimized",
+                inputScript,
+                10);
+
+            AssertManifestProcess(referenceResult, referencePath, "Reference movement");
+            AssertManifestProcess(optimizedResult, optimizedPath, "Optimized movement");
+
+            using JsonDocument referenceDocument = JsonDocument.Parse(
+                File.ReadAllText(referencePath));
+            using JsonDocument optimizedDocument = JsonDocument.Parse(
+                File.ReadAllText(optimizedPath));
+            JsonElement reference = referenceDocument.RootElement;
+            JsonElement optimized = optimizedDocument.RootElement;
+
+            Assert.Equal("Reference", reference.GetProperty("faceGenerationMode").GetString());
+            Assert.Equal("Optimized", optimized.GetProperty("faceGenerationMode").GetString());
+            Assert.Equal(2, reference.GetProperty("captureCenterChunkX").GetInt32());
+            Assert.Equal(1, reference.GetProperty("captureCenterChunkY").GetInt32());
+            Assert.Equal(-3, reference.GetProperty("captureCenterChunkZ").GetInt32());
+            Assert.Equal(
+                reference.GetProperty("captureCenterChunkX").GetInt32(),
+                optimized.GetProperty("captureCenterChunkX").GetInt32());
+            Assert.Equal(
+                reference.GetProperty("captureCenterChunkY").GetInt32(),
+                optimized.GetProperty("captureCenterChunkY").GetInt32());
+            Assert.Equal(
+                reference.GetProperty("captureCenterChunkZ").GetInt32(),
+                optimized.GetProperty("captureCenterChunkZ").GetInt32());
+            Assert.Equal(
+                reference.GetProperty("activeCoordinateSha256").GetString(),
+                optimized.GetProperty("activeCoordinateSha256").GetString());
+            Assert.Equal(
+                reference.GetProperty("gameInputSha256").GetString(),
+                optimized.GetProperty("gameInputSha256").GetString());
+            Assert.Equal(
+                reference.GetProperty("blockRegistrySha256").GetString(),
+                optimized.GetProperty("blockRegistrySha256").GetString());
+            Assert.True(
+                reference.GetProperty("faces").GetProperty("transparentFaceCount").GetInt64() > 0);
+            Assert.Contains(
+                reference.GetProperty("chunks").EnumerateArray(),
+                chunk => chunk.GetProperty("fullyOccluded").GetBoolean());
+            Assert.Equal(
+                reference.GetProperty("faces").GetProperty("sha256").GetString(),
+                optimized.GetProperty("faces").GetProperty("sha256").GetString());
+        }
+
         private static async Task<SimulatedGpuProcessResult> RunManifestAsync(
             TestWorkspace workspace,
             string outputPath,
             string worldName,
-            string faceGenerationMode)
+            string faceGenerationMode,
+            string? inputScript = null,
+            int? frameRate = null)
         {
             ProcessStartInfo startInfo =
                 SimulatedGpuUploadTestSupport.CreateFaceManifestStartInfo(
                     workspace,
                     outputPath,
                     worldName,
-                    faceGenerationMode);
+                    faceGenerationMode,
+                    inputScript,
+                    frameRate);
             return await SimulatedGpuUploadTestSupport.RunAsync(
                 startInfo,
-                TimeSpan.FromSeconds(75),
+                TimeSpan.FromSeconds(inputScript is null ? 75 : 100),
                 TestContext.Current.CancellationToken);
         }
 

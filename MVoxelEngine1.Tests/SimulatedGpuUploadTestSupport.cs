@@ -112,7 +112,9 @@ namespace MVoxelEngine1.Tests
             TestWorkspace workspace,
             string outputPath,
             string worldName,
-            string faceGenerationMode)
+            string faceGenerationMode,
+            string? inputScript = null,
+            int? frameRate = null)
         {
             string application = TestPaths.ApplicationExecutable;
             Assert.True(File.Exists(application), $"Application executable was not found at {application}.");
@@ -133,6 +135,10 @@ namespace MVoxelEngine1.Tests
             AddArgument(startInfo, "renderStreamingIfAllowed", "false");
             AddArgument(startInfo, "faceGenerationMode", faceGenerationMode);
             AddArgument(startInfo, "faceManifestOutput", outputPath);
+            if (!string.IsNullOrWhiteSpace(inputScript))
+                AddArgument(startInfo, "simulatedInput", inputScript);
+            if (frameRate.HasValue)
+                AddArgument(startInfo, "simulatedFrameRate", frameRate.Value.ToString());
             return startInfo;
         }
 

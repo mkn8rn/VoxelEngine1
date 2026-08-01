@@ -44,15 +44,15 @@ namespace MVoxelEngine1.WorldGeneration
         private CancellationTokenSource meshBuildCts;           // drives current mesh build worker set
 
         private readonly FaceGenerationMode faceGenerationMode;
-        private readonly ReaderWriterLockSlim referenceRenderStateLock =
+        private readonly ReaderWriterLockSlim renderStateLock =
             new(LockRecursionPolicy.SupportsRecursion);
 
-        private sealed class ReferenceRenderStateScope : IDisposable
+        private sealed class RenderStateScope : IDisposable
         {
             private ReaderWriterLockSlim? stateLock;
             private readonly bool write;
 
-            public ReferenceRenderStateScope(
+            public RenderStateScope(
                 ReaderWriterLockSlim stateLock,
                 bool write)
             {
@@ -72,15 +72,6 @@ namespace MVoxelEngine1.WorldGeneration
                     currentLock.ExitWriteLock();
                 else
                     currentLock.ExitReadLock();
-            }
-        }
-
-        private sealed class EmptyRenderStateScope : IDisposable
-        {
-            public static EmptyRenderStateScope Instance { get; } = new();
-
-            public void Dispose()
-            {
             }
         }
 
@@ -304,23 +295,17 @@ namespace MVoxelEngine1.WorldGeneration
 
         public IDisposable AcquireRenderStateReadScope()
         {
-            if (faceGenerationMode != FaceGenerationMode.Reference)
-                return EmptyRenderStateScope.Instance;
-
-            referenceRenderStateLock.EnterReadLock();
-            return new ReferenceRenderStateScope(
-                referenceRenderStateLock,
+            renderStateLock.EnterReadLock();
+            return new RenderStateScope(
+                renderStateLock,
                 write: false);
         }
 
-        private IDisposable AcquireReferenceRenderStateWriteScope()
+        private IDisposable AcquireRenderStateWriteScope()
         {
-            if (faceGenerationMode != FaceGenerationMode.Reference)
-                return EmptyRenderStateScope.Instance;
-
-            referenceRenderStateLock.EnterWriteLock();
-            return new ReferenceRenderStateScope(
-                referenceRenderStateLock,
+            renderStateLock.EnterWriteLock();
+            return new RenderStateScope(
+                renderStateLock,
                 write: true);
         }
 
@@ -334,7 +319,7 @@ namespace MVoxelEngine1.WorldGeneration
             int lastLogRemaining = -1;
             while (true)
             {
-                ThrowIfReferenceMeshBuildFailed();
+                ThrowIfMeshBuildFailed();
                 int remaining = 0;
                 foreach (var key in targetSet)
                 {
@@ -357,33 +342,14 @@ namespace MVoxelEngine1.WorldGeneration
 
         public void Render(ShaderProgram program)
         {
-            ThrowIfReferenceMeshBuildFailed();
+            ThrowIfMeshBuildFailed();
             // We really should not be handling GL calls here, but for now it's simplest.
             // Maybe I'll make a world render atlas at some point
 
-            if (faceGenerationMode == FaceGenerationMode.Reference)
-            {
-                RenderCurrentReferenceChunks(program);
-                return;
-            }
-
-            // Pass 1: draw all opaque across active chunks so depth buffer contains solid surfaces.
-            GL.DepthMask(true);
-            foreach (var chunk in activeChunks.Values)
-            {
-                chunk.chunkRender?.RenderOpaque(program);
-            }
-
-            // Pass 2: draw all transparent across active chunks with blending and no depth writes.
-            GL.DepthMask(false);
-            foreach (var chunk in activeChunks.Values)
-            {
-                chunk.chunkRender?.RenderTransparent(program);
-            }
-            GL.DepthMask(true);
+            RenderCurrentChunks(program);
         }
 
-        private void RenderCurrentReferenceChunks(ShaderProgram program)
+        private void RenderCurrentChunks(ShaderProgram program)
         {
             using IDisposable stateScope = AcquireRenderStateReadScope();
             ChunkRender[] currentRenderers = activeChunks
@@ -471,14 +437,14 @@ namespace MVoxelEngine1.WorldGeneration
                             if (!activeChunks.ContainsKey(key) && !unbuiltChunks.ContainsKey(key) && !passiveChunks.ContainsKey(key))
                             {
                                 using IDisposable stateScope =
-                                    AcquireReferenceRenderStateWriteScope();
+                                    AcquireRenderStateWriteScope();
                                 bool alreadyRegistered =
                                     activeChunks.ContainsKey(key) ||
                                     unbuiltChunks.ContainsKey(key) ||
                                     passiveChunks.ContainsKey(key);
                                 if (!alreadyRegistered)
                                 {
-                                    MarkReferenceNeighborsDirtyForTopologyChange(key);
+                                    MarkRenderNeighborsDirtyForTopologyChange(key);
                                     if (insideCore)
                                     {
                                         unbuiltChunks[key] = existing;
@@ -490,7 +456,7 @@ namespace MVoxelEngine1.WorldGeneration
                                         registered = true;
                                     }
                                     if (registered)
-                                        MarkReferenceNeighborsDirtyForTopologyChange(key);
+                                        MarkRenderNeighborsDirtyForTopologyChange(key);
                                 }
                             }
                             if (insideCore)
@@ -538,19 +504,19 @@ namespace MVoxelEngine1.WorldGeneration
                             // Skip if already recorded (race safety)
                             if (activeChunks.ContainsKey(chunkKey) || unbuiltChunks.ContainsKey(chunkKey) || passiveChunks.ContainsKey(chunkKey)) return;
                             using IDisposable stateScope =
-                                AcquireReferenceRenderStateWriteScope();
+                                AcquireRenderStateWriteScope();
                             if (activeChunks.ContainsKey(chunkKey) ||
                                 unbuiltChunks.ContainsKey(chunkKey) ||
                                 passiveChunks.ContainsKey(chunkKey))
                             {
                                 return;
                             }
-                            MarkReferenceNeighborsDirtyForTopologyChange(chunkKey);
+                            MarkRenderNeighborsDirtyForTopologyChange(chunkKey);
                             if (insideLod1)
                                 unbuiltChunks[chunkKey] = chunkInstance;
                             else
                                 passiveChunks[chunkKey] = chunkInstance;
-                            MarkReferenceNeighborsDirtyForTopologyChange(chunkKey);
+                            MarkRenderNeighborsDirtyForTopologyChange(chunkKey);
                             state.RegisteredChunks.Enqueue(chunkKey);
                             // Remove scheduling markers for this specific chunk if present
                             chunkGenSchedule.TryRemove(chunkKey, out _);
@@ -571,11 +537,8 @@ namespace MVoxelEngine1.WorldGeneration
                         if (remainingWorkers == 0 && state.Columns.IsEmpty && state.RemainingColumns <= 0)
                         {
                             generatingBatches.TryRemove((bx, bz), out _);
-                            if (faceGenerationMode == FaceGenerationMode.Reference)
-                            {
-                                while (state.RegisteredChunks.TryDequeue(out var registered))
-                                    MarkReferenceNeighborsDirty(registered);
-                            }
+                            while (state.RegisteredChunks.TryDequeue(out var registered))
+                                MarkRenderNeighborsDirty(registered);
 
                             ScheduleVisibleChunksInBatch(bx, bz);
                         }
@@ -599,7 +562,7 @@ namespace MVoxelEngine1.WorldGeneration
                     if (token.IsCancellationRequested) break;
 
                     using IDisposable stateScope =
-                        AcquireReferenceRenderStateWriteScope();
+                        AcquireRenderStateWriteScope();
 
                     int lodDist = GameManager.settings.lod1RenderDistance;
                     int verticalRange = lodDist;
@@ -664,10 +627,10 @@ namespace MVoxelEngine1.WorldGeneration
                                 continue;
                             }
                         }
-                        else
+                        else if (!TryPrepareOptimizedNeighbors(key, ch))
                         {
-                            TryMarkBuriedByNeighbors(key, ch);
-                            PopulateNeighborFaceFlags(key, ch);
+                            deferredForMissingNeighbor = true;
+                            continue;
                         }
 
                         long buildStart = StartupPerformanceRecorder.IsRunning ? Stopwatch.GetTimestamp() : 0;
@@ -687,8 +650,7 @@ namespace MVoxelEngine1.WorldGeneration
                     catch (Exception ex)
                     {
                         permitDirtyRetry = false;
-                        if (faceGenerationMode == FaceGenerationMode.Reference)
-                            RecordReferenceMeshBuildFailure(key, ex);
+                        RecordMeshBuildFailure(key, ex);
                         Console.WriteLine($"Mesh build error for chunk {key}: {ex.Message}");
                     }
                     finally
@@ -716,16 +678,34 @@ namespace MVoxelEngine1.WorldGeneration
             (-1,0,0),(1,0,0),(0,-1,0),(0,1,0),(0,0,-1),(0,0,1)
         };
 
-        private void MarkReferenceNeighborsDirtyForTopologyChange(
+        private void MarkRenderNeighborsDirtyForTopologyChange(
             (int cx, int cy, int cz) key)
         {
-            if (faceGenerationMode == FaceGenerationMode.Reference)
-                MarkReferenceNeighborsDirty(key);
+            MarkRenderNeighborsDirty(key);
         }
 
         // Helpers to snapshot neighbor planes so the renderer reads stable, per-build copies.
         private static ushort[] SnapshotUShorts(ushort[] src) => src == null ? null : (ushort[])src.Clone();
         private static ulong[] SnapshotULongs(ulong[] src) => src == null ? null : (ulong[])src.Clone();
+
+        private bool TryPrepareOptimizedNeighbors(
+            (int cx, int cy, int cz) key,
+            Chunk chunk)
+        {
+            if (!TryGetRequiredRenderNeighbor((key.cx - 1, key.cy, key.cz), out _) ||
+                !TryGetRequiredRenderNeighbor((key.cx + 1, key.cy, key.cz), out _) ||
+                !TryGetRequiredRenderNeighbor((key.cx, key.cy - 1, key.cz), out _) ||
+                !TryGetRequiredRenderNeighbor((key.cx, key.cy + 1, key.cz), out _) ||
+                !TryGetRequiredRenderNeighbor((key.cx, key.cy, key.cz - 1), out _) ||
+                !TryGetRequiredRenderNeighbor((key.cx, key.cy, key.cz + 1), out _))
+            {
+                return false;
+            }
+
+            TryMarkBuriedByNeighbors(key, chunk);
+            PopulateNeighborFaceFlags(key, chunk);
+            return true;
+        }
 
         private void PopulateNeighborFaceFlags((int cx, int cy, int cz) key, Chunk ch)
         {
@@ -803,12 +783,12 @@ namespace MVoxelEngine1.WorldGeneration
             (int cx, int cy, int cz) key,
             out ReferenceNeighborBlockPlanes? planes)
         {
-            if (!TryGetReferenceNeighbor((key.cx - 1, key.cy, key.cz), out var left) ||
-                !TryGetReferenceNeighbor((key.cx + 1, key.cy, key.cz), out var right) ||
-                !TryGetReferenceNeighbor((key.cx, key.cy - 1, key.cz), out var down) ||
-                !TryGetReferenceNeighbor((key.cx, key.cy + 1, key.cz), out var up) ||
-                !TryGetReferenceNeighbor((key.cx, key.cy, key.cz - 1), out var back) ||
-                !TryGetReferenceNeighbor((key.cx, key.cy, key.cz + 1), out var front))
+            if (!TryGetRequiredRenderNeighbor((key.cx - 1, key.cy, key.cz), out var left) ||
+                !TryGetRequiredRenderNeighbor((key.cx + 1, key.cy, key.cz), out var right) ||
+                !TryGetRequiredRenderNeighbor((key.cx, key.cy - 1, key.cz), out var down) ||
+                !TryGetRequiredRenderNeighbor((key.cx, key.cy + 1, key.cz), out var up) ||
+                !TryGetRequiredRenderNeighbor((key.cx, key.cy, key.cz - 1), out var back) ||
+                !TryGetRequiredRenderNeighbor((key.cx, key.cy, key.cz + 1), out var front))
             {
                 planes = null;
                 return false;
@@ -828,7 +808,7 @@ namespace MVoxelEngine1.WorldGeneration
             return true;
         }
 
-        private bool TryGetReferenceNeighbor(
+        private bool TryGetRequiredRenderNeighbor(
             (int cx, int cy, int cz) key,
             out Chunk? chunk)
         {
@@ -934,8 +914,7 @@ namespace MVoxelEngine1.WorldGeneration
                     {
                         ScheduleChunksAroundPlayer(pcx, pcy, pcz);
                         UnloadFarChunks(pcx, pcy, pcz);
-                        if (faceGenerationMode == FaceGenerationMode.Reference)
-                            MarkReferenceActiveChunksDirty();
+                        MarkRenderActiveChunksDirty();
                         PruneOutOfRangeBufferChunks(pcx, pcy, pcz);
                     }
                     catch (Exception ex)
@@ -983,7 +962,7 @@ namespace MVoxelEngine1.WorldGeneration
                 chunkPositionQueue?.Dispose();
                 bufferChunkPositionQueue?.Dispose();
                 meshBuildQueue?.Dispose();
-                referenceRenderStateLock.Dispose();
+                renderStateLock.Dispose();
             }
         }
 
@@ -1047,17 +1026,6 @@ namespace MVoxelEngine1.WorldGeneration
             // Only perform on initial build attempt; if chunk already active we skip.
             if (!unbuiltChunks.ContainsKey(key)) return;
 
-            // We require all six neighbors to be present (either generated but unbuilt, or already active).
-            static bool GetChunk((int cx, int cy, int cz) k,
-                                 ConcurrentDictionary<(int, int, int), Chunk> active,
-                                 ConcurrentDictionary<(int, int, int), Chunk> pending,
-                                 out Chunk result)
-            {
-                if (active.TryGetValue(k, out result)) return true;
-                if (pending.TryGetValue(k, out result)) return true;
-                result = null; return false;
-            }
-
             var leftKey = (key.cx - 1, key.cy, key.cz);
             var rightKey = (key.cx + 1, key.cy, key.cz);
             var downKey = (key.cx, key.cy - 1, key.cz);
@@ -1065,12 +1033,12 @@ namespace MVoxelEngine1.WorldGeneration
             var backKey = (key.cx, key.cy, key.cz - 1); // negative Z
             var frontKey = (key.cx, key.cy, key.cz + 1); // positive Z
 
-            if (!GetChunk(leftKey, activeChunks, unbuiltChunks, out var left)) return;
-            if (!GetChunk(rightKey, activeChunks, unbuiltChunks, out var right)) return;
-            if (!GetChunk(downKey, activeChunks, unbuiltChunks, out var down)) return;
-            if (!GetChunk(upKey, activeChunks, unbuiltChunks, out var up)) return;
-            if (!GetChunk(backKey, activeChunks, unbuiltChunks, out var back)) return;
-            if (!GetChunk(frontKey, activeChunks, unbuiltChunks, out var front)) return;
+            if (!TryGetChunk(leftKey, out var left)) return;
+            if (!TryGetChunk(rightKey, out var right)) return;
+            if (!TryGetChunk(downKey, out var down)) return;
+            if (!TryGetChunk(upKey, out var up)) return;
+            if (!TryGetChunk(backKey, out var back)) return;
+            if (!TryGetChunk(frontKey, out var front)) return;
 
             // Opposing faces: our -X must be solid and neighbor's +X solid, etc.
             // Also ensure all our faces solid (prevents skipping if we have any exposed face ourselves).
@@ -1110,7 +1078,7 @@ namespace MVoxelEngine1.WorldGeneration
         private void ScheduleVisibleChunksInBatch(int bx, int bz)
         {
             using IDisposable stateScope =
-                AcquireReferenceRenderStateWriteScope();
+                AcquireRenderStateWriteScope();
             int lodDist = GameManager.settings.lod1RenderDistance;
             // Determine center (player) chunk
             var (pcx, pcy, pcz) = PlayerChunkPosition;

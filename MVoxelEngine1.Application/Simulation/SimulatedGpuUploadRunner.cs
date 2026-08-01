@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using MVoxelEngine1.Application.Gameplay;
 using MVoxelEngine1.Graphics.Terrain;
 using MVoxelEngine1.Graphics.Textures;
@@ -58,73 +57,29 @@ namespace MVoxelEngine1.Application.Simulation
                 PlayerInputKeys.None);
             output.WriteSnapshot("initial", simulationElapsedSeconds, frame);
 
-            var movementClock = Stopwatch.StartNew();
-            double frameIntervalSeconds = 1.0 / frameRate;
-            for (int stepIndex = 0; stepIndex < steps.Count; stepIndex++)
-            {
-                TimedPlayerInputStep step = steps[stepIndex];
-                output.WriteInputBoundary(
-                    "inputStarted",
-                    stepIndex,
-                    step,
-                    simulationElapsedSeconds);
-
-                var stepClock = Stopwatch.StartNew();
-                double appliedSeconds = 0;
-                double scheduledSeconds = 0;
-                double stepStartSimulationSeconds = simulationElapsedSeconds;
-                while (appliedSeconds < step.DurationSeconds)
-                {
-                    scheduledSeconds = Math.Min(
-                        scheduledSeconds + frameIntervalSeconds,
-                        step.DurationSeconds);
-                    WaitUntil(stepClock, scheduledSeconds);
-
-                    double elapsedSeconds = Math.Min(
-                        stepClock.Elapsed.TotalSeconds,
-                        step.DurationSeconds);
-                    double deltaSeconds = elapsedSeconds - appliedSeconds;
-                    if (deltaSeconds <= 0)
-                        continue;
-
-                    player.Update(step.Keys, deltaSeconds);
-                    appliedSeconds = elapsedSeconds;
-                    simulationElapsedSeconds = stepStartSimulationSeconds + appliedSeconds;
-                    frameIndex++;
-                    frame = output.RenderFrame(
-                        frameIndex,
-                        simulationElapsedSeconds,
-                        movementClock.Elapsed.TotalSeconds,
-                        deltaSeconds,
-                        step.Keys);
-                }
-
-                simulationElapsedSeconds = stepStartSimulationSeconds + step.DurationSeconds;
-                output.WriteInputBoundary(
-                    "inputEnded",
-                    stepIndex,
-                    step,
-                    simulationElapsedSeconds);
-            }
+            TimedPlayerMovementResult movement = TimedPlayerMovementRunner.Run(
+                player,
+                steps,
+                frameRate,
+                boundary => output.WriteInputBoundary(
+                    boundary.Started ? "inputStarted" : "inputEnded",
+                    boundary.StepIndex,
+                    boundary.Step,
+                    boundary.SimulationElapsedSeconds),
+                current => frame = output.RenderFrame(
+                    current.FrameIndex,
+                    current.SimulationElapsedSeconds,
+                    current.WallElapsedSeconds,
+                    current.DeltaSeconds,
+                    current.Keys));
+            frameIndex = movement.FrameIndex;
+            simulationElapsedSeconds = movement.SimulationElapsedSeconds;
 
             output.WriteSnapshot("final", simulationElapsedSeconds, frame);
-            await output.CompleteAsync(simulationElapsedSeconds, movementClock.Elapsed.TotalSeconds);
+            await output.CompleteAsync(
+                simulationElapsedSeconds,
+                movement.WallElapsedSeconds);
             Console.WriteLine($"Simulated GPU upload data written to {Path.GetFullPath(outputPath)}");
-        }
-
-        private static void WaitUntil(Stopwatch clock, double targetSeconds)
-        {
-            while (true)
-            {
-                double remainingSeconds = targetSeconds - clock.Elapsed.TotalSeconds;
-                if (remainingSeconds <= 0)
-                    return;
-
-                if (remainingSeconds > 0.004)
-                    Thread.Sleep(TimeSpan.FromSeconds(remainingSeconds - 0.002));
-                else
-                    Thread.SpinWait(64);
-            }
         }
     }
 }
