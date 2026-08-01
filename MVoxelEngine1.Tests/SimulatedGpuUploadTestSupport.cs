@@ -16,13 +16,16 @@ namespace MVoxelEngine1.Tests
         public static void ConfigureSmallWorld(
             string gameDataRoot,
             int maximumWorldHeight = 160,
-            int lod1RenderDistance = 1)
+            int lod1RenderDistance = 1,
+            int chunkSizeY = 16,
+            int chunkSizeX = 16,
+            int chunkSizeZ = 16)
         {
             string defaultsPath = Path.Combine(gameDataRoot, "Default", "Defaults.txt");
             JsonObject defaults = JsonNode.Parse(File.ReadAllText(defaultsPath))!.AsObject();
-            defaults["chunkMaxX"] = 16;
-            defaults["chunkMaxY"] = 16;
-            defaults["chunkMaxZ"] = 16;
+            defaults["chunkMaxX"] = chunkSizeX;
+            defaults["chunkMaxY"] = chunkSizeY;
+            defaults["chunkMaxZ"] = chunkSizeZ;
             defaults["maxWorldHeight"] = maximumWorldHeight;
             defaults["lod1RenderDistance"] = lod1RenderDistance;
             defaults["lod2RenderDistance"] = 1;
@@ -31,7 +34,7 @@ namespace MVoxelEngine1.Tests
             defaults["lod5RenderDistance"] = 4;
             defaults["regionWidthInChunks"] = Math.Max(
                 16,
-                (maximumWorldHeight + 15) / 16);
+                (maximumWorldHeight + chunkSizeY - 1) / chunkSizeY);
             defaults["chunkGenerationBufferInitial"] = lod1RenderDistance;
             defaults["chunkGenerationBufferRuntime"] = lod1RenderDistance;
             File.WriteAllText(
@@ -102,6 +105,34 @@ namespace MVoxelEngine1.Tests
                     writerFailAfterRecords.Value.ToString());
             }
 
+            return startInfo;
+        }
+
+        public static ProcessStartInfo CreateFaceManifestStartInfo(
+            TestWorkspace workspace,
+            string outputPath,
+            string worldName,
+            string faceGenerationMode)
+        {
+            string application = TestPaths.ApplicationExecutable;
+            Assert.True(File.Exists(application), $"Application executable was not found at {application}.");
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = application,
+                WorkingDirectory = Path.GetDirectoryName(application)!,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            AddArgument(startInfo, "gameDataDirectory", workspace.GameDataRoot);
+            AddArgument(startInfo, "game", "Default");
+            AddArgument(startInfo, "worldName", worldName);
+            AddArgument(startInfo, "seed", "123456");
+            AddArgument(startInfo, "renderStreamingIfAllowed", "false");
+            AddArgument(startInfo, "faceGenerationMode", faceGenerationMode);
+            AddArgument(startInfo, "faceManifestOutput", outputPath);
             return startInfo;
         }
 

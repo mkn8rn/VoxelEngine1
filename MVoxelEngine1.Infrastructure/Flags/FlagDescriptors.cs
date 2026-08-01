@@ -27,6 +27,7 @@ namespace MVoxelEngine1.Infrastructure.Flags
             new FlagDescriptor("worldName", (f,v) => f.worldName = v),
             new FlagDescriptor("seed", (f,v) => { if (int.TryParse(v, out var x)) f.seed = x; }),
             new FlagDescriptor("benchmarkOutput", (f,v) => f.benchmarkOutput = v),
+            new FlagDescriptor("faceManifestOutput", (f,v) => f.faceManifestOutput = v),
             new FlagDescriptor("simulatedGpuUploadOutput", (f,v) => f.simulatedGpuUploadOutput = v),
             new FlagDescriptor("simulatedInput", (f,v) => f.simulatedInput = v),
             new FlagDescriptor("simulatedFrameRate", (f,v) => { if (int.TryParse(v, out var x)) f.simulatedFrameRate = x; }),

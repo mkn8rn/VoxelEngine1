@@ -22,6 +22,7 @@
     <ProjectReference Include="..\MVoxelEngine1.Application\MVoxelEngine1.Application.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\MVoxelEngine1.Graphics\MVoxelEngine1.Graphics.csproj" />
     <ProjectReference Include="..\MVoxelEngine1.Infrastructure\MVoxelEngine1.Infrastructure.csproj" />
+    <ProjectReference Include="..\MVoxelEngine1.WorldGeneration\MVoxelEngine1.WorldGeneration.csproj" />
   </ItemGroup>
 
 </Project>

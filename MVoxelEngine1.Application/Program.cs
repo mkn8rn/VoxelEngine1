@@ -17,6 +17,13 @@ namespace MVoxelEngine1.Application
             EnvironmentFlags.LoadEnvironmentFlags();
             FlagManager.ApplyFlags(args);
 
+            if (!string.IsNullOrWhiteSpace(FlagManager.flags.faceManifestOutput))
+            {
+                ValidateFaceManifestFlags();
+                FaceManifestRunner.Run(FlagManager.flags.faceManifestOutput);
+                return;
+            }
+
             if (!string.IsNullOrWhiteSpace(FlagManager.flags.simulatedGpuUploadOutput))
             {
                 ValidateSimulatedGpuUploadFlags();
@@ -78,6 +85,24 @@ namespace MVoxelEngine1.Application
                 throw new InvalidOperationException("The simulated window width must be positive.");
             if (FlagManager.flags.windowHeight is null || FlagManager.flags.windowHeight <= 0)
                 throw new InvalidOperationException("The simulated window height must be positive.");
+        }
+
+        private static void ValidateFaceManifestFlags()
+        {
+            if (!string.IsNullOrWhiteSpace(FlagManager.flags.benchmarkOutput))
+                throw new InvalidOperationException("Benchmark mode and face manifest mode cannot run together.");
+            if (!string.IsNullOrWhiteSpace(FlagManager.flags.simulatedGpuUploadOutput))
+                throw new InvalidOperationException("Simulated GPU upload mode and face manifest mode cannot run together.");
+            if (string.IsNullOrWhiteSpace(FlagManager.flags.game))
+                throw new InvalidOperationException("The face manifest game is not set.");
+            if (string.IsNullOrWhiteSpace(FlagManager.flags.worldName))
+                throw new InvalidOperationException("The face manifest world name is not set.");
+            if (!FlagManager.flags.seed.HasValue)
+                throw new InvalidOperationException("The face manifest seed is not set.");
+            if (!FlagManager.flags.faceGenerationMode.HasValue)
+                throw new InvalidOperationException("The face generation mode is not set.");
+            if (FlagManager.flags.renderStreamingIfAllowed is not false)
+                throw new InvalidOperationException("Face manifest mode requires renderStreamingIfAllowed=false.");
         }
     }
 }

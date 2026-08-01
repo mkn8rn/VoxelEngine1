@@ -1,5 +1,6 @@
 using MVoxelEngine1.Graphics.Terrain;
 using MVoxelEngine1.Infrastructure.Models;
+using MVoxelEngine1.Infrastructure.Managers;
 using MVoxelEngine1.WorldGeneration.Terrain;
 
 namespace MVoxelEngine1.WorldGeneration
@@ -68,6 +69,59 @@ namespace MVoxelEngine1.WorldGeneration
                     chunk,
                     renderer?.UploadData,
                     renderer?.IsOpenGlUploaded ?? false));
+            }
+
+            return chunks;
+        }
+
+        public IReadOnlyList<WorldRenderChunk> CaptureRequiredRenderChunks()
+        {
+            ThrowIfReferenceMeshBuildFailed();
+            using IDisposable stateScope = AcquireRenderStateReadScope();
+            int radius = GameManager.settings.lod1RenderDistance;
+            long regionLimit = GameManager.settings.regionWidthInChunks;
+            (int centerX, int centerY, int centerZ) = PlayerChunkPosition;
+            int minimumX = Math.Max(centerX - radius, (int)-regionLimit);
+            int maximumX = Math.Min(centerX + radius, (int)regionLimit);
+            int minimumY = Math.Max(centerY - radius, (int)-regionLimit);
+            int maximumY = Math.Min(centerY + radius, (int)regionLimit);
+            int minimumZ = Math.Max(centerZ - radius, (int)-regionLimit);
+            int maximumZ = Math.Min(centerZ + radius, (int)regionLimit);
+            int capacity = checked(
+                (maximumX - minimumX + 1) *
+                (maximumY - minimumY + 1) *
+                (maximumZ - minimumZ + 1));
+            var chunks = new List<WorldRenderChunk>(capacity);
+
+            for (int chunkX = minimumX; chunkX <= maximumX; chunkX++)
+            {
+                for (int chunkY = minimumY; chunkY <= maximumY; chunkY++)
+                {
+                    for (int chunkZ = minimumZ; chunkZ <= maximumZ; chunkZ++)
+                    {
+                        var key = (chunkX, chunkY, chunkZ);
+                        if (dirtyChunks.ContainsKey(key))
+                        {
+                            throw new InvalidOperationException(
+                                $"Required render chunk {key} is dirty.");
+                        }
+
+                        if (!activeChunks.TryGetValue(key, out Chunk? chunk))
+                        {
+                            throw new InvalidOperationException(
+                                $"Required render chunk {key} is not active.");
+                        }
+
+                        ChunkRender? renderer = chunk.chunkRender;
+                        chunks.Add(new WorldRenderChunk(
+                            chunkX,
+                            chunkY,
+                            chunkZ,
+                            chunk,
+                            renderer?.UploadData,
+                            renderer?.IsOpenGlUploaded ?? false));
+                    }
+                }
             }
 
             return chunks;
