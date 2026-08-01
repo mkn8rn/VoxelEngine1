@@ -50,10 +50,29 @@ namespace MVoxelEngine1.WorldGeneration
         public bool IsOpenGlUploaded { get; }
 
         public ushort GetBlockLocal(int x, int y, int z) => chunk.GetBlockLocal(x, y, z);
+
+        internal ReferenceFaceGenerationResult GenerateReferenceFaces(
+            ReferenceNeighborBlockPlanes neighbors) =>
+            chunk.GenerateReferenceFaces(neighbors);
     }
 
     public partial class World
     {
+        internal ReferenceNeighborBlockPlanes CaptureReferenceNeighborBlockPlanes(
+            int chunkX,
+            int chunkY,
+            int chunkZ)
+        {
+            var key = (chunkX, chunkY, chunkZ);
+            if (!TryCreateReferenceNeighborBlockPlanes(key, out var planes))
+            {
+                throw new WorldRenderStateNotReadyException(
+                    $"Required Reference neighbors for chunk {key} are not available.");
+            }
+
+            return planes!;
+        }
+
         public IReadOnlyList<WorldRenderChunk> CaptureActiveRenderChunks()
         {
             ThrowIfMeshBuildFailed();

@@ -5,6 +5,7 @@ using MVoxelEngine1.Application.Gameplay;
 using MVoxelEngine1.Graphics.Terrain;
 using MVoxelEngine1.Graphics.Textures;
 using MVoxelEngine1.Infrastructure.Managers;
+using MVoxelEngine1.Infrastructure.Models;
 using MVoxelEngine1.Infrastructure.Models.Simulation;
 using MVoxelEngine1.WorldGeneration;
 
@@ -32,27 +33,41 @@ namespace MVoxelEngine1.Application.Simulation
                 BlockTextureAtlasUploadMode.SimulatedGpuUpload);
             ChunkRender.terrainTextureAtlas = textureAtlas;
 
-            using var world = new World();
-            var player = new Player(world);
-            if (steps.Count != 0)
-            {
-                Console.WriteLine($"Applying timed face manifest input: {inputScript}");
-                TimedPlayerMovementResult movement = TimedPlayerMovementRunner.Run(
-                    player,
-                    steps,
-                    frameRate);
-                Console.WriteLine(
-                    $"Timed face manifest input completed after " +
-                    $"{movement.SimulationElapsedSeconds:F6} simulated seconds.");
-            }
+            FaceGenerationMode requestedMode =
+                FlagManager.flags.faceGenerationMode!.Value;
+            if (requestedMode == FaceGenerationMode.Reference)
+                FlagManager.flags.faceGenerationMode = FaceGenerationMode.Optimized;
 
-            WorldFaceManifest manifest = CaptureWhenReady(world);
-            WriteAtomic(outputPath, manifest);
-            Console.WriteLine(
-                $"Canonical face manifest written to {Path.GetFullPath(outputPath)}");
+            try
+            {
+                using var world = new World();
+                var player = new Player(world);
+                if (steps.Count != 0)
+                {
+                    Console.WriteLine($"Applying timed face manifest input: {inputScript}");
+                    TimedPlayerMovementResult movement = TimedPlayerMovementRunner.Run(
+                        player,
+                        steps,
+                        frameRate);
+                    Console.WriteLine(
+                        $"Timed face manifest input completed after " +
+                        $"{movement.SimulationElapsedSeconds:F6} simulated seconds.");
+                }
+
+                WorldFaceManifest manifest = CaptureWhenReady(world, requestedMode);
+                WriteAtomic(outputPath, manifest);
+                Console.WriteLine(
+                    $"Canonical face manifest written to {Path.GetFullPath(outputPath)}");
+            }
+            finally
+            {
+                FlagManager.flags.faceGenerationMode = requestedMode;
+            }
         }
 
-        private static WorldFaceManifest CaptureWhenReady(World world)
+        private static WorldFaceManifest CaptureWhenReady(
+            World world,
+            FaceGenerationMode requestedMode)
         {
             TimeSpan timeout = TimeSpan.FromSeconds(60);
             var clock = Stopwatch.StartNew();
@@ -65,7 +80,7 @@ namespace MVoxelEngine1.Application.Simulation
                         world,
                         FlagManager.flags.game!,
                         FlagManager.flags.seed!.Value,
-                        FlagManager.flags.faceGenerationMode!.Value);
+                        requestedMode);
                 }
                 catch (WorldRenderStateNotReadyException ex)
                 {

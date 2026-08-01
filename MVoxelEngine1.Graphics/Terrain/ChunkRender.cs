@@ -173,13 +173,14 @@ namespace MVoxelEngine1.Graphics.Terrain
                     allOneBlockId,
                     referenceNeighbors,
                     TerrainLoader.IsOpaque)
-                : ReferenceFaceGenerator.Generate(
+                : ReferenceFaceGenerator.GenerateSections(
                     maxX,
                     maxY,
                     maxZ,
                     getLocalBlock,
                     referenceNeighbors,
-                    TerrainLoader.IsOpaque);
+                    TerrainLoader.IsOpaque,
+                    prerenderData.SectionDescs);
 
             instanceCount = faces.OpaqueFaceCount;
             instanceOffsetBuffer = faces.OpaqueOffsets;

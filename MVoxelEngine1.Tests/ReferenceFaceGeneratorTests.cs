@@ -1,5 +1,6 @@
 using MVoxelEngine1.Graphics.Terrain;
 using MVoxelEngine1.Infrastructure.Flags;
+using MVoxelEngine1.Infrastructure.Models.Generation;
 using MVoxelEngine1.Infrastructure.Models;
 
 namespace MVoxelEngine1.Tests
@@ -194,6 +195,74 @@ namespace MVoxelEngine1.Tests
         }
 
         [Fact]
+        public void SectionAwareScanMatchesCompleteVoxelScan()
+        {
+            const int maxX = 32;
+            const int maxY = 16;
+            const int maxZ = 16;
+            var blocks = new ushort[maxX, maxY, maxZ];
+            for (int x = 0; x < 16; x++)
+            {
+                for (int y = 0; y < maxY; y++)
+                {
+                    for (int z = 0; z < maxZ; z++)
+                        blocks[x, y, z] = Water;
+                }
+            }
+
+            blocks[16, 8, 8] = Stone;
+            blocks[20, 9, 9] = Glass;
+            var sections = new[]
+            {
+                new SectionPrerenderDesc
+                {
+                    Kind = (byte)Section.RepresentationKind.Uniform,
+                    UniformBlockId = Water,
+                    TransparentCount = Section.VOXELS_PER_SECTION,
+                    SectionBaseX = 0,
+                    SectionBaseY = 0,
+                    SectionBaseZ = 0
+                },
+                new SectionPrerenderDesc
+                {
+                    Kind = (byte)Section.RepresentationKind.Expanded,
+                    OpaqueCount = 1,
+                    TransparentCount = 1,
+                    SectionBaseX = 16,
+                    SectionBaseY = 0,
+                    SectionBaseZ = 0
+                }
+            };
+            var neighbors = new ReferenceNeighborBlockPlanes(
+                negativeX: Fill(maxY * maxZ, Water),
+                positiveX: Fill(maxY * maxZ, Stone),
+                negativeY: Fill(maxX * maxZ, Air),
+                positiveY: Fill(maxX * maxZ, Water),
+                negativeZ: Fill(maxX * maxY, Glass),
+                positiveZ: Fill(maxX * maxY, Stone));
+
+            ushort GetBlock(int x, int y, int z) => blocks[x, y, z];
+            ReferenceFaceGenerationResult complete = ReferenceFaceGenerator.Generate(
+                maxX,
+                maxY,
+                maxZ,
+                GetBlock,
+                neighbors,
+                IsOpaque);
+            ReferenceFaceGenerationResult sectionAware =
+                ReferenceFaceGenerator.GenerateSections(
+                    maxX,
+                    maxY,
+                    maxZ,
+                    GetBlock,
+                    neighbors,
+                    IsOpaque,
+                    sections);
+
+            Assert.Equal(GetRecords(complete), GetRecords(sectionAware));
+        }
+
+        [Fact]
         public void RejectsNeighborPlaneWithWrongLength()
         {
             var neighbors = new ReferenceNeighborBlockPlanes(negativeX: new ushort[2]);
@@ -342,6 +411,44 @@ namespace MVoxelEngine1.Tests
 
             Array.Sort(records, StringComparer.Ordinal);
             return records;
+        }
+
+        private static string[] GetRecords(ReferenceFaceGenerationResult result)
+        {
+            var records = new string[
+                result.OpaqueFaceCount + result.TransparentFaceCount];
+            int target = 0;
+            Add(
+                result.OpaqueOffsets,
+                result.OpaqueBlockIds,
+                result.OpaqueDirections,
+                "opaque");
+            Add(
+                result.TransparentOffsets,
+                result.TransparentBlockIds,
+                result.TransparentDirections,
+                "transparent");
+            Array.Sort(records, StringComparer.Ordinal);
+            return records;
+
+            void Add(
+                byte[] offsets,
+                ushort[] blockIds,
+                byte[] directions,
+                string pass)
+            {
+                for (int index = 0; index < directions.Length; index++)
+                {
+                    records[target++] = string.Join(
+                        ',',
+                        pass,
+                        offsets[index * 3],
+                        offsets[index * 3 + 1],
+                        offsets[index * 3 + 2],
+                        blockIds[index],
+                        directions[index]);
+                }
+            }
         }
     }
 }
