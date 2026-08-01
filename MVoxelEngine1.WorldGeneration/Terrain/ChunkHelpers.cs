@@ -1,5 +1,6 @@
 ﻿using MVoxelEngine1.Infrastructure.Models.Generation;
 using MVoxelEngine1.Infrastructure.Loaders;
+using MVoxelEngine1.Infrastructure.Diagnostics;
 using MVoxelEngine1.Infrastructure.Models.Generation;
 using MVoxelEngine1.Infrastructure.Models.Terrain;
 using System;
@@ -7,6 +8,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using System.Diagnostics;
 using MVoxelEngine1.WorldGeneration.Utils;
 
 namespace MVoxelEngine1.WorldGeneration.Terrain
@@ -62,6 +64,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
 
         private void BuildAllBoundaryPlanesInitial()
         {
+            long performanceStart = StartupPerformanceRecorder.IsRunning ? Stopwatch.GetTimestamp() : 0;
             EnsurePlaneArrays();
             Array.Clear(PlaneNegX);
             Array.Clear(PlanePosX);
@@ -873,6 +876,9 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
 
             // Derive per-face solidity flags from planes (opaque only tracking)
             SetFaceSolidFromPlanes();
+            if (performanceStart != 0)
+                GenerationPerformanceRecorder.RecordBoundaryPlanes(
+                    GenerationPerformanceRecorder.GetElapsedTicks(performanceStart));
         }
 
         private void CreateUniformSections(ushort blockId)

@@ -1,5 +1,6 @@
 ﻿using MVoxelEngine1.WorldGeneration.Utils;
 using MVoxelEngine1.Graphics;
+using MVoxelEngine1.Infrastructure.Diagnostics;
 using MVoxelEngine1.Graphics.Terrain;
 using MVoxelEngine1.Infrastructure.Managers;
 using MVoxelEngine1.Tools.Noise;
@@ -7,6 +8,7 @@ using OpenTK.Mathematics;
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
+using System.Diagnostics;
 using System.Buffers;
 using MVoxelEngine1.Infrastructure.Models.Terrain;
 using MVoxelEngine1.Infrastructure.Models.Generation;
@@ -168,17 +170,29 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                 else if (_uniformOverride == UniformOverride.AllStone)
                 {
                     AllStoneChunk = true;
+                    long start = StartupPerformanceRecorder.IsRunning ? Stopwatch.GetTimestamp() : 0;
                     CreateUniformSections((ushort)BaseBlockType.Stone);
+                    if (start != 0)
+                        GenerationPerformanceRecorder.RecordUniformSections(
+                            GenerationPerformanceRecorder.GetElapsedTicks(start));
                 }
                 else if (_uniformOverride == UniformOverride.AllSoil)
                 {
                     AllSoilChunk = true;
+                    long start = StartupPerformanceRecorder.IsRunning ? Stopwatch.GetTimestamp() : 0;
                     CreateUniformSections((ushort)BaseBlockType.Soil);
+                    if (start != 0)
+                        GenerationPerformanceRecorder.RecordUniformSections(
+                            GenerationPerformanceRecorder.GetElapsedTicks(start));
                 }
                 else if (_uniformOverride == UniformOverride.AllWater)
                 {
                     AllWaterChunk = true; // full slab uniformly water
+                    long start = StartupPerformanceRecorder.IsRunning ? Stopwatch.GetTimestamp() : 0;
                     CreateUniformSections((ushort)BaseBlockType.Water);
+                    if (start != 0)
+                        GenerationPerformanceRecorder.RecordUniformSections(
+                            GenerationPerformanceRecorder.GetElapsedTicks(start));
                 }
                 if (AllStoneChunk || AllSoilChunk || AllWaterChunk)
                 {
@@ -186,7 +200,11 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                 }
                 return;
             }
+            long generationStart = StartupPerformanceRecorder.IsRunning ? Stopwatch.GetTimestamp() : 0;
             GenerateInitialChunkData(columnSpanMap);
+            if (generationStart != 0)
+                GenerationPerformanceRecorder.RecordNonUniformGeneration(
+                    GenerationPerformanceRecorder.GetElapsedTicks(generationStart));
         }
 
         // Opaque pass forwarding for this chunk's renderer.

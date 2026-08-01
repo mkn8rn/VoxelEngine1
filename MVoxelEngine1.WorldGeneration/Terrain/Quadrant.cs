@@ -1,31 +1,23 @@
 ﻿using MVoxelEngine1.Infrastructure.Managers;
 using MVoxelEngine1.Infrastructure.Models.Generation.Biomes;
+using MVoxelEngine1.Infrastructure.Diagnostics;
 using MVoxelEngine1.Infrastructure.Models.Terrain;
 using MVoxelEngine1.Tools.Noise;
 using OpenTK.Mathematics;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Threading;
 
 namespace MVoxelEngine1.WorldGeneration.Terrain
 {
-    // Holds world‑space vertical material extents for a single (chunkX,chunkZ) column footprint.
-    // Surface  : highest sampled surface height (used for fast AllAir classification) aggregated across all block columns in the chunk.
-    // Stone/Soil spans here remain the aggregated (max coverage) span used ONLY for slab uniform classification.
-    // Each ColumnProfile owns the full set of per‑block (x,z) columns for that chunk (chunkMaxX * chunkMaxZ).
+    // Stores exact block columns and uniform ranges for one chunk column.
     internal struct ChunkColumnProfile
     {
-        public int Surface;      // aggregated maximum surface in this chunk column
-        public int StoneStart;   // aggregated min stone start across block columns
-        public int StoneEnd;     // aggregated max stone end across block columns
-        public int SoilStart;    // aggregated min soil start across block columns
-        public int SoilEnd;      // aggregated max soil end across block columns
-
-        // Full per-block column data. Length = chunkMaxX * chunkMaxZ.
         public BlockColumnProfile[] BlockColumns;
-        public bool BlockColumnsBuilt; // true once BlockColumns array populated
-        public bool AggregatedBuilt;   // true once aggregated (Surface/Stone/Soil) values populated lazily
+        public ColumnUniformRanges UniformRanges;
+        public bool BlockColumnsBuilt;
     }
 
     // Per single BLOCK (local x,z inside a chunk) vertical column absolute world extents.
@@ -40,20 +32,20 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
         public int WaterEnd;   // world water span end (biome water level inclusive) or -1
     }
 
-    // Compact vertical band summary for a single (chunkX,chunkZ) column across ALL vertical chunks.
-    // Values are expressed in chunk layer indices (cy). These bounds allow early-out of generation for
-    // empty vertical layers (no non-air material) before chunk objects are created.
-    internal struct ColumnVerticalBands
+    internal struct ColumnUniformRanges
     {
-        public short topNonAirCy;     // highest cy containing any stone or soil voxel
-        public short bottomNonAirCy;  // lowest cy containing any stone or soil voxel
-        public short firstStoneCy;    // lowest cy containing stone (or -1 if absent)
-        public short lastStoneCy;     // highest cy containing stone (or -1 if absent)
-        public short firstSoilCy;     // lowest cy containing soil (or -1 if absent)
-        public short lastSoilCy;      // highest cy containing soil (or -1 if absent)
-
-        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
-        public bool HasAnyNonAir() => bottomNonAirCy <= topNonAirCy;
+        public bool HasMaterial;
+        public int MinimumMaterialStart;
+        public int MaximumMaterialEnd;
+        public bool AllColumnsHaveStone;
+        public int StoneStartMaximum;
+        public int StoneEndMinimum;
+        public bool AllColumnsHaveSoil;
+        public int SoilStartMaximum;
+        public int SoilEndMinimum;
+        public bool AllColumnsHaveWater;
+        public int WaterStartMaximum;
+        public int WaterEndMinimum;
     }
 
     // previously named Batch - you may see out of date comments referencing Batch.
@@ -91,23 +83,15 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
         private long _seed;
         private bool _seedSet;
 
-        // ------------------------------------------------------------
-        // Column classification profiles & uniform slab inference
-        // ------------------------------------------------------------
         private readonly ChunkColumnProfile[,] _profiles = new ChunkColumnProfile[QUAD_SIZE, QUAD_SIZE];
-        private volatile bool _profilesBuilt;                    // True once every profile cell initialized (aggregated data only) – now only set when all 256 have been lazily built
-        private readonly object _profileBuildLock = new();       // Guards aggregated profile initialization (per-column lazy path)
-        private int _aggregatedBuiltCount;                       // Count of aggregated column profiles built so far (when reaches QUAD_SIZE^2 -> _profilesBuilt=true)
 
         // ------------------------------------------------------------
-        // Cached per-column block column span arrays + vertical band summaries
+        // Cached block-column span arrays and uniform range summaries
         // ------------------------------------------------------------
         // Key: (columnCx, columnCz) in chunk coordinates.
         // Value: array sized (chunkMaxX * chunkMaxZ) of BlockColumnProfile mapping each local (x,z) block column inside the chunk.
         // Index convention: index = localX * chunkMaxZ + localZ.
         private readonly ConcurrentDictionary<(int cx, int cz), BlockColumnProfile[]> _columnLocalSpanCache = new();
-        // Column vertical bands (always produced when BlockColumns are built). Provides early-out vertical generation bounds.
-        private readonly ConcurrentDictionary<(int cx, int cz), ColumnVerticalBands> _columnVerticalBands = new();
 
         // Stores the regionLimit/vertical chunk count used when maps were built so we can detect incompatible requests (legacy: retained, no longer used for sizing).
         private long _spanCacheRegionLimit = -1; // -1 => uninitialized
@@ -117,16 +101,6 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
         // Batch state flags
         // ------------------------------------------------------------
         public volatile bool Dirty;                              // Marked when chunk additions/removals occur (world save grouping)
-
-        // ------------------------------------------------------------
-        // Precomputed quadrant-uniform ranges for stone, soil and air chunk layers
-        // ------------------------------------------------------------
-        private bool _uniformRangesComputed;      // true once below ranges computed
-        private int _uniformStoneFirstCy = int.MaxValue;
-        private int _uniformStoneLastCy = int.MinValue;
-        private int _uniformSoilFirstCy = int.MaxValue;
-        private int _uniformSoilLastCy = int.MinValue;
-        private int _uniformAirFirstCy = int.MaxValue;          // any cy >= this is all air (above maximum surface)
 
         // ------------------------------------------------------------
         // Uniform classification kinds for vertical chunk slabs
@@ -253,201 +227,9 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             return _heightmapCacheGlobal.GetOrAdd((seed, baseWorldX, baseWorldZ), key => GenerateHeightMap(key.seed, key.baseX, key.baseZ));
         }
 
-        // ------------------------------------------------------------
-        // Profile construction (aggregated only)
-        // ------------------------------------------------------------
-        // Builds aggregated column profiles once for the entire batch footprint using the supplied provider delegate.
-        // Per‑block column arrays are built lazily per chunk column on demand.
-        public void BuildProfiles(Func<int, int, (int surface, int stoneStart, int stoneEnd, int soilStart, int soilEnd)> provider)
-        {
-            if (_profilesBuilt)
-            {
-                return;
-            }
-            lock (_profileBuildLock)
-            {
-                if (_profilesBuilt)
-                {
-                    return;
-                }
-
-                for (int lx = 0; lx < QUAD_SIZE; lx++)
-                {
-                    for (int lz = 0; lz < QUAD_SIZE; lz++)
-                    {
-                        var (surface, stoneStart, stoneEnd, soilStart, soilEnd) = provider(quadX * QUAD_SIZE + lx, quadZ * QUAD_SIZE + lz);
-                        _profiles[lx, lz].Surface = surface;
-                        _profiles[lx, lz].StoneStart = stoneStart;
-                        _profiles[lx, lz].StoneEnd = stoneEnd;
-                        _profiles[lx, lz].SoilStart = soilStart;
-                        _profiles[lx, lz].SoilEnd = soilEnd;
-                        _profiles[lx, lz].AggregatedBuilt = true;
-                    }
-                }
-                _aggregatedBuiltCount = QUAD_SIZE * QUAD_SIZE;
-                _profilesBuilt = true;
-                ComputeUniformRangesIfNeeded();
-            }
-        }
-
-        // Lazily ensure a single aggregated column profile (Surface / Stone / Soil extents) is built.
-        private void EnsureAggregatedProfile(int columnCx, int columnCz)
-        {
-            var (lx, lz) = LocalIndices(columnCx, columnCz);
-            ref var profile = ref _profiles[lx, lz];
-            if (profile.AggregatedBuilt) return;
-            lock (_profileBuildLock)
-            {
-                if (profile.AggregatedBuilt) return;
-                if (!_seedSet)
-                    throw new InvalidOperationException("Seed not set before building aggregated profile.");
-                if (Biome == null)
-                    throw new InvalidOperationException("Biome must be set before building aggregated profile.");
-
-                int sizeX = GameManager.settings.chunkMaxX;
-                int sizeZ = GameManager.settings.chunkMaxZ;
-                int baseWorldX = columnCx * sizeX;
-                int baseWorldZ = columnCz * sizeZ;
-                var hm = GetOrCreateHeightmap(_seed, baseWorldX, baseWorldZ);
-                int localX = (int)((uint)(columnCx % sizeX + sizeX) % sizeX);
-                int localZ = (int)((uint)(columnCz % sizeZ + sizeZ) % sizeZ);
-                int surface = (int)hm[localX, localZ];
-                
-                // Cheap slope (normalized to [0..1])
-                int clx0 = Math.Max(localX - 1, 0), clx1 = Math.Min(localX + 1, sizeX - 1);
-                int clz0 = Math.Max(localZ - 1, 0), clz1 = Math.Min(localZ + 1, sizeZ - 1);
-                float dx = hm[clx1, localZ] - hm[clx0, localZ];
-                float dz = hm[localX, clz1] - hm[localX, clz0];
-                float grad = MathF.Sqrt(dx * dx + dz * dz);
-                float slope01 = MathF.Min(1f, grad / 6f); // tune 6f to control sensitivity
-                var (stoneStart, stoneEnd, soilStart, soilEnd, waterStartTmp, waterEndTmp) =
-
-                // Derive stone and soil spans for this column (water span also returned but aggregated not stored yet)
-                TerrainGenerationUtils.DeriveWorldStoneSoilSpans(
-                    surface,
-                    Biome,
-                    baseWorldX + localX,
-                    baseWorldZ + localZ,
-                    _seed,
-                    slope01
-                );
-
-                // Store aggregated profile
-                profile.Surface = surface;
-                profile.StoneStart = stoneStart;
-                profile.StoneEnd = stoneEnd;
-                profile.SoilStart = soilStart;
-                profile.SoilEnd = soilEnd;
-                profile.AggregatedBuilt = true;
-                _aggregatedBuiltCount++;
-                if (_aggregatedBuiltCount == QUAD_SIZE * QUAD_SIZE)
-                {
-                    _profilesBuilt = true; // all aggregated now
-                    ComputeUniformRangesIfNeeded();
-                }
-            }
-        }
-
-        // Computes quadrant-wide uniform ranges for stone, soil and air vertical chunk layers based on aggregated column extents only.
-        private void ComputeUniformRangesIfNeeded()
-        {
-            if (_uniformRangesComputed || !_profilesBuilt) return;
-
-            // --- Uniform Air --- (any chunk layer whose baseY > every column surface)
-            int maxSurface = int.MinValue;
-            for (int lx = 0; lx < QUAD_SIZE; lx++)
-                for (int lz = 0; lz < QUAD_SIZE; lz++)
-                    if (_profiles[lx, lz].Surface > maxSurface) maxSurface = _profiles[lx, lz].Surface;
-            if (maxSurface != int.MinValue)
-            {
-                int chunkSizeY = GameManager.settings.chunkMaxY;
-                int firstAirBaseY = maxSurface + 1;
-                if (firstAirBaseY < 0) firstAirBaseY = 0;
-                _uniformAirFirstCy = (firstAirBaseY + chunkSizeY - 1) / chunkSizeY; // ceilDiv
-            }
-
-            // --- Uniform Stone --- (intersection of stone spans, truncated before any soil start)
-            int stoneIntersectStart = int.MinValue;
-            int stoneIntersectEnd = int.MaxValue;
-            bool stonePossible = true;
-            for (int lx = 0; lx < QUAD_SIZE && stonePossible; lx++)
-            {
-                for (int lz = 0; lz < QUAD_SIZE; lz++)
-                {
-                    ref readonly var p = ref _profiles[lx, lz];
-                    if (p.StoneStart < 0 || p.StoneEnd < p.StoneStart) { stonePossible = false; break; }
-                    if (p.StoneStart > stoneIntersectStart) stoneIntersectStart = p.StoneStart;
-                    if (p.StoneEnd < stoneIntersectEnd) stoneIntersectEnd = p.StoneEnd;
-                }
-            }
-            if (stonePossible && stoneIntersectStart <= stoneIntersectEnd)
-            {
-                for (int lx = 0; lx < QUAD_SIZE && stoneIntersectStart <= stoneIntersectEnd; lx++)
-                {
-                    for (int lz = 0; lz < QUAD_SIZE; lz++)
-                    {
-                        ref readonly var p = ref _profiles[lx, lz];
-                        if (p.SoilStart >= 0 && p.SoilStart <= stoneIntersectEnd)
-                        {
-                            int newEnd = p.SoilStart - 1;
-                            if (newEnd < stoneIntersectEnd) stoneIntersectEnd = newEnd;
-                            if (stoneIntersectStart > stoneIntersectEnd) break;
-                        }
-                    }
-                }
-                if (stoneIntersectStart <= stoneIntersectEnd)
-                {
-                    int chunkSizeY = GameManager.settings.chunkMaxY;
-                    _uniformStoneFirstCy = FloorDiv(stoneIntersectStart, chunkSizeY);
-                    _uniformStoneLastCy = FloorDiv(stoneIntersectEnd, chunkSizeY);
-                }
-            }
-
-            // --- Uniform Soil ---
-            // Conditions across all columns for a baseY (chunk slab bottom) to be soil uniform:
-            //   baseY >= max(soilStart_i), topY <= min(soilEnd_i), and baseY > max(stoneEnd_i) (stone not intruding).
-            int soilStartMax = int.MinValue;
-            int soilEndMin = int.MaxValue;
-            int stoneEndMax = int.MinValue; // only stone columns considered for intrusion threshold
-            bool soilPossible = true;
-            for (int lx = 0; lx < QUAD_SIZE && soilPossible; lx++)
-            {
-                for (int lz = 0; lz < QUAD_SIZE; lz++)
-                {
-                    ref readonly var p = ref _profiles[lx, lz];
-                    if (p.SoilStart < 0 || p.SoilEnd < p.SoilStart) { soilPossible = false; break; } // any column missing soil span -> impossible
-                    if (p.SoilStart > soilStartMax) soilStartMax = p.SoilStart;
-                    if (p.SoilEnd < soilEndMin) soilEndMin = p.SoilEnd;
-                    if (p.StoneEnd >= 0 && p.StoneEnd > stoneEndMax) stoneEndMax = p.StoneEnd;
-                }
-            }
-            if (soilPossible && soilStartMax <= soilEndMin)
-            {
-                int chunkSizeY = GameManager.settings.chunkMaxY;
-                // Bmin = max(soilStartMax, stoneEndMax+1), Bmax = soilEndMin - (chunkSizeY-1)
-                int baseMin = soilStartMax;
-                if (stoneEndMax >= 0 && stoneEndMax + 1 > baseMin) baseMin = stoneEndMax + 1;
-                int baseMax = soilEndMin - (chunkSizeY - 1);
-                if (baseMin <= baseMax)
-                {
-                    // Convert base range to cy range.
-                    int firstCy = (baseMin + chunkSizeY - 1) / chunkSizeY; // ceilDiv(baseMin)
-                    int lastCy = baseMax / chunkSizeY;                     // floorDiv(baseMax)
-                    if (firstCy <= lastCy)
-                    {
-                        _uniformSoilFirstCy = firstCy;
-                        _uniformSoilLastCy = lastCy;
-                    }
-                }
-            }
-
-            _uniformRangesComputed = true;
-        }
-
         // Ensure per-block column data exists for the specified chunk column (lazy build).
         private void EnsureBlockColumnsBuilt(int columnCx, int columnCz)
         {
-            EnsureAggregatedProfile(columnCx, columnCz); // aggregated must precede block-level build
             var (lx, lz) = LocalIndices(columnCx, columnCz);
             ref var profile = ref _profiles[lx, lz];
             if (profile.BlockColumnsBuilt) return;
@@ -462,12 +244,22 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             int baseWorldZ = columnCz * sizeZ;
             var hm = GetOrCreateHeightmap(_seed, baseWorldX, baseWorldZ);
 
-            int stoneFirstWorld = int.MaxValue;
-            int stoneLastWorld = int.MinValue;
-            int soilFirstWorld = int.MaxValue;
-            int soilLastWorld = int.MinValue;
+            var ranges = new ColumnUniformRanges
+            {
+                MinimumMaterialStart = int.MaxValue,
+                MaximumMaterialEnd = int.MinValue,
+                AllColumnsHaveStone = true,
+                StoneStartMaximum = int.MinValue,
+                StoneEndMinimum = int.MaxValue,
+                AllColumnsHaveSoil = true,
+                SoilStartMaximum = int.MinValue,
+                SoilEndMinimum = int.MaxValue,
+                AllColumnsHaveWater = true,
+                WaterStartMaximum = int.MinValue,
+                WaterEndMinimum = int.MaxValue
+            };
 
-            // Build per-block columns and accumulate vertical band extremes.
+            // Build block columns and their exact uniform range summary.
             for (int x = 0; x < sizeX; x++)
             {
                 for (int z = 0; z < sizeZ; z++)
@@ -502,59 +294,52 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                         WaterEnd = waterEnd
                     };
 
-                    if (stoneStart >= 0 && stoneEnd >= stoneStart)
+                    bool hasStone = stoneStart >= 0 && stoneEnd >= stoneStart;
+                    bool hasSoil = soilStart >= 0 && soilEnd >= soilStart;
+                    bool hasWater = waterStart >= 0 && waterEnd >= waterStart;
+
+                    if (hasStone)
                     {
-                        if (stoneStart < stoneFirstWorld) stoneFirstWorld = stoneStart;
-                        if (stoneEnd > stoneLastWorld) stoneLastWorld = stoneEnd;
+                        ranges.HasMaterial = true;
+                        if (stoneStart < ranges.MinimumMaterialStart) ranges.MinimumMaterialStart = stoneStart;
+                        if (stoneEnd > ranges.MaximumMaterialEnd) ranges.MaximumMaterialEnd = stoneEnd;
+                        if (stoneStart > ranges.StoneStartMaximum) ranges.StoneStartMaximum = stoneStart;
+                        if (stoneEnd < ranges.StoneEndMinimum) ranges.StoneEndMinimum = stoneEnd;
                     }
-                    if (soilStart >= 0 && soilEnd >= soilStart)
+                    else
                     {
-                        if (soilStart < soilFirstWorld) soilFirstWorld = soilStart;
-                        if (soilEnd > soilLastWorld) soilLastWorld = soilEnd;
+                        ranges.AllColumnsHaveStone = false;
+                    }
+
+                    if (hasSoil)
+                    {
+                        ranges.HasMaterial = true;
+                        if (soilStart < ranges.MinimumMaterialStart) ranges.MinimumMaterialStart = soilStart;
+                        if (soilEnd > ranges.MaximumMaterialEnd) ranges.MaximumMaterialEnd = soilEnd;
+                        if (soilStart > ranges.SoilStartMaximum) ranges.SoilStartMaximum = soilStart;
+                        if (soilEnd < ranges.SoilEndMinimum) ranges.SoilEndMinimum = soilEnd;
+                    }
+                    else
+                    {
+                        ranges.AllColumnsHaveSoil = false;
+                    }
+
+                    if (hasWater)
+                    {
+                        ranges.HasMaterial = true;
+                        if (waterStart < ranges.MinimumMaterialStart) ranges.MinimumMaterialStart = waterStart;
+                        if (waterEnd > ranges.MaximumMaterialEnd) ranges.MaximumMaterialEnd = waterEnd;
+                        if (waterStart > ranges.WaterStartMaximum) ranges.WaterStartMaximum = waterStart;
+                        if (waterEnd < ranges.WaterEndMinimum) ranges.WaterEndMinimum = waterEnd;
+                    }
+                    else
+                    {
+                        ranges.AllColumnsHaveWater = false;
                     }
                 }
             }
 
-            // Derive column vertical bands in chunk layer (cy) indices for early-out.
-            // If no material present, bottomNonAirCy > topNonAirCy (sentinel configuration).
-            ColumnVerticalBands bands;
-            if (stoneFirstWorld == int.MaxValue && soilFirstWorld == int.MaxValue)
-            {
-                bands.bottomNonAirCy = 1; // sentinel: empty range
-                bands.topNonAirCy = 0;
-                bands.firstStoneCy = -1;
-                bands.lastStoneCy = -1;
-                bands.firstSoilCy = -1;
-                bands.lastSoilCy = -1;
-            }
-            else
-            {
-                int sizeY = GameManager.settings.chunkMaxY; // chunk vertical span (world units per chunk layer)
-                // Convert world Y to chunk layer indices using floor division.
-                int bStoneCy = stoneFirstWorld == int.MaxValue ? int.MaxValue : FloorDiv(stoneFirstWorld, sizeY);
-                int tStoneCy = stoneLastWorld == int.MinValue ? int.MinValue : FloorDiv(stoneLastWorld, sizeY);
-                int bSoilCy = soilFirstWorld == int.MaxValue ? int.MaxValue : FloorDiv(soilFirstWorld, sizeY);
-                int tSoilCy = soilLastWorld == int.MinValue ? int.MinValue : FloorDiv(soilLastWorld, sizeY);
-
-                int bottom = Math.Min(bStoneCy, bSoilCy);
-                int top = Math.Max(tStoneCy, tSoilCy);
-                if (bottom == int.MaxValue && top == int.MinValue)
-                {
-                    bands.bottomNonAirCy = 1;
-                    bands.topNonAirCy = 0;
-                }
-                else
-                {
-                    bands.bottomNonAirCy = (short)bottom;
-                    bands.topNonAirCy = (short)top;
-                }
-                bands.firstStoneCy = stoneFirstWorld == int.MaxValue ? (short)-1 : (short)bStoneCy;
-                bands.lastStoneCy = stoneLastWorld == int.MinValue ? (short)-1 : (short)tStoneCy;
-                bands.firstSoilCy = soilFirstWorld == int.MaxValue ? (short)-1 : (short)bSoilCy;
-                bands.lastSoilCy = soilLastWorld == int.MinValue ? (short)-1 : (short)tSoilCy;
-            }
-            _columnVerticalBands[(columnCx, columnCz)] = bands;
-
+            profile.UniformRanges = ranges;
             profile.BlockColumnsBuilt = true;
         }
 
@@ -563,8 +348,6 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
         // ------------------------------------------------------------
         private BlockColumnProfile[] GetOrBuildColumnSpanMap(int columnCx, int columnCz, int chunkSizeY, long regionLimit)
         {
-            // Aggregated profile for this column is ensured lazily; full quadrant aggregated build no longer required here.
-
             // clear cache if parameters change
             if (_spanCacheRegionLimit >= 0 && (_spanCacheRegionLimit != regionLimit || _spanCacheChunkHeight != chunkSizeY))
             {
@@ -589,76 +372,34 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             return profile.BlockColumns;
         }
 
-        // Helper accessor for vertical bands (assumes EnsureBlockColumnsBuilt already called).
-        private ColumnVerticalBands GetColumnVerticalBands(int columnCx, int columnCz)
+        private UniformKind ClassifyColumnVerticalChunk(
+            int columnCx,
+            int columnCz,
+            int cy,
+            int sizeY)
         {
-            if (_columnVerticalBands.TryGetValue((columnCx, columnCz), out var b)) return b;
-            // Force build if missing (should not happen in normal flow).
-            EnsureBlockColumnsBuilt(columnCx, columnCz);
-            return _columnVerticalBands[(columnCx, columnCz)];
-        }
-
-        // ------------------------------------------------------------
-        // Uniform classification for a vertical chunk slab
-        // ------------------------------------------------------------
-        public bool ClassifyVerticalChunk(int cy, int sizeY, out UniformKind kind)
-        {
-            kind = UniformKind.None;
-            if (!_profilesBuilt) // aggregated profiles must be complete
-            {
-                return false;
-            }
-
+            var (lx, lz) = LocalIndices(columnCx, columnCz);
+            ref readonly ColumnUniformRanges ranges = ref _profiles[lx, lz].UniformRanges;
             int baseY = cy * sizeY;
             int topY = baseY + sizeY - 1;
 
-            bool allAir = true;   // baseY strictly above surface for every column
-            bool allStone = true; // slab fully inside stone span and no soil overlap
-            bool allSoil = true;  // slab fully inside soil span and stone does not intrude into baseY
-            bool allWater = true; // slab fully inside per-column water span: baseY >= surface+1 AND topY <= biome.waterLevel for every column and biome.waterLevel > surface
-
-            for (int lx = 0; lx < QUAD_SIZE; lx++)
-            {
-                for (int lz = 0; lz < QUAD_SIZE; lz++)
-                {
-                    ref readonly ChunkColumnProfile p = ref _profiles[lx, lz];
-                    if (!p.AggregatedBuilt)
-                    {
-                        kind = UniformKind.None; return false; // defensive
-                    }
-
-                    // AllAir check
-                    if (!(baseY > p.Surface)) allAir = false;
-
-                    bool hasStoneSpan = p.StoneStart >= 0 && p.StoneEnd >= p.StoneStart;
-                    bool hasSoilSpan = p.SoilStart >= 0 && p.SoilEnd >= p.SoilStart;
-
-                    bool stoneCoversSlab = hasStoneSpan && p.StoneStart <= baseY && p.StoneEnd >= topY;
-                    bool soilCoversSlab = hasSoilSpan && p.SoilStart <= baseY && p.SoilEnd >= topY;
-                    bool soilOverlapsSlab = hasSoilSpan && p.SoilStart <= topY && p.SoilEnd >= baseY;
-                    if (!(stoneCoversSlab && !soilOverlapsSlab)) allStone = false;
-
-                    bool stoneIntrudes = hasStoneSpan && p.StoneEnd >= baseY; // stone intersects soil-only candidate slab
-                    if (!(soilCoversSlab && !stoneIntrudes)) allSoil = false;
-
-                    // AllWater: biome water plane must be above surface; slab must be entirely between surface+1 and waterLevel inclusive.
-                    // Stone / soil do not disqualify since water is only above surface; if slab reaches below or intersects surface reject.
-                    if (!(Biome.waterLevel > p.Surface && baseY >= p.Surface + 1 && topY <= Biome.waterLevel)) allWater = false;
-
-                    if (!allAir && !allStone && !allSoil && !allWater)
-                    {
-                        kind = UniformKind.None; return true; // early exit
-                    }
-                }
-            }
-
-            // Water is geometrically above the surface, so test it before air.
-            if (allWater) kind = UniformKind.AllWater;
-            else if (allAir) kind = UniformKind.AllAir;
-            else if (allStone) kind = UniformKind.AllStone;
-            else if (allSoil) kind = UniformKind.AllSoil;
-            else kind = UniformKind.None;
-            return true;
+            if (ranges.AllColumnsHaveWater &&
+                ranges.WaterStartMaximum <= baseY &&
+                ranges.WaterEndMinimum >= topY)
+                return UniformKind.AllWater;
+            if (ranges.AllColumnsHaveStone &&
+                ranges.StoneStartMaximum <= baseY &&
+                ranges.StoneEndMinimum >= topY)
+                return UniformKind.AllStone;
+            if (ranges.AllColumnsHaveSoil &&
+                ranges.SoilStartMaximum <= baseY &&
+                ranges.SoilEndMinimum >= topY)
+                return UniformKind.AllSoil;
+            if (!ranges.HasMaterial ||
+                topY < ranges.MinimumMaterialStart ||
+                baseY > ranges.MaximumMaterialEnd)
+                return UniformKind.AllAir;
+            return UniformKind.None;
         }
 
         // Delegate for registering newly created chunks with world dictionaries.
@@ -668,8 +409,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
         // Column generation entry point
         // ------------------------------------------------------------
         // Generates (or loads) all vertical chunk layers inside a single column of the batch.
-        // Performs biome initialization (if unset), builds aggregated profiles (one‑time), applies precomputed uniform stone overrides,
-        // classifies each remaining slab for uniform overrides, creates chunk instances, and invokes the registrar for external indexing.
+        // Builds exact block-column spans once, classifies each slab, creates chunks, and registers them.
         internal void GenerateOrLoadColumn(
             int cx,
             int cz,
@@ -689,6 +429,13 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             if (Math.Abs(cx - playerCx) > lodDist + 1 || Math.Abs(cz - playerCz) > lodDist + 1)
                 return;
 
+            bool recordPerformance = StartupPerformanceRecorder.IsRunning;
+            long profileTicks = 0;
+            long classificationTicks = 0;
+            long spanMapTicks = 0;
+            long constructionTicks = 0;
+            long registrationTicks = 0;
+
             if (Biome == null)
             {
                 int worldBaseX = cx * sizeX;
@@ -697,12 +444,6 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             }
             if (!_seedSet) { _seed = seed; _seedSet = true; }
 
-            EnsureAggregatedProfile(cx, cz); // ensure aggregated surface/stone/soil ready
-
-            bool aggregatedComplete = _profilesBuilt; // grid ready for uniform range overrides
-            bool haveUniformStone = aggregatedComplete && _uniformStoneFirstCy <= _uniformStoneLastCy;
-            bool haveUniformSoil = aggregatedComplete && _uniformSoilFirstCy <= _uniformSoilLastCy;
-
             int vMin = playerCy - verticalRange;
             int vMax = playerCy + verticalRange;
             if (vMin < -regionLimit) vMin = (int)-regionLimit;
@@ -710,47 +451,60 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
 
             int columnBaseX = cx * sizeX;
             int columnBaseZ = cz * sizeZ;
-            float[,] columnHeightmap = null;
-            BlockColumnProfile[] spanMap = null;
+            long phaseStart = recordPerformance ? Stopwatch.GetTimestamp() : 0;
+            BlockColumnProfile[] spanMap = GetOrBuildColumnSpanMap(
+                cx,
+                cz,
+                sizeY,
+                regionLimit);
+            if (recordPerformance)
+                spanMapTicks += GenerationPerformanceRecorder.GetElapsedTicks(phaseStart);
 
             for (int cy = vMin; cy <= vMax; cy++)
             {
                 if (TryGetChunk(cx, cy, cz, out _)) continue;
-                Chunk.UniformOverride overrideKind = Chunk.UniformOverride.None;
-
-                if (aggregatedComplete)
+                phaseStart = recordPerformance ? Stopwatch.GetTimestamp() : 0;
+                UniformKind classified = ClassifyColumnVerticalChunk(
+                    cx,
+                    cz,
+                    cy,
+                    sizeY);
+                if (recordPerformance)
+                    classificationTicks += GenerationPerformanceRecorder.GetElapsedTicks(phaseStart);
+                Chunk.UniformOverride overrideKind = classified switch
                 {
-                    // Classify water before air because water is above the surface.
-                    if (ClassifyVerticalChunk(cy, sizeY, out var classified))
-                    {
-                        if (classified == UniformKind.AllWater) overrideKind = Chunk.UniformOverride.AllWater;
-                        else if (classified == UniformKind.AllStone) overrideKind = Chunk.UniformOverride.AllStone;
-                        else if (classified == UniformKind.AllSoil) overrideKind = Chunk.UniformOverride.AllSoil;
-                        else if (classified == UniformKind.AllAir) overrideKind = Chunk.UniformOverride.AllAir; // fallback safety
-                    }
-                }
-
-                // Build per-column span map only if needed for non-uniform generation path.
-                if (overrideKind == Chunk.UniformOverride.None)
-                {
-                    if (haveUniformStone && cy >= _uniformStoneFirstCy && cy <= _uniformStoneLastCy)
-                        overrideKind = Chunk.UniformOverride.AllStone;
-                    else if (haveUniformSoil && cy >= _uniformSoilFirstCy && cy <= _uniformSoilLastCy)
-                        overrideKind = Chunk.UniformOverride.AllSoil;
-                }
-
-                if (overrideKind == Chunk.UniformOverride.None)
-                {
-                    columnHeightmap ??= GetOrCreateHeightmap(seed, columnBaseX, columnBaseZ); // retained (may be used elsewhere)
-                    spanMap ??= GetOrBuildColumnSpanMap(cx, cz, sizeY, regionLimit); // includes water spans now
-                }
+                    UniformKind.AllAir => Chunk.UniformOverride.AllAir,
+                    UniformKind.AllStone => Chunk.UniformOverride.AllStone,
+                    UniformKind.AllSoil => Chunk.UniformOverride.AllSoil,
+                    UniformKind.AllWater => Chunk.UniformOverride.AllWater,
+                    _ => Chunk.UniformOverride.None
+                };
 
                 var worldPos = new Vector3(columnBaseX, cy * sizeY, columnBaseZ);
+                phaseStart = recordPerformance ? Stopwatch.GetTimestamp() : 0;
                 var chunk = new Chunk(worldPos, seed, chunkSaveDirectory, autoGenerate: true, uniformOverride: overrideKind, columnSpanMap: spanMap);
+                if (recordPerformance)
+                {
+                    constructionTicks += GenerationPerformanceRecorder.GetElapsedTicks(phaseStart);
+                    GenerationPerformanceRecorder.RecordChunkKind((int)overrideKind);
+                }
                 AddOrReplaceChunk(chunk, cx, cy, cz);
 
                 bool insideLod1 = Math.Abs(cx - playerCx) <= lodDist && Math.Abs(cz - playerCz) <= lodDist && Math.Abs(cy - playerCy) <= verticalRange;
+                phaseStart = recordPerformance ? Stopwatch.GetTimestamp() : 0;
                 registrar((cx, cy, cz), chunk, insideLod1);
+                if (recordPerformance)
+                    registrationTicks += GenerationPerformanceRecorder.GetElapsedTicks(phaseStart);
+            }
+
+            if (recordPerformance)
+            {
+                GenerationPerformanceRecorder.RecordColumn(
+                    profileTicks,
+                    classificationTicks,
+                    spanMapTicks,
+                    constructionTicks,
+                    registrationTicks);
             }
         }
     }

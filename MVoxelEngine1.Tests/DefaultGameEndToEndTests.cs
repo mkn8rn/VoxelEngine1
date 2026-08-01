@@ -128,6 +128,7 @@ namespace MVoxelEngine1.Tests
             AssertPositiveFinite(
                 result.ProcessorTimeMilliseconds,
                 nameof(result.ProcessorTimeMilliseconds));
+            AssertGenerationDiagnostics(result.GenerationDiagnostics);
             Assert.True(
                 result.InitialGenerationCompleteMilliseconds >=
                 result.InitialGenerationStartMilliseconds +
@@ -200,6 +201,53 @@ namespace MVoxelEngine1.Tests
             Assert.Equal(Environment.ProcessorCount, parameters.LogicalProcessorCount);
             Assert.False(parameters.ServerGarbageCollection);
             Assert.Equal("Interactive", parameters.GarbageCollectionLatencyMode);
+        }
+
+        private static void AssertGenerationDiagnostics(
+            GenerationPerformanceSnapshot diagnostics)
+        {
+            Assert.True(diagnostics.Columns > 0);
+            Assert.True(diagnostics.Chunks > 0);
+            Assert.True(diagnostics.AllAirChunks > 0);
+            Assert.True(diagnostics.AllStoneChunks > 0);
+            Assert.True(diagnostics.NonUniformChunks > 0);
+            Assert.Equal(
+                diagnostics.Chunks,
+                diagnostics.AllAirChunks +
+                diagnostics.AllStoneChunks +
+                diagnostics.AllSoilChunks +
+                diagnostics.AllWaterChunks +
+                diagnostics.NonUniformChunks);
+            AssertNonNegativeFinite(
+                diagnostics.AggregatedProfileMilliseconds,
+                nameof(diagnostics.AggregatedProfileMilliseconds));
+            AssertPositiveFinite(
+                diagnostics.VerticalClassificationMilliseconds,
+                nameof(diagnostics.VerticalClassificationMilliseconds));
+            AssertPositiveFinite(
+                diagnostics.SpanMapMilliseconds,
+                nameof(diagnostics.SpanMapMilliseconds));
+            AssertPositiveFinite(
+                diagnostics.ChunkConstructionMilliseconds,
+                nameof(diagnostics.ChunkConstructionMilliseconds));
+            AssertPositiveFinite(
+                diagnostics.UniformSectionMilliseconds,
+                nameof(diagnostics.UniformSectionMilliseconds));
+            AssertPositiveFinite(
+                diagnostics.NonUniformGenerationMilliseconds,
+                nameof(diagnostics.NonUniformGenerationMilliseconds));
+            AssertPositiveFinite(
+                diagnostics.BoundaryPlaneMilliseconds,
+                nameof(diagnostics.BoundaryPlaneMilliseconds));
+            AssertPositiveFinite(
+                diagnostics.RegistrarMilliseconds,
+                nameof(diagnostics.RegistrarMilliseconds));
+        }
+
+        private static void AssertNonNegativeFinite(double value, string metricName)
+        {
+            Assert.True(double.IsFinite(value), $"{metricName} must be finite.");
+            Assert.True(value >= 0, $"{metricName} must not be negative.");
         }
 
         private static long ReadConsoleTiming(string output, string prefix)
