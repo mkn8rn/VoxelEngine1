@@ -63,6 +63,7 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
         public required long ManagedHeapBytes { get; init; }
         public required long TotalAllocatedBytes { get; init; }
         public required double ProcessorTimeMilliseconds { get; init; }
+        public required GenerationPerformanceSnapshot GenerationDiagnostics { get; init; }
         public required DateTimeOffset RecordedAtUtc { get; init; }
     }
 
@@ -129,6 +130,7 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
                 cameraAppearanceTicks = 0;
                 gpuStreamingStartTicks = 0;
                 generationToRenderTicks = 0;
+                GenerationPerformanceRecorder.Reset();
                 timer = Stopwatch.StartNew();
             }
         }
@@ -227,6 +229,7 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
                 ManagedHeapBytes = GC.GetTotalMemory(forceFullCollection: false),
                 TotalAllocatedBytes = GC.GetTotalAllocatedBytes(precise: false),
                 ProcessorTimeMilliseconds = process.TotalProcessorTime.TotalMilliseconds,
+                GenerationDiagnostics = GenerationPerformanceRecorder.CreateSnapshot(),
                 RecordedAtUtc = DateTimeOffset.UtcNow
             };
         }
