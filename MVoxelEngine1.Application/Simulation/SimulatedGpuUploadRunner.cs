@@ -14,7 +14,9 @@ namespace MVoxelEngine1.Application.Simulation
             string outputPath,
             string inputScript,
             IReadOnlyList<TimedPlayerInputStep> steps,
-            int frameRate)
+            int frameRate,
+            int writerDelayMilliseconds,
+            int? writerFailAfterRecords)
         {
             GameDataStartup.Load();
 
@@ -41,7 +43,9 @@ namespace MVoxelEngine1.Application.Simulation
                 world,
                 player,
                 windowWidth,
-                windowHeight);
+                windowHeight,
+                writerDelayMilliseconds,
+                writerFailAfterRecords);
 
             Console.WriteLine("Simulated GPU upload mode started without an OpenTK window.");
             long frameIndex = 0;

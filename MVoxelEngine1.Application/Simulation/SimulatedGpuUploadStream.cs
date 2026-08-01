@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Threading.Channels;
+using System.Runtime.ExceptionServices;
 using MVoxelEngine1.Application.Gameplay;
 using MVoxelEngine1.Graphics.Terrain;
 using MVoxelEngine1.Graphics.Textures;
@@ -22,6 +23,8 @@ namespace MVoxelEngine1.Application.Simulation
 
     internal sealed class SimulatedGpuUploadStream : IAsyncDisposable
     {
+        private const int RecordQueueCapacity = 4;
+
         private readonly record struct ChunkIdentity(
             int ChunkX,
             int ChunkY,
@@ -51,6 +54,11 @@ namespace MVoxelEngine1.Application.Simulation
             ushort[] NeighborBlockIds);
 
         private abstract record StreamRecord;
+
+        private sealed record QueuedRecord(
+            long Sequence,
+            long RetainedPayloadBytes,
+            StreamRecord Record);
 
         private sealed record UploadRecord(
             long FrameIndex,
@@ -103,17 +111,33 @@ namespace MVoxelEngine1.Application.Simulation
         private readonly Player player;
         private readonly int windowWidth;
         private readonly int windowHeight;
+        private readonly string finalOutputPath;
+        private readonly string temporaryOutputPath;
         private readonly FileStream fileStream;
         private readonly Utf8JsonWriter writer;
-        private readonly Channel<StreamRecord> records;
+        private readonly Channel<QueuedRecord> records;
+        private readonly SemaphoreSlim retainedRecordSlots;
+        private readonly CancellationTokenSource writerFailureCancellation = new();
         private readonly Task writerTask;
+        private readonly int writerDelayMilliseconds;
+        private readonly int? writerFailAfterRecords;
         private readonly Dictionary<long, ChunkIdentity> uploadedRenderData = new();
         private HashSet<long> activeRenderData = new();
+        private ExceptionDispatchInfo? writerFailure;
+        private long nextSequence;
+        private long writtenRecordCount;
+        private int retainedRecordCount;
+        private int peakRetainedRecordCount;
+        private long retainedPayloadBytes;
+        private long peakRetainedPayloadBytes;
         private long frameCount;
         private long uploadCount;
         private long deletionCount;
         private int snapshotCount;
         private bool completionQueued;
+        private bool outputResourcesDisposed;
+        private bool finalOutputPublished;
+        private bool disposed;
 
         public SimulatedGpuUploadStream(
             string outputPath,
@@ -123,39 +147,69 @@ namespace MVoxelEngine1.Application.Simulation
             World world,
             Player player,
             int windowWidth,
-            int windowHeight)
+            int windowHeight,
+            int writerDelayMilliseconds,
+            int? writerFailAfterRecords)
         {
             this.world = world;
             this.player = player;
             this.windowWidth = windowWidth;
             this.windowHeight = windowHeight;
+            this.writerDelayMilliseconds = writerDelayMilliseconds;
+            this.writerFailAfterRecords = writerFailAfterRecords;
 
-            string fullOutputPath = Path.GetFullPath(outputPath);
-            string outputDirectory = Path.GetDirectoryName(fullOutputPath)
+            finalOutputPath = Path.GetFullPath(outputPath);
+            string outputDirectory = Path.GetDirectoryName(finalOutputPath)
                 ?? throw new InvalidOperationException("The simulated GPU output directory is not valid.");
             Directory.CreateDirectory(outputDirectory);
+            if (File.Exists(finalOutputPath))
+                throw new IOException($"The simulated GPU output already exists: {finalOutputPath}");
+
+            temporaryOutputPath = Path.Combine(
+                outputDirectory,
+                $".{Path.GetFileName(finalOutputPath)}.{Guid.NewGuid():N}.incomplete");
 
             fileStream = new FileStream(
-                fullOutputPath,
+                temporaryOutputPath,
                 FileMode.CreateNew,
                 FileAccess.Write,
                 FileShare.Read,
                 1_048_576,
                 FileOptions.SequentialScan);
             writer = new Utf8JsonWriter(fileStream, new JsonWriterOptions { Indented = false });
-            records = Channel.CreateUnbounded<StreamRecord>(new UnboundedChannelOptions
+            records = Channel.CreateBounded<QueuedRecord>(new BoundedChannelOptions(RecordQueueCapacity)
             {
                 SingleReader = true,
                 SingleWriter = true,
-                AllowSynchronousContinuations = false
+                AllowSynchronousContinuations = false,
+                FullMode = BoundedChannelFullMode.Wait
             });
+            retainedRecordSlots = new SemaphoreSlim(RecordQueueCapacity, RecordQueueCapacity);
 
-            WriteSessionHeader(inputScript, frameRate, textureAtlas);
-            writerTask = Task.Factory.StartNew(
-                WriteRecords,
-                CancellationToken.None,
-                TaskCreationOptions.LongRunning,
-                TaskScheduler.Default);
+            try
+            {
+                WriteSessionHeader(inputScript, frameRate, textureAtlas);
+                writerTask = Task.Factory.StartNew(
+                    WriteRecords,
+                    CancellationToken.None,
+                    TaskCreationOptions.LongRunning,
+                    TaskScheduler.Default);
+            }
+            catch
+            {
+                try
+                {
+                    DisposeOutputResources();
+                }
+                finally
+                {
+                    DeleteTemporaryOutput();
+                    writerFailureCancellation.Dispose();
+                    retainedRecordSlots.Dispose();
+                }
+
+                throw;
+            }
         }
 
         public SimulatedRenderFrameState RenderFrame(
@@ -268,54 +322,159 @@ namespace MVoxelEngine1.Application.Simulation
                 deletionCount,
                 snapshotCount));
             completionQueued = true;
-            records.Writer.Complete();
-            await writerTask;
+            records.Writer.TryComplete();
+
+            try
+            {
+                await writerTask.ConfigureAwait(false);
+                ThrowIfWriterFailed();
+                if (writtenRecordCount != nextSequence)
+                {
+                    throw new InvalidDataException(
+                        $"The simulated GPU writer recorded {writtenRecordCount} of {nextSequence} queued records.");
+                }
+
+                PublishFinalOutput();
+            }
+            finally
+            {
+                if (!finalOutputPublished)
+                {
+                    try
+                    {
+                        DisposeOutputResources();
+                    }
+                    finally
+                    {
+                        DeleteTemporaryOutput();
+                    }
+                }
+            }
         }
 
         public async ValueTask DisposeAsync()
         {
-            if (!completionQueued)
+            if (disposed)
+                return;
+
+            disposed = true;
+            Exception? disposalFailure = null;
+            try
             {
+                if (!completionQueued)
+                {
+                    records.Writer.TryComplete();
+                    try
+                    {
+                        await writerTask.ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        disposalFailure = ex;
+                    }
+                }
+            }
+            finally
+            {
+                writerFailureCancellation.Cancel();
                 records.Writer.TryComplete();
-                await writerTask;
+                try
+                {
+                    try
+                    {
+                        DisposeOutputResources();
+                    }
+                    catch (Exception ex) when (disposalFailure is not null)
+                    {
+                        disposalFailure = new AggregateException(disposalFailure, ex);
+                    }
+                    catch (Exception ex)
+                    {
+                        disposalFailure = ex;
+                    }
+                    finally
+                    {
+                        if (!finalOutputPublished)
+                            DeleteTemporaryOutput();
+                    }
+                }
+                finally
+                {
+                    writerFailureCancellation.Dispose();
+                    retainedRecordSlots.Dispose();
+                }
             }
 
-            writer.Dispose();
-            fileStream.Dispose();
+            if (disposalFailure is not null)
+                ExceptionDispatchInfo.Capture(disposalFailure).Throw();
         }
 
         private void WriteRecords()
         {
-            while (records.Reader.WaitToReadAsync().AsTask().GetAwaiter().GetResult())
+            try
             {
-                while (records.Reader.TryRead(out StreamRecord? record))
+                while (records.Reader.WaitToReadAsync().AsTask().GetAwaiter().GetResult())
                 {
-                    switch (record)
+                    while (records.Reader.TryRead(out QueuedRecord? queued))
                     {
-                        case UploadRecord upload:
-                            WriteUploadRecord(upload);
-                            break;
-                        case DeletionRecord deletion:
-                            WriteDeletionRecord(deletion);
-                            break;
-                        case RenderFrameRecord frame:
-                            WriteRenderFrameRecord(frame);
-                            break;
-                        case SnapshotRecord snapshot:
-                            WriteSnapshotRecord(snapshot);
-                            break;
-                        case InputBoundaryRecord inputBoundary:
-                            WriteInputBoundaryRecord(inputBoundary);
-                            break;
-                        case CompletionRecord completion:
-                            WriteCompletionRecord(completion);
-                            break;
-                        default:
-                            throw new InvalidOperationException("The simulated GPU stream record is not valid.");
-                    }
+                        try
+                        {
+                            if (writerDelayMilliseconds > 0)
+                                Thread.Sleep(writerDelayMilliseconds);
+                            if (writerFailAfterRecords.HasValue &&
+                                writtenRecordCount >= writerFailAfterRecords.Value)
+                            {
+                                throw new IOException(
+                                    $"The simulated GPU writer failure was requested after {writerFailAfterRecords.Value} records.");
+                            }
 
-                    writer.Flush();
+                            switch (queued.Record)
+                            {
+                                case UploadRecord upload:
+                                    WriteUploadRecord(upload, queued.Sequence);
+                                    break;
+                                case DeletionRecord deletion:
+                                    WriteDeletionRecord(deletion, queued.Sequence);
+                                    break;
+                                case RenderFrameRecord frame:
+                                    WriteRenderFrameRecord(frame, queued.Sequence);
+                                    break;
+                                case SnapshotRecord snapshot:
+                                    WriteSnapshotRecord(snapshot, queued.Sequence);
+                                    break;
+                                case InputBoundaryRecord inputBoundary:
+                                    WriteInputBoundaryRecord(inputBoundary, queued.Sequence);
+                                    break;
+                                case CompletionRecord completion:
+                                    WriteCompletionRecord(completion, queued.Sequence);
+                                    break;
+                                default:
+                                    throw new InvalidOperationException("The simulated GPU stream record is not valid.");
+                            }
+
+                            writer.Flush();
+                            writtenRecordCount++;
+                        }
+                        finally
+                        {
+                            ReleaseRecordRetention(queued);
+                        }
+                    }
                 }
+            }
+            catch (Exception ex)
+            {
+                Interlocked.CompareExchange(
+                    ref writerFailure,
+                    ExceptionDispatchInfo.Capture(ex),
+                    null);
+                writerFailureCancellation.Cancel();
+                records.Writer.TryComplete(ex);
+
+                while (records.Reader.TryRead(out QueuedRecord? abandoned))
+                    ReleaseRecordRetention(abandoned);
+
+                throw;
             }
         }
 
@@ -387,10 +546,61 @@ namespace MVoxelEngine1.Application.Simulation
 
         private void QueueRecord(StreamRecord record)
         {
-            if (completionQueued || !records.Writer.TryWrite(record))
+            if (completionQueued)
                 throw new InvalidOperationException("The simulated GPU output stream is closed.");
-            if (writerTask.IsFaulted)
-                throw new InvalidOperationException("The simulated GPU output writer failed.", writerTask.Exception);
+
+            ThrowIfWriterFailed();
+            try
+            {
+                retainedRecordSlots.Wait(writerFailureCancellation.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                ThrowIfWriterFailed();
+                throw new InvalidOperationException("The simulated GPU output stream is closed.");
+            }
+
+            long retainedBytes = EstimateRetainedPayloadBytes(record);
+            var queued = new QueuedRecord(
+                Interlocked.Increment(ref nextSequence) - 1,
+                retainedBytes,
+                record);
+            int currentCount = Interlocked.Increment(ref retainedRecordCount);
+            long currentBytes = Interlocked.Add(ref retainedPayloadBytes, retainedBytes);
+            UpdateMaximum(ref peakRetainedRecordCount, currentCount);
+            UpdateMaximum(ref peakRetainedPayloadBytes, currentBytes);
+
+            bool retained = true;
+            try
+            {
+                ThrowIfWriterFailed();
+                if (!records.Writer.TryWrite(queued))
+                {
+                    ThrowIfWriterFailed();
+                    throw new InvalidOperationException("The simulated GPU output stream is closed.");
+                }
+
+                retained = false;
+            }
+            finally
+            {
+                if (retained)
+                    ReleaseRecordRetention(queued);
+            }
+        }
+
+        private void ReleaseRecordRetention(QueuedRecord queued)
+        {
+            Interlocked.Add(ref retainedPayloadBytes, -queued.RetainedPayloadBytes);
+            Interlocked.Decrement(ref retainedRecordCount);
+            retainedRecordSlots.Release();
+        }
+
+        private void ThrowIfWriterFailed()
+        {
+            ExceptionDispatchInfo? failure = Volatile.Read(ref writerFailure);
+            if (failure is not null)
+                throw new InvalidOperationException("The simulated GPU output writer failed.", failure.SourceException);
         }
 
         private CameraCapture CaptureCamera()
@@ -441,7 +651,7 @@ namespace MVoxelEngine1.Application.Simulation
             BlockTextureAtlas textureAtlas)
         {
             writer.WriteStartObject();
-            writer.WriteNumber("schemaVersion", 1);
+            writer.WriteNumber("schemaVersion", 2);
             writer.WriteString("mode", "simulatedGpuUpload");
             writer.WriteString("createdUtc", DateTimeOffset.UtcNow);
             writer.WriteBoolean("windowCreated", false);
@@ -456,6 +666,15 @@ namespace MVoxelEngine1.Application.Simulation
             writer.WriteNumber("playerMovementSpeed", Player.MovementSpeed);
             writer.WriteNumber("windowWidth", windowWidth);
             writer.WriteNumber("windowHeight", windowHeight);
+            writer.WriteNumber("recordQueueCapacity", RecordQueueCapacity);
+            writer.WriteString("recordQueueFullPolicy", "wait");
+            writer.WriteBoolean("silentRecordLossAllowed", false);
+            writer.WriteBoolean("atomicFinalPublication", true);
+            writer.WriteNumber("writerDelayMilliseconds", writerDelayMilliseconds);
+            if (writerFailAfterRecords.HasValue)
+                writer.WriteNumber("writerFailAfterRecords", writerFailAfterRecords.Value);
+            else
+                writer.WriteNull("writerFailAfterRecords");
 
             writer.WriteStartObject("chunkDimensions");
             writer.WriteNumber("x", GameManager.settings.chunkMaxX);
@@ -475,11 +694,12 @@ namespace MVoxelEngine1.Application.Simulation
             writer.Flush();
         }
 
-        private void WriteUploadRecord(UploadRecord record)
+        private void WriteUploadRecord(UploadRecord record, long sequence)
         {
             ChunkRenderUploadData data = record.Data;
             writer.WriteStartObject();
             writer.WriteString("type", "simulatedGpuUpload");
+            writer.WriteNumber("sequence", sequence);
             writer.WriteNumber("frameIndex", record.FrameIndex);
             writer.WriteNumber("renderDataId", data.RenderDataId);
             writer.WriteBoolean("actualGpuUploadPerformed", false);
@@ -494,10 +714,11 @@ namespace MVoxelEngine1.Application.Simulation
             writer.WriteEndObject();
         }
 
-        private void WriteDeletionRecord(DeletionRecord record)
+        private void WriteDeletionRecord(DeletionRecord record, long sequence)
         {
             writer.WriteStartObject();
             writer.WriteString("type", "simulatedGpuDeletion");
+            writer.WriteNumber("sequence", sequence);
             writer.WriteNumber("frameIndex", record.FrameIndex);
             writer.WriteNumber("renderDataId", record.RenderDataId);
             writer.WriteBoolean("actualOpenGlDeletionPerformed", false);
@@ -505,10 +726,11 @@ namespace MVoxelEngine1.Application.Simulation
             writer.WriteEndObject();
         }
 
-        private void WriteRenderFrameRecord(RenderFrameRecord record)
+        private void WriteRenderFrameRecord(RenderFrameRecord record, long sequence)
         {
             writer.WriteStartObject();
             writer.WriteString("type", "renderFrame");
+            writer.WriteNumber("sequence", sequence);
             writer.WriteNumber("frameIndex", record.FrameIndex);
             writer.WriteNumber("simulationElapsedSeconds", record.SimulationElapsedSeconds);
             writer.WriteNumber("wallElapsedSeconds", record.WallElapsedSeconds);
@@ -524,10 +746,11 @@ namespace MVoxelEngine1.Application.Simulation
             writer.WriteEndObject();
         }
 
-        private void WriteSnapshotRecord(SnapshotRecord record)
+        private void WriteSnapshotRecord(SnapshotRecord record, long sequence)
         {
             writer.WriteStartObject();
             writer.WriteString("type", "snapshot");
+            writer.WriteNumber("sequence", sequence);
             writer.WriteNumber("snapshotIndex", record.SnapshotIndex);
             writer.WriteString("name", record.Name);
             writer.WriteNumber("frameIndex", record.FrameIndex);
@@ -555,10 +778,11 @@ namespace MVoxelEngine1.Application.Simulation
             writer.WriteEndObject();
         }
 
-        private void WriteInputBoundaryRecord(InputBoundaryRecord record)
+        private void WriteInputBoundaryRecord(InputBoundaryRecord record, long sequence)
         {
             writer.WriteStartObject();
             writer.WriteString("type", record.Type);
+            writer.WriteNumber("sequence", sequence);
             writer.WriteNumber("stepIndex", record.StepIndex);
             WriteInputKeys(record.Step.Keys);
             writer.WriteNumber("durationSeconds", record.Step.DurationSeconds);
@@ -568,10 +792,16 @@ namespace MVoxelEngine1.Application.Simulation
             writer.WriteEndObject();
         }
 
-        private void WriteCompletionRecord(CompletionRecord record)
+        private void WriteCompletionRecord(CompletionRecord record, long sequence)
         {
             writer.WriteEndArray();
             writer.WriteStartObject("summary");
+            writer.WriteNumber("completionSequence", sequence);
+            writer.WriteNumber("streamRecordCount", sequence + 1);
+            writer.WriteNumber("recordQueueCapacity", RecordQueueCapacity);
+            writer.WriteNumber("peakRetainedRecordCount", Volatile.Read(ref peakRetainedRecordCount));
+            writer.WriteNumber("peakRetainedRecordPayloadBytes", Volatile.Read(ref peakRetainedPayloadBytes));
+            writer.WriteBoolean("silentRecordLossAllowed", false);
             writer.WriteNumber("simulationElapsedSeconds", record.SimulationElapsedSeconds);
             writer.WriteNumber("wallElapsedSeconds", record.WallElapsedSeconds);
             writer.WriteNumber("renderFrameCount", record.FrameCount);
@@ -619,6 +849,7 @@ namespace MVoxelEngine1.Application.Simulation
                 ushort neighborBlockId = diagnostics.NeighborBlockIds[index];
 
                 writer.WriteStartObject();
+                writer.WriteString("renderPass", transparent ? "transparent" : "opaque");
                 WriteVector("offset", localX, localY, localZ);
                 writer.WriteNumber("tileIndex", tileIndices[index]);
                 writer.WriteNumber("faceDirection", direction);
@@ -764,6 +995,107 @@ namespace MVoxelEngine1.Application.Simulation
                 writer.WriteString(propertyName, name);
             else
                 writer.WriteNull(propertyName);
+        }
+
+        private void PublishFinalOutput()
+        {
+            writer.Flush();
+            fileStream.Flush(flushToDisk: true);
+            DisposeOutputResources();
+            File.Move(temporaryOutputPath, finalOutputPath);
+            finalOutputPublished = true;
+        }
+
+        private void DisposeOutputResources()
+        {
+            if (outputResourcesDisposed)
+                return;
+
+            outputResourcesDisposed = true;
+            Exception? failure = null;
+            try
+            {
+                writer.Dispose();
+            }
+            catch (Exception ex)
+            {
+                failure = ex;
+            }
+
+            try
+            {
+                fileStream.Dispose();
+            }
+            catch (Exception ex) when (failure is not null)
+            {
+                failure = new AggregateException(failure, ex);
+            }
+            catch (Exception ex)
+            {
+                failure = ex;
+            }
+
+            if (failure is not null)
+                ExceptionDispatchInfo.Capture(failure).Throw();
+        }
+
+        private void DeleteTemporaryOutput()
+        {
+            if (File.Exists(temporaryOutputPath))
+                File.Delete(temporaryOutputPath);
+        }
+
+        private static long EstimateRetainedPayloadBytes(StreamRecord record)
+        {
+            const long RecordOverheadEstimate = 256;
+            return record switch
+            {
+                UploadRecord upload => checked(
+                    RecordOverheadEstimate +
+                    upload.Data.OpaqueOffsets.Length +
+                    upload.Data.OpaqueTileIndices.Length * sizeof(uint) +
+                    upload.Data.OpaqueFaceDirections.Length +
+                    upload.Data.TransparentOffsets.Length +
+                    upload.Data.TransparentTileIndices.Length * sizeof(uint) +
+                    upload.Data.TransparentFaceDirections.Length +
+                    upload.OpaqueDiagnostics.BlockIds.Length * sizeof(ushort) +
+                    upload.OpaqueDiagnostics.NeighborBlockIds.Length * sizeof(ushort) +
+                    upload.TransparentDiagnostics.BlockIds.Length * sizeof(ushort) +
+                    upload.TransparentDiagnostics.NeighborBlockIds.Length * sizeof(ushort)),
+                RenderFrameRecord frame => checked(
+                    RecordOverheadEstimate +
+                    frame.OpaqueDrawRenderDataIds.Length * sizeof(long) +
+                    frame.TransparentDrawRenderDataIds.Length * sizeof(long)),
+                SnapshotRecord snapshot => checked(
+                    RecordOverheadEstimate + snapshot.ActiveChunks.Length * 64L),
+                _ => RecordOverheadEstimate
+            };
+        }
+
+        private static void UpdateMaximum(ref int maximum, int candidate)
+        {
+            int observed = Volatile.Read(ref maximum);
+            while (candidate > observed)
+            {
+                int previous = Interlocked.CompareExchange(ref maximum, candidate, observed);
+                if (previous == observed)
+                    return;
+
+                observed = previous;
+            }
+        }
+
+        private static void UpdateMaximum(ref long maximum, long candidate)
+        {
+            long observed = Volatile.Read(ref maximum);
+            while (candidate > observed)
+            {
+                long previous = Interlocked.CompareExchange(ref maximum, candidate, observed);
+                if (previous == observed)
+                    return;
+
+                observed = previous;
+            }
         }
 
         private static void ValidateUploadData(ChunkRenderUploadData data)
