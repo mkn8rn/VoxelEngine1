@@ -71,5 +71,29 @@ namespace MVoxelEngine1.Tests
 
             Assert.Contains("Duplicate canonical face", exception.Message);
         }
+
+        [Fact]
+        public void OrderedBatchesMatchCompleteHash()
+        {
+            CanonicalRenderFace first = OpaqueFace with { WorldX = -20 };
+            CanonicalRenderFace second = OpaqueFace with { WorldX = -3 };
+            CanonicalRenderFace third = TransparentFace with { WorldX = 16 };
+            CanonicalRenderFace fourth = TransparentFace with { WorldX = 40 };
+            CanonicalRenderFace[] all = { fourth, second, first, third };
+
+            CanonicalFaceSetDigest complete = CanonicalRenderFaceHasher.Hash(all);
+            CanonicalFaceSetDigest batches =
+                CanonicalRenderFaceHasher.HashOrderedBatches(
+                    new[]
+                    {
+                        new[] { second, first },
+                        new[] { fourth, third }
+                    });
+
+            Assert.Equal(complete.Sha256, batches.Sha256);
+            Assert.Equal(complete.OpaqueSha256, batches.OpaqueSha256);
+            Assert.Equal(complete.TransparentSha256, batches.TransparentSha256);
+            Assert.Equal(complete.FaceCount, batches.FaceCount);
+        }
     }
 }

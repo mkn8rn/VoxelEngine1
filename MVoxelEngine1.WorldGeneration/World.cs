@@ -830,14 +830,16 @@ namespace MVoxelEngine1.WorldGeneration
             return !insideRegion || !expectedInMemory;
         }
 
-        private static ushort[]? SnapshotXPlane(
+        private static ReferenceBlockPlane SnapshotXPlane(
             Chunk? chunk,
             int x,
             int maxY,
             int maxZ)
         {
             if (chunk is null || chunk.AllAirChunk)
-                return null;
+                return ReferenceBlockPlane.Uniform(0);
+            if (chunk.AllOneBlockChunk)
+                return ReferenceBlockPlane.Uniform(chunk.AllOneBlockBlockId);
 
             var result = new ushort[checked(maxY * maxZ)];
             for (int z = 0; z < maxZ; z++)
@@ -846,17 +848,19 @@ namespace MVoxelEngine1.WorldGeneration
                     result[z * maxY + y] = chunk.GetBlockLocal(x, y, z);
             }
 
-            return result;
+            return ReferenceBlockPlane.FromBlocks(result);
         }
 
-        private static ushort[]? SnapshotYPlane(
+        private static ReferenceBlockPlane SnapshotYPlane(
             Chunk? chunk,
             int y,
             int maxX,
             int maxZ)
         {
             if (chunk is null || chunk.AllAirChunk)
-                return null;
+                return ReferenceBlockPlane.Uniform(0);
+            if (chunk.AllOneBlockChunk)
+                return ReferenceBlockPlane.Uniform(chunk.AllOneBlockBlockId);
 
             var result = new ushort[checked(maxX * maxZ)];
             for (int x = 0; x < maxX; x++)
@@ -865,17 +869,19 @@ namespace MVoxelEngine1.WorldGeneration
                     result[x * maxZ + z] = chunk.GetBlockLocal(x, y, z);
             }
 
-            return result;
+            return ReferenceBlockPlane.FromBlocks(result);
         }
 
-        private static ushort[]? SnapshotZPlane(
+        private static ReferenceBlockPlane SnapshotZPlane(
             Chunk? chunk,
             int z,
             int maxX,
             int maxY)
         {
             if (chunk is null || chunk.AllAirChunk)
-                return null;
+                return ReferenceBlockPlane.Uniform(0);
+            if (chunk.AllOneBlockChunk)
+                return ReferenceBlockPlane.Uniform(chunk.AllOneBlockBlockId);
 
             var result = new ushort[checked(maxX * maxY)];
             for (int x = 0; x < maxX; x++)
@@ -884,7 +890,7 @@ namespace MVoxelEngine1.WorldGeneration
                     result[x * maxY + y] = chunk.GetBlockLocal(x, y, z);
             }
 
-            return result;
+            return ReferenceBlockPlane.FromBlocks(result);
         }
 
         private bool TryGetChunk((int cx,int cy,int cz) key, out Chunk chunk)

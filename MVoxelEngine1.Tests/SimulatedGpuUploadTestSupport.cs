@@ -145,8 +145,12 @@ namespace MVoxelEngine1.Tests
         public static async Task<SimulatedGpuProcessResult> RunAsync(
             ProcessStartInfo startInfo,
             TimeSpan timeout,
-            CancellationToken testCancellation)
+            CancellationToken testCancellation,
+            long? maximumWorkingSetBytes = null)
         {
+            if (maximumWorkingSetBytes is <= 0)
+                throw new ArgumentOutOfRangeException(nameof(maximumWorkingSetBytes));
+
             using var process = new Process { StartInfo = startInfo };
             Assert.True(process.Start(), "Application process did not start.");
             Task<string> standardOutputTask = process.StandardOutput.ReadToEndAsync(testCancellation);
@@ -164,6 +168,19 @@ namespace MVoxelEngine1.Tests
                 {
                     process.Refresh();
                     peakWorkingSetBytes = Math.Max(peakWorkingSetBytes, process.WorkingSet64);
+                    if (maximumWorkingSetBytes.HasValue &&
+                        peakWorkingSetBytes > maximumWorkingSetBytes.Value)
+                    {
+                        process.Kill(entireProcessTree: true);
+                        await process.WaitForExitAsync(testCancellation);
+                        string limitOutput = await standardOutputTask;
+                        string limitError = await standardErrorTask;
+                        throw new InvalidOperationException(
+                            $"Application process exceeded the {maximumWorkingSetBytes.Value}-byte memory limit. " +
+                            $"Peak working set: {peakWorkingSetBytes} bytes. " +
+                            $"Output: {Tail(limitOutput)} Error: {Tail(limitError)}");
+                    }
+
                     if (OperatingSystem.IsWindows())
                         windowObserved |= process.MainWindowHandle != IntPtr.Zero;
 
@@ -179,7 +196,7 @@ namespace MVoxelEngine1.Tests
                 string timeoutOutput = await standardOutputTask;
                 string timeoutError = await standardErrorTask;
                 throw new TimeoutException(
-                    $"Simulated GPU upload exceeded {timeout.TotalSeconds:0} seconds. " +
+                    $"Application process exceeded {timeout.TotalSeconds:0} seconds. " +
                     $"Output: {Tail(timeoutOutput)} Error: {Tail(timeoutError)}");
             }
 

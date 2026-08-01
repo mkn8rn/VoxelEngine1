@@ -563,5 +563,32 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                 GetBlockLocal,
                 referenceNeighbors);
         }
+
+        internal ReferenceFaceGenerationResult GenerateReferenceFaces(
+            ReferenceNeighborBlockPlanes neighbors)
+        {
+            ArgumentNullException.ThrowIfNull(neighbors);
+            if (AllAirChunk)
+                return ReferenceFaceGenerator.Empty();
+            if (AllOneBlockChunk)
+            {
+                return ReferenceFaceGenerator.GenerateUniform(
+                    dimX,
+                    dimY,
+                    dimZ,
+                    AllOneBlockBlockId,
+                    neighbors,
+                    TerrainLoader.IsOpaque);
+            }
+
+            return ReferenceFaceGenerator.GenerateSections(
+                dimX,
+                dimY,
+                dimZ,
+                GetBlockLocal,
+                neighbors,
+                TerrainLoader.IsOpaque,
+                BuildSectionDescriptors());
+        }
     }
 }

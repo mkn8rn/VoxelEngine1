@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "referenceManifestSha256": "3F9581AD6E4A8D6ED6ABFF49933C52BA8432E61CA455F8C4F374163EF643F1B8",
+  "game": "Default",
+  "seed": 123456,
+  "chunkSizeX": 160,
+  "chunkSizeY": 160,
+  "chunkSizeZ": 160,
+  "lod1Radius": 12,
+  "activeChunkCount": 15625,
+  "captureCenterChunkX": 0,
+  "captureCenterChunkY": 0,
+  "captureCenterChunkZ": 0,
+  "activeCoordinateSha256": "3853E3BD9E0C0DABCEA5359C374ABA702220E9080294FDDDE5852E27EFCCFBC6",
+  "gameInputSha256": "9FC9BC59776B239177FDA25241AB0CDB350328283AC72785A66853B84DB5A562",
+  "blockRegistrySha256": "CC5C57FE8EE451A52B36CA85081E2EEBD436BD751B1EDA2C8025CEF71211A414",
+  "faces": {
+    "faceCount": 51191214,
+    "opaqueFaceCount": 44695412,
+    "transparentFaceCount": 6495802,
+    "sha256": "9075F8FD0152C523C8CDA8ED3B009817CF5B36CD6A367691B3C5FDF1DA8F6555",
+    "opaqueSha256": "8390E880D7A241C4C42B2A515049424DFFBCB35A7F0036DD2CC8B9DD914B950C",
+    "transparentSha256": "4152D6C68A4FA46EF2729FCB82AE92EF34372D809FDCB99E9B56359BB1A2228D",
+    "opaqueDirections": [
+      {
+        "direction": 0,
+        "faceCount": 2808358,
+        "sha256": "94DC38019D2FB76D748977236036B3B8842B7365F7EACB562F9C0934DBF29357"
+      },
+      {
+        "direction": 1,
+        "faceCount": 3107016,
+        "sha256": "15CC87480D460E05EBA76DC7D4397FE2FD61FDABFF1198301E546E51B5EDF8DB"
+      },
+      {
+        "direction": 2,
+        "faceCount": 16000000,
+        "sha256": "3E38932EB144FE8F051DC92B7754A37AB46E1797EB131B2E73F4C41B093CC208"
+      },
+      {
+        "direction": 3,
+        "faceCount": 16000000,
+        "sha256": "E60E4F442D79AD0CCDC3646D84E9FA7F77777B4E38A96EEF818ABAF2F7126D62"
+      },
+      {
+        "direction": 4,
+        "faceCount": 3424463,
+        "sha256": "C4EBA474B9F5007DB8662082CC2EF2B12745B4B19F6F380560F93275C583DEA3"
+      },
+      {
+        "direction": 5,
+        "faceCount": 3355575,
+        "sha256": "46B83AFE7645365FDC4506DF519564C311EE539672B1290B04965EDB004184AD"
+      }
+    ],
+    "transparentDirections": [
+      {
+        "direction": 0,
+        "faceCount": 0,
+        "sha256": "C23D4B4FF9CC3DA4E52190E6EA88B0C2130AB74FE6E9DD32C2358DE30BB86A4F"
+      },
+      {
+        "direction": 1,
+        "faceCount": 0,
+        "sha256": "301589664AB6BC7777C66097964B400816FD802E8AAF72AD853B60825490E364"
+      },
+      {
+        "direction": 2,
+        "faceCount": 0,
+        "sha256": "9755A982CDE3FB11A7AAB1C9A9D0E63CDBCE0273EEFC5A7072B647DD7ED19405"
+      },
+      {
+        "direction": 3,
+        "faceCount": 6495802,
+        "sha256": "CBF5E23CFE13F8F9F5A7AAF936718DB4CC844A3272B19622B6CEDBE54D0952FE"
+      },
+      {
+        "direction": 4,
+        "faceCount": 0,
+        "sha256": "A781BBE5B76489857BB79C1592A507A05CE82E9F5AE593497F5BCDFF8B4D8450"
+      },
+      {
+        "direction": 5,
+        "faceCount": 0,
+        "sha256": "0B50C30FBCAFF551A78A67F44372E0C68D6310E28BB5015E2265D807D7EE49E8"
+      }
+    ]
+  }
+}

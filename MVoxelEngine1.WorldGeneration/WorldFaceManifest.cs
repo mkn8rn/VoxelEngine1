@@ -121,25 +121,78 @@ namespace MVoxelEngine1.WorldGeneration
             CanonicalRenderFace[] faces = source.ToArray();
             Array.Sort(faces, Comparer);
 
-            using IncrementalHash all = CreateHasher("all");
-            using IncrementalHash opaque = CreateHasher("opaque");
-            using IncrementalHash transparent = CreateHasher("transparent");
-            IncrementalHash[] opaqueDirections = CreateDirectionHashers("opaque");
-            IncrementalHash[] transparentDirections = CreateDirectionHashers("transparent");
-            var opaqueCounts = new long[6];
-            var transparentCounts = new long[6];
-            long opaqueCount = 0;
-            long transparentCount = 0;
+            using var accumulator = new CanonicalFaceDigestAccumulator();
+            accumulator.AppendSorted(faces);
+            return accumulator.Complete();
+        }
 
-            try
+        public static CanonicalFaceSetDigest HashOrderedBatches(
+            IEnumerable<IEnumerable<CanonicalRenderFace>> batches)
+        {
+            ArgumentNullException.ThrowIfNull(batches);
+            using var accumulator = new CanonicalFaceDigestAccumulator();
+            foreach (IEnumerable<CanonicalRenderFace> batch in batches)
             {
-                CanonicalRenderFace? previous = null;
+                ArgumentNullException.ThrowIfNull(batch);
+                CanonicalRenderFace[] faces = batch.ToArray();
+                Array.Sort(faces, Comparer);
+                accumulator.AppendSorted(faces);
+            }
+
+            return accumulator.Complete();
+        }
+
+        internal static void Sort(List<CanonicalRenderFace> faces)
+        {
+            ArgumentNullException.ThrowIfNull(faces);
+            faces.Sort(Comparer);
+        }
+
+        internal static CanonicalFaceSetDigest HashSorted(
+            IReadOnlyList<CanonicalRenderFace> faces)
+        {
+            ArgumentNullException.ThrowIfNull(faces);
+            using var accumulator = new CanonicalFaceDigestAccumulator();
+            accumulator.AppendSorted(faces);
+            return accumulator.Complete();
+        }
+
+        internal sealed class CanonicalFaceDigestAccumulator : IDisposable
+        {
+            private readonly IncrementalHash all = CreateHasher("all");
+            private readonly IncrementalHash opaque = CreateHasher("opaque");
+            private readonly IncrementalHash transparent = CreateHasher("transparent");
+            private readonly IncrementalHash[] opaqueDirections = CreateDirectionHashers("opaque");
+            private readonly IncrementalHash[] transparentDirections = CreateDirectionHashers("transparent");
+            private readonly long[] opaqueCounts = new long[6];
+            private readonly long[] transparentCounts = new long[6];
+            private CanonicalRenderFace? previous;
+            private long faceCount;
+            private long opaqueCount;
+            private long transparentCount;
+            private bool completed;
+
+            public void AppendSorted(IReadOnlyList<CanonicalRenderFace> faces)
+            {
+                if (completed)
+                    throw new InvalidOperationException("The canonical face digest is complete.");
+
                 Span<byte> encoded = stackalloc byte[18];
-                foreach (CanonicalRenderFace face in faces)
+                for (int index = 0; index < faces.Count; index++)
                 {
+                    CanonicalRenderFace face = faces[index];
                     Validate(face);
-                    if (previous.HasValue && previous.Value == face)
-                        throw new InvalidOperationException($"Duplicate canonical face: {face}.");
+                    if (previous.HasValue)
+                    {
+                        int comparison = CompareFaces(previous.Value, face);
+                        if (comparison == 0)
+                            throw new InvalidOperationException($"Duplicate canonical face: {face}.");
+                        if (comparison > 0)
+                        {
+                            throw new InvalidOperationException(
+                                "Canonical face batches are not in coordinate order.");
+                        }
+                    }
 
                     Encode(face, encoded);
                     all.AppendData(encoded);
@@ -158,12 +211,20 @@ namespace MVoxelEngine1.WorldGeneration
                         transparentCount++;
                     }
 
+                    faceCount++;
                     previous = face;
                 }
+            }
 
+            public CanonicalFaceSetDigest Complete()
+            {
+                if (completed)
+                    throw new InvalidOperationException("The canonical face digest is complete.");
+
+                completed = true;
                 return new CanonicalFaceSetDigest
                 {
-                    FaceCount = faces.LongLength,
+                    FaceCount = faceCount,
                     OpaqueFaceCount = opaqueCount,
                     TransparentFaceCount = transparentCount,
                     Sha256 = GetHex(all),
@@ -177,8 +238,12 @@ namespace MVoxelEngine1.WorldGeneration
                         transparentCounts)
                 };
             }
-            finally
+
+            public void Dispose()
             {
+                all.Dispose();
+                opaque.Dispose();
+                transparent.Dispose();
                 DisposeAll(opaqueDirections);
                 DisposeAll(transparentDirections);
             }
@@ -311,12 +376,34 @@ namespace MVoxelEngine1.WorldGeneration
                 .ThenBy(chunk => chunk.ChunkY)
                 .ThenBy(chunk => chunk.ChunkZ)
                 .ToArray();
+            if (faceGenerationMode == FaceGenerationMode.Reference)
+            {
+                return CaptureReference(
+                    world,
+                    game,
+                    seed,
+                    centerX,
+                    centerY,
+                    centerZ,
+                    chunks);
+            }
+            if (faceGenerationMode != FaceGenerationMode.Optimized)
+                throw new ArgumentOutOfRangeException(nameof(faceGenerationMode));
+
             var chunkManifests = new ChunkFaceManifest[chunks.Length];
-            var allFaces = new List<CanonicalRenderFace>();
+            var expectedTileIndices = new Dictionary<int, uint>();
+            using var allFaces =
+                new CanonicalRenderFaceHasher.CanonicalFaceDigestAccumulator();
+            var xSlabFaces = new List<CanonicalRenderFace>();
+            int? currentChunkX = null;
 
             for (int index = 0; index < chunks.Length; index++)
             {
                 WorldRenderChunk chunk = chunks[index];
+                if (currentChunkX.HasValue && currentChunkX.Value != chunk.ChunkX)
+                    AppendSlab(allFaces, xSlabFaces);
+                currentChunkX = chunk.ChunkX;
+
                 ChunkRenderUploadData? data = chunk.UploadData;
                 if (data is not null && data.FaceGenerationMode != faceGenerationMode)
                 {
@@ -327,26 +414,133 @@ namespace MVoxelEngine1.WorldGeneration
 
                 List<CanonicalRenderFace> chunkFaces = data is null
                     ? new List<CanonicalRenderFace>()
-                    : CaptureChunkFaces(world, chunk, data);
-                CanonicalFaceSetDigest digest = CanonicalRenderFaceHasher.Hash(chunkFaces);
-                bool fullyOccluded = data?.FullyOccluded ?? true;
-                if (fullyOccluded && digest.FaceCount != 0)
+                    : CaptureChunkFaces(
+                        world,
+                        chunk,
+                        data,
+                        expectedTileIndices);
+                CanonicalRenderFaceHasher.Sort(chunkFaces);
+                CanonicalFaceSetDigest digest =
+                    CanonicalRenderFaceHasher.HashSorted(chunkFaces);
+                if (data?.FullyOccluded == true && digest.FaceCount != 0)
                 {
                     throw new InvalidOperationException(
                         $"Fully occluded chunk ({chunk.ChunkX}, {chunk.ChunkY}, {chunk.ChunkZ}) has faces.");
                 }
 
-                allFaces.AddRange(chunkFaces);
+                xSlabFaces.AddRange(chunkFaces);
                 chunkManifests[index] = new ChunkFaceManifest
                 {
                     ChunkX = chunk.ChunkX,
                     ChunkY = chunk.ChunkY,
                     ChunkZ = chunk.ChunkZ,
-                    FullyOccluded = fullyOccluded,
+                    FullyOccluded = digest.FaceCount == 0,
                     Faces = digest
                 };
             }
 
+            AppendSlab(allFaces, xSlabFaces);
+            CanonicalFaceSetDigest allFaceDigest = allFaces.Complete();
+
+            return CreateManifest(
+                game,
+                seed,
+                FaceGenerationMode.Optimized,
+                centerX,
+                centerY,
+                centerZ,
+                chunks,
+                allFaceDigest,
+                chunkManifests);
+        }
+
+        private static WorldFaceManifest CaptureReference(
+            World world,
+            string game,
+            int seed,
+            int centerX,
+            int centerY,
+            int centerZ,
+            WorldRenderChunk[] chunks)
+        {
+            var chunkManifests = new ChunkFaceManifest[chunks.Length];
+            using var allFaces =
+                new CanonicalRenderFaceHasher.CanonicalFaceDigestAccumulator();
+            var parallelOptions = new ParallelOptions
+            {
+                MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount)
+            };
+
+            int slabStart = 0;
+            while (slabStart < chunks.Length)
+            {
+                int chunkX = chunks[slabStart].ChunkX;
+                int slabEnd = slabStart + 1;
+                while (slabEnd < chunks.Length && chunks[slabEnd].ChunkX == chunkX)
+                    slabEnd++;
+
+                var slabFaces = new List<CanonicalRenderFace>[slabEnd - slabStart];
+                int currentSlabStart = slabStart;
+                Parallel.For(
+                    slabStart,
+                    slabEnd,
+                    parallelOptions,
+                    index =>
+                    {
+                        WorldRenderChunk chunk = chunks[index];
+                        ReferenceNeighborBlockPlanes neighbors =
+                            world.CaptureReferenceNeighborBlockPlanes(
+                                chunk.ChunkX,
+                                chunk.ChunkY,
+                                chunk.ChunkZ);
+                        ReferenceFaceGenerationResult generated =
+                            chunk.GenerateReferenceFaces(neighbors);
+                        List<CanonicalRenderFace> faces =
+                            CaptureReferenceChunkFaces(world, chunk, generated);
+                        CanonicalRenderFaceHasher.Sort(faces);
+                        CanonicalFaceSetDigest digest =
+                            CanonicalRenderFaceHasher.HashSorted(faces);
+                        chunkManifests[index] = new ChunkFaceManifest
+                        {
+                            ChunkX = chunk.ChunkX,
+                            ChunkY = chunk.ChunkY,
+                            ChunkZ = chunk.ChunkZ,
+                            FullyOccluded = digest.FaceCount == 0,
+                            Faces = digest
+                        };
+                        slabFaces[index - currentSlabStart] = faces;
+                    });
+
+                var combinedSlabFaces = new List<CanonicalRenderFace>();
+                foreach (List<CanonicalRenderFace> faces in slabFaces)
+                    combinedSlabFaces.AddRange(faces);
+                AppendSlab(allFaces, combinedSlabFaces);
+                slabStart = slabEnd;
+            }
+
+            return CreateManifest(
+                game,
+                seed,
+                FaceGenerationMode.Reference,
+                centerX,
+                centerY,
+                centerZ,
+                chunks,
+                allFaces.Complete(),
+                chunkManifests);
+        }
+
+        private static WorldFaceManifest CreateManifest(
+            string game,
+            int seed,
+            FaceGenerationMode faceGenerationMode,
+            int centerX,
+            int centerY,
+            int centerZ,
+            WorldRenderChunk[] chunks,
+            CanonicalFaceSetDigest faceDigest,
+            ChunkFaceManifest[] chunkManifests)
+        {
             return new WorldFaceManifest
             {
                 SchemaVersion = 1,
@@ -365,15 +559,25 @@ namespace MVoxelEngine1.WorldGeneration
                 ActiveCoordinateSha256 = HashCoordinates(chunks),
                 GameInputSha256 = HashGameInputs(),
                 BlockRegistrySha256 = HashBlockRegistry(),
-                Faces = CanonicalRenderFaceHasher.Hash(allFaces),
+                Faces = faceDigest,
                 Chunks = chunkManifests
             };
+        }
+
+        private static void AppendSlab(
+            CanonicalRenderFaceHasher.CanonicalFaceDigestAccumulator accumulator,
+            List<CanonicalRenderFace> faces)
+        {
+            CanonicalRenderFaceHasher.Sort(faces);
+            accumulator.AppendSorted(faces);
+            faces.Clear();
         }
 
         private static List<CanonicalRenderFace> CaptureChunkFaces(
             World world,
             WorldRenderChunk chunk,
-            ChunkRenderUploadData data)
+            ChunkRenderUploadData data,
+            Dictionary<int, uint> expectedTileIndices)
         {
             var result = new List<CanonicalRenderFace>(checked(
                 data.OpaqueFaceCount + data.TransparentFaceCount));
@@ -385,7 +589,8 @@ namespace MVoxelEngine1.WorldGeneration
                 data.OpaqueTileIndices.Span,
                 data.OpaqueFaceDirections.Span,
                 CanonicalRenderPass.Opaque,
-                result);
+                result,
+                expectedTileIndices);
             CapturePass(
                 world,
                 chunk,
@@ -394,8 +599,114 @@ namespace MVoxelEngine1.WorldGeneration
                 data.TransparentTileIndices.Span,
                 data.TransparentFaceDirections.Span,
                 CanonicalRenderPass.Transparent,
+                result,
+                expectedTileIndices);
+            return result;
+        }
+
+        private static List<CanonicalRenderFace> CaptureReferenceChunkFaces(
+            World world,
+            WorldRenderChunk chunk,
+            ReferenceFaceGenerationResult generated)
+        {
+            var result = new List<CanonicalRenderFace>(checked(
+                generated.OpaqueFaceCount + generated.TransparentFaceCount));
+            CaptureReferencePass(
+                world,
+                chunk,
+                generated.OpaqueFaceCount,
+                generated.OpaqueOffsets,
+                generated.OpaqueBlockIds,
+                generated.OpaqueDirections,
+                CanonicalRenderPass.Opaque,
+                result);
+            CaptureReferencePass(
+                world,
+                chunk,
+                generated.TransparentFaceCount,
+                generated.TransparentOffsets,
+                generated.TransparentBlockIds,
+                generated.TransparentDirections,
+                CanonicalRenderPass.Transparent,
                 result);
             return result;
+        }
+
+        private static void CaptureReferencePass(
+            World world,
+            WorldRenderChunk chunk,
+            int faceCount,
+            ReadOnlySpan<byte> offsets,
+            ReadOnlySpan<ushort> blockIds,
+            ReadOnlySpan<byte> directions,
+            CanonicalRenderPass renderPass,
+            List<CanonicalRenderFace> destination)
+        {
+            if (offsets.Length != checked(faceCount * 3) ||
+                blockIds.Length != faceCount ||
+                directions.Length != faceCount)
+            {
+                throw new InvalidOperationException(
+                    $"Reference chunk ({chunk.ChunkX}, {chunk.ChunkY}, {chunk.ChunkZ}) has invalid face arrays.");
+            }
+
+            int maxX = GameManager.settings.chunkMaxX;
+            int maxY = GameManager.settings.chunkMaxY;
+            int maxZ = GameManager.settings.chunkMaxZ;
+            int originX = checked(chunk.ChunkX * maxX);
+            int originY = checked(chunk.ChunkY * maxY);
+            int originZ = checked(chunk.ChunkZ * maxZ);
+            for (int index = 0; index < faceCount; index++)
+            {
+                int localX = offsets[index * 3];
+                int localY = offsets[index * 3 + 1];
+                int localZ = offsets[index * 3 + 2];
+                byte direction = directions[index];
+                if ((uint)localX >= (uint)maxX ||
+                    (uint)localY >= (uint)maxY ||
+                    (uint)localZ >= (uint)maxZ ||
+                    direction >= FaceNormals.Length)
+                {
+                    throw new InvalidOperationException(
+                        $"Reference chunk ({chunk.ChunkX}, {chunk.ChunkY}, {chunk.ChunkZ}) has an invalid face.");
+                }
+
+                ushort blockId = blockIds[index];
+                if (chunk.GetBlockLocal(localX, localY, localZ) != blockId)
+                {
+                    throw new InvalidOperationException(
+                        $"Reference chunk ({chunk.ChunkX}, {chunk.ChunkY}, {chunk.ChunkZ}) has the wrong source block.");
+                }
+
+                bool opaque = TerrainLoader.IsOpaque(blockId);
+                if ((renderPass == CanonicalRenderPass.Opaque) != opaque)
+                {
+                    throw new InvalidOperationException(
+                        $"Reference chunk ({chunk.ChunkX}, {chunk.ChunkY}, {chunk.ChunkZ}) has a face in the wrong pass.");
+                }
+
+                int worldX = originX + localX;
+                int worldY = originY + localY;
+                int worldZ = originZ + localZ;
+                (int dx, int dy, int dz) = FaceNormals[direction];
+                int neighborX = localX + dx;
+                int neighborY = localY + dy;
+                int neighborZ = localZ + dz;
+                ushort neighborBlockId =
+                    (uint)neighborX < (uint)maxX &&
+                    (uint)neighborY < (uint)maxY &&
+                    (uint)neighborZ < (uint)maxZ
+                        ? chunk.GetBlockLocal(neighborX, neighborY, neighborZ)
+                        : world.GetBlock(worldX + dx, worldY + dy, worldZ + dz);
+                destination.Add(new CanonicalRenderFace(
+                    worldX,
+                    worldY,
+                    worldZ,
+                    direction,
+                    renderPass,
+                    blockId,
+                    neighborBlockId));
+            }
         }
 
         private static void CapturePass(
@@ -406,7 +717,8 @@ namespace MVoxelEngine1.WorldGeneration
             ReadOnlySpan<uint> tileIndices,
             ReadOnlySpan<byte> directions,
             CanonicalRenderPass renderPass,
-            List<CanonicalRenderFace> destination)
+            List<CanonicalRenderFace> destination,
+            Dictionary<int, uint> expectedTileIndices)
         {
             if (offsets.Length != checked(faceCount * 3) ||
                 tileIndices.Length != faceCount ||
@@ -446,7 +758,10 @@ namespace MVoxelEngine1.WorldGeneration
                         $"Chunk ({chunk.ChunkX}, {chunk.ChunkY}, {chunk.ChunkZ}) has a face in the wrong pass.");
                 }
 
-                uint expectedTileIndex = GetExpectedTileIndex(blockId, direction);
+                uint expectedTileIndex = GetExpectedTileIndex(
+                    blockId,
+                    direction,
+                    expectedTileIndices);
                 if (tileIndices[index] != expectedTileIndex)
                 {
                     throw new InvalidOperationException(
@@ -459,10 +774,15 @@ namespace MVoxelEngine1.WorldGeneration
                 int worldY = originY + localY;
                 int worldZ = originZ + localZ;
                 (int dx, int dy, int dz) = FaceNormals[direction];
-                ushort neighborBlockId = world.GetBlock(
-                    worldX + dx,
-                    worldY + dy,
-                    worldZ + dz);
+                int neighborX = localX + dx;
+                int neighborY = localY + dy;
+                int neighborZ = localZ + dz;
+                ushort neighborBlockId =
+                    (uint)neighborX < (uint)maxX &&
+                    (uint)neighborY < (uint)maxY &&
+                    (uint)neighborZ < (uint)maxZ
+                        ? chunk.GetBlockLocal(neighborX, neighborY, neighborZ)
+                        : world.GetBlock(worldX + dx, worldY + dy, worldZ + dz);
                 destination.Add(new CanonicalRenderFace(
                     worldX,
                     worldY,
@@ -474,8 +794,15 @@ namespace MVoxelEngine1.WorldGeneration
             }
         }
 
-        private static uint GetExpectedTileIndex(ushort blockId, byte direction)
+        private static uint GetExpectedTileIndex(
+            ushort blockId,
+            byte direction,
+            Dictionary<int, uint> expectedTileIndices)
         {
+            int cacheKey = (blockId << 3) | direction;
+            if (expectedTileIndices.TryGetValue(cacheKey, out uint cached))
+                return cached;
+
             var atlas = ChunkRender.terrainTextureAtlas ??
                 throw new InvalidOperationException("The runtime texture atlas is not initialized.");
             var coordinates = atlas.GetBlockUVs(blockId, (Faces)direction);
@@ -491,7 +818,9 @@ namespace MVoxelEngine1.WorldGeneration
                     minimumY = coordinates[index].y;
             }
 
-            return checked((uint)(minimumY * atlas.tilesX + minimumX));
+            uint result = checked((uint)(minimumY * atlas.tilesX + minimumX));
+            expectedTileIndices.Add(cacheKey, result);
+            return result;
         }
 
         private static string HashCoordinates(
