@@ -1,4 +1,5 @@
 using MVoxelEngine1.Graphics.Terrain;
+using MVoxelEngine1.Infrastructure.Models;
 using MVoxelEngine1.WorldGeneration.Terrain;
 
 namespace MVoxelEngine1.WorldGeneration
@@ -46,10 +47,18 @@ namespace MVoxelEngine1.WorldGeneration
     {
         public IReadOnlyList<WorldRenderChunk> CaptureActiveRenderChunks()
         {
+            ThrowIfReferenceMeshBuildFailed();
+            using IDisposable stateScope = AcquireRenderStateReadScope();
             var chunks = new List<WorldRenderChunk>(activeChunks.Count);
             foreach (var pair in activeChunks)
             {
                 (int cx, int cy, int cz) key = pair.Key;
+                if (faceGenerationMode == FaceGenerationMode.Reference &&
+                    dirtyChunks.ContainsKey(key))
+                {
+                    continue;
+                }
+
                 Chunk chunk = pair.Value;
                 ChunkRender? renderer = chunk.chunkRender;
                 chunks.Add(new WorldRenderChunk(

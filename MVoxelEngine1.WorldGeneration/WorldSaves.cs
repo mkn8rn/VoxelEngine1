@@ -427,8 +427,10 @@ namespace MVoxelEngine1.WorldGeneration
             var (bx,bz) = BatchKeyFromChunk(targetCx, targetCz);
             string path = GetBatchFilePath(bx,bz);
             if (!File.Exists(path)) return null;
+            using IDisposable stateScope =
+                AcquireReferenceRenderStateWriteScope();
             Chunk requested = null;
-            var loadedChunks = new List<((int cx, int cy, int cz) Key, Chunk Chunk)>();
+            var loadedChunks = new List<(int cx, int cy, int cz)>();
             try
             {
                 using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 256*1024, FileOptions.SequentialScan);
@@ -465,16 +467,18 @@ namespace MVoxelEngine1.WorldGeneration
                     var chunk = ParseInlineChunkPayload(cx, cy, cz, payload);
                     if (chunk != null)
                     {
+                        MarkReferenceNeighborsDirtyForTopologyChange(key);
                         unbuiltChunks[key] = chunk;
                         batch.AddOrReplaceChunk(chunk, cx, cy, cz);
-                        loadedChunks.Add((key, chunk));
+                        loadedChunks.Add(key);
+                        MarkReferenceNeighborsDirtyForTopologyChange(key);
                         if (cx==targetCx && cy==targetCy && cz==targetCz) requested = chunk;
                     }
                 }
                 if (faceGenerationMode == FaceGenerationMode.Reference)
                 {
                     foreach (var loadedChunk in loadedChunks)
-                        MarkReferenceNeighborsDirty(loadedChunk.Key, loadedChunk.Chunk);
+                        MarkReferenceNeighborsDirty(loadedChunk);
                 }
                 // After load schedule any visible ones
                 ScheduleVisibleChunksInBatch(bx,bz);

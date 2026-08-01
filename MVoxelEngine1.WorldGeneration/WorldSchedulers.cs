@@ -31,7 +31,7 @@ namespace MVoxelEngine1.WorldGeneration
             }
 
             // For each increasing radius ring, enqueue entire vertical stack for each (x,z) column before moving on.
-            for (int radius = 0; radius < lodDist; radius++)
+            for (int radius = 0; radius <= lodDist; radius++)
             {
                 if (radius == 0)
                 {
@@ -60,7 +60,49 @@ namespace MVoxelEngine1.WorldGeneration
                 }
             }
 
-            Console.WriteLine($"[World] Scheduled {count} initial LoD1 chunks.");
+            int referenceGuardCount = EnqueueReferenceGuardRing(0, 0, 0);
+            Console.WriteLine(
+                $"[World] Requested {count} initial LoD1 chunks and " +
+                $"{referenceGuardCount} Reference neighbor chunks.");
+        }
+
+        private int EnqueueReferenceGuardRing(
+            int centerCx,
+            int centerCy,
+            int centerCz)
+        {
+            if (faceGenerationMode != FaceGenerationMode.Reference)
+                return 0;
+
+            int lodDistance = GameManager.settings.lod1RenderDistance;
+            int radius = lodDistance + 1;
+            int sizeX = GameManager.settings.chunkMaxX;
+            int sizeY = GameManager.settings.chunkMaxY;
+            int sizeZ = GameManager.settings.chunkMaxZ;
+            long regionLimit = GameManager.settings.regionWidthInChunks;
+            int minimumY = Math.Max(centerCy - lodDistance, (int)-regionLimit);
+            int maximumY = Math.Min(centerCy + lodDistance, (int)regionLimit);
+            int requested = 0;
+
+            for (int dx = -radius; dx <= radius; dx++)
+            {
+                for (int dz = -radius; dz <= radius; dz++)
+                {
+                    if (Math.Abs(dx) != radius && Math.Abs(dz) != radius)
+                        continue;
+
+                    for (int cy = minimumY; cy <= maximumY; cy++)
+                    {
+                        EnqueueChunkPosition(
+                            (centerCx + dx) * sizeX,
+                            cy * sizeY,
+                            (centerCz + dz) * sizeZ);
+                        requested++;
+                    }
+                }
+            }
+
+            return requested;
         }
 
         private void EnqueueInitialBufferChunkPositions()
@@ -164,6 +206,8 @@ namespace MVoxelEngine1.WorldGeneration
 
         private void EnqueueChunkPosition(int worldX, int worldY, int worldZ, bool force = false)
         {
+            using IDisposable stateScope =
+                AcquireReferenceRenderStateWriteScope();
             var key = ChunkIndexKey(worldX, worldY, worldZ);
             // Region boundary check (inclusive): disallow if any chunk coordinate magnitude exceeds regionWidthInChunks
             long regionLimit = GameManager.settings.regionWidthInChunks; // allowed range: -regionLimit .. +regionLimit
@@ -214,21 +258,30 @@ namespace MVoxelEngine1.WorldGeneration
             bufferChunkPositionQueue.Add(new Vector3(worldX, worldY, worldZ));
         }
 
-        private void MarkReferenceNeighborsDirty(
-            (int cx, int cy, int cz) key,
-            Chunk changedChunk)
+        private void MarkReferenceNeighborsDirty((int cx, int cy, int cz) key)
         {
+            using IDisposable stateScope =
+                AcquireReferenceRenderStateWriteScope();
             foreach (var dir in NeighborDirs)
             {
                 var nk = (key.cx + dir.dx, key.cy + dir.dy, key.cz + dir.dz);
-                // Only consider already present neighbor chunks (passive neighbors do not need rebuild until promoted)
-                bool neighborExists = unbuiltChunks.ContainsKey(nk) || activeChunks.ContainsKey(nk);
-                if (!neighborExists) continue;
-
-                if (!HasAnyNonAirOnBoundary(changedChunk, dir)) continue;
+                if (unbuiltChunks.ContainsKey(nk))
+                {
+                    EnqueueMeshBuild(nk, markDirty: true);
+                    continue;
+                }
+                if (!activeChunks.ContainsKey(nk)) continue;
 
                 EnqueueMeshBuild(nk, markDirty: true);
             }
+        }
+
+        private void MarkReferenceActiveChunksDirty()
+        {
+            using IDisposable stateScope =
+                AcquireReferenceRenderStateWriteScope();
+            foreach (var key in activeChunks.Keys)
+                EnqueueMeshBuild(key, markDirty: true);
         }
 
         private void EnqueueMeshBuild((int cx, int cy, int cz) key, bool markDirty = true)
@@ -236,8 +289,8 @@ namespace MVoxelEngine1.WorldGeneration
             // If marking dirty, ensure chunk is marked dirty even if not enqueued for build (will be built next time)
             if (markDirty)
             {
-                // Ensure dirty flag exists (idempotent)
-                dirtyChunks.TryAdd(key, 0);
+                long revision = Interlocked.Increment(ref nextDirtyRevision);
+                dirtyChunks.AddOrUpdate(key, revision, (_, _) => revision);
             }
 
             // Only enqueue if chunk is present (unbuilt or active)
@@ -250,6 +303,17 @@ namespace MVoxelEngine1.WorldGeneration
             {
                 meshBuildQueue.Add(key);
             }
+        }
+
+        private bool TryRemoveDirtyRevision(
+            (int cx, int cy, int cz) key,
+            long revision)
+        {
+            var item = new KeyValuePair<(int cx, int cy, int cz), long>(
+                key,
+                revision);
+            return ((ICollection<KeyValuePair<(int cx, int cy, int cz), long>>)dirtyChunks)
+                .Remove(item);
         }
 
         private void PruneOutOfRangeBufferChunks(int playerCx, int playerCy, int playerCz)
@@ -325,6 +389,8 @@ namespace MVoxelEngine1.WorldGeneration
                 }
             }
 
+            EnqueueReferenceGuardRing(centerCx, centerCy, centerCz);
+
             // Buffer (initial or runtime depending on currentBufferRadius) beyond LoD1
             if (bufferRadius > lodDist)
             {
@@ -353,6 +419,8 @@ namespace MVoxelEngine1.WorldGeneration
         // Unload chunks (active or unbuilt) outside of current interest radius.
         private void UnloadFarChunks(int centerCx, int centerCy, int centerCz)
         {
+            using IDisposable stateScope =
+                AcquireReferenceRenderStateWriteScope();
             int lodDist = GameManager.settings.lod1RenderDistance;
             int verticalRange = lodDist;
 
@@ -369,11 +437,11 @@ namespace MVoxelEngine1.WorldGeneration
             {
                 if (Math.Abs(key.cx - centerCx) > lodDist || Math.Abs(key.cz - centerCz) > lodDist || Math.Abs(key.cy - centerCy) > verticalRange)
                 {
+                    MarkReferenceNeighborsDirtyForTopologyChange(key);
                     if (activeChunks.TryRemove(key, out var chunk))
                     {
                         chunk.chunkRender?.ScheduleDelete();
-                        if (faceGenerationMode == FaceGenerationMode.Reference)
-                            MarkReferenceNeighborsDirty(key, chunk);
+                        MarkReferenceNeighborsDirtyForTopologyChange(key);
                         dirtyChunks.TryRemove(key, out _);
                         meshBuildSchedule.TryRemove(key, out _);
                         TrackBatch(key);
@@ -385,10 +453,10 @@ namespace MVoxelEngine1.WorldGeneration
             {
                 if (Math.Abs(key.cx - centerCx) > lodDist || Math.Abs(key.cz - centerCz) > lodDist || Math.Abs(key.cy - centerCy) > verticalRange)
                 {
-                    if (unbuiltChunks.TryRemove(key, out var chunk))
+                    MarkReferenceNeighborsDirtyForTopologyChange(key);
+                    if (unbuiltChunks.TryRemove(key, out _))
                     {
-                        if (faceGenerationMode == FaceGenerationMode.Reference)
-                            MarkReferenceNeighborsDirty(key, chunk);
+                        MarkReferenceNeighborsDirtyForTopologyChange(key);
                         cancelledChunks[key] = 0;
                         chunkGenSchedule.TryRemove(key, out _);
                         meshBuildSchedule.TryRemove(key, out _);
@@ -402,10 +470,10 @@ namespace MVoxelEngine1.WorldGeneration
             {
                 if (Math.Abs(key.cx - centerCx) > lodDist + 1 || Math.Abs(key.cz - centerCz) > lodDist + 1 || Math.Abs(key.cy - centerCy) > verticalRange)
                 {
-                    if (passiveChunks.TryRemove(key, out var chunk))
+                    MarkReferenceNeighborsDirtyForTopologyChange(key);
+                    if (passiveChunks.TryRemove(key, out _))
                     {
-                        if (faceGenerationMode == FaceGenerationMode.Reference)
-                            MarkReferenceNeighborsDirty(key, chunk);
+                        MarkReferenceNeighborsDirtyForTopologyChange(key);
                         TrackBatch(key);
                     }
                 }
