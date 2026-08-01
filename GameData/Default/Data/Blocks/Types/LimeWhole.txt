@@ -2,7 +2,7 @@
   "ID": 257,
   "Name": "Limestone",
   "BaseType": "Stone",
-  "TextureFaceBase": "LimeWhole"
+  "TextureFaceBase": "LimeWhole",
   "IsTransparent": true,
   "StateOfMatter": "Solid"
 }

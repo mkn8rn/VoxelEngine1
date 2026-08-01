@@ -1,5 +1,6 @@
 ﻿using MVoxelEngine1.Infrastructure.Managers;
 using MVoxelEngine1.Infrastructure.Flags;
+using MVoxelEngine1.Infrastructure.Diagnostics;
 using System;
 using System.Runtime;
 
@@ -13,6 +14,16 @@ namespace MVoxelEngine1.Application
             ConsoleFlags.Parse(args);
             EnvironmentFlags.LoadEnvironmentFlags();
             FlagManager.ApplyFlags(args);
+
+            if (!string.IsNullOrWhiteSpace(FlagManager.flags.benchmarkOutput))
+            {
+                if (string.IsNullOrWhiteSpace(FlagManager.flags.game))
+                    throw new InvalidOperationException("Benchmark game is not set.");
+                if (!FlagManager.flags.seed.HasValue)
+                    throw new InvalidOperationException("Benchmark seed is not set.");
+
+                StartupPerformanceRecorder.Begin(FlagManager.flags.game, FlagManager.flags.seed.Value);
+            }
 
             using (Window game = new Window())
             {

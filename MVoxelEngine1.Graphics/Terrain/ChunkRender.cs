@@ -12,6 +12,7 @@ using MVoxelEngine1.Infrastructure.Models.Terrain;
 using Vector3 = OpenTK.Mathematics.Vector3;
 using MVoxelEngine1.Graphics.Textures;
 using MVoxelEngine1.Infrastructure.Models.Generation;
+using MVoxelEngine1.Infrastructure.Diagnostics;
 using MVoxelEngine1.Graphics.Terrain.Sections;
 using System.Linq;
 
@@ -114,6 +115,8 @@ namespace MVoxelEngine1.Graphics.Terrain
         public void Build()
         {
             if (isBuilt) return;
+
+            StartupPerformanceRecorder.RecordGpuStreamingStart();
 
             // Shared index buffer (bind per-VAO after VAO bind to attach)
             quadIndexIBO = new IBO(QuadIndices, QuadIndices.Length);

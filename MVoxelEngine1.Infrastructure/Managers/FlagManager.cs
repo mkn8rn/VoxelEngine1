@@ -21,7 +21,10 @@ namespace MVoxelEngine1.Infrastructure.Managers
             var flags = new ProgramFlags
             {
                 game = PreferString(consoleFlags.game, envFlags.game),
-                gamesDirectory = PreferString(consoleFlags.gamesDirectory, envFlags.gamesDirectory),
+                gameDataDirectory = PreferString(consoleFlags.gameDataDirectory, envFlags.gameDataDirectory),
+                worldName = PreferString(consoleFlags.worldName, envFlags.worldName),
+                seed = PreferValue(consoleFlags.seed, envFlags.seed),
+                benchmarkOutput = PreferString(consoleFlags.benchmarkOutput, envFlags.benchmarkOutput),
                 windowWidth = PreferValue(consoleFlags.windowWidth, envFlags.windowWidth),
                 windowHeight = PreferValue(consoleFlags.windowHeight, envFlags.windowHeight),
                 useFacePooling = PreferValue(consoleFlags.useFacePooling, envFlags.useFacePooling),
@@ -46,8 +49,14 @@ namespace MVoxelEngine1.Infrastructure.Managers
 
             if (!string.IsNullOrEmpty(flags.game))
                 Console.WriteLine($"Set game: {flags.game}");
-            if (!string.IsNullOrEmpty(flags.gamesDirectory))
-                Console.WriteLine($"Set gamesDirectory: {flags.gamesDirectory}");
+            if (!string.IsNullOrEmpty(flags.gameDataDirectory))
+                Console.WriteLine($"Set gameDataDirectory: {flags.gameDataDirectory}");
+            if (!string.IsNullOrEmpty(flags.worldName))
+                Console.WriteLine($"Set worldName: {flags.worldName}");
+            if (flags.seed.HasValue)
+                Console.WriteLine($"Set seed: {flags.seed.Value}");
+            if (!string.IsNullOrEmpty(flags.benchmarkOutput))
+                Console.WriteLine($"Set benchmarkOutput: {flags.benchmarkOutput}");
             if (flags.windowWidth.HasValue)
                 Console.WriteLine($"Set windowWidth: {flags.windowWidth.Value}");
             if (flags.windowHeight.HasValue)

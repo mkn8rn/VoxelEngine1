@@ -42,7 +42,10 @@ namespace MVoxelEngine1.Infrastructure.Models
     public class ProgramFlags
     {
         public string? game;
-        public string? gamesDirectory;
+        public string? gameDataDirectory;
+        public string? worldName;
+        public int? seed;
+        public string? benchmarkOutput;
 
         // Window settings
         public int? windowWidth;

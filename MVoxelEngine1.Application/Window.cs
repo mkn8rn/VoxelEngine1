@@ -17,6 +17,8 @@ using MVoxelEngine1.Graphics.Terrain;
 using MVoxelEngine1.Infrastructure.Loaders;
 using MVoxelEngine1.WorldGeneration;
 using MVoxelEngine1.Graphics.Textures;
+using MVoxelEngine1.Infrastructure.Diagnostics;
+using System.Diagnostics;
 
 namespace MVoxelEngine1.Application
 {
@@ -43,6 +45,7 @@ namespace MVoxelEngine1.Application
         // settings
         int windowWidth;
         int windowHeight;
+        bool benchmarkWritten;
 
         public Window() : base(GameWindowSettings.Default, NativeWindowSettings.Default)
         {
@@ -75,7 +78,7 @@ namespace MVoxelEngine1.Application
             GameManager.Initialize();
 
             // Select game
-            string game = GameManager.SelectGameFolder();
+            string game = GameManager.SelectGameFolder(FlagManager.flags.game);
             GameManager.LoadGameDefaultSettings(game);
 
             // Initialize the Data Loaders
@@ -86,6 +89,7 @@ namespace MVoxelEngine1.Application
             Console.WriteLine("Biomes loading.");
             BiomeManager.LoadAllBiomes();
             Console.WriteLine($"Loaded {BiomeManager.Biomes.Count} biome(s).");
+            StartupPerformanceRecorder.RecordGameLoaded();
 
             // Initialize the Texture Atlases
             Console.WriteLine("Texture atlases initializing.");
@@ -130,11 +134,14 @@ namespace MVoxelEngine1.Application
 
         protected override void OnUnload()
         {
+            world?.Dispose();
             base.OnUnload();
         }
 
         protected override void OnRenderFrame(FrameEventArgs args)
         {
+            long renderStart = Stopwatch.GetTimestamp();
+
             GL.ClearColor(0.3f, 0f, 0.6f, 1f);
             GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
 
@@ -152,8 +159,23 @@ namespace MVoxelEngine1.Application
             GL.UniformMatrix4(projectionLocation, true, ref projection);
 
             world.Render(shaderProgram);
+            bool gpuStreamingStarted = StartupPerformanceRecorder.HasGpuStreamingStarted;
 
             Context.SwapBuffers();
+
+            StartupPerformanceRecorder.RecordCameraAppearance();
+            if (gpuStreamingStarted)
+                StartupPerformanceRecorder.RecordFirstRender(Stopwatch.GetElapsedTime(renderStart));
+
+            if (!benchmarkWritten &&
+                !string.IsNullOrWhiteSpace(FlagManager.flags.benchmarkOutput) &&
+                StartupPerformanceRecorder.IsComplete)
+            {
+                StartupPerformanceRecorder.WriteSnapshot(FlagManager.flags.benchmarkOutput);
+                benchmarkWritten = true;
+                Console.WriteLine($"Benchmark metrics written to {Path.GetFullPath(FlagManager.flags.benchmarkOutput)}");
+                Close();
+            }
 
             base.OnRenderFrame(args);
         }

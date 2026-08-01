@@ -13,6 +13,7 @@ using MVoxelEngine1.Infrastructure.Loaders;
 using MVoxelEngine1.WorldGeneration.Terrain;
 using MVoxelEngine1.Infrastructure.Models.Terrain;
 using MVoxelEngine1.Infrastructure.Models.Generation;
+using MVoxelEngine1.Infrastructure.Diagnostics;
 using OpenTK.Graphics.OpenGL4;
 
 namespace MVoxelEngine1.WorldGeneration
@@ -113,7 +114,7 @@ namespace MVoxelEngine1.WorldGeneration
                 Console.WriteLine("Warning: meshRenderWorkersPerCoreInitial flag is not set or invalid. Defaulting to worldGenWorkersPerCore");
 
             loader = new WorldLoader();
-            loader.ChooseWorld();
+            loader.ChooseWorld(FlagManager.flags.worldName, FlagManager.flags.seed);
             ID = loader.ID;
             RegionID = loader.RegionID;
             Console.WriteLine("World data loaded.");
@@ -505,7 +506,10 @@ namespace MVoxelEngine1.WorldGeneration
                             continue;
                         }
 
+                        long buildStart = StartupPerformanceRecorder.IsRunning ? Stopwatch.GetTimestamp() : 0;
                         ch.BuildRender(worldBlockAccessor);
+                        if (buildStart != 0)
+                            StartupPerformanceRecorder.RecordFirstChunkBuild(Stopwatch.GetElapsedTime(buildStart));
 
                         if (unbuiltChunks.TryRemove(key, out var builtChunk))
                         {
