@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 
 namespace MVoxelEngine1.Tests
 {
@@ -12,7 +11,7 @@ namespace MVoxelEngine1.Tests
         public async Task Seed123456StreamsRenderDataDuringTimedMovementWithoutWindowAsync()
         {
             using TestWorkspace workspace = TestPaths.CreateWorkspace();
-            ConfigureSmallWorld(workspace.GameDataRoot);
+            SimulatedGpuUploadTestSupport.ConfigureSmallWorld(workspace.GameDataRoot);
             string application = TestPaths.ApplicationExecutable;
             Assert.True(File.Exists(application), $"Application executable was not found at {application}.");
 
@@ -90,13 +89,19 @@ namespace MVoxelEngine1.Tests
 
             using JsonDocument document = JsonDocument.Parse(File.ReadAllText(outputPath));
             JsonElement root = document.RootElement;
+            Assert.Equal(2, root.GetProperty("schemaVersion").GetInt32());
             Assert.Equal("simulatedGpuUpload", root.GetProperty("mode").GetString());
             Assert.Equal(123456, root.GetProperty("seed").GetInt32());
             Assert.False(root.GetProperty("windowCreated").GetBoolean());
             Assert.False(root.GetProperty("openGlCallsAllowed").GetBoolean());
             Assert.Equal(0, root.GetProperty("actualGpuUploadCount").GetInt32());
+            Assert.Equal(4, root.GetProperty("recordQueueCapacity").GetInt32());
+            Assert.Equal("wait", root.GetProperty("recordQueueFullPolicy").GetString());
+            Assert.False(root.GetProperty("silentRecordLossAllowed").GetBoolean());
+            Assert.True(root.GetProperty("atomicFinalPublication").GetBoolean());
 
             JsonElement[] events = root.GetProperty("events").EnumerateArray().ToArray();
+            SimulatedGpuUploadTestSupport.AssertCompleteOrderedStream(root);
             JsonElement[] snapshots = events
                 .Where(element => element.GetProperty("type").GetString() == "snapshot")
                 .ToArray();
@@ -132,6 +137,9 @@ namespace MVoxelEngine1.Tests
             Assert.True(face.TryGetProperty("tileIndex", out _));
             Assert.True(face.TryGetProperty("blockId", out _));
             Assert.True(face.TryGetProperty("neighborBlockIdAtUpload", out _));
+            Assert.Contains(
+                face.GetProperty("renderPass").GetString(),
+                new[] { "opaque", "transparent" });
 
             foreach (JsonElement snapshot in snapshots)
             {
@@ -145,30 +153,14 @@ namespace MVoxelEngine1.Tests
             Assert.True(summary.GetProperty("simulatedGpuUploadCount").GetInt64() > 0);
             Assert.True(summary.GetProperty("simulatedGpuDeletionCount").GetInt64() > 0);
             Assert.Equal(0, summary.GetProperty("actualGpuUploadCount").GetInt32());
+            Assert.InRange(summary.GetProperty("peakRetainedRecordCount").GetInt32(), 1, 4);
+            Assert.True(summary.GetProperty("peakRetainedRecordPayloadBytes").GetInt64() > 0);
+            Assert.Empty(SimulatedGpuUploadTestSupport.FindIncompleteFiles(outputPath));
 
             string worldsDirectory = Path.Combine(workspace.GameDataRoot, "Default", "Saves", "Worlds");
             string worldFile = Assert.Single(Directory.GetFiles(worldsDirectory, "world.txt", SearchOption.AllDirectories));
             Assert.Equal("123456", File.ReadAllLines(worldFile)[3]);
             Console.WriteLine($"Simulated GPU upload result: {outputPath}");
-        }
-
-        private static void ConfigureSmallWorld(string gameDataRoot)
-        {
-            string defaultsPath = Path.Combine(gameDataRoot, "Default", "Defaults.txt");
-            JsonObject defaults = JsonNode.Parse(File.ReadAllText(defaultsPath))!.AsObject();
-            defaults["chunkMaxX"] = 16;
-            defaults["chunkMaxY"] = 16;
-            defaults["chunkMaxZ"] = 16;
-            defaults["maxWorldHeight"] = 160;
-            defaults["lod1RenderDistance"] = 1;
-            defaults["lod2RenderDistance"] = 1;
-            defaults["lod3RenderDistance"] = 1;
-            defaults["lod4RenderDistance"] = 1;
-            defaults["lod5RenderDistance"] = 4;
-            defaults["regionWidthInChunks"] = 16;
-            defaults["chunkGenerationBufferInitial"] = 1;
-            defaults["chunkGenerationBufferRuntime"] = 1;
-            File.WriteAllText(defaultsPath, defaults.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
         }
 
         private static void AddArgument(ProcessStartInfo startInfo, string name, string value)

@@ -30,6 +30,8 @@ namespace MVoxelEngine1.Infrastructure.Flags
             new FlagDescriptor("simulatedGpuUploadOutput", (f,v) => f.simulatedGpuUploadOutput = v),
             new FlagDescriptor("simulatedInput", (f,v) => f.simulatedInput = v),
             new FlagDescriptor("simulatedFrameRate", (f,v) => { if (int.TryParse(v, out var x)) f.simulatedFrameRate = x; }),
+            new FlagDescriptor("simulatedGpuWriterDelayMilliseconds", (f,v) => { if (int.TryParse(v, out var x)) f.simulatedGpuWriterDelayMilliseconds = x; }),
+            new FlagDescriptor("simulatedGpuWriterFailAfterRecords", (f,v) => { if (int.TryParse(v, out var x)) f.simulatedGpuWriterFailAfterRecords = x; }),
             new FlagDescriptor("windowWidth", (f,v) => { if (int.TryParse(v, out var x)) f.windowWidth = x; }),
             new FlagDescriptor("windowHeight", (f,v) => { if (int.TryParse(v, out var x)) f.windowHeight = x; }),
             new FlagDescriptor("worldGenWorkersPerCore", (f,v) => { if (float.TryParse(v, out var x)) f.worldGenWorkersPerCore = x; }),

@@ -89,7 +89,30 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                                     specializedHandled = EmitEmptySectionInstances(); // no-op placeholder
                                     break;
                                 case 1: // Uniform
-                                    specializedHandled = EmitUniformSectionInstances(ref desc, sx, sy, sz, S, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
+                                    if (TerrainLoader.IsOpaque(desc.UniformBlockId))
+                                    {
+                                        specializedHandled = EmitUniformSectionInstances(
+                                            ref desc,
+                                            sx,
+                                            sy,
+                                            sz,
+                                            S,
+                                            opaqueOffsetList,
+                                            opaqueTileIndexList,
+                                            opaqueFaceDirList);
+                                    }
+                                    else
+                                    {
+                                        specializedHandled = EmitUniformSectionInstances(
+                                            ref desc,
+                                            sx,
+                                            sy,
+                                            sz,
+                                            S,
+                                            transparentOffsetList,
+                                            transparentTileIndexList,
+                                            transparentFaceDirList);
+                                    }
                                     break;
                                 case 4: // Packed single-id
                                     specializedHandled = EmitPackedSectionInstances(ref desc, sx, sy, sz, S,

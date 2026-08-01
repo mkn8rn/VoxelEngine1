@@ -49,6 +49,8 @@ namespace MVoxelEngine1.Infrastructure.Models
         public string? simulatedGpuUploadOutput;
         public string? simulatedInput;
         public int? simulatedFrameRate;
+        public int? simulatedGpuWriterDelayMilliseconds;
+        public int? simulatedGpuWriterFailAfterRecords;
 
         // Window settings
         public int? windowWidth;

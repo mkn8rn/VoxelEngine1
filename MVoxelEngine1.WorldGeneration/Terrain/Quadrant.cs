@@ -652,9 +652,9 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                 }
             }
 
-            // Precedence: AllAir > AllWater > AllStone > AllSoil (air above everything, then water layer, then solid materials)
-            if (allAir) kind = UniformKind.AllAir;
-            else if (allWater) kind = UniformKind.AllWater;
+            // Water is geometrically above the surface, so test it before air.
+            if (allWater) kind = UniformKind.AllWater;
+            else if (allAir) kind = UniformKind.AllAir;
             else if (allStone) kind = UniformKind.AllStone;
             else if (allSoil) kind = UniformKind.AllSoil;
             else kind = UniformKind.None;
@@ -702,7 +702,6 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             bool aggregatedComplete = _profilesBuilt; // grid ready for uniform range overrides
             bool haveUniformStone = aggregatedComplete && _uniformStoneFirstCy <= _uniformStoneLastCy;
             bool haveUniformSoil = aggregatedComplete && _uniformSoilFirstCy <= _uniformSoilLastCy;
-            bool haveUniformAir = aggregatedComplete && _uniformAirFirstCy != int.MaxValue;
 
             int vMin = playerCy - verticalRange;
             int vMax = playerCy + verticalRange;
@@ -719,13 +718,9 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                 if (TryGetChunk(cx, cy, cz, out _)) continue;
                 Chunk.UniformOverride overrideKind = Chunk.UniformOverride.None;
 
-                if (haveUniformAir && cy >= _uniformAirFirstCy)
+                if (aggregatedComplete)
                 {
-                    overrideKind = Chunk.UniformOverride.AllAir;
-                }
-                else if (aggregatedComplete)
-                {
-                    // (Air > Water > Stone > Soil).
+                    // Classify water before air because water is above the surface.
                     if (ClassifyVerticalChunk(cy, sizeY, out var classified))
                     {
                         if (classified == UniformKind.AllWater) overrideKind = Chunk.UniformOverride.AllWater;

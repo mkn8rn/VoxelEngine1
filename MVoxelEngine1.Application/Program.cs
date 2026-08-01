@@ -27,12 +27,20 @@ namespace MVoxelEngine1.Application
                 int frameRate = FlagManager.flags.simulatedFrameRate ?? 60;
                 if (frameRate <= 0 || frameRate > 1000)
                     throw new InvalidOperationException("The simulated frame rate must be from 1 through 1000.");
+                int writerDelayMilliseconds = FlagManager.flags.simulatedGpuWriterDelayMilliseconds ?? 0;
+                if (writerDelayMilliseconds < 0 || writerDelayMilliseconds > 1000)
+                    throw new InvalidOperationException("The simulated GPU writer delay must be from 0 through 1000 milliseconds.");
+                int? writerFailAfterRecords = FlagManager.flags.simulatedGpuWriterFailAfterRecords;
+                if (writerFailAfterRecords is <= 0)
+                    throw new InvalidOperationException("The simulated GPU writer failure record count must be positive.");
 
                 await SimulatedGpuUploadRunner.RunAsync(
                     FlagManager.flags.simulatedGpuUploadOutput,
                     inputScript,
                     steps,
-                    frameRate);
+                    frameRate,
+                    writerDelayMilliseconds,
+                    writerFailAfterRecords);
                 return;
             }
 

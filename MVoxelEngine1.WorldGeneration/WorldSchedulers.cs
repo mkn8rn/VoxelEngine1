@@ -23,6 +23,12 @@ namespace MVoxelEngine1.WorldGeneration
 
             int count = 0; // track how many initial chunks we enqueue
 
+            if (lodDist == 0)
+            {
+                EnqueueChunkPosition(0, 0, 0);
+                count = 1;
+            }
+
             // For each increasing radius ring, enqueue entire vertical stack for each (x,z) column before moving on.
             for (int radius = 0; radius < lodDist; radius++)
             {
