@@ -35,7 +35,7 @@ namespace MVoxelEngine1.Tests
                     "MVoxelEngine1.Application",
                     "bin",
                     configuration,
-                    "net8.0",
+                    "net10.0",
                     "MVoxelEngine1.Application.exe");
             }
         }
