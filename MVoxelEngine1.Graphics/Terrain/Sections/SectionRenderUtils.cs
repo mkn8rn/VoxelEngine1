@@ -53,6 +53,12 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
         }
         private static readonly ConcurrentDictionary<ushort, FaceTileSet> _faceTileCache = new();
 
+        static SectionRender()
+        {
+            EnsureBoundaryMasks();
+            EnsureLiDecode();
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private FaceTileSet GetFaceTileSet(ushort blockId)
         {

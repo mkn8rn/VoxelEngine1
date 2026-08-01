@@ -462,17 +462,15 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             return arr;
         }
 
-        public void BuildRender(
+        internal ChunkRender? CreateRender(
             FaceGenerationMode faceGenerationMode,
             ReferenceNeighborBlockPlanes? referenceNeighbors)
         {
-            chunkRender?.ScheduleDelete();
-
             if (AllAirChunk ||
                 (faceGenerationMode == FaceGenerationMode.Optimized &&
                  OcclusionStatus != OcclusionClass.None))
             {
-                return;
+                return null;
             }
 
             if (AllOneBlockChunk)
@@ -493,12 +491,11 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                     HasStats = uniformOpaque
                 };
                 var prerenderUniform = BuildPrerenderData(BuildSectionDescriptors());
-                chunkRender = new ChunkRender(
+                return new ChunkRender(
                     prerenderUniform,
                     faceGenerationMode,
                     GetBlockLocal,
                     referenceNeighbors);
-                return;
             }
 
             // Aggregate opaque stats directly from sections (no flatten) and detect any transparent content.
@@ -554,14 +551,21 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                 ZNonEmpty = totalOpaque > 0 ? dimZ : 0,
                 HasStats = boundsInit
             };
-            if (totalOpaque == 0 && !anyTransparent) return;
+            if (totalOpaque == 0 && !anyTransparent) return null;
 
             var prerender = BuildPrerenderData(BuildSectionDescriptors());
-            chunkRender = new ChunkRender(
+            return new ChunkRender(
                 prerender,
                 faceGenerationMode,
                 GetBlockLocal,
                 referenceNeighbors);
+        }
+
+        internal void PublishRender(ChunkRender? renderer)
+        {
+            ChunkRender? previous = chunkRender;
+            chunkRender = renderer;
+            previous?.ScheduleDelete();
         }
 
         internal ReferenceFaceGenerationResult GenerateReferenceFaces(
