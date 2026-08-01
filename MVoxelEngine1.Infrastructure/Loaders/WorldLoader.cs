@@ -1,9 +1,4 @@
-﻿using MVoxelEngine1.Infrastructure.Managers;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+using MVoxelEngine1.Infrastructure.Managers;
 
 namespace MVoxelEngine1.Infrastructure.Loaders
 {
@@ -11,14 +6,27 @@ namespace MVoxelEngine1.Infrastructure.Loaders
     {
         public Guid ID;
         public Guid RegionID;
-        public string worldName;
+        public string worldName = string.Empty;
         public int seed;
-        public string currentWorldSaveDirectory;
+        public string currentWorldSaveDirectory = string.Empty;
         public string currentWorldDataFile = "world.txt";
         public string currentWorldSavedChunksSubDirectory = "chunks";
-        public static Dictionary<Guid, string> worldSaves = new Dictionary<Guid, string>();
-        public void ChooseWorld()
+
+        private readonly Dictionary<Guid, string> worldSaves = new();
+
+        public IReadOnlyDictionary<Guid, string> WorldSaves => worldSaves;
+
+        public void ChooseWorld(string? requestedWorldName = null, int? requestedSeed = null)
         {
+            if (requestedSeed.HasValue)
+            {
+                string resolvedWorldName = string.IsNullOrWhiteSpace(requestedWorldName)
+                    ? $"World{requestedSeed.Value}"
+                    : requestedWorldName;
+                CreateWorldSave(resolvedWorldName, requestedSeed.Value);
+                return;
+            }
+
             DetectWorldSaves();
 
             if (worldSaves.Count == 0)
@@ -27,174 +35,194 @@ namespace MVoxelEngine1.Infrastructure.Loaders
                 return;
             }
 
-            Console.WriteLine("Please select world: ");
-            Console.WriteLine("0. Generate brand new world");
+            Console.WriteLine("Please select a world:");
+            Console.WriteLine("0. Generate a new world");
 
             List<string> worldSaveNames = worldSaves.Values.ToList();
+            for (int index = 0; index < worldSaveNames.Count; index++)
+                Console.WriteLine(index + 1 + ". " + worldSaveNames[index]);
 
-            for (int i = 0; i < worldSaveNames.Count; i++)
+            string? input = Console.ReadLine();
+            if (!int.TryParse(input, out int selectedWorldIndex))
+                throw new InvalidOperationException("World selection is not a valid number.");
+
+            if (selectedWorldIndex == 0)
             {
-                Console.WriteLine(i + 1 + ". " + worldSaveNames[i]);
+                GenerateWorldSave();
+                return;
             }
 
-            string input = Console.ReadLine();
+            if (selectedWorldIndex < 1 || selectedWorldIndex > worldSaves.Count)
+                throw new InvalidOperationException("World selection is outside the valid range.");
 
-            if (int.TryParse(input, out int selectedWorldIndex))
-            {
-                if (selectedWorldIndex == 0)
-                {
-                    GenerateWorldSave();
-                }
-                else if (selectedWorldIndex >= 1 && selectedWorldIndex <= worldSaves.Count)
-                {
-                    string selectedWorld = worldSaveNames[selectedWorldIndex - 1];
-                    Guid selectedWorldId = worldSaves.FirstOrDefault(x => x.Value == selectedWorld).Key;
-                    LoadWorldSave(selectedWorldId);
-                }
-                else
-                {
-                    Console.WriteLine("Invalid input. Please select a valid world.");
-                }
-            }
-            else
-            {
-                Console.WriteLine("Invalid input. Please enter a valid number.");
-            }
+            string selectedWorld = worldSaveNames[selectedWorldIndex - 1];
+            Guid selectedWorldId = worldSaves.First(item => item.Value == selectedWorld).Key;
+            LoadWorldSave(selectedWorldId);
+        }
+
+        public void CreateWorldSave(string name, int worldSeed)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                throw new ArgumentException("World name is null or empty.", nameof(name));
+
+            worldName = name;
+            seed = worldSeed;
+            ID = Guid.NewGuid();
+            RegionID = Guid.NewGuid();
+            WriteWorldSave();
         }
 
         public void GenerateWorldSave()
         {
             if (string.IsNullOrWhiteSpace(worldName))
-            {
                 GetWorldName();
-            }
 
             if (seed == 0)
-            {
                 GetWorldSeed();
-            }
 
             if (ID == Guid.Empty)
-            {
                 ID = Guid.NewGuid();
-            }
             if (RegionID == Guid.Empty)
-            {
                 RegionID = Guid.NewGuid();
-            }
 
-            Console.WriteLine($"Generating world {worldName} with seed: {seed}, id: {ID}, region: {RegionID}");
-
-            // World root directory (by world ID)
-            var worldRoot = Path.Combine(GameManager.settings.savesWorldDirectory, ID.ToString());
-            Directory.CreateDirectory(worldRoot);
-            currentWorldSaveDirectory = worldRoot; // keep root (region-specific paths built later)
-
-            string worldDataPath = Path.Combine(worldRoot, currentWorldDataFile);
-            using (var writer = new StreamWriter(worldDataPath))
-            {
-                // New format (4 lines): ID, RegionID, worldName, seed
-                writer.WriteLine(ID.ToString());
-                writer.WriteLine(RegionID.ToString());
-                writer.WriteLine(worldName);
-                writer.WriteLine(seed);
-            }
-
-            // Ensure region folder + chunks subfolder now
-            string regionFolder = Path.Combine(worldRoot, RegionID.ToString());
-            Directory.CreateDirectory(regionFolder);
-            string chunkSaveFolderPath = Path.Combine(regionFolder, currentWorldSavedChunksSubDirectory);
-            Directory.CreateDirectory(chunkSaveFolderPath);
+            WriteWorldSave();
         }
 
         public void DetectWorldSaves()
         {
-            string[] worldRootDirs = Directory.GetDirectories(GameManager.settings.savesWorldDirectory);
-            foreach (string worldRoot in worldRootDirs)
+            string savesDirectory = GameManager.settings.savesWorldDirectory;
+            Directory.CreateDirectory(savesDirectory);
+            worldSaves.Clear();
+
+            foreach (string worldRoot in Directory.GetDirectories(savesDirectory))
             {
                 string worldDataPath = Path.Combine(worldRoot, currentWorldDataFile);
-                if (!System.IO.File.Exists(worldDataPath)) continue;
-                try
-                {
-                    string[] lines = File.ReadAllLines(worldDataPath);
-                    var id = Guid.Parse(lines[0]);
-                    var worldNameLocal = lines[2];
-                    if (!worldSaves.ContainsKey(id))
-                    {
-                        worldSaves.Add(id, worldNameLocal);
-                        Console.WriteLine($"Detected world save: {worldNameLocal}, id: {id}");
-                    }
-                }
-                catch { }
+                if (!File.Exists(worldDataPath))
+                    continue;
+
+                WorldSaveData data = ReadWorldSave(worldDataPath);
+                if (!worldSaves.TryAdd(data.ID, data.Name))
+                    throw new InvalidDataException($"Duplicate world ID '{data.ID}' was found at {worldDataPath}.");
+
+                Console.WriteLine($"Detected world save: {data.Name}, id: {data.ID}");
             }
         }
 
         public void LoadWorldSave(Guid id)
         {
-            ID = id;
-            var worldRoot = Path.Combine(GameManager.settings.savesWorldDirectory, id.ToString());
-            currentWorldSaveDirectory = worldRoot; // root, region subfolders below
+            string worldRoot = Path.Combine(GameManager.settings.savesWorldDirectory, id.ToString());
             string worldDataPath = Path.Combine(worldRoot, currentWorldDataFile);
-            string[] lines = File.ReadAllLines(worldDataPath);
+            WorldSaveData data = ReadWorldSave(worldDataPath);
 
-            RegionID = Guid.Parse(lines[1]);
-            worldName = lines[2];
-            seed = int.Parse(lines[3]);
+            if (data.ID != id)
+                throw new InvalidDataException($"World file ID '{data.ID}' does not match directory ID '{id}'.");
 
-            // Ensure region directories exist
-            string regionFolder = Path.Combine(worldRoot, RegionID.ToString());
-            Directory.CreateDirectory(regionFolder);
-            string chunkSaveFolderPath = Path.Combine(regionFolder, currentWorldSavedChunksSubDirectory);
-            Directory.CreateDirectory(chunkSaveFolderPath);
+            ID = data.ID;
+            RegionID = data.RegionID;
+            worldName = data.Name;
+            seed = data.Seed;
+            currentWorldSaveDirectory = worldRoot;
 
-            Console.WriteLine($"Loaded world save: {worldName}, id: {id}, seed: {seed}");
+            CreateRegionDirectories(worldRoot);
+            Console.WriteLine($"Loaded world save: {worldName}, id: {ID}, seed: {seed}");
         }
 
         public void GetWorldName()
         {
             while (true)
             {
-                Console.WriteLine("Please enter a name for the world: ");
-                string input = Console.ReadLine();
-                if (IsLatinAlphabet(input))
+                Console.WriteLine("Please enter a world name:");
+                string? input = Console.ReadLine();
+                if (!IsLatinAlphabet(input))
                 {
-                    if (worldSaves.Values.Contains(input))
-                    {
-                        Console.WriteLine("Invalid input. The world name is already taken. Please enter a different name.");
-                    }
-                    else
-                    {
-                        worldName = input;
-                        break;
-                    }
+                    Console.WriteLine("The world name must contain only Latin alphabet characters.");
+                    continue;
                 }
-                else
+
+                if (worldSaves.Values.Contains(input!, StringComparer.OrdinalIgnoreCase))
                 {
-                    Console.WriteLine("Invalid input. Please enter a name with only Latin alphabet characters.");
+                    Console.WriteLine("The world name is already in use.");
+                    continue;
                 }
+
+                worldName = input!;
+                return;
             }
         }
+
         public void GetWorldSeed()
         {
-            Console.WriteLine("Please enter a seed for the world: ");
-            string input = Console.ReadLine();
+            Console.WriteLine("Please enter a world seed:");
+            string? input = Console.ReadLine();
 
             while (!int.TryParse(input, out seed))
             {
-                Console.WriteLine("Invalid input. Please enter a valid seed: ");
+                Console.WriteLine("The world seed must be an integer.");
                 input = Console.ReadLine();
             }
         }
-        public bool IsLatinAlphabet(string input)
+
+        public bool IsLatinAlphabet(string? input)
         {
-            foreach (char c in input)
+            if (string.IsNullOrWhiteSpace(input))
+                return false;
+
+            foreach (char character in input)
             {
-                if (!char.IsLetter(c))
-                {
+                if (!char.IsAsciiLetter(character))
                     return false;
-                }
             }
+
             return true;
         }
+
+        private void WriteWorldSave()
+        {
+            Console.WriteLine($"Generating world {worldName} with seed: {seed}, id: {ID}, region: {RegionID}");
+
+            string worldRoot = Path.Combine(GameManager.settings.savesWorldDirectory, ID.ToString());
+            Directory.CreateDirectory(worldRoot);
+            currentWorldSaveDirectory = worldRoot;
+
+            string worldDataPath = Path.Combine(worldRoot, currentWorldDataFile);
+            File.WriteAllLines(worldDataPath, new[]
+            {
+                ID.ToString(),
+                RegionID.ToString(),
+                worldName,
+                seed.ToString()
+            });
+
+            CreateRegionDirectories(worldRoot);
+        }
+
+        private void CreateRegionDirectories(string worldRoot)
+        {
+            string regionDirectory = Path.Combine(worldRoot, RegionID.ToString());
+            Directory.CreateDirectory(regionDirectory);
+            Directory.CreateDirectory(Path.Combine(regionDirectory, currentWorldSavedChunksSubDirectory));
+        }
+
+        private static WorldSaveData ReadWorldSave(string worldDataPath)
+        {
+            if (!File.Exists(worldDataPath))
+                throw new FileNotFoundException("World data file was not found.", worldDataPath);
+
+            string[] lines = File.ReadAllLines(worldDataPath);
+            if (lines.Length != 4)
+                throw new InvalidDataException($"World data file must contain four lines: {worldDataPath}");
+            if (!Guid.TryParse(lines[0], out Guid id))
+                throw new InvalidDataException($"World ID is invalid in {worldDataPath}.");
+            if (!Guid.TryParse(lines[1], out Guid regionId))
+                throw new InvalidDataException($"Region ID is invalid in {worldDataPath}.");
+            if (string.IsNullOrWhiteSpace(lines[2]))
+                throw new InvalidDataException($"World name is empty in {worldDataPath}.");
+            if (!int.TryParse(lines[3], out int worldSeed))
+                throw new InvalidDataException($"World seed is invalid in {worldDataPath}.");
+
+            return new WorldSaveData(id, regionId, lines[2], worldSeed);
+        }
+
+        private readonly record struct WorldSaveData(Guid ID, Guid RegionID, string Name, int Seed);
     }
 }

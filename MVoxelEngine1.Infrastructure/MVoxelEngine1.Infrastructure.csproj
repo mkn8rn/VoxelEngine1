@@ -8,7 +8,8 @@
   </PropertyGroup>
 
 	<ItemGroup>
-		<None Include="Games\**">
+		<None Include="..\GameData\**\*">
+			<Link>GameData\%(RecursiveDir)%(Filename)%(Extension)</Link>
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 		</None>
 	</ItemGroup>
@@ -21,10 +22,6 @@
 
   <ItemGroup>
     <None Include="Loaders\TerrainLoader.cs" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Folder Include="Games\Default\Data\Blocks\Types\" />
   </ItemGroup>
 
 </Project>

@@ -32,7 +32,7 @@ namespace MVoxelEngine1.Infrastructure.Models
         public required int chunkGenerationBufferRuntime { get; set; }
 
         // Directories (required in JSON except those computed at runtime)
-        public string gamesDirectory { get; set; } = string.Empty;
+        public string gameDataDirectory { get; set; } = string.Empty;
         public string loadedGameDirectory { get; set; } = string.Empty;
         public required string loadedGameSettingsDirectory { get; set; }
         public required string assetsBaseBlockTexturesDirectory { get; set; }

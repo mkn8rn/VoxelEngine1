@@ -14,8 +14,11 @@ namespace MVoxelEngine1.Infrastructure.Managers
         // Public accessor (non-null after LoadGameDefaultSettings). Existing code can continue calling GameManager.settings
         public static GameSettings settings => _settings ?? throw new InvalidOperationException("Game settings not loaded. Call LoadGameDefaultSettings first.");
 
-        // Root folder containing all games (set from flags at initialization)
-        private static string gamesRoot = string.Empty;
+        private static string gameDataRoot = string.Empty;
+
+        public static string GameDataRoot => !string.IsNullOrWhiteSpace(gameDataRoot)
+            ? gameDataRoot
+            : throw new InvalidOperationException("GameManager is not initialized.");
 
         private static readonly JsonSerializerOptions jsonOptions = new()
         {
@@ -27,22 +30,31 @@ namespace MVoxelEngine1.Infrastructure.Managers
 
         public static void Initialize()
         {
-            LoadEnvironmentDefaultSettings();
+            string? configuredDirectory = FlagManager.flags.gameDataDirectory;
+            if (string.IsNullOrWhiteSpace(configuredDirectory))
+                throw new InvalidOperationException("gameDataDirectory flag is null or empty.");
+
+            Initialize(configuredDirectory);
         }
 
-        private static void LoadEnvironmentDefaultSettings()
+        public static void Initialize(string gameDataDirectory)
         {
-            var flags = FlagManager.flags;
-            if (string.IsNullOrEmpty(flags.gamesDirectory))
-                throw new Exception("gamesDirectory flag is null or empty.");
-            var path = Path.GetDirectoryName(typeof(GameManager).Assembly.Location)!;
-            gamesRoot = Path.Combine(path, flags.gamesDirectory);
-            if (!Directory.Exists(gamesRoot))
-                throw new DirectoryNotFoundException($"Games root directory not found: {gamesRoot}");
+            if (string.IsNullOrWhiteSpace(gameDataDirectory))
+                throw new ArgumentException("Game data directory is null or empty.", nameof(gameDataDirectory));
+
+            string assemblyDirectory = Path.GetDirectoryName(typeof(GameManager).Assembly.Location)!;
+            string resolvedDirectory = Path.IsPathRooted(gameDataDirectory)
+                ? gameDataDirectory
+                : Path.Combine(assemblyDirectory, gameDataDirectory);
+
+            gameDataRoot = Path.GetFullPath(resolvedDirectory);
+            if (!Directory.Exists(gameDataRoot))
+                throw new DirectoryNotFoundException($"Game data root directory not found: {gameDataRoot}");
         }
 
         public static void LoadGameDefaultSettings(string gameDirectory)
         {
+            gameDirectory = Path.GetFullPath(gameDirectory);
             string defaultsPath = Path.Combine(gameDirectory, "Defaults.txt"); // still using .txt extension
             if (!File.Exists(defaultsPath))
                 throw new Exception($"Defaults.txt not found in {gameDirectory}");
@@ -64,7 +76,7 @@ namespace MVoxelEngine1.Infrastructure.Managers
                 throw new Exception("Deserialization returned null GameSettings.");
 
             // Post-process: ensure required directory paths are rooted relative to the game folder.
-            loaded.gamesDirectory = gamesRoot; // override any JSON value
+            loaded.gameDataDirectory = gameDataRoot;
             loaded.loadedGameDirectory = gameDirectory;
             loaded.loadedGameSettingsDirectory = Path.Combine(gameDirectory, loaded.loadedGameSettingsDirectory);
             loaded.assetsBaseBlockTexturesDirectory = Path.Combine(gameDirectory, loaded.assetsBaseBlockTexturesDirectory);
@@ -77,36 +89,15 @@ namespace MVoxelEngine1.Infrastructure.Managers
             _settings = loaded;
         }
 
-        private static string MakeRelative(string baseDir, string fullPath)
-        {
-            try
-            {
-                var baseUri = new Uri(AppendDirectorySeparator(baseDir));
-                var fullUri = new Uri(fullPath);
-                if (baseUri.IsBaseOf(fullUri))
-                    return Uri.UnescapeDataString(baseUri.MakeRelativeUri(fullUri).ToString().Replace('/', Path.DirectorySeparatorChar));
-            }
-            catch { }
-            return fullPath; // fallback to original
-        }
-
-        private static string AppendDirectorySeparator(string path) =>
-            path.EndsWith(Path.DirectorySeparatorChar) ? path : path + Path.DirectorySeparatorChar;
-
         public static string SelectGameFolder(string? autoGameName = null)
         {
-            if (string.IsNullOrEmpty(gamesRoot))
-                throw new InvalidOperationException("GameManager not initialized (gamesRoot unset). Call GameManager.Initialize() first.");
+            if (string.IsNullOrEmpty(gameDataRoot))
+                throw new InvalidOperationException("GameManager is not initialized. Call GameManager.Initialize first.");
 
-            string[] gameFolders = Directory.GetDirectories(gamesRoot);
+            string[] gameFolders = Directory.GetDirectories(gameDataRoot);
             if (gameFolders.Length == 0)
-                throw new Exception($"No game folders found in {gamesRoot}");
-            if (gameFolders.Length == 1)
-            {
-                string onlyGameName = Path.GetFileName(gameFolders[0]);
-                Console.WriteLine($"Only one game: '{onlyGameName}' detected. Skipping game selection.");
-                return gameFolders[0];
-            }
+                throw new DirectoryNotFoundException($"No game folders found in {gameDataRoot}");
+
             var defaultIndex = Array.FindIndex(gameFolders, f => Path.GetFileName(f).Equals("Default", StringComparison.OrdinalIgnoreCase));
             List<string> orderedFolders = new();
             if (defaultIndex != -1)
@@ -130,7 +121,15 @@ namespace MVoxelEngine1.Infrastructure.Managers
                     Console.WriteLine($"Auto-selecting game: '{autoGameName}' via command-line flag.");
                     return match;
                 }
-                Console.WriteLine($"Game '{autoGameName}' not found. Proceeding with manual selection.");
+
+                throw new DirectoryNotFoundException($"Game '{autoGameName}' was not found in {gameDataRoot}.");
+            }
+
+            if (gameFolders.Length == 1)
+            {
+                string onlyGameName = Path.GetFileName(gameFolders[0]);
+                Console.WriteLine($"Only one game: '{onlyGameName}' detected. Skipping game selection.");
+                return gameFolders[0];
             }
 
             Console.WriteLine("Select a game to load:");
