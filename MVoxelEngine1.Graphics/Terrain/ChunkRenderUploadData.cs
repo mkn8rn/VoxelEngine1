@@ -1,3 +1,5 @@
+using MVoxelEngine1.Infrastructure.Models;
+
 namespace MVoxelEngine1.Graphics.Terrain
 {
     public sealed class ChunkRenderUploadData
@@ -8,6 +10,7 @@ namespace MVoxelEngine1.Graphics.Terrain
             float chunkWorldY,
             float chunkWorldZ,
             bool fullyOccluded,
+            FaceGenerationMode faceGenerationMode,
             int opaqueFaceCount,
             byte[]? opaqueOffsets,
             uint[]? opaqueTileIndices,
@@ -22,6 +25,7 @@ namespace MVoxelEngine1.Graphics.Terrain
             ChunkWorldY = chunkWorldY;
             ChunkWorldZ = chunkWorldZ;
             FullyOccluded = fullyOccluded;
+            FaceGenerationMode = faceGenerationMode;
             OpaqueFaceCount = opaqueFaceCount;
             OpaqueOffsets = opaqueOffsets ?? Array.Empty<byte>();
             OpaqueTileIndices = opaqueTileIndices ?? Array.Empty<uint>();
@@ -41,6 +45,8 @@ namespace MVoxelEngine1.Graphics.Terrain
         public float ChunkWorldZ { get; }
 
         public bool FullyOccluded { get; }
+
+        public FaceGenerationMode FaceGenerationMode { get; }
 
         public int OpaqueFaceCount { get; }
 

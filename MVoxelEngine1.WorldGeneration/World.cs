@@ -1,5 +1,6 @@
 ﻿using MVoxelEngine1.Graphics;
 using MVoxelEngine1.Infrastructure.Managers;
+using MVoxelEngine1.Graphics.Terrain;
 using OpenTK.Mathematics;
 using System;
 using System.Collections.Concurrent;
@@ -13,6 +14,7 @@ using MVoxelEngine1.Infrastructure.Loaders;
 using MVoxelEngine1.WorldGeneration.Terrain;
 using MVoxelEngine1.Infrastructure.Models.Terrain;
 using MVoxelEngine1.Infrastructure.Models.Generation;
+using MVoxelEngine1.Infrastructure.Models;
 using MVoxelEngine1.Infrastructure.Diagnostics;
 using OpenTK.Graphics.OpenGL4;
 
@@ -40,8 +42,7 @@ namespace MVoxelEngine1.WorldGeneration
         private CancellationTokenSource generationCts;          // drives current generation worker set
         private CancellationTokenSource meshBuildCts;           // drives current mesh build worker set
 
-        // World block accessor delegates
-        private Func<int, int, int, ushort> worldBlockAccessor;
+        private readonly FaceGenerationMode faceGenerationMode;
 
         // Asynchronous scheduling pipeline
         private int chunkScheduleWorkerCount = 1; 
@@ -82,6 +83,7 @@ namespace MVoxelEngine1.WorldGeneration
         private sealed class BatchGenerationState
         {
             public readonly ConcurrentQueue<(int cx,int cz)> Columns = new();
+            public readonly ConcurrentQueue<((int cx, int cy, int cz) Key, Chunk Chunk)> RegisteredChunks = new();
             public int RemainingColumns; // decremented per column processed (approximate; may over-decrement if duplicates skipped)
             public int ActiveWorkers; // number of workers currently draining queue
             public volatile bool Initialized; // set true once columns seeded
@@ -119,7 +121,8 @@ namespace MVoxelEngine1.WorldGeneration
             RegionID = loader.RegionID;
             Console.WriteLine("World data loaded.");
 
-            worldBlockAccessor = GetBlock;
+            faceGenerationMode = FlagManager.flags.faceGenerationMode ?? FaceGenerationMode.Optimized;
+            Console.WriteLine($"Face generation mode: {faceGenerationMode}.");
             chunkPositionQueue = new BlockingCollection<Vector3>(new ConcurrentQueue<Vector3>());
             bufferChunkPositionQueue = new BlockingCollection<Vector3>(new ConcurrentQueue<Vector3>());
             meshBuildQueue = new BlockingCollection<(int cx, int cy, int cz)>(new ConcurrentQueue<(int, int, int)>());
@@ -373,11 +376,23 @@ namespace MVoxelEngine1.WorldGeneration
                         {
                             bool insideCore = Math.Abs(cx - playerCxSnapshot) <= lodDist && Math.Abs(cz - playerCzSnapshot) <= lodDist && Math.Abs(cy - playerCySnapshot) <= lodDist;
                             bool insidePlusOne = Math.Abs(cx - playerCxSnapshot) <= lodDist + 1 && Math.Abs(cz - playerCzSnapshot) <= lodDist + 1 && Math.Abs(cy - playerCySnapshot) <= lodDist;
+                            bool registered = false;
 
                             if (!activeChunks.ContainsKey(key) && !unbuiltChunks.ContainsKey(key) && !passiveChunks.ContainsKey(key))
                             {
-                                if (insideCore) unbuiltChunks[key] = existing; else if (insidePlusOne) passiveChunks[key] = existing;
+                                if (insideCore)
+                                {
+                                    unbuiltChunks[key] = existing;
+                                    registered = true;
+                                }
+                                else if (insidePlusOne)
+                                {
+                                    passiveChunks[key] = existing;
+                                    registered = true;
+                                }
                             }
+                            if (registered && faceGenerationMode == FaceGenerationMode.Reference)
+                                MarkReferenceNeighborsDirty(key, existing);
                             if (insideCore)
                             {
                                 EnqueueMeshBuild(key, markDirty: false);
@@ -423,6 +438,7 @@ namespace MVoxelEngine1.WorldGeneration
                             // Skip if already recorded (race safety)
                             if (activeChunks.ContainsKey(chunkKey) || unbuiltChunks.ContainsKey(chunkKey) || passiveChunks.ContainsKey(chunkKey)) return;
                             if (insideLod1) unbuiltChunks[chunkKey] = chunkInstance; else passiveChunks[chunkKey] = chunkInstance;
+                            state.RegisteredChunks.Enqueue((chunkKey, chunkInstance));
                             // Remove scheduling markers for this specific chunk if present
                             chunkGenSchedule.TryRemove(chunkKey, out _);
                             bufferGenSchedule.TryRemove(chunkKey, out _);
@@ -440,7 +456,16 @@ namespace MVoxelEngine1.WorldGeneration
 
                         int remainingWorkers = Interlocked.Decrement(ref state.ActiveWorkers);
                         if (remainingWorkers == 0 && state.Columns.IsEmpty && state.RemainingColumns <= 0)
-                        { generatingBatches.TryRemove((bx, bz), out _); ScheduleVisibleChunksInBatch(bx, bz); }
+                        {
+                            generatingBatches.TryRemove((bx, bz), out _);
+                            if (faceGenerationMode == FaceGenerationMode.Reference)
+                            {
+                                while (state.RegisteredChunks.TryDequeue(out var registered))
+                                    MarkReferenceNeighborsDirty(registered.Key, registered.Chunk);
+                            }
+
+                            ScheduleVisibleChunksInBatch(bx, bz);
+                        }
 
                         if (isBuffer) bufferGenSchedule.TryRemove(key, out _); else chunkGenSchedule.TryRemove(key, out _);
                     }
@@ -497,17 +522,25 @@ namespace MVoxelEngine1.WorldGeneration
                             continue;
                         }
 
-                        TryMarkBuriedByNeighbors(key, ch);
-                        PopulateNeighborFaceFlags(key, ch);
-
                         if (activeChunks.ContainsKey(key) && !dirtyChunks.ContainsKey(key))
                         {
-                            // Nothing to do; skip rebuilding
+                            // This chunk has current render data.
                             continue;
                         }
 
+                        ReferenceNeighborBlockPlanes? referenceNeighbors = null;
+                        if (faceGenerationMode == FaceGenerationMode.Reference)
+                        {
+                            referenceNeighbors = CreateReferenceNeighborBlockPlanes(key);
+                        }
+                        else
+                        {
+                            TryMarkBuriedByNeighbors(key, ch);
+                            PopulateNeighborFaceFlags(key, ch);
+                        }
+
                         long buildStart = StartupPerformanceRecorder.IsRunning ? Stopwatch.GetTimestamp() : 0;
-                        ch.BuildRender(worldBlockAccessor);
+                        ch.BuildRender(faceGenerationMode, referenceNeighbors);
                         if (buildStart != 0)
                             StartupPerformanceRecorder.RecordFirstChunkBuild(Stopwatch.GetElapsedTime(buildStart));
 
@@ -535,7 +568,7 @@ namespace MVoxelEngine1.WorldGeneration
             (-1,0,0),(1,0,0),(0,-1,0),(0,1,0),(0,0,-1),(0,0,1)
         };
 
-        private bool HasAnySolidOnBoundary(Chunk chunk, (int dx, int dy, int dz) dir)
+        private bool HasAnyNonAirOnBoundary(Chunk chunk, (int dx, int dy, int dz) dir)
         {
             int sizeX = GameManager.settings.chunkMaxX;
             int sizeY = GameManager.settings.chunkMaxY;
@@ -643,6 +676,86 @@ namespace MVoxelEngine1.WorldGeneration
                 ch.NeighborPlanePosZFace = SnapshotULongs(front.PlaneNegZ);
                 ch.NeighborTransparentPlanePosZFace = SnapshotUShorts(front.TransparentPlaneNegZ);
             }
+        }
+
+        private ReferenceNeighborBlockPlanes CreateReferenceNeighborBlockPlanes(
+            (int cx, int cy, int cz) key)
+        {
+            TryGetChunk((key.cx - 1, key.cy, key.cz), out var left);
+            TryGetChunk((key.cx + 1, key.cy, key.cz), out var right);
+            TryGetChunk((key.cx, key.cy - 1, key.cz), out var down);
+            TryGetChunk((key.cx, key.cy + 1, key.cz), out var up);
+            TryGetChunk((key.cx, key.cy, key.cz - 1), out var back);
+            TryGetChunk((key.cx, key.cy, key.cz + 1), out var front);
+
+            int maxX = GameManager.settings.chunkMaxX;
+            int maxY = GameManager.settings.chunkMaxY;
+            int maxZ = GameManager.settings.chunkMaxZ;
+
+            return new ReferenceNeighborBlockPlanes(
+                SnapshotXPlane(left, maxX - 1, maxY, maxZ),
+                SnapshotXPlane(right, 0, maxY, maxZ),
+                SnapshotYPlane(down, maxY - 1, maxX, maxZ),
+                SnapshotYPlane(up, 0, maxX, maxZ),
+                SnapshotZPlane(back, maxZ - 1, maxX, maxY),
+                SnapshotZPlane(front, 0, maxX, maxY));
+        }
+
+        private static ushort[]? SnapshotXPlane(
+            Chunk? chunk,
+            int x,
+            int maxY,
+            int maxZ)
+        {
+            if (chunk is null || chunk.AllAirChunk)
+                return null;
+
+            var result = new ushort[checked(maxY * maxZ)];
+            for (int z = 0; z < maxZ; z++)
+            {
+                for (int y = 0; y < maxY; y++)
+                    result[z * maxY + y] = chunk.GetBlockLocal(x, y, z);
+            }
+
+            return result;
+        }
+
+        private static ushort[]? SnapshotYPlane(
+            Chunk? chunk,
+            int y,
+            int maxX,
+            int maxZ)
+        {
+            if (chunk is null || chunk.AllAirChunk)
+                return null;
+
+            var result = new ushort[checked(maxX * maxZ)];
+            for (int x = 0; x < maxX; x++)
+            {
+                for (int z = 0; z < maxZ; z++)
+                    result[x * maxZ + z] = chunk.GetBlockLocal(x, y, z);
+            }
+
+            return result;
+        }
+
+        private static ushort[]? SnapshotZPlane(
+            Chunk? chunk,
+            int z,
+            int maxX,
+            int maxY)
+        {
+            if (chunk is null || chunk.AllAirChunk)
+                return null;
+
+            var result = new ushort[checked(maxX * maxY)];
+            for (int x = 0; x < maxX; x++)
+            {
+                for (int y = 0; y < maxY; y++)
+                    result[x * maxY + y] = chunk.GetBlockLocal(x, y, z);
+            }
+
+            return result;
         }
 
         private bool TryGetChunk((int cx,int cy,int cz) key, out Chunk chunk)

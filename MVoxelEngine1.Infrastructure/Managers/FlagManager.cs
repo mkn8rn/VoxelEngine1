@@ -30,6 +30,7 @@ namespace MVoxelEngine1.Infrastructure.Managers
                 simulatedFrameRate = PreferValue(consoleFlags.simulatedFrameRate, envFlags.simulatedFrameRate),
                 simulatedGpuWriterDelayMilliseconds = PreferValue(consoleFlags.simulatedGpuWriterDelayMilliseconds, envFlags.simulatedGpuWriterDelayMilliseconds),
                 simulatedGpuWriterFailAfterRecords = PreferValue(consoleFlags.simulatedGpuWriterFailAfterRecords, envFlags.simulatedGpuWriterFailAfterRecords),
+                faceGenerationMode = PreferValue(consoleFlags.faceGenerationMode, envFlags.faceGenerationMode),
                 windowWidth = PreferValue(consoleFlags.windowWidth, envFlags.windowWidth),
                 windowHeight = PreferValue(consoleFlags.windowHeight, envFlags.windowHeight),
                 useFacePooling = PreferValue(consoleFlags.useFacePooling, envFlags.useFacePooling),
@@ -72,6 +73,8 @@ namespace MVoxelEngine1.Infrastructure.Managers
                 Console.WriteLine($"Set simulatedGpuWriterDelayMilliseconds: {flags.simulatedGpuWriterDelayMilliseconds.Value}");
             if (flags.simulatedGpuWriterFailAfterRecords.HasValue)
                 Console.WriteLine($"Set simulatedGpuWriterFailAfterRecords: {flags.simulatedGpuWriterFailAfterRecords.Value}");
+            if (flags.faceGenerationMode.HasValue)
+                Console.WriteLine($"Set faceGenerationMode: {flags.faceGenerationMode.Value}");
             if (flags.windowWidth.HasValue)
                 Console.WriteLine($"Set windowWidth: {flags.windowWidth.Value}");
             if (flags.windowHeight.HasValue)

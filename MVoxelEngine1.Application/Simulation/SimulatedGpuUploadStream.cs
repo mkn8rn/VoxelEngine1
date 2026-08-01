@@ -6,6 +6,7 @@ using MVoxelEngine1.Graphics.Terrain;
 using MVoxelEngine1.Graphics.Textures;
 using MVoxelEngine1.Infrastructure.Loaders;
 using MVoxelEngine1.Infrastructure.Managers;
+using MVoxelEngine1.Infrastructure.Models;
 using MVoxelEngine1.Infrastructure.Models.Simulation;
 using MVoxelEngine1.WorldGeneration;
 using OpenTK.Mathematics;
@@ -659,6 +660,9 @@ namespace MVoxelEngine1.Application.Simulation
             writer.WriteNumber("actualGpuUploadCount", 0);
             writer.WriteString("game", FlagManager.flags.game);
             writer.WriteNumber("seed", FlagManager.flags.seed!.Value);
+            writer.WriteString(
+                "faceGenerationMode",
+                (FlagManager.flags.faceGenerationMode ?? FaceGenerationMode.Optimized).ToString());
             writer.WriteString("worldId", world.ID);
             writer.WriteString("regionId", world.RegionID);
             writer.WriteString("inputScript", inputScript);
@@ -703,6 +707,7 @@ namespace MVoxelEngine1.Application.Simulation
             writer.WriteNumber("frameIndex", record.FrameIndex);
             writer.WriteNumber("renderDataId", data.RenderDataId);
             writer.WriteBoolean("actualGpuUploadPerformed", false);
+            writer.WriteString("faceGenerationMode", data.FaceGenerationMode.ToString());
             WriteChunkIndex(record.Chunk);
             WriteVector("worldOrigin", data.ChunkWorldX, data.ChunkWorldY, data.ChunkWorldZ);
             WriteVector("shaderChunkPosition", data.ChunkWorldX + 1, data.ChunkWorldY + 1, data.ChunkWorldZ + 1);
