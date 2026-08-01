@@ -15,12 +15,14 @@ using MVoxelEngine1.Infrastructure.Models.Generation;
 using MVoxelEngine1.Infrastructure.Diagnostics;
 using MVoxelEngine1.Graphics.Terrain.Sections;
 using System.Linq;
+using System.Threading;
 
 namespace MVoxelEngine1.Graphics.Terrain
 {
     public partial class ChunkRender
     {
         private static readonly ConcurrentQueue<ChunkRender> pendingDeletion = new();
+        private static long nextRenderDataId;
 
         private bool isBuilt = false;
         private Vector3 chunkWorldPosition;
@@ -70,6 +72,7 @@ namespace MVoxelEngine1.Graphics.Terrain
         private readonly int prepassSolidCount; private readonly int prepassExposureEstimate;
         private readonly ChunkPrerenderData prerenderData;
         private bool fullyOccluded;
+        private ChunkRenderUploadData uploadData;
 
         private SectionRender sectionRender;
 
@@ -85,6 +88,14 @@ namespace MVoxelEngine1.Graphics.Terrain
         // Which is why our indices are flipped from how they normally are (0,1,2,0,2,3 -> 0,2,1,0,3,2)
         private static readonly ushort[] QuadIndices = new ushort[] { 0, 2, 1, 0, 3, 2 }; // two triangles
 
+        public static ReadOnlyMemory<byte> QuadPositionUploadData => QuadPositions;
+
+        public static ReadOnlyMemory<ushort> QuadIndexUploadData => QuadIndices;
+
+        public ChunkRenderUploadData UploadData => uploadData;
+
+        public bool IsOpenGlUploaded => isBuilt;
+
         public ChunkRender(ChunkPrerenderData prerenderData)
         {
             this.prerenderData = prerenderData;
@@ -97,6 +108,20 @@ namespace MVoxelEngine1.Graphics.Terrain
             nNegXPosX = prerenderData.NeighborNegXPosX; nPosXNegX = prerenderData.NeighborPosXNegX; nNegYPosY = prerenderData.NeighborNegYPosY; nPosYNegY = prerenderData.NeighborPosYNegY; nNegZPosZ = prerenderData.NeighborNegZPosZ; nPosZNegZ = prerenderData.NeighborPosZNegZ;
             allOneBlock = prerenderData.AllOneBlock; allOneBlockId = prerenderData.AllOneBlockId;
             GenerateFaces();
+            uploadData = new ChunkRenderUploadData(
+                Interlocked.Increment(ref nextRenderDataId),
+                chunkWorldPosition.X,
+                chunkWorldPosition.Y,
+                chunkWorldPosition.Z,
+                fullyOccluded,
+                instanceCount,
+                instanceOffsetBuffer,
+                instanceTileIndexBuffer,
+                instanceFaceDirBuffer,
+                transparentInstanceCount,
+                transparentInstanceOffsetBuffer,
+                transparentInstanceTileIndexBuffer,
+                transparentInstanceFaceDirBuffer);
         }
 
         private void GenerateFaces()
