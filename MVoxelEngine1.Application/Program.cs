@@ -21,6 +21,8 @@ namespace MVoxelEngine1.Application
                     throw new InvalidOperationException("Benchmark game is not set.");
                 if (!FlagManager.flags.seed.HasValue)
                     throw new InvalidOperationException("Benchmark seed is not set.");
+                if (FlagManager.flags.renderStreamingIfAllowed is not false)
+                    throw new InvalidOperationException("Benchmark mode requires renderStreamingIfAllowed=false.");
 
                 StartupPerformanceRecorder.Begin(FlagManager.flags.game, FlagManager.flags.seed.Value);
             }

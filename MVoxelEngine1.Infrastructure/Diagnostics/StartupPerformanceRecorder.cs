@@ -8,6 +8,8 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
         public required string Game { get; init; }
         public required int Seed { get; init; }
         public required double GameLoadMilliseconds { get; init; }
+        public required long InitialGenerationMilliseconds { get; init; }
+        public required long InitialChunkMeshBuildMilliseconds { get; init; }
         public required double BuildMilliseconds { get; init; }
         public required double RenderMilliseconds { get; init; }
         public required double CameraAppearanceMilliseconds { get; init; }
@@ -17,11 +19,16 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
 
     public static class StartupPerformanceRecorder
     {
+        private const long UnrecordedMilliseconds = -1;
         private static readonly object Sync = new();
         private static Stopwatch? timer;
+        private static Stopwatch? initialGenerationTimer;
+        private static Stopwatch? initialChunkMeshBuildTimer;
         private static string game = string.Empty;
         private static int seed;
         private static long gameLoadTicks;
+        private static long initialGenerationMilliseconds = UnrecordedMilliseconds;
+        private static long initialChunkMeshBuildMilliseconds = UnrecordedMilliseconds;
         private static long buildTicks;
         private static long renderTicks;
         private static long cameraAppearanceTicks;
@@ -33,6 +40,8 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
 
         public static bool IsComplete =>
             Volatile.Read(ref gameLoadTicks) > 0 &&
+            Volatile.Read(ref initialGenerationMilliseconds) >= 0 &&
+            Volatile.Read(ref initialChunkMeshBuildMilliseconds) >= 0 &&
             Volatile.Read(ref buildTicks) > 0 &&
             Volatile.Read(ref renderTicks) > 0 &&
             Volatile.Read(ref cameraAppearanceTicks) > 0 &&
@@ -48,6 +57,10 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
                 game = gameName;
                 seed = worldSeed;
                 gameLoadTicks = 0;
+                initialGenerationTimer = null;
+                initialChunkMeshBuildTimer = null;
+                initialGenerationMilliseconds = UnrecordedMilliseconds;
+                initialChunkMeshBuildMilliseconds = UnrecordedMilliseconds;
                 buildTicks = 0;
                 renderTicks = 0;
                 cameraAppearanceTicks = 0;
@@ -57,6 +70,18 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
         }
 
         public static void RecordGameLoaded() => RecordElapsed(ref gameLoadTicks);
+
+        public static void BeginInitialGeneration() =>
+            BeginPhase(ref initialGenerationTimer, ref initialGenerationMilliseconds, "initial generation");
+
+        public static long CompleteInitialGeneration() =>
+            CompletePhase(ref initialGenerationTimer, ref initialGenerationMilliseconds, "initial generation");
+
+        public static void BeginInitialChunkMeshBuild() =>
+            BeginPhase(ref initialChunkMeshBuildTimer, ref initialChunkMeshBuildMilliseconds, "initial chunk mesh build");
+
+        public static long CompleteInitialChunkMeshBuild() =>
+            CompletePhase(ref initialChunkMeshBuildTimer, ref initialChunkMeshBuildMilliseconds, "initial chunk mesh build");
 
         public static void RecordFirstChunkBuild(TimeSpan duration) => RecordDuration(ref buildTicks, duration);
 
@@ -76,6 +101,8 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
                 Game = game,
                 Seed = seed,
                 GameLoadMilliseconds = ToMilliseconds(Volatile.Read(ref gameLoadTicks)),
+                InitialGenerationMilliseconds = Volatile.Read(ref initialGenerationMilliseconds),
+                InitialChunkMeshBuildMilliseconds = Volatile.Read(ref initialChunkMeshBuildMilliseconds),
                 BuildMilliseconds = ToMilliseconds(Volatile.Read(ref buildTicks)),
                 RenderMilliseconds = ToMilliseconds(Volatile.Read(ref renderTicks)),
                 CameraAppearanceMilliseconds = ToMilliseconds(Volatile.Read(ref cameraAppearanceTicks)),
@@ -101,6 +128,39 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
                 WriteIndented = true
             });
             File.WriteAllText(fullPath, json);
+        }
+
+        private static void BeginPhase(
+            ref Stopwatch? phaseTimer,
+            ref long destination,
+            string phaseName)
+        {
+            lock (Sync)
+            {
+                if (phaseTimer is not null)
+                    throw new InvalidOperationException($"The {phaseName} timer is already running.");
+
+                destination = UnrecordedMilliseconds;
+                phaseTimer = Stopwatch.StartNew();
+            }
+        }
+
+        private static long CompletePhase(
+            ref Stopwatch? phaseTimer,
+            ref long destination,
+            string phaseName)
+        {
+            lock (Sync)
+            {
+                if (phaseTimer is null)
+                    throw new InvalidOperationException($"The {phaseName} timer is not running.");
+
+                phaseTimer.Stop();
+                long elapsedMilliseconds = phaseTimer.ElapsedMilliseconds;
+                phaseTimer = null;
+                Volatile.Write(ref destination, elapsedMilliseconds);
+                return elapsedMilliseconds;
+            }
         }
 
         private static void RecordElapsed(ref long destination)

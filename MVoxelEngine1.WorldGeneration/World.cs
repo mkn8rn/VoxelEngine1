@@ -243,7 +243,7 @@ namespace MVoxelEngine1.WorldGeneration
         private void WaitForInitialChunkGeneration()
         {
             Console.WriteLine("[World] Waiting for initial chunk + buffer generation...");
-            var sw = Stopwatch.StartNew();
+            StartupPerformanceRecorder.BeginInitialGeneration();
 
             // Progress loop now also waits for any in‑flight quad (generatingBatches)
             while (chunkGenSchedule.Count > 0 || bufferGenSchedule.Count > 0 || generatingBatches.Count > 0)
@@ -255,14 +255,14 @@ namespace MVoxelEngine1.WorldGeneration
                 Console.WriteLine($"[World] Initial generation progress: scheduledActive={remainingActive}, scheduledBuffer={remainingBuffer}, inFlightQuads={inflightBatches}, generatedChunks={generatedChunks}");
                 Thread.Sleep(500);
             }
-            sw.Stop();
-            Console.WriteLine($"[World] Initial generation complete in {sw.ElapsedMilliseconds} ms. (Generated chunks: {unbuiltChunks.Count + activeChunks.Count})");
+            long elapsedMilliseconds = StartupPerformanceRecorder.CompleteInitialGeneration();
+            Console.WriteLine($"[World] Initial generation complete in {elapsedMilliseconds} ms. (Generated chunks: {unbuiltChunks.Count + activeChunks.Count})");
         }
 
         private void WaitForInitialChunkRenderBuild()
         {
             Console.WriteLine("[World] Building chunk meshes asynchronously...");
-            var sw = Stopwatch.StartNew();
+            StartupPerformanceRecorder.BeginInitialChunkMeshBuild();
             // Snapshot target set at start to avoid negative progress when late chunks arrive. (Only LoD1 unbuilt chunks considered)
             var targetSet = new HashSet<(int cx,int cy,int cz)>(unbuiltChunks.Keys);
             int initialTotal = targetSet.Count;
@@ -285,8 +285,8 @@ namespace MVoxelEngine1.WorldGeneration
                 }
                 Thread.Sleep(500);
             }
-            sw.Stop();
-            Console.WriteLine($"[World] Chunk mesh build complete in {sw.ElapsedMilliseconds} ms.");
+            long elapsedMilliseconds = StartupPerformanceRecorder.CompleteInitialChunkMeshBuild();
+            Console.WriteLine($"[World] Chunk mesh build complete in {elapsedMilliseconds} ms.");
         }
 
         public void Render(ShaderProgram program)

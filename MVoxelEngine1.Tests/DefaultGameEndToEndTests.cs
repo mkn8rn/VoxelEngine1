@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using MVoxelEngine1.Infrastructure.Diagnostics;
 
 namespace MVoxelEngine1.Tests
@@ -39,7 +40,7 @@ namespace MVoxelEngine1.Tests
             startInfo.ArgumentList.Add("--seed");
             startInfo.ArgumentList.Add("123456");
             startInfo.ArgumentList.Add("--renderStreamingIfAllowed");
-            startInfo.ArgumentList.Add("true");
+            startInfo.ArgumentList.Add("false");
             startInfo.ArgumentList.Add("--windowWidth");
             startInfo.ArgumentList.Add("320");
             startInfo.ArgumentList.Add("--windowHeight");
@@ -87,10 +88,18 @@ namespace MVoxelEngine1.Tests
             Assert.Equal("Default", result.Game);
             Assert.Equal(123456, result.Seed);
             AssertPositiveFinite(result.GameLoadMilliseconds, nameof(result.GameLoadMilliseconds));
+            Assert.True(result.InitialGenerationMilliseconds > 0);
+            Assert.True(result.InitialChunkMeshBuildMilliseconds > 0);
             AssertPositiveFinite(result.BuildMilliseconds, nameof(result.BuildMilliseconds));
             AssertPositiveFinite(result.RenderMilliseconds, nameof(result.RenderMilliseconds));
             AssertPositiveFinite(result.CameraAppearanceMilliseconds, nameof(result.CameraAppearanceMilliseconds));
             AssertPositiveFinite(result.GpuStreamingStartMilliseconds, nameof(result.GpuStreamingStartMilliseconds));
+            Assert.Equal(
+                ReadConsoleTiming(standardOutput, "[World] Initial generation complete in "),
+                result.InitialGenerationMilliseconds);
+            Assert.Equal(
+                ReadConsoleTiming(standardOutput, "[World] Chunk mesh build complete in "),
+                result.InitialChunkMeshBuildMilliseconds);
 
             string worldsDirectory = Path.Combine(workspace.GameDataRoot, "Default", "Saves", "Worlds");
             string worldFile = Assert.Single(Directory.GetFiles(worldsDirectory, "world.txt", SearchOption.AllDirectories));
@@ -103,6 +112,15 @@ namespace MVoxelEngine1.Tests
         {
             Assert.True(double.IsFinite(value), $"{metricName} must be finite.");
             Assert.True(value > 0, $"{metricName} must be greater than zero.");
+        }
+
+        private static long ReadConsoleTiming(string output, string prefix)
+        {
+            Match match = Regex.Match(
+                output,
+                $"{Regex.Escape(prefix)}(?<milliseconds>[0-9]+) ms\\.");
+            Assert.True(match.Success, $"Console timing was not found for '{prefix}'. Output: {Tail(output)}");
+            return long.Parse(match.Groups["milliseconds"].Value);
         }
 
         private static string Tail(string value)
