@@ -1,0 +1,650 @@
+﻿using MVoxelEngine1.Infrastructure.Models.Generation;
+using MVoxelEngine1.Infrastructure.Models.Terrain;
+using System;
+using System.Buffers;
+using System.Collections.Generic;
+using System.Numerics;
+using System.Runtime.CompilerServices;
+using MVoxelEngine1.Infrastructure.Loaders;
+
+namespace MVoxelEngine1.WorldGeneration.Utils
+{
+    internal static partial class SectionUtils
+    {
+        private static uint[] RentBitData(int uintCount) => ArrayPool<uint>.Shared.Rent(uintCount);
+        private static void ReturnBitData(uint[] data) { if (data != null) ArrayPool<uint>.Shared.Return(data, clearArray: false); }
+
+        private const int SECTION_SIZE = Section.SECTION_SIZE;
+        private const int VOXELS_PER_SECTION = SECTION_SIZE * SECTION_SIZE * SECTION_SIZE; // 4096
+        private const int MULTIPACKED_ID_MAX = Section.MAX_MULTIPACKED_IDS; // max distinct ids to qualify for MultiPacked finalize path
+        private const int PACKED_ID_MAX = Section.MAX_PACKED_DISTINCT_IDS; // max distinct ids to qualify for Packed finalize path
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static ushort GetBlock(Section sec, int x, int y, int z)
+        {
+            if (sec == null || sec.IsAllAir || sec.Kind == Section.RepresentationKind.Empty) return Section.AIR;
+            int linear = LinearIndex(x, y, z);
+            switch (sec.Kind)
+            {
+                case Section.RepresentationKind.Uniform:
+                    return sec.UniformBlockId;
+                case Section.RepresentationKind.Expanded:
+                    return sec.ExpandedDense[linear];
+                case Section.RepresentationKind.Packed:
+                case Section.RepresentationKind.MultiPacked:
+                default:
+                    int paletteIndex = ReadBits(sec, linear); return sec.Palette[paletteIndex];
+            }
+        }
+
+        public static void SetBlock(Section sec, int x, int y, int z, ushort blockId)
+        {
+            if (sec == null) return;
+            // Any mutation invalidates metadata
+            sec.MetadataBuilt = false;
+
+            if (sec.Kind == Section.RepresentationKind.Uniform && blockId != sec.UniformBlockId)
+            {
+                EnsurePacked(sec); // convert uniform to packed to allow mutation
+            }
+            if (sec.Kind != Section.RepresentationKind.Packed && sec.Kind != Section.RepresentationKind.MultiPacked && sec.Kind != Section.RepresentationKind.Empty)
+            {
+                EnsurePacked(sec);
+            }
+
+            int linear = LinearIndex(x, y, z);
+
+            if (blockId == Section.AIR)
+            {
+                if (sec.IsAllAir) return;
+                int oldIdxAir = ReadBits(sec, linear);
+                ushort oldBlockIdAir = sec.Palette[oldIdxAir];
+                bool oldOpaqueAir = oldBlockIdAir != Section.AIR && TerrainLoader.IsOpaque(oldBlockIdAir);
+                if (oldIdxAir == 0) return; // already air
+                WriteBits(sec, linear, 0);
+                if (oldOpaqueAir) sec.OpaqueVoxelCount--; // NonAirCount now tracks opaque voxels only
+                sec.CompletelyFull = false; // no longer full
+                if (sec.OpaqueVoxelCount == 0)
+                {
+                    // Collapse only if no opaque voxels AND all are air; transparent-only content not collapsed here (still represented)
+                    // We rely on IsAllAir flag for total emptiness; do not set IsAllAir unless palette reduces to just AIR.
+                    bool onlyAirLeft = true;
+                    if (sec.Kind == Section.RepresentationKind.Packed || sec.Kind == Section.RepresentationKind.MultiPacked)
+                    {
+                        for (int i = 0; i < sec.VoxelCount; i++)
+                        {
+                            if (ReadBits(sec, i) != 0) { onlyAirLeft = false; break; }
+                        }
+                    }
+                    if (onlyAirLeft)
+                    {
+                        Collapse(sec);
+                        sec.Kind = Section.RepresentationKind.Empty;
+                    }
+                }
+                return;
+            }
+
+            if (sec.IsAllAir)
+            {
+                Initialize(sec);
+                sec.Kind = Section.RepresentationKind.Packed; // start as packed (may later promote to MultiPacked)
+            }
+
+            int existingPaletteIndex = ReadBits(sec, linear);
+            ushort existingBlock = sec.Palette[existingPaletteIndex];
+            if (existingBlock == blockId) return;
+
+            bool existingOpaque = existingBlock != Section.AIR && TerrainLoader.IsOpaque(existingBlock);
+            bool newOpaque = blockId != Section.AIR && TerrainLoader.IsOpaque(blockId);
+
+            int newPaletteIndex = GetOrAddPaletteIndex(sec, blockId);
+            if (newPaletteIndex >= (1 << sec.BitsPerIndex))
+            {
+                GrowBits(sec);
+                newPaletteIndex = GetOrAddPaletteIndex(sec, blockId);
+            }
+
+            if (existingOpaque && !newOpaque) sec.OpaqueVoxelCount--; // lost one opaque voxel
+            else if (!existingOpaque && newOpaque) sec.OpaqueVoxelCount++; // gained an opaque voxel
+
+            WriteBits(sec, linear, newPaletteIndex);
+
+            if (sec.OpaqueVoxelCount == sec.VoxelCount && sec.VoxelCount != 0)
+            {
+                sec.CompletelyFull = true;
+            }
+        }
+
+        public static void ClassifyRepresentation(Section sec)
+        {
+            if (sec == null) return;
+            // Emptiness now determined by IsAllAir (all air) – NonAirCount tracks opaque voxels only.
+            if (sec.IsAllAir)
+            {
+                sec.Kind = Section.RepresentationKind.Empty;
+                sec.MetadataBuilt = true; // trivial
+                return;
+            }
+            int total = sec.VoxelCount;
+            if (total == 0) total = VOXELS_PER_SECTION;
+
+            // Uniform (full volume single id) – still based on palette fullness, independent of opacity tracking.
+            if (sec.CompletelyFull && sec.Palette != null && sec.Palette.Count == 2 && sec.Palette[0] == Section.AIR)
+            {
+                sec.Kind = Section.RepresentationKind.Uniform;
+                sec.UniformBlockId = sec.Palette[1];
+                BuildMetadataUniform(sec);
+                return;
+            }
+            if (sec.Palette != null && sec.Palette.Count == 2 && sec.Palette[0] == Section.AIR && sec.OpaqueVoxelCount == total)
+            {
+                sec.CompletelyFull = true;
+                sec.Kind = Section.RepresentationKind.Uniform;
+                sec.UniformBlockId = sec.Palette[1];
+                BuildMetadataUniform(sec);
+                return;
+            }
+
+            // Distinct non-air id count (excludes AIR). Use PACKED_ID_MAX threshold (does not include air) for escalation.
+            int distinctNonAir = (sec.Palette?.Count ?? 0) - 1; // exclude air
+            if (distinctNonAir > PACKED_ID_MAX) // exceeds packed limit, consider MultiPacked or Dense
+            {
+                if (distinctNonAir <= MULTIPACKED_ID_MAX)
+                {
+                    // Within multi-packed limit: keep packed bitstream form with variable bpi (MultiPacked)
+                    sec.Kind = Section.RepresentationKind.MultiPacked;
+                    BuildMetadataPacked(sec);
+                }
+                else
+                {
+                    // Exceeds multi-packed palette capacity: expand to dense per-voxel storage
+                    ExpandToDense(sec);
+                    BuildMetadataDense(sec);
+                }
+                return;
+            }
+
+            // At or below PACKED_ID_MAX (currently single non-air id) but not full volume -> single-id packed (1-bit if possible)
+            sec.Kind = Section.RepresentationKind.Packed;
+            BuildMetadataPacked(sec);
+        }
+
+        private static void ExpandToDense(Section sec)
+        {
+            if (sec.Kind == Section.RepresentationKind.Expanded) return;
+            var arr = new ushort[VOXELS_PER_SECTION];
+            for (int z = 0; z < SECTION_SIZE; z++)
+                for (int x = 0; x < SECTION_SIZE; x++)
+                    for (int y = 0; y < SECTION_SIZE; y++)
+                    {
+                        int li = LinearIndex(x, y, z);
+                        int pi = ReadBits(sec, li);
+                        if (pi != 0) arr[li] = sec.Palette[pi];
+                    }
+            sec.ExpandedDense = arr;
+            sec.Kind = Section.RepresentationKind.Expanded;
+        }
+
+        private static void BuildMetadataUniform(Section sec)
+        {
+            sec.OpaqueBits = null; // not needed
+            sec.FaceNegXBits = sec.FacePosXBits = sec.FaceNegYBits = sec.FacePosYBits = sec.FaceNegZBits = sec.FacePosZBits = null; // opaque faces implicit
+            if (sec.UniformBlockId != Section.AIR && !TerrainLoader.IsOpaque(sec.UniformBlockId))
+            {
+                // Uniform transparent: ensure TransparentBits + face masks
+                if (sec.TransparentBits == null)
+                {
+                    sec.TransparentBits = new ulong[64]; for (int i = 0; i < 64; i++) sec.TransparentBits[i] = ulong.MaxValue;
+                }
+                BuildTransparentFaceMasks(sec, sec.TransparentBits);
+            }
+            int N = VOXELS_PER_SECTION;
+            // Internal adjacency for full 16^3 block
+            int len = SECTION_SIZE; long lenL = len;
+            long internalAdj = (lenL - 1) * lenL * lenL + lenL * (lenL - 1) * lenL + lenL * lenL * (lenL - 1);
+            sec.InternalExposure = (int)(6L * N - 2L * internalAdj);
+            sec.HasBounds = true; sec.MinLX = sec.MinLY = sec.MinLZ = 0; sec.MaxLX = sec.MaxLY = sec.MaxLZ = (byte)(SECTION_SIZE - 1);
+            sec.MetadataBuilt = true;
+        }
+
+        private static void BuildMetadataDense(Section sec)
+        {
+            // Split classification into opaque and transparent bitsets. Internal exposure only considers opaque.
+            ulong[] opaqueBits = null; // allocate lazily
+            ulong[] transparentBits = null;
+            byte minx = 255, miny = 255, minz = 255, maxx = 0, maxy = 0, maxz = 0;
+            var arr = sec.ExpandedDense;
+            int transparentCount = 0; int opaqueCount = 0;
+            for (int li = 0; li < VOXELS_PER_SECTION; li++)
+            {
+                ushort id = arr[li];
+                if (id == Section.AIR) continue; // skip air entirely
+                DecodeLinear(li, out int x, out int y, out int z);
+                if (x < minx) minx = (byte)x; if (x > maxx) maxx = (byte)x;
+                if (y < miny) miny = (byte)y; if (y > maxy) maxy = (byte)y;
+                if (z < minz) minz = (byte)z; if (z > maxz) maxz = (byte)z;
+                if (TerrainLoader.IsOpaque(id))
+                {
+                    opaqueBits ??= new ulong[64];
+                    opaqueBits[li >> 6] |= 1UL << (li & 63);
+                    opaqueCount++;
+                }
+                else
+                {
+                    transparentBits ??= new ulong[64];
+                    transparentBits[li >> 6] |= 1UL << (li & 63);
+                    transparentCount++;
+                }
+            }
+            if (opaqueBits != null)
+                ComputeInternalExposure(opaqueBits, out sec.InternalExposure);
+            else
+                sec.InternalExposure = 0;
+            sec.OpaqueBits = opaqueBits; if (opaqueBits != null) BuildFaceMasks(sec, opaqueBits);
+            sec.TransparentBits = transparentBits; sec.TransparentCount = transparentCount; sec.HasTransparent = transparentCount > 0; if (transparentBits != null) BuildTransparentFaceMasks(sec, transparentBits);
+            sec.OpaqueVoxelCount = opaqueCount; // opaque voxel count
+            sec.HasBounds = minx != 255; // if any non-air (including transparent)
+            if (sec.HasBounds)
+            {
+                sec.MinLX = minx; sec.MaxLX = maxx;
+                sec.MinLY = miny; sec.MaxLY = maxy;
+                sec.MinLZ = minz; sec.MaxLZ = maxz;
+            }
+            sec.MetadataBuilt = true;
+        }
+
+        private static void BuildMetadataPacked(Section sec)
+        {
+            // Packed / MultiPacked classification: decode palette indices, split into opaque vs transparent bitsets.
+            ulong[] opaqueBits = null;
+            ulong[] transparentBits = null;
+            byte minx = 255, miny = 255, minz = 255, maxx = 0, maxy = 0, maxz = 0;
+            int transparentCount = 0; int opaqueCount = 0;
+            for (int li = 0; li < VOXELS_PER_SECTION; li++)
+            {
+                int pi = ReadBits(sec, li);
+                if (pi == 0) continue; // air
+                ushort id = sec.Palette[pi];
+                DecodeLinear(li, out int x, out int y, out int z);
+                if (x < minx) minx = (byte)x; if (x > maxx) maxx = (byte)x;
+                if (y < miny) miny = (byte)y; if (y > maxy) maxy = (byte)y;
+                if (z < minz) minz = (byte)z; if (z > maxz) maxz = (byte)z;
+                if (TerrainLoader.IsOpaque(id))
+                {
+                    opaqueBits ??= new ulong[64];
+                    opaqueBits[li >> 6] |= 1UL << (li & 63);
+                    opaqueCount++;
+                }
+                else
+                {
+                    transparentBits ??= new ulong[64];
+                    transparentBits[li >> 6] |= 1UL << (li & 63);
+                    transparentCount++;
+                }
+            }
+            if (opaqueBits != null)
+                ComputeInternalExposure(opaqueBits, out sec.InternalExposure);
+            else
+                sec.InternalExposure = 0;
+            sec.OpaqueBits = opaqueBits; if (opaqueBits != null) BuildFaceMasks(sec, opaqueBits);
+            sec.TransparentBits = transparentBits; sec.TransparentCount = transparentCount; sec.HasTransparent = transparentCount > 0; if (transparentBits != null) BuildTransparentFaceMasks(sec, transparentBits);
+            sec.OpaqueVoxelCount = opaqueCount;
+            sec.HasBounds = minx != 255; // if any non-air (including transparent)
+            if (sec.HasBounds)
+            {
+                sec.MinLX = minx; sec.MaxLX = maxx;
+                sec.MinLY = miny; sec.MaxLY = maxy;
+                sec.MinLZ = minz; sec.MaxLZ = maxz;
+            }
+            sec.MetadataBuilt = true;
+        }
+
+        private static void ComputeInternalExposure(ulong[] bits, out int exposure)
+        {
+            long adjX = 0, adjZ = 0, adjY = 0;
+            for (int li = 0; li < VOXELS_PER_SECTION; li++)
+            {
+                if ((bits[li >> 6] & (1UL << (li & 63))) == 0) continue;
+                // decode cheaply without full DecodeLinear where possible
+                int y = li & 15;               // low 4 bits
+                int columnIndex = li >> 4;     // 0..255
+                int x = columnIndex & 15;
+                int z = columnIndex >> 4;
+                // neighbors
+                // vertical y+1 contiguous +1
+                if (y < 15)
+                {
+                    int liY = li + 1;
+                    if ((bits[liY >> 6] & (1UL << (liY & 63))) != 0) adjY++;
+                }
+                // x+1 => next column (columnIndex+1) if x<15
+                if (x < 15)
+                {
+                    int liX = li + 16; // add 16 (one column * 16 y entries)
+                    if ((bits[liX >> 6] & (1UL << (liX & 63))) != 0) adjX++;
+                }
+                // z+1 => columnIndex +16 => +256 linear indices
+                if (z < 15)
+                {
+                    int liZ = li + 256; // 16 columns per z *16 y
+                    if ((bits[liZ >> 6] & (1UL << (liZ & 63))) != 0) adjZ++;
+                }
+            }
+            int N = 0;
+            for (int i = 0; i < 64; i++) N += BitOperations.PopCount(bits[i]);
+            long internalAdj = adjX + adjZ + adjY;
+            exposure = (int)(6L * N - 2L * internalAdj);
+        }
+
+        // Builds 256‑bit (4 * ulong) masks for each boundary face of a 16^3 section
+        // using the section's occupancy bitset (column‑major: li = ((z*16 + x)*16)+y).
+        // Layouts must match renderer expectations:
+        //  Neg/Pos X: YZ plane  index = z*16 + y
+        //  Neg/Pos Y: XZ plane  index = x*16 + z
+        //  Neg/Pos Z: XY plane  index = x*16 + y
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void BuildFaceMasks(Section sec, ulong[] occ)
+        {
+            const int S = 16;
+            if (occ == null) return;
+
+            static void EnsureAndClear(ref ulong[] arr)
+            {
+                if (arr == null) arr = new ulong[4];
+                else Array.Clear(arr);
+            }
+
+            EnsureAndClear(ref sec.FaceNegXBits);
+            EnsureAndClear(ref sec.FacePosXBits);
+            EnsureAndClear(ref sec.FaceNegYBits);
+            EnsureAndClear(ref sec.FacePosYBits);
+            EnsureAndClear(ref sec.FaceNegZBits);
+            EnsureAndClear(ref sec.FacePosZBits);
+
+            // X faces (x = 0 and x = 15)  -> YZ plane (z,y)
+            for (int z = 0; z < S; z++)
+            {
+                int zBase256 = z * 256; // z * 16 * 16
+                for (int y = 0; y < S; y++)
+                {
+                    int liNeg = zBase256 + y;            // x=0
+                    int liPos = zBase256 + 240 + y;      // x=15 -> (15 * 16) = 240
+                    int idxYZ = z * S + y;               // plane index
+                    int w = idxYZ >> 6; int b = idxYZ & 63;
+
+                    if ((occ[liNeg >> 6] & (1UL << (liNeg & 63))) != 0UL)
+                        sec.FaceNegXBits[w] |= 1UL << b;
+                    if ((occ[liPos >> 6] & (1UL << (liPos & 63))) != 0UL)
+                        sec.FacePosXBits[w] |= 1UL << b;
+                }
+            }
+
+            // Y faces (y = 0 and y = 15) -> XZ plane (x,z)
+            for (int x = 0; x < S; x++)
+            {
+                int xOffset16 = x * 16;
+                for (int z = 0; z < S; z++)
+                {
+                    int ci = z * S + x;          // (z,x) pair inside XZ iteration for convenience
+                    // Reconstruct li base for (z,x,y) ordering:
+                    // li = ((z*16 + x)*16)+y = (z*256) + (x*16) + y
+                    int baseZX = z * 256 + xOffset16;
+
+                    int liNeg = baseZX + 0;      // y=0
+                    int liPos = baseZX + 15;     // y=15
+                    int idxXZ = x * S + z;       // plane index mapping (x,z)
+                    int w = idxXZ >> 6; int b = idxXZ & 63;
+
+                    if ((occ[liNeg >> 6] & (1UL << (liNeg & 63))) != 0UL)
+                        sec.FaceNegYBits[w] |= 1UL << b;
+                    if ((occ[liPos >> 6] & (1UL << (liPos & 63))) != 0UL)
+                        sec.FacePosYBits[w] |= 1UL << b;
+                }
+            }
+
+            // Z faces (z = 0 and z = 15) -> XY plane (x,y)
+            for (int x = 0; x < S; x++)
+            {
+                int xOffset16 = x * 16;
+                for (int y = 0; y < S; y++)
+                {
+                    int liNeg = xOffset16 + y;                 // z=0
+                    int liPos = 15 * 256 + xOffset16 + y;      // z=15 -> 15*256 = 3840
+                    int idxXY = x * S + y;                     // plane index (x,y)
+                    int w = idxXY >> 6; int b = idxXY & 63;
+
+                    if ((occ[liNeg >> 6] & (1UL << (liNeg & 63))) != 0UL)
+                        sec.FaceNegZBits[w] |= 1UL << b;
+                    if ((occ[liPos >> 6] & (1UL << (liPos & 63))) != 0UL)
+                        sec.FacePosZBits[w] |= 1UL << b;
+                }
+            }
+        }
+        internal static void BuildTransparentFaceMasks(Section sec, ulong[] occ)
+        {
+            // Builds transparent boundary face masks (one 256-bit mask per face) using the transparent occupancy bitset.
+            // Layout matches opaque face masks: indices map to 16x16 planes as documented in BuildFaceMasks.
+            const int S = 16; if (occ == null) return;
+            static void EnsureAndClear(ref ulong[] arr) { if (arr == null) arr = new ulong[4]; else Array.Clear(arr); }
+            EnsureAndClear(ref sec.TransparentFaceNegXBits);
+            EnsureAndClear(ref sec.TransparentFacePosXBits);
+            EnsureAndClear(ref sec.TransparentFaceNegYBits);
+            EnsureAndClear(ref sec.TransparentFacePosYBits);
+            EnsureAndClear(ref sec.TransparentFaceNegZBits);
+            EnsureAndClear(ref sec.TransparentFacePosZBits);
+            // X faces
+            for (int z = 0; z < S; z++)
+            {
+                int zBase256 = z * 256;
+                for (int y = 0; y < S; y++)
+                {
+                    int liNeg = zBase256 + y;            // x=0
+                    int liPos = zBase256 + 240 + y;      // x=15
+                    int idxYZ = z * S + y; int w = idxYZ >> 6; int b = idxYZ & 63;
+                    if ((occ[liNeg >> 6] & (1UL << (liNeg & 63))) != 0UL) sec.TransparentFaceNegXBits[w] |= 1UL << b;
+                    if ((occ[liPos >> 6] & (1UL << (liPos & 63))) != 0UL) sec.TransparentFacePosXBits[w] |= 1UL << b;
+                }
+            }
+            // Y faces
+            for (int x = 0; x < S; x++)
+            {
+                int xOffset16 = x * 16;
+                for (int z = 0; z < S; z++)
+                {
+                    int baseZX = z * 256 + xOffset16;
+                    int liNeg = baseZX + 0; int liPos = baseZX + 15; int idxXZ = x * S + z; int w = idxXZ >> 6; int b = idxXZ & 63;
+                    if ((occ[liNeg >> 6] & (1UL << (liNeg & 63))) != 0UL) sec.TransparentFaceNegYBits[w] |= 1UL << b;
+                    if ((occ[liPos >> 6] & (1UL << (liPos & 63))) != 0UL) sec.TransparentFacePosYBits[w] |= 1UL << b;
+                }
+            }
+            // Z faces
+            for (int x = 0; x < S; x++)
+            {
+                int xOffset16 = x * 16;
+                for (int y = 0; y < S; y++)
+                {
+                    int liNeg = xOffset16 + y; int liPos = 15 * 256 + xOffset16 + y; int idxXY = x * S + y; int w = idxXY >> 6; int b = idxXY & 63;
+                    if ((occ[liNeg >> 6] & (1UL << (liNeg & 63))) != 0UL) sec.TransparentFaceNegZBits[w] |= 1UL << b;
+                    if ((occ[liPos >> 6] & (1UL << (liPos & 63))) != 0UL) sec.TransparentFacePosZBits[w] |= 1UL << b;
+                }
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static int LinearIndex(int x, int y, int z)
+            => ((z * SECTION_SIZE) + x) * SECTION_SIZE + y; // column-major: columnIndex*16 + y
+
+        public static void DecodeLinear(int li, out int x, out int y, out int z)
+        {
+            y = li & 15; // low 4 bits
+            int columnIndex = li >> 4; // 0..255
+            x = columnIndex & 15;
+            z = columnIndex >> 4;
+        }
+
+        private static int ReadBits(Section sec, int voxelIndex)
+            => ReadBits(sec.BitData, sec.BitsPerIndex, voxelIndex);
+
+        private static void GrowBits(Section sec)
+        {
+            int paletteCountMinusOne = sec.Palette.Count - 1;
+            int needed = paletteCountMinusOne <= 0 ? 1 : (int)BitOperations.Log2((uint)paletteCountMinusOne) + 1;
+            if (needed <= sec.BitsPerIndex) return;
+
+            int oldBits = sec.BitsPerIndex;
+            var oldData = sec.BitData;
+            sec.BitsPerIndex = needed;
+            AllocateBitData(sec);
+
+            for (int i = 0; i < sec.VoxelCount; i++)
+            {
+                int pi = ReadBits(oldData, oldBits, i);
+                WriteBits(sec, i, pi);
+            }
+        }
+
+        private static void AllocateBitData(Section sec)
+        {
+            if (sec.BitsPerIndex <= 0)
+            {
+                sec.BitData = null;
+                return;
+            }
+            long totalBits = (long)sec.VoxelCount * sec.BitsPerIndex;
+            int uintCount = (int)((totalBits + 31) / 32);
+            sec.BitData = RentBitData(uintCount);
+            Array.Clear(sec.BitData, 0, uintCount);
+        }
+
+        private static int ReadBits(uint[] data, int bpi, int voxelIndex)
+        {
+            if (bpi == 0) return 0;
+            long bitPos = (long)voxelIndex * bpi;
+            int dataIndex = (int)(bitPos >> 5);
+            int bitOffset = (int)(bitPos & 31);
+            uint value = data[dataIndex] >> bitOffset;
+            int mask = (1 << bpi) - 1;
+            int remaining = 32 - bitOffset;
+            if (remaining < bpi)
+            {
+                value |= data[dataIndex + 1] << remaining;
+            }
+            return (int)(value & (uint)mask);
+        }
+
+        private static void WriteBits(Section sec, int voxelIndex, int paletteIndex)
+        {
+            long bitPos = (long)voxelIndex * sec.BitsPerIndex;
+            int dataIndex = (int)(bitPos >> 5);
+            int bitOffset = (int)(bitPos & 31);
+            uint mask = (uint)((1 << sec.BitsPerIndex) - 1);
+
+            sec.BitData[dataIndex] &= ~(mask << bitOffset);
+            sec.BitData[dataIndex] |= (uint)paletteIndex << bitOffset;
+
+            int remaining = 32 - bitOffset;
+            if (remaining < sec.BitsPerIndex)
+            {
+                int bitsInNext = sec.BitsPerIndex - remaining;
+                uint nextMask = (uint)((1 << bitsInNext) - 1);
+                sec.BitData[dataIndex + 1] &= ~nextMask;
+                sec.BitData[dataIndex + 1] |= (uint)paletteIndex >> remaining;
+            }
+        }
+
+        private static void Collapse(Section sec)
+        {
+            sec.IsAllAir = true;
+            sec.Palette = null;
+            sec.PaletteLookup = null;
+            ReturnBitData(sec.BitData);
+            sec.BitData = null;
+            sec.BitsPerIndex = 0;
+            sec.OpaqueVoxelCount = 0; // opaque voxel count (now zero)
+            sec.CompletelyFull = false;
+        }
+
+        private static int GetOrAddPaletteIndex(Section sec, ushort blockId)
+        {
+            if (sec.PaletteLookup.TryGetValue(blockId, out int idx))
+                return idx;
+            idx = sec.Palette.Count;
+            sec.Palette.Add(blockId);
+            sec.PaletteLookup[blockId] = idx;
+            return idx;
+        }
+
+        private static void Initialize(Section sec)
+        {
+            sec.IsAllAir = false;
+            sec.VoxelCount = VOXELS_PER_SECTION;
+            sec.Palette = new List<ushort>(8) { Section.AIR };
+            sec.PaletteLookup = new Dictionary<ushort, int> { { Section.AIR, 0 } };
+            sec.BitsPerIndex = 1;
+            AllocateBitData(sec);
+            sec.OpaqueVoxelCount = 0; // opaque count starts at 0
+            sec.CompletelyFull = false;
+            sec.MetadataBuilt = false;
+        }
+
+        private static void EnsurePacked(Section sec)
+        {
+            if (sec.Kind == Section.RepresentationKind.Packed || sec.Kind == Section.RepresentationKind.MultiPacked) return;
+            if (sec.Kind == Section.RepresentationKind.Empty)
+            {
+                sec.IsAllAir = true; sec.Palette = null; sec.PaletteLookup = null; sec.BitData = null; sec.BitsPerIndex = 0; sec.OpaqueVoxelCount = 0; sec.CompletelyFull = false; return;
+            }
+            if (sec.Kind == Section.RepresentationKind.Uniform)
+            {
+                ushort blockId = sec.UniformBlockId;
+                sec.IsAllAir = false;
+                sec.VoxelCount = Section.SECTION_SIZE * Section.SECTION_SIZE * Section.SECTION_SIZE;
+                sec.Palette = new List<ushort> { Section.AIR, blockId };
+                sec.PaletteLookup = new Dictionary<ushort, int> { { Section.AIR, 0 }, { blockId, 1 } };
+                sec.BitsPerIndex = 1;
+                long totalBits = (long)sec.VoxelCount * sec.BitsPerIndex;
+                int uintCount = (int)((totalBits + 31) / 32);
+                sec.BitData = ArrayPool<uint>.Shared.Rent(uintCount);
+                for (int i = 0; i < uintCount; i++) sec.BitData[i] = 0xFFFFFFFFu;
+                sec.OpaqueVoxelCount = TerrainLoader.IsOpaque(blockId) ? sec.VoxelCount : 0; // opaque voxel count
+                sec.CompletelyFull = TerrainLoader.IsOpaque(blockId);
+                sec.Kind = Section.RepresentationKind.Packed;
+                sec.MetadataBuilt = false;
+                return;
+            }
+            // For Sparse / DenseExpanded fallback: rebuild packed from existing data
+            if (sec.Kind == Section.RepresentationKind.Expanded)
+            {
+                // Repack dense expanded
+                ushort[] dense = sec.ExpandedDense;
+                // Build palette anew
+                var palette = new List<ushort> { Section.AIR };
+                var lookup = new Dictionary<ushort, int> { { Section.AIR, 0 } };
+                for (int i = 0; i < dense.Length; i++)
+                {
+                    ushort id = dense[i]; if (id == Section.AIR) continue;
+                    if (!lookup.ContainsKey(id)) { lookup[id] = palette.Count; palette.Add(id); }
+                }
+                sec.Palette = palette; sec.PaletteLookup = lookup;
+                int paletteCountMinusOne = palette.Count - 1;
+                int bpi = paletteCountMinusOne <= 0 ? 1 : (int)BitOperations.Log2((uint)paletteCountMinusOne) + 1;
+                sec.BitsPerIndex = bpi;
+                long totalBits2 = (long)sec.VoxelCount * bpi;
+                int uintCount2 = (int)((totalBits2 + 31) / 32);
+                sec.BitData = ArrayPool<uint>.Shared.Rent(uintCount2); Array.Clear(sec.BitData, 0, uintCount2);
+                sec.OpaqueVoxelCount = 0;
+                for (int i = 0; i < dense.Length; i++)
+                {
+                    ushort id = dense[i];
+                    if (id == Section.AIR) continue;
+                    int pi = lookup[id];
+                    WriteBits(sec, i, pi);
+                    if (TerrainLoader.IsOpaque(id)) sec.OpaqueVoxelCount++;
+                }
+                sec.Kind = Section.RepresentationKind.Packed; sec.MetadataBuilt = false;
+                return;
+            }
+        }
+    }
+}

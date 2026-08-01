@@ -1,0 +1,28 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>MVoxelEngine1.Graphics</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+	<ItemGroup>
+		<None Include="Shaders\**">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</None>
+	</ItemGroup>
+
+	<ItemGroup>
+	  <None Include="ShaderProgram.cs" />
+	</ItemGroup>
+
+	<ItemGroup>
+	  <PackageReference Include="OpenTK" Version="4.9.4" />
+	  <PackageReference Include="StbImageSharp" Version="2.30.15" />
+	</ItemGroup>
+
+	<ItemGroup>
+	  <ProjectReference Include="..\MVoxelEngine1.Infrastructure\MVoxelEngine1.Infrastructure.csproj" />
+	</ItemGroup>
+</Project>

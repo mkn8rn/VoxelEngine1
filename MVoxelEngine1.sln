@@ -1,0 +1,56 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.13.36105.23
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MVoxelEngine1.Application", "MVoxelEngine1.Application\MVoxelEngine1.Application.csproj", "{E9BB0018-4A81-439F-B58F-6CE4D1B1D9B6}"
+	ProjectSection(ProjectDependencies) = postProject
+		{3BCEFBF2-4B39-47F1-B1FD-6E38D9A46C02} = {3BCEFBF2-4B39-47F1-B1FD-6E38D9A46C02}
+	EndProjectSection
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MVoxelEngine1.Infrastructure", "MVoxelEngine1.Infrastructure\MVoxelEngine1.Infrastructure.csproj", "{3BCEFBF2-4B39-47F1-B1FD-6E38D9A46C02}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MVoxelEngine1.Graphics", "MVoxelEngine1.Graphics\MVoxelEngine1.Graphics.csproj", "{B8FBAF69-FB52-4C3D-A149-2AED36543274}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MVoxelEngine1.Tools", "MVoxelEngine1.Tools\MVoxelEngine1.Tools.csproj", "{D17340C6-0D89-42EA-B8EA-8599BC87C26C}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MVoxelEngine1.WorldGeneration", "MVoxelEngine1.WorldGeneration\MVoxelEngine1.WorldGeneration.csproj", "{7D0E10CF-91BC-479D-A628-1C46ACE90B79}"
+	ProjectSection(ProjectDependencies) = postProject
+		{3BCEFBF2-4B39-47F1-B1FD-6E38D9A46C02} = {3BCEFBF2-4B39-47F1-B1FD-6E38D9A46C02}
+		{D17340C6-0D89-42EA-B8EA-8599BC87C26C} = {D17340C6-0D89-42EA-B8EA-8599BC87C26C}
+	EndProjectSection
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{E9BB0018-4A81-439F-B58F-6CE4D1B1D9B6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E9BB0018-4A81-439F-B58F-6CE4D1B1D9B6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E9BB0018-4A81-439F-B58F-6CE4D1B1D9B6}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E9BB0018-4A81-439F-B58F-6CE4D1B1D9B6}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3BCEFBF2-4B39-47F1-B1FD-6E38D9A46C02}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3BCEFBF2-4B39-47F1-B1FD-6E38D9A46C02}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3BCEFBF2-4B39-47F1-B1FD-6E38D9A46C02}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3BCEFBF2-4B39-47F1-B1FD-6E38D9A46C02}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B8FBAF69-FB52-4C3D-A149-2AED36543274}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B8FBAF69-FB52-4C3D-A149-2AED36543274}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B8FBAF69-FB52-4C3D-A149-2AED36543274}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B8FBAF69-FB52-4C3D-A149-2AED36543274}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D17340C6-0D89-42EA-B8EA-8599BC87C26C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D17340C6-0D89-42EA-B8EA-8599BC87C26C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D17340C6-0D89-42EA-B8EA-8599BC87C26C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D17340C6-0D89-42EA-B8EA-8599BC87C26C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7D0E10CF-91BC-479D-A628-1C46ACE90B79}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7D0E10CF-91BC-479D-A628-1C46ACE90B79}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7D0E10CF-91BC-479D-A628-1C46ACE90B79}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7D0E10CF-91BC-479D-A628-1C46ACE90B79}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {09BFC65A-2231-474A-92AC-69B6A1937196}
+	EndGlobalSection
+EndGlobal

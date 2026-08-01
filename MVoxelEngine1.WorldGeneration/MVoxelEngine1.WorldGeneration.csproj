@@ -1,0 +1,15 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>MVoxelEngine1.WorldGeneration</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\MVoxelEngine1.Graphics\MVoxelEngine1.Graphics.csproj" />
+		<ProjectReference Include="..\MVoxelEngine1.Infrastructure\MVoxelEngine1.Infrastructure.csproj" />
+		<ProjectReference Include="..\MVoxelEngine1.Tools\MVoxelEngine1.Tools.csproj" />
+	</ItemGroup>
+</Project>
