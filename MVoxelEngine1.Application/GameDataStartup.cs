@@ -23,14 +23,5 @@ namespace MVoxelEngine1.Application
             StartupPerformanceRecorder.RecordGameLoaded();
             return terrainLoader;
         }
-
-        public static void PrepareCamera()
-        {
-            System.Runtime.GCSettings.LargeObjectHeapCompactionMode =
-                System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
-        }
     }
 }
