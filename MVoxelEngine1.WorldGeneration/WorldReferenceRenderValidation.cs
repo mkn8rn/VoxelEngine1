@@ -8,7 +8,7 @@ namespace MVoxelEngine1.WorldGeneration
 {
     public partial class World
     {
-        private Exception? referenceMeshBuildFailure;
+        private Exception? meshBuildFailure;
 
         private void ValidateReferenceRenderData(
             (int cx, int cy, int cz) key,
@@ -191,22 +191,22 @@ namespace MVoxelEngine1.WorldGeneration
             return opaque ? "opaque" : "transparent";
         }
 
-        private void RecordReferenceMeshBuildFailure(
+        private void RecordMeshBuildFailure(
             (int cx, int cy, int cz) key,
             Exception cause)
         {
             var failure = new InvalidOperationException(
-                $"Reference mesh build failed for chunk {key}.",
+                $"{faceGenerationMode} mesh build failed for chunk {key}.",
                 cause);
             Interlocked.CompareExchange(
-                ref referenceMeshBuildFailure,
+                ref meshBuildFailure,
                 failure,
                 null);
         }
 
-        private void ThrowIfReferenceMeshBuildFailed()
+        private void ThrowIfMeshBuildFailed()
         {
-            Exception? failure = Volatile.Read(ref referenceMeshBuildFailure);
+            Exception? failure = Volatile.Read(ref meshBuildFailure);
             if (failure is not null)
                 throw failure;
         }

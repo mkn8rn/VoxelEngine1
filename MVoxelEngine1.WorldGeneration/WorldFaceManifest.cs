@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
+using MVoxelEngine1.Graphics.Models;
 using MVoxelEngine1.Graphics.Terrain;
 using MVoxelEngine1.Infrastructure.Loaders;
 using MVoxelEngine1.Infrastructure.Managers;
@@ -86,6 +87,12 @@ namespace MVoxelEngine1.WorldGeneration
         public required int Lod1Radius { get; init; }
 
         public required int ActiveChunkCount { get; init; }
+
+        public required int CaptureCenterChunkX { get; init; }
+
+        public required int CaptureCenterChunkY { get; init; }
+
+        public required int CaptureCenterChunkZ { get; init; }
 
         public required string ActiveCoordinateSha256 { get; init; }
 
@@ -298,6 +305,7 @@ namespace MVoxelEngine1.WorldGeneration
             ArgumentException.ThrowIfNullOrWhiteSpace(game);
 
             using IDisposable stateScope = world.AcquireRenderStateReadScope();
+            (int centerX, int centerY, int centerZ) = world.PlayerChunkPosition;
             WorldRenderChunk[] chunks = world.CaptureRequiredRenderChunks()
                 .OrderBy(chunk => chunk.ChunkX)
                 .ThenBy(chunk => chunk.ChunkY)
@@ -351,6 +359,9 @@ namespace MVoxelEngine1.WorldGeneration
                 ChunkSizeZ = GameManager.settings.chunkMaxZ,
                 Lod1Radius = GameManager.settings.lod1RenderDistance,
                 ActiveChunkCount = chunks.Length,
+                CaptureCenterChunkX = centerX,
+                CaptureCenterChunkY = centerY,
+                CaptureCenterChunkZ = centerZ,
                 ActiveCoordinateSha256 = HashCoordinates(chunks),
                 GameInputSha256 = HashGameInputs(),
                 BlockRegistrySha256 = HashBlockRegistry(),
@@ -435,6 +446,15 @@ namespace MVoxelEngine1.WorldGeneration
                         $"Chunk ({chunk.ChunkX}, {chunk.ChunkY}, {chunk.ChunkZ}) has a face in the wrong pass.");
                 }
 
+                uint expectedTileIndex = GetExpectedTileIndex(blockId, direction);
+                if (tileIndices[index] != expectedTileIndex)
+                {
+                    throw new InvalidOperationException(
+                        $"Chunk ({chunk.ChunkX}, {chunk.ChunkY}, {chunk.ChunkZ}) has " +
+                        $"tile {tileIndices[index]} for block {blockId} direction {direction}, " +
+                        $"but the runtime texture atlas requires tile {expectedTileIndex}.");
+                }
+
                 int worldX = originX + localX;
                 int worldY = originY + localY;
                 int worldZ = originZ + localZ;
@@ -452,6 +472,26 @@ namespace MVoxelEngine1.WorldGeneration
                     blockId,
                     neighborBlockId));
             }
+        }
+
+        private static uint GetExpectedTileIndex(ushort blockId, byte direction)
+        {
+            var atlas = ChunkRender.terrainTextureAtlas ??
+                throw new InvalidOperationException("The runtime texture atlas is not initialized.");
+            var coordinates = atlas.GetBlockUVs(blockId, (Faces)direction);
+            if (coordinates.Count != 4)
+                throw new InvalidOperationException("A runtime texture face must have four atlas coordinates.");
+            byte minimumX = byte.MaxValue;
+            byte minimumY = byte.MaxValue;
+            for (int index = 0; index < coordinates.Count; index++)
+            {
+                if (coordinates[index].x < minimumX)
+                    minimumX = coordinates[index].x;
+                if (coordinates[index].y < minimumY)
+                    minimumY = coordinates[index].y;
+            }
+
+            return checked((uint)(minimumY * atlas.tilesX + minimumX));
         }
 
         private static string HashCoordinates(

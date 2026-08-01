@@ -5,6 +5,14 @@ using MVoxelEngine1.WorldGeneration.Terrain;
 
 namespace MVoxelEngine1.WorldGeneration
 {
+    public sealed class WorldRenderStateNotReadyException : InvalidOperationException
+    {
+        public WorldRenderStateNotReadyException(string message)
+            : base(message)
+        {
+        }
+    }
+
     public sealed class WorldRenderChunk
     {
         private readonly Chunk chunk;
@@ -48,14 +56,13 @@ namespace MVoxelEngine1.WorldGeneration
     {
         public IReadOnlyList<WorldRenderChunk> CaptureActiveRenderChunks()
         {
-            ThrowIfReferenceMeshBuildFailed();
+            ThrowIfMeshBuildFailed();
             using IDisposable stateScope = AcquireRenderStateReadScope();
             var chunks = new List<WorldRenderChunk>(activeChunks.Count);
             foreach (var pair in activeChunks)
             {
                 (int cx, int cy, int cz) key = pair.Key;
-                if (faceGenerationMode == FaceGenerationMode.Reference &&
-                    dirtyChunks.ContainsKey(key))
+                if (dirtyChunks.ContainsKey(key))
                 {
                     continue;
                 }
@@ -76,7 +83,7 @@ namespace MVoxelEngine1.WorldGeneration
 
         public IReadOnlyList<WorldRenderChunk> CaptureRequiredRenderChunks()
         {
-            ThrowIfReferenceMeshBuildFailed();
+            ThrowIfMeshBuildFailed();
             using IDisposable stateScope = AcquireRenderStateReadScope();
             int radius = GameManager.settings.lod1RenderDistance;
             long regionLimit = GameManager.settings.regionWidthInChunks;
@@ -102,13 +109,13 @@ namespace MVoxelEngine1.WorldGeneration
                         var key = (chunkX, chunkY, chunkZ);
                         if (dirtyChunks.ContainsKey(key))
                         {
-                            throw new InvalidOperationException(
+                            throw new WorldRenderStateNotReadyException(
                                 $"Required render chunk {key} is dirty.");
                         }
 
                         if (!activeChunks.TryGetValue(key, out Chunk? chunk))
                         {
-                            throw new InvalidOperationException(
+                            throw new WorldRenderStateNotReadyException(
                                 $"Required render chunk {key} is not active.");
                         }
 
