@@ -24,7 +24,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
         private readonly UniformOverride _uniformOverride;
 
         public Vector3 position { get; set; }
-        public ChunkRender chunkRender;
+        public ChunkRender? chunkRender;
         public ChunkData chunkData;
         public string saveDirectory;
         public long generationSeed;

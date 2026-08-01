@@ -185,11 +185,8 @@ namespace MVoxelEngine1.WorldGeneration
                 WaitForInitialChunkGeneration();
                 StopGenerationWorkers();
 
-                // 2. Initial mesh build workers (after gen complete) - only for active (LoD1) chunks
-                StartMeshBuildWorkers(initialMesh);
-                // Chunks were already enqueued for build during generation
-                WaitForInitialChunkRenderBuild();
-                StopMeshBuildWorkers();
+                // 2. Build initial LoD1 render data after generation completes.
+                BuildInitialChunkRenders(initialMesh);
 
                 // 3. Start steady-state workers (may be same counts; restart for clarity per spec)
                 StartGenerationWorkers(finalGen);
@@ -309,35 +306,74 @@ namespace MVoxelEngine1.WorldGeneration
                 write: true);
         }
 
-        private void WaitForInitialChunkRenderBuild()
+        private void BuildInitialChunkRenders(int maximumParallelism)
         {
-            Console.WriteLine("[World] Building chunk meshes asynchronously...");
+            Console.WriteLine("[World] Building initial chunk meshes in parallel.");
             StartupPerformanceRecorder.BeginInitialChunkMeshBuild();
-            // Snapshot target set at start to avoid negative progress when late chunks arrive. (Only LoD1 unbuilt chunks considered)
-            var targetSet = new HashSet<(int cx,int cy,int cz)>(unbuiltChunks.Keys);
-            int initialTotal = targetSet.Count;
-            int lastLogRemaining = -1;
-            while (true)
+            (int cx, int cy, int cz)[] targetSet = unbuiltChunks.Keys.ToArray();
+            var options = new ParallelOptions
             {
-                ThrowIfMeshBuildFailed();
-                int remaining = 0;
-                foreach (var key in targetSet)
+                MaxDegreeOfParallelism = Math.Max(1, maximumParallelism)
+            };
+
+            Parallel.ForEach(targetSet, options, key =>
+            {
+                try
                 {
-                    if (unbuiltChunks.ContainsKey(key)) remaining++;
+                    if (!unbuiltChunks.TryGetValue(key, out Chunk? chunk))
+                        return;
+
+                    ReferenceNeighborBlockPlanes? referenceNeighbors = null;
+                    bool neighborsReady = faceGenerationMode == FaceGenerationMode.Reference
+                        ? TryCreateReferenceNeighborBlockPlanes(
+                            key,
+                            out referenceNeighbors)
+                        : TryPrepareOptimizedNeighbors(key, chunk);
+                    if (!neighborsReady)
+                    {
+                        throw new InvalidOperationException(
+                            $"Required render neighbors are missing for chunk {key}.");
+                    }
+
+                    long buildStart = StartupPerformanceRecorder.IsRunning
+                        ? Stopwatch.GetTimestamp()
+                        : 0;
+                    ChunkRender? renderer = chunk.CreateRender(
+                        faceGenerationMode,
+                        referenceNeighbors);
+                    chunk.PublishRender(renderer);
+                    if (faceGenerationMode == FaceGenerationMode.Reference)
+                        ValidateReferenceRenderData(key, chunk);
+                    if (buildStart != 0)
+                    {
+                        StartupPerformanceRecorder.RecordFirstChunkBuild(
+                            Stopwatch.GetElapsedTime(buildStart));
+                    }
+
+                    activeChunks[key] = chunk;
+                    unbuiltChunks.TryRemove(key, out _);
+                    dirtyChunks.TryRemove(key, out _);
                 }
-                // Exit once all initial targets either built (moved to active) or removed AND mesh build queue drained for those targets.
-                if (meshBuildSchedule.Count == 0 && remaining == 0)
-                    break;
-                if (remaining != lastLogRemaining)
+                catch (Exception ex)
                 {
-                    int built = initialTotal - remaining;
-                    Console.WriteLine($"[World] Chunk mesh build: {built}/{initialTotal}, remaining: {remaining}");
-                    lastLogRemaining = remaining;
+                    RecordMeshBuildFailure(key, ex);
+                    throw;
                 }
-                Thread.Sleep(500);
+                finally
+                {
+                    meshBuildSchedule.TryRemove(key, out _);
+                }
+            });
+
+            while (meshBuildQueue.TryTake(out _))
+            {
             }
+            meshBuildSchedule.Clear();
+            ThrowIfMeshBuildFailed();
             long elapsedMilliseconds = StartupPerformanceRecorder.CompleteInitialChunkMeshBuild();
-            Console.WriteLine($"[World] Chunk mesh build complete in {elapsedMilliseconds} ms.");
+            Console.WriteLine(
+                $"[World] Chunk mesh build complete in {elapsedMilliseconds} ms. " +
+                $"(Built chunks: {targetSet.Length})");
         }
 
         public void Render(ShaderProgram program)
@@ -634,15 +670,19 @@ namespace MVoxelEngine1.WorldGeneration
                         }
 
                         long buildStart = StartupPerformanceRecorder.IsRunning ? Stopwatch.GetTimestamp() : 0;
-                        ch.BuildRender(faceGenerationMode, referenceNeighbors);
+                        ChunkRender? renderer = ch.CreateRender(
+                            faceGenerationMode,
+                            referenceNeighbors);
+                        ch.PublishRender(renderer);
                         if (faceGenerationMode == FaceGenerationMode.Reference)
                             ValidateReferenceRenderData(key, ch);
                         if (buildStart != 0)
                             StartupPerformanceRecorder.RecordFirstChunkBuild(Stopwatch.GetElapsedTime(buildStart));
 
-                        if (unbuiltChunks.TryRemove(key, out var builtChunk))
+                        if (unbuiltChunks.TryGetValue(key, out Chunk? builtChunk))
                         {
                             activeChunks[key] = builtChunk;
+                            unbuiltChunks.TryRemove(key, out _);
                         }
                         if (consumedDirtyRevision != 0)
                             TryRemoveDirtyRevision(key, consumedDirtyRevision);
