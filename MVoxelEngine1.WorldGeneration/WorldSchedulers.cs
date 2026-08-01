@@ -1,5 +1,6 @@
 ﻿using MVoxelEngine1.WorldGeneration.Terrain;
 using MVoxelEngine1.Infrastructure.Managers;
+using MVoxelEngine1.Infrastructure.Models;
 using OpenTK.Mathematics;
 using System;
 using System.Collections.Generic;
@@ -213,7 +214,9 @@ namespace MVoxelEngine1.WorldGeneration
             bufferChunkPositionQueue.Add(new Vector3(worldX, worldY, worldZ));
         }
 
-        private void MarkNeighborsDirty((int cx, int cy, int cz) key, Chunk newChunk)
+        private void MarkReferenceNeighborsDirty(
+            (int cx, int cy, int cz) key,
+            Chunk changedChunk)
         {
             foreach (var dir in NeighborDirs)
             {
@@ -222,13 +225,9 @@ namespace MVoxelEngine1.WorldGeneration
                 bool neighborExists = unbuiltChunks.ContainsKey(nk) || activeChunks.ContainsKey(nk);
                 if (!neighborExists) continue;
 
-                if (!HasAnySolidOnBoundary(newChunk, dir)) continue;
+                if (!HasAnyNonAirOnBoundary(changedChunk, dir)) continue;
 
-                // Mark dirty & enqueue (coalesce multiple marks by using dirtyChunks)
-                if (dirtyChunks.TryAdd(nk, 0))
-                {
-                    EnqueueMeshBuild(nk, markDirty: true);
-                }
+                EnqueueMeshBuild(nk, markDirty: true);
             }
         }
 
@@ -373,6 +372,8 @@ namespace MVoxelEngine1.WorldGeneration
                     if (activeChunks.TryRemove(key, out var chunk))
                     {
                         chunk.chunkRender?.ScheduleDelete();
+                        if (faceGenerationMode == FaceGenerationMode.Reference)
+                            MarkReferenceNeighborsDirty(key, chunk);
                         dirtyChunks.TryRemove(key, out _);
                         meshBuildSchedule.TryRemove(key, out _);
                         TrackBatch(key);
@@ -384,8 +385,10 @@ namespace MVoxelEngine1.WorldGeneration
             {
                 if (Math.Abs(key.cx - centerCx) > lodDist || Math.Abs(key.cz - centerCz) > lodDist || Math.Abs(key.cy - centerCy) > verticalRange)
                 {
-                    if (unbuiltChunks.TryRemove(key, out _))
+                    if (unbuiltChunks.TryRemove(key, out var chunk))
                     {
+                        if (faceGenerationMode == FaceGenerationMode.Reference)
+                            MarkReferenceNeighborsDirty(key, chunk);
                         cancelledChunks[key] = 0;
                         chunkGenSchedule.TryRemove(key, out _);
                         meshBuildSchedule.TryRemove(key, out _);
@@ -399,7 +402,12 @@ namespace MVoxelEngine1.WorldGeneration
             {
                 if (Math.Abs(key.cx - centerCx) > lodDist + 1 || Math.Abs(key.cz - centerCz) > lodDist + 1 || Math.Abs(key.cy - centerCy) > verticalRange)
                 {
-                    if (passiveChunks.TryRemove(key, out _)) TrackBatch(key);
+                    if (passiveChunks.TryRemove(key, out var chunk))
+                    {
+                        if (faceGenerationMode == FaceGenerationMode.Reference)
+                            MarkReferenceNeighborsDirty(key, chunk);
+                        TrackBatch(key);
+                    }
                 }
                 // Promotion if moved into LoD1 vertical + horizontal bounds
                 else if (Math.Abs(key.cx - centerCx) <= lodDist && Math.Abs(key.cz - centerCz) <= lodDist && Math.Abs(key.cy - centerCy) <= verticalRange)

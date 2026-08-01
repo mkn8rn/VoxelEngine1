@@ -13,6 +13,8 @@ using Vector3 = OpenTK.Mathematics.Vector3;
 using MVoxelEngine1.Graphics.Textures;
 using MVoxelEngine1.Infrastructure.Models.Generation;
 using MVoxelEngine1.Infrastructure.Diagnostics;
+using MVoxelEngine1.Infrastructure.Loaders;
+using MVoxelEngine1.Infrastructure.Models;
 using MVoxelEngine1.Graphics.Terrain.Sections;
 using System.Linq;
 using System.Threading;
@@ -96,7 +98,11 @@ namespace MVoxelEngine1.Graphics.Terrain
 
         public bool IsOpenGlUploaded => isBuilt;
 
-        public ChunkRender(ChunkPrerenderData prerenderData)
+        public ChunkRender(
+            ChunkPrerenderData prerenderData,
+            FaceGenerationMode faceGenerationMode,
+            Func<int, int, int, ushort>? getLocalBlock,
+            ReferenceNeighborBlockPlanes? referenceNeighbors)
         {
             this.prerenderData = prerenderData;
             this.prepassSolidCount = prerenderData.PrepassSolidCount;
@@ -107,13 +113,14 @@ namespace MVoxelEngine1.Graphics.Terrain
             faceNegX = prerenderData.FaceNegX; facePosX = prerenderData.FacePosX; faceNegY = prerenderData.FaceNegY; facePosY = prerenderData.FacePosY; faceNegZ = prerenderData.FaceNegZ; facePosZ = prerenderData.FacePosZ;
             nNegXPosX = prerenderData.NeighborNegXPosX; nPosXNegX = prerenderData.NeighborPosXNegX; nNegYPosY = prerenderData.NeighborNegYPosY; nPosYNegY = prerenderData.NeighborPosYNegY; nNegZPosZ = prerenderData.NeighborNegZPosZ; nPosZNegZ = prerenderData.NeighborPosZNegZ;
             allOneBlock = prerenderData.AllOneBlock; allOneBlockId = prerenderData.AllOneBlockId;
-            GenerateFaces();
+            GenerateFaces(faceGenerationMode, getLocalBlock, referenceNeighbors);
             uploadData = new ChunkRenderUploadData(
                 Interlocked.Increment(ref nextRenderDataId),
                 chunkWorldPosition.X,
                 chunkWorldPosition.Y,
                 chunkWorldPosition.Z,
                 fullyOccluded,
+                faceGenerationMode,
                 instanceCount,
                 instanceOffsetBuffer,
                 instanceTileIndexBuffer,
@@ -124,8 +131,25 @@ namespace MVoxelEngine1.Graphics.Terrain
                 transparentInstanceFaceDirBuffer);
         }
 
-        private void GenerateFaces()
+        private void GenerateFaces(
+            FaceGenerationMode faceGenerationMode,
+            Func<int, int, int, ushort>? getLocalBlock,
+            ReferenceNeighborBlockPlanes? referenceNeighbors)
         {
+            if (faceGenerationMode == FaceGenerationMode.Reference)
+            {
+                if (getLocalBlock is null)
+                    throw new ArgumentNullException(nameof(getLocalBlock));
+                if (referenceNeighbors is null)
+                    throw new ArgumentNullException(nameof(referenceNeighbors));
+
+                GenerateReferenceFaces(getLocalBlock, referenceNeighbors);
+                return;
+            }
+
+            if (faceGenerationMode != FaceGenerationMode.Optimized)
+                throw new ArgumentOutOfRangeException(nameof(faceGenerationMode));
+
             if (prepassSolidCount > 0 && faceNegX && facePosX && faceNegY && facePosY && faceNegZ && facePosZ &&
                 nNegXPosX && nPosXNegX && nNegYPosY && nPosYNegY && nNegZPosZ && nPosZNegZ)
             {
@@ -135,6 +159,70 @@ namespace MVoxelEngine1.Graphics.Terrain
             sectionRender = new SectionRender(prerenderData, terrainTextureAtlas);
             sectionRender.Build(out instanceCount, out instanceOffsetBuffer, out instanceTileIndexBuffer, out instanceFaceDirBuffer,
                                 out transparentInstanceCount, out transparentInstanceOffsetBuffer, out transparentInstanceTileIndexBuffer, out transparentInstanceFaceDirBuffer);
+        }
+
+        private void GenerateReferenceFaces(
+            Func<int, int, int, ushort> getLocalBlock,
+            ReferenceNeighborBlockPlanes referenceNeighbors)
+        {
+            ReferenceFaceGenerationResult faces = allOneBlock && allOneBlockId != 0
+                ? ReferenceFaceGenerator.GenerateUniform(
+                    maxX,
+                    maxY,
+                    maxZ,
+                    allOneBlockId,
+                    referenceNeighbors,
+                    TerrainLoader.IsOpaque)
+                : ReferenceFaceGenerator.Generate(
+                    maxX,
+                    maxY,
+                    maxZ,
+                    getLocalBlock,
+                    referenceNeighbors,
+                    TerrainLoader.IsOpaque);
+
+            instanceCount = faces.OpaqueFaceCount;
+            instanceOffsetBuffer = faces.OpaqueOffsets;
+            instanceFaceDirBuffer = faces.OpaqueDirections;
+            instanceTileIndexBuffer = BuildReferenceTileIndices(
+                faces.OpaqueBlockIds,
+                faces.OpaqueDirections);
+
+            transparentInstanceCount = faces.TransparentFaceCount;
+            transparentInstanceOffsetBuffer = faces.TransparentOffsets;
+            transparentInstanceFaceDirBuffer = faces.TransparentDirections;
+            transparentInstanceTileIndexBuffer = BuildReferenceTileIndices(
+                faces.TransparentBlockIds,
+                faces.TransparentDirections);
+
+            fullyOccluded = instanceCount == 0 && transparentInstanceCount == 0;
+        }
+
+        private static uint[] BuildReferenceTileIndices(
+            ReadOnlySpan<ushort> blockIds,
+            ReadOnlySpan<byte> directions)
+        {
+            if (blockIds.Length != directions.Length)
+                throw new InvalidOperationException("Reference face arrays have different lengths.");
+
+            var result = new uint[blockIds.Length];
+            var cache = new Dictionary<int, uint>();
+            for (int index = 0; index < result.Length; index++)
+            {
+                int key = (blockIds[index] << 3) | directions[index];
+                if (!cache.TryGetValue(key, out uint tileIndex))
+                {
+                    tileIndex = SectionRender.ComputeTileIndex(
+                        terrainTextureAtlas,
+                        blockIds[index],
+                        (Faces)directions[index]);
+                    cache.Add(key, tileIndex);
+                }
+
+                result[index] = tileIndex;
+            }
+
+            return result;
         }
 
         public void Build()

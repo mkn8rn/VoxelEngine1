@@ -2,6 +2,7 @@
 using MVoxelEngine1.Infrastructure.Models.Generation;
 using MVoxelEngine1.Infrastructure.Models.Generation;
 using MVoxelEngine1.Infrastructure.Models.Terrain;
+using MVoxelEngine1.Infrastructure.Models;
 using System;
 using System.Buffers;
 using System.Collections.Generic;
@@ -461,11 +462,15 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             return arr;
         }
 
-        public void BuildRender(Func<int, int, int, ushort> worldBlockGetter)
+        public void BuildRender(
+            FaceGenerationMode faceGenerationMode,
+            ReferenceNeighborBlockPlanes? referenceNeighbors)
         {
             chunkRender?.ScheduleDelete();
 
-            if (AllAirChunk || OcclusionStatus != OcclusionClass.None)
+            if (AllAirChunk ||
+                (faceGenerationMode == FaceGenerationMode.Optimized &&
+                 OcclusionStatus != OcclusionClass.None))
             {
                 return;
             }
@@ -488,7 +493,11 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                     HasStats = uniformOpaque
                 };
                 var prerenderUniform = BuildPrerenderData(BuildSectionDescriptors());
-                chunkRender = new ChunkRender(prerenderUniform);
+                chunkRender = new ChunkRender(
+                    prerenderUniform,
+                    faceGenerationMode,
+                    GetBlockLocal,
+                    referenceNeighbors);
                 return;
             }
 
@@ -548,7 +557,11 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             if (totalOpaque == 0 && !anyTransparent) return;
 
             var prerender = BuildPrerenderData(BuildSectionDescriptors());
-            chunkRender = new ChunkRender(prerender);
+            chunkRender = new ChunkRender(
+                prerender,
+                faceGenerationMode,
+                GetBlockLocal,
+                referenceNeighbors);
         }
     }
 }

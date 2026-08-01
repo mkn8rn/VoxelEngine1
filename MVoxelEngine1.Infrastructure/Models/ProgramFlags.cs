@@ -39,6 +39,12 @@ namespace MVoxelEngine1.Infrastructure.Models
         Enabled = 1
     }
 
+    public enum FaceGenerationMode
+    {
+        Optimized = 0,
+        Reference = 1
+    }
+
     public class ProgramFlags
     {
         public string? game;
@@ -51,6 +57,7 @@ namespace MVoxelEngine1.Infrastructure.Models
         public int? simulatedFrameRate;
         public int? simulatedGpuWriterDelayMilliseconds;
         public int? simulatedGpuWriterFailAfterRecords;
+        public FaceGenerationMode? faceGenerationMode;
 
         // Window settings
         public int? windowWidth;

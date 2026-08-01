@@ -7,6 +7,7 @@ using System.Runtime.InteropServices;
 using System.Collections.Generic;
 using OpenTK.Mathematics;
 using System.Security.Cryptography.X509Certificates;
+using MVoxelEngine1.Infrastructure.Models;
 
 namespace MVoxelEngine1.WorldGeneration
 {
@@ -427,6 +428,7 @@ namespace MVoxelEngine1.WorldGeneration
             string path = GetBatchFilePath(bx,bz);
             if (!File.Exists(path)) return null;
             Chunk requested = null;
+            var loadedChunks = new List<((int cx, int cy, int cz) Key, Chunk Chunk)>();
             try
             {
                 using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 256*1024, FileOptions.SequentialScan);
@@ -465,8 +467,14 @@ namespace MVoxelEngine1.WorldGeneration
                     {
                         unbuiltChunks[key] = chunk;
                         batch.AddOrReplaceChunk(chunk, cx, cy, cz);
+                        loadedChunks.Add((key, chunk));
                         if (cx==targetCx && cy==targetCy && cz==targetCz) requested = chunk;
                     }
+                }
+                if (faceGenerationMode == FaceGenerationMode.Reference)
+                {
+                    foreach (var loadedChunk in loadedChunks)
+                        MarkReferenceNeighborsDirty(loadedChunk.Key, loadedChunk.Chunk);
                 }
                 // After load schedule any visible ones
                 ScheduleVisibleChunksInBatch(bx,bz);
