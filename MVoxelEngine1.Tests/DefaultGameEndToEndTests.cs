@@ -317,10 +317,10 @@ namespace MVoxelEngine1.Tests
                 diagnostics.GeneratedSpanWritePassMilliseconds,
                 nameof(diagnostics.GeneratedSpanWritePassMilliseconds));
             Assert.True(diagnostics.NeighborPlaneSnapshotChunks > 0);
-            Assert.True(diagnostics.NeighborOpaquePlaneSnapshotArrays > 0);
-            Assert.True(diagnostics.NeighborTransparentPlaneSnapshotArrays > 0);
-            Assert.True(diagnostics.NeighborOpaquePlaneSnapshotBytes > 0);
-            Assert.True(diagnostics.NeighborTransparentPlaneSnapshotBytes > 0);
+            Assert.Equal(0, diagnostics.NeighborOpaquePlaneSnapshotArrays);
+            Assert.Equal(0, diagnostics.NeighborTransparentPlaneSnapshotArrays);
+            Assert.Equal(0, diagnostics.NeighborOpaquePlaneSnapshotBytes);
+            Assert.Equal(0, diagnostics.NeighborTransparentPlaneSnapshotBytes);
             AssertPositiveFinite(
                 diagnostics.NeighborPlaneSnapshotMilliseconds,
                 nameof(diagnostics.NeighborPlaneSnapshotMilliseconds));

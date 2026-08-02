@@ -60,11 +60,8 @@ namespace MVoxelEngine1.Graphics.Terrain
         private readonly bool nNegXPosX, nPosXNegX, nNegYPosY, nPosYNegY, nNegZPosZ, nPosZNegZ;
         private readonly bool allOneBlock; private readonly ushort allOneBlockId;
         private readonly int prepassSolidCount; private readonly int prepassExposureEstimate;
-        private readonly ChunkPrerenderData prerenderData;
         private bool fullyOccluded;
         private ChunkRenderUploadData uploadData;
-
-        private SectionRender sectionRender;
 
         // Static quad data (positions & base UVs 0..1) reused for all faces.
         private static readonly byte[] QuadPositions = new byte[]
@@ -92,7 +89,6 @@ namespace MVoxelEngine1.Graphics.Terrain
             Func<int, int, int, ushort>? getLocalBlock,
             ReferenceNeighborBlockPlanes? referenceNeighbors)
         {
-            this.prerenderData = prerenderData;
             this.prepassSolidCount = prerenderData.PrepassSolidCount;
             this.prepassExposureEstimate = prerenderData.PrepassExposureEstimate;
             this.chunkMeta = prerenderData.chunkData;
@@ -101,7 +97,11 @@ namespace MVoxelEngine1.Graphics.Terrain
             faceNegX = prerenderData.FaceNegX; facePosX = prerenderData.FacePosX; faceNegY = prerenderData.FaceNegY; facePosY = prerenderData.FacePosY; faceNegZ = prerenderData.FaceNegZ; facePosZ = prerenderData.FacePosZ;
             nNegXPosX = prerenderData.NeighborNegXPosX; nPosXNegX = prerenderData.NeighborPosXNegX; nNegYPosY = prerenderData.NeighborNegYPosY; nPosYNegY = prerenderData.NeighborPosYNegY; nNegZPosZ = prerenderData.NeighborNegZPosZ; nPosZNegZ = prerenderData.NeighborPosZNegZ;
             allOneBlock = prerenderData.AllOneBlock; allOneBlockId = prerenderData.AllOneBlockId;
-            GenerateFaces(faceGenerationMode, getLocalBlock, referenceNeighbors);
+            GenerateFaces(
+                prerenderData,
+                faceGenerationMode,
+                getLocalBlock,
+                referenceNeighbors);
             uploadData = new ChunkRenderUploadData(
                 Interlocked.Increment(ref nextRenderDataId),
                 chunkWorldPosition.X,
@@ -116,6 +116,7 @@ namespace MVoxelEngine1.Graphics.Terrain
         }
 
         private void GenerateFaces(
+            ChunkPrerenderData prerenderData,
             FaceGenerationMode faceGenerationMode,
             Func<int, int, int, ushort>? getLocalBlock,
             ReferenceNeighborBlockPlanes? referenceNeighbors)
@@ -127,7 +128,10 @@ namespace MVoxelEngine1.Graphics.Terrain
                 if (referenceNeighbors is null)
                     throw new ArgumentNullException(nameof(referenceNeighbors));
 
-                GenerateReferenceFaces(getLocalBlock, referenceNeighbors);
+                GenerateReferenceFaces(
+                    prerenderData,
+                    getLocalBlock,
+                    referenceNeighbors);
                 return;
             }
 
@@ -143,7 +147,9 @@ namespace MVoxelEngine1.Graphics.Terrain
             bool recordPerformance = StartupPerformanceRecorder.IsRunning;
             bool usesGeneratedSpans = prerenderData.GeneratedSpans is not null;
             long buildStart = recordPerformance ? Stopwatch.GetTimestamp() : 0;
-            sectionRender = new SectionRender(prerenderData, terrainTextureAtlas);
+            var sectionRender = new SectionRender(
+                prerenderData,
+                terrainTextureAtlas);
             SetMeshData(sectionRender.Build());
             if (recordPerformance)
             {
@@ -165,6 +171,7 @@ namespace MVoxelEngine1.Graphics.Terrain
         }
 
         private void GenerateReferenceFaces(
+            ChunkPrerenderData prerenderData,
             Func<int, int, int, ushort> getLocalBlock,
             ReferenceNeighborBlockPlanes referenceNeighbors)
         {
