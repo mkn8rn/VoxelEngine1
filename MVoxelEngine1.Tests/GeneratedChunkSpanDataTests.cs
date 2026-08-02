@@ -15,6 +15,12 @@ namespace MVoxelEngine1.Tests
     public class GeneratedChunkSpanDataTests
     {
         [Fact]
+        public void BlockColumnProfilesContainOnlySixMaterialEndpoints()
+        {
+            Assert.Equal(24, Unsafe.SizeOf<BlockColumnProfile>());
+        }
+
+        [Fact]
         public void EmptySentinelsRemainAirAtNegativeWorldHeight()
         {
             var source = new GeneratedChunkSpanData(
@@ -658,7 +664,6 @@ namespace MVoxelEngine1.Tests
             {
                 columns[index] = new BlockColumnProfile
                 {
-                    Surface = 7,
                     StoneStart = 0,
                     StoneEnd = 4,
                     SoilStart = 5,
