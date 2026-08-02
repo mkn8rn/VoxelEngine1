@@ -19,7 +19,9 @@ namespace MVoxelEngine1.Tests
                 TimeSpan.FromMilliseconds(1).Ticks,
                 TimeSpan.FromMilliseconds(4).Ticks,
                 opaqueFaces: 12,
-                transparentFaces: 5);
+                transparentFaces: 5,
+                opaqueRectangles: 3,
+                transparentRectangles: 2);
 
             MeshPerformanceSnapshot snapshot =
                 MeshPerformanceRecorder.CreateSnapshot();
@@ -29,6 +31,8 @@ namespace MVoxelEngine1.Tests
             Assert.Equal(1, snapshot.SectionChunks);
             Assert.Equal(12, snapshot.GeneratedSpanOpaqueFaces);
             Assert.Equal(5, snapshot.GeneratedSpanTransparentFaces);
+            Assert.Equal(3, snapshot.GeneratedSpanOpaqueRectangles);
+            Assert.Equal(2, snapshot.GeneratedSpanTransparentRectangles);
             Assert.Equal(10, snapshot.AggregatedBuildMilliseconds);
             Assert.Equal(7, snapshot.GeneratedSpanBuildMilliseconds);
             Assert.Equal(3, snapshot.SectionBuildMilliseconds);

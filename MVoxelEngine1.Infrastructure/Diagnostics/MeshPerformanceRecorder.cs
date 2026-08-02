@@ -9,6 +9,8 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
         public required long SectionChunks { get; init; }
         public required long GeneratedSpanOpaqueFaces { get; init; }
         public required long GeneratedSpanTransparentFaces { get; init; }
+        public required long GeneratedSpanOpaqueRectangles { get; init; }
+        public required long GeneratedSpanTransparentRectangles { get; init; }
         public required double AggregatedBuildMilliseconds { get; init; }
         public required double GeneratedSpanBuildMilliseconds { get; init; }
         public required double SectionBuildMilliseconds { get; init; }
@@ -24,6 +26,8 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
         private static long sectionChunks;
         private static long generatedSpanOpaqueFaces;
         private static long generatedSpanTransparentFaces;
+        private static long generatedSpanOpaqueRectangles;
+        private static long generatedSpanTransparentRectangles;
         private static long aggregatedBuildTicks;
         private static long generatedSpanBuildTicks;
         private static long sectionBuildTicks;
@@ -38,6 +42,8 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
             Volatile.Write(ref sectionChunks, 0);
             Volatile.Write(ref generatedSpanOpaqueFaces, 0);
             Volatile.Write(ref generatedSpanTransparentFaces, 0);
+            Volatile.Write(ref generatedSpanOpaqueRectangles, 0);
+            Volatile.Write(ref generatedSpanTransparentRectangles, 0);
             Volatile.Write(ref aggregatedBuildTicks, 0);
             Volatile.Write(ref generatedSpanBuildTicks, 0);
             Volatile.Write(ref sectionBuildTicks, 0);
@@ -67,7 +73,9 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
             long preparationTicks,
             long writePassTicks,
             int opaqueFaces,
-            int transparentFaces)
+            int transparentFaces,
+            int opaqueRectangles,
+            int transparentRectangles)
         {
             Interlocked.Increment(ref generatedSpanChunks);
             Interlocked.Add(ref generatedSpanCountPassTicks, countPassTicks);
@@ -75,6 +83,10 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
             Interlocked.Add(ref generatedSpanWritePassTicks, writePassTicks);
             Interlocked.Add(ref generatedSpanOpaqueFaces, opaqueFaces);
             Interlocked.Add(ref generatedSpanTransparentFaces, transparentFaces);
+            Interlocked.Add(ref generatedSpanOpaqueRectangles, opaqueRectangles);
+            Interlocked.Add(
+                ref generatedSpanTransparentRectangles,
+                transparentRectangles);
         }
 
         public static MeshPerformanceSnapshot CreateSnapshot() => new()
@@ -84,6 +96,10 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
             SectionChunks = Volatile.Read(ref sectionChunks),
             GeneratedSpanOpaqueFaces = Volatile.Read(ref generatedSpanOpaqueFaces),
             GeneratedSpanTransparentFaces = Volatile.Read(ref generatedSpanTransparentFaces),
+            GeneratedSpanOpaqueRectangles = Volatile.Read(
+                ref generatedSpanOpaqueRectangles),
+            GeneratedSpanTransparentRectangles = Volatile.Read(
+                ref generatedSpanTransparentRectangles),
             AggregatedBuildMilliseconds = ToMilliseconds(
                 Volatile.Read(ref aggregatedBuildTicks)),
             GeneratedSpanBuildMilliseconds = ToMilliseconds(

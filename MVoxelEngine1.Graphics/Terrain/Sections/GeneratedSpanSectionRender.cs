@@ -4,70 +4,94 @@ using MVoxelEngine1.Graphics.Models;
 using MVoxelEngine1.Graphics.Textures;
 using MVoxelEngine1.Infrastructure.Diagnostics;
 using System.Diagnostics;
+using System.Buffers;
+using System.Collections.Generic;
 
 namespace MVoxelEngine1.Graphics.Terrain.Sections
 {
     internal partial class SectionRender
     {
-        private void BuildGeneratedSpans(
-            out int opaqueFaceCount,
-            out byte[] opaqueOffsets,
-            out uint[] opaqueTileIndices,
-            out byte[] opaqueFaceDirs,
-            out int transparentFaceCount,
-            out byte[] transparentOffsets,
-            out uint[] transparentTileIndices,
-            out byte[] transparentFaceDirs)
+        private FaceRectangleMeshData BuildGeneratedSpanRectangles()
         {
             GeneratedChunkSpanData source = data.GeneratedSpans ??
                 throw new InvalidOperationException("Generated span data is not available.");
 
             bool recordPerformance = StartupPerformanceRecorder.IsRunning;
             long phaseStart = recordPerformance ? Stopwatch.GetTimestamp() : 0;
-            var counter = new GeneratedFaceWriter(source, atlas);
-            GenerateGeneratedFaces(source, ref counter);
-            long countPassTicks = recordPerformance
-                ? MeshPerformanceRecorder.GetElapsedTicks(phaseStart)
-                : 0;
-
-            phaseStart = recordPerformance ? Stopwatch.GetTimestamp() : 0;
-            var writer = new GeneratedFaceWriter(
-                source,
-                atlas,
-                counter.OpaqueCount,
-                counter.TransparentCount);
+            int horizontalCellCount = checked(source.Width * source.Depth);
+            int[] bottomFaces = ArrayPool<int>.Shared.Rent(horizontalCellCount);
+            int[] topFaces = ArrayPool<int>.Shared.Rent(horizontalCellCount);
+            var writer = new GeneratedFaceRectangleWriter(source, atlas);
             long preparationTicks = recordPerformance
                 ? MeshPerformanceRecorder.GetElapsedTicks(phaseStart)
                 : 0;
+            FaceRectangleMeshData result;
             phaseStart = recordPerformance ? Stopwatch.GetTimestamp() : 0;
-            GenerateGeneratedFaces(source, ref writer);
-            writer.ValidateCompletion();
+            try
+            {
+                for (int material = 0; material < 3; material++)
+                {
+                    Array.Fill(bottomFaces, -1, 0, horizontalCellCount);
+                    Array.Fill(topFaces, -1, 0, horizontalCellCount);
+                    ushort blockId = GetGeneratedMaterialBlockId(
+                        source,
+                        material);
+                    GenerateGeneratedMaterial(
+                        source,
+                        material,
+                        blockId,
+                        bottomFaces,
+                        topFaces,
+                        ref writer);
+                    EmitGeneratedHorizontalRectangles(
+                        blockId,
+                        2,
+                        bottomFaces,
+                        source.Width,
+                        source.Depth,
+                        ref writer);
+                    EmitGeneratedHorizontalRectangles(
+                        blockId,
+                        3,
+                        topFaces,
+                        source.Width,
+                        source.Depth,
+                        ref writer);
+                }
+
+                result = writer.Complete();
+            }
+            finally
+            {
+                ArrayPool<int>.Shared.Return(bottomFaces);
+                ArrayPool<int>.Shared.Return(topFaces);
+            }
+
             long writePassTicks = recordPerformance
                 ? MeshPerformanceRecorder.GetElapsedTicks(phaseStart)
                 : 0;
-
-            opaqueFaceCount = writer.OpaqueCount;
-            opaqueOffsets = writer.OpaqueOffsets!;
-            opaqueTileIndices = writer.OpaqueTileIndices!;
-            opaqueFaceDirs = writer.OpaqueDirections!;
-            transparentFaceCount = writer.TransparentCount;
-            transparentOffsets = writer.TransparentOffsets!;
-            transparentTileIndices = writer.TransparentTileIndices!;
-            transparentFaceDirs = writer.TransparentDirections!;
             if (recordPerformance)
             {
                 MeshPerformanceRecorder.RecordGeneratedSpanPhases(
-                    countPassTicks,
+                    countPassTicks: 0,
                     preparationTicks,
                     writePassTicks,
-                    opaqueFaceCount,
-                    transparentFaceCount);
+                    result.OpaqueFaceCount,
+                    result.TransparentFaceCount,
+                    result.OpaqueRectangleCount,
+                    result.TransparentRectangleCount);
             }
+
+            return result;
         }
 
-        private void GenerateGeneratedFaces(
+        private void GenerateGeneratedMaterial(
             GeneratedChunkSpanData source,
-            ref GeneratedFaceWriter writer)
+            int material,
+            ushort blockId,
+            int[] bottomFaces,
+            int[] topFaces,
+            ref GeneratedFaceRectangleWriter writer)
         {
             for (int x = 0; x < source.Width; x++)
             {
@@ -75,38 +99,62 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                 {
                     ref readonly BlockColumnProfile column =
                         ref source.Columns[x * source.Depth + z];
-                    GenerateGeneratedInterval(
+                    GetGeneratedMaterialInterval(
+                        column,
+                        material,
+                        out int intervalStart,
+                        out int intervalEnd);
+                    GenerateGeneratedIntervalRectangles(
                         source,
                         column,
-                        source.StoneBlockId,
-                        column.StoneStart,
-                        column.StoneEnd,
+                        blockId,
+                        intervalStart,
+                        intervalEnd,
                         x,
                         z,
-                        ref writer);
-                    GenerateGeneratedInterval(
-                        source,
-                        column,
-                        source.SoilBlockId,
-                        column.SoilStart,
-                        column.SoilEnd,
-                        x,
-                        z,
-                        ref writer);
-                    GenerateGeneratedInterval(
-                        source,
-                        column,
-                        source.WaterBlockId,
-                        column.WaterStart,
-                        column.WaterEnd,
-                        x,
-                        z,
+                        bottomFaces,
+                        topFaces,
                         ref writer);
                 }
             }
         }
 
-        private void GenerateGeneratedInterval(
+        private static ushort GetGeneratedMaterialBlockId(
+            GeneratedChunkSpanData source,
+            int material) => material switch
+            {
+                0 => source.StoneBlockId,
+                1 => source.SoilBlockId,
+                2 => source.WaterBlockId,
+                _ => throw new ArgumentOutOfRangeException(nameof(material))
+            };
+
+        private static void GetGeneratedMaterialInterval(
+            in BlockColumnProfile column,
+            int material,
+            out int intervalStart,
+            out int intervalEnd)
+        {
+            switch (material)
+            {
+                case 0:
+                    intervalStart = column.StoneStart;
+                    intervalEnd = column.StoneEnd;
+                    return;
+                case 1:
+                    intervalStart = column.SoilStart;
+                    intervalEnd = column.SoilEnd;
+                    return;
+                case 2:
+                    intervalStart = column.WaterStart;
+                    intervalEnd = column.WaterEnd;
+                    return;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(material));
+            }
+        }
+
+        private void GenerateGeneratedIntervalRectangles(
             GeneratedChunkSpanData source,
             in BlockColumnProfile column,
             ushort blockId,
@@ -114,7 +162,9 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             int intervalEnd,
             int x,
             int z,
-            ref GeneratedFaceWriter writer)
+            int[] bottomFaces,
+            int[] topFaces,
+            ref GeneratedFaceRectangleWriter writer)
         {
             if (intervalStart < 0 || intervalEnd < intervalStart)
                 return;
@@ -139,7 +189,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     out bool neighborOpaque,
                     out ushort neighborId);
                 if (FaceVisible(blockId, neighborOpaque, neighborId))
-                    writer.Emit(blockId, 2, x, localStart, z);
+                    bottomFaces[horizontalIndex] = localStart;
             }
             else
             {
@@ -149,7 +199,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     TerrainLoader.IsOpaque(neighborId),
                     neighborId))
                 {
-                    writer.Emit(blockId, 2, x, localStart, z);
+                    bottomFaces[horizontalIndex] = localStart;
                 }
             }
 
@@ -162,7 +212,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     out bool neighborOpaque,
                     out ushort neighborId);
                 if (FaceVisible(blockId, neighborOpaque, neighborId))
-                    writer.Emit(blockId, 3, x, localEnd, z);
+                    topFaces[horizontalIndex] = localEnd;
             }
             else
             {
@@ -172,7 +222,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     TerrainLoader.IsOpaque(neighborId),
                     neighborId))
                 {
-                    writer.Emit(blockId, 3, x, localEnd, z);
+                    topFaces[horizontalIndex] = localEnd;
                 }
             }
 
@@ -289,6 +339,70 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             }
         }
 
+        private static void EmitGeneratedHorizontalRectangles(
+            ushort blockId,
+            byte direction,
+            int[] faceHeights,
+            int width,
+            int depth,
+            ref GeneratedFaceRectangleWriter writer)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                for (int z = 0; z < depth; z++)
+                {
+                    int index = x * depth + z;
+                    int y = faceHeights[index];
+                    if (y < 0)
+                        continue;
+
+                    int extentX = 1;
+                    while (x + extentX < width &&
+                           faceHeights[(x + extentX) * depth + z] == y)
+                    {
+                        extentX++;
+                    }
+
+                    int extentZ = 1;
+                    while (z + extentZ < depth)
+                    {
+                        bool rowMatches = true;
+                        for (int offsetX = 0; offsetX < extentX; offsetX++)
+                        {
+                            if (faceHeights[
+                                    (x + offsetX) * depth + z + extentZ] != y)
+                            {
+                                rowMatches = false;
+                                break;
+                            }
+                        }
+
+                        if (!rowMatches)
+                            break;
+                        extentZ++;
+                    }
+
+                    for (int offsetX = 0; offsetX < extentX; offsetX++)
+                    {
+                        int row = (x + offsetX) * depth + z;
+                        Array.Fill(faceHeights, -2, row, extentZ);
+                    }
+
+                    int anchorZ = direction == 3
+                        ? z + extentZ - 1
+                        : z;
+                    writer.EmitRectangle(
+                        blockId,
+                        direction,
+                        x,
+                        y,
+                        anchorZ,
+                        extentX,
+                        extentZ);
+                }
+            }
+        }
+
         private static void EmitGeneratedColumnRange(
             GeneratedChunkSpanData source,
             in BlockColumnProfile neighborColumn,
@@ -298,7 +412,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             int z,
             int worldStart,
             int worldEnd,
-            ref GeneratedFaceWriter writer)
+            ref GeneratedFaceRectangleWriter writer)
         {
             int current = worldStart;
             while (current <= worldEnd)
@@ -338,7 +452,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             ulong[] opaquePlane,
             ushort[] transparentPlane,
             int planeBaseIndex,
-            ref GeneratedFaceWriter writer)
+            ref GeneratedFaceRectangleWriter writer)
         {
             int visibleStart = -1;
             for (int y = localStart; y <= localEnd; y++)
@@ -451,111 +565,65 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             return neighborBlockId == 0 || neighborBlockId != sourceBlockId;
         }
 
-        private struct GeneratedFaceWriter
+        private struct GeneratedFaceRectangleWriter
         {
             private readonly GeneratedChunkSpanData source;
-            private readonly uint[]? faceTiles;
-            private int opaqueWriteIndex;
-            private int transparentWriteIndex;
+            private readonly uint[] faceTiles;
+            private readonly List<uint> opaqueRectangles;
+            private readonly List<uint> transparentRectangles;
 
-            public GeneratedFaceWriter(
+            public GeneratedFaceRectangleWriter(
                 GeneratedChunkSpanData source,
                 BlockTextureAtlas atlas)
             {
                 this.source = source;
-                faceTiles = null;
-                OpaqueCount = 0;
-                TransparentCount = 0;
-                OpaqueOffsets = null;
-                OpaqueTileIndices = null;
-                OpaqueDirections = null;
-                TransparentOffsets = null;
-                TransparentTileIndices = null;
-                TransparentDirections = null;
-                opaqueWriteIndex = 0;
-                transparentWriteIndex = 0;
-            }
-
-            public GeneratedFaceWriter(
-                GeneratedChunkSpanData source,
-                BlockTextureAtlas atlas,
-                int opaqueCount,
-                int transparentCount)
-            {
-                this.source = source;
                 faceTiles = BuildFaceTiles(source, atlas);
-                OpaqueCount = opaqueCount;
-                TransparentCount = transparentCount;
-                OpaqueOffsets = new byte[checked(opaqueCount * 3)];
-                OpaqueTileIndices = new uint[opaqueCount];
-                OpaqueDirections = new byte[opaqueCount];
-                TransparentOffsets = new byte[checked(transparentCount * 3)];
-                TransparentTileIndices = new uint[transparentCount];
-                TransparentDirections = new byte[transparentCount];
-                opaqueWriteIndex = 0;
-                transparentWriteIndex = 0;
+                opaqueRectangles = new List<uint>(12_288);
+                transparentRectangles = new List<uint>(1_536);
+                OpaqueFaceCount = 0;
+                TransparentFaceCount = 0;
             }
 
-            public int OpaqueCount { get; private set; }
+            public int OpaqueFaceCount { get; private set; }
 
-            public int TransparentCount { get; private set; }
+            public int TransparentFaceCount { get; private set; }
 
-            public byte[]? OpaqueOffsets { get; }
-
-            public uint[]? OpaqueTileIndices { get; }
-
-            public byte[]? OpaqueDirections { get; }
-
-            public byte[]? TransparentOffsets { get; }
-
-            public uint[]? TransparentTileIndices { get; }
-
-            public byte[]? TransparentDirections { get; }
-
-            public void Emit(
+            public void EmitRectangle(
                 ushort blockId,
                 byte direction,
                 int x,
                 int y,
-                int z)
+                int z,
+                int extentU,
+                int extentV)
             {
-                if (TerrainLoader.IsOpaque(blockId))
-                {
-                    if (OpaqueOffsets is null)
-                    {
-                        OpaqueCount++;
-                        return;
-                    }
-
-                    Write(
-                        blockId,
-                        direction,
-                        x,
-                        y,
-                        z,
-                        OpaqueOffsets,
-                        OpaqueTileIndices!,
-                        OpaqueDirections!,
-                        opaqueWriteIndex++);
-                    return;
-                }
-
-                if (TransparentOffsets is null)
-                {
-                    TransparentCount++;
-                    return;
-                }
-
-                Write(
-                    blockId,
-                    direction,
+                uint position = PackedFaceRectangle.PackPosition(
                     x,
                     y,
                     z,
-                    TransparentOffsets,
-                    TransparentTileIndices!,
-                    TransparentDirections!,
-                    transparentWriteIndex++);
+                    direction);
+                uint tileIndex = GetFaceTile(blockId, direction);
+                uint attributes = PackedFaceRectangle.PackAttributes(
+                    extentU,
+                    extentV,
+                    tileIndex);
+                int logicalFaceCount = checked(extentU * extentV);
+                List<uint> destination;
+                if (TerrainLoader.IsOpaque(blockId))
+                {
+                    OpaqueFaceCount = checked(
+                        OpaqueFaceCount + logicalFaceCount);
+                    destination = opaqueRectangles;
+                }
+                else
+                {
+                    TransparentFaceCount = checked(
+                        TransparentFaceCount + logicalFaceCount);
+                    destination = transparentRectangles;
+                }
+
+                destination.Add(position);
+                destination.Add(attributes);
             }
 
             public void EmitYRange(
@@ -566,49 +634,25 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                 int endY,
                 int z)
             {
-                int count = endY - startY + 1;
-                if (TerrainLoader.IsOpaque(blockId) && OpaqueOffsets is null)
-                {
-                    OpaqueCount = checked(OpaqueCount + count);
-                    return;
-                }
-                if (!TerrainLoader.IsOpaque(blockId) && TransparentOffsets is null)
-                {
-                    TransparentCount = checked(TransparentCount + count);
-                    return;
-                }
-
-                for (int y = startY; y <= endY; y++)
-                    Emit(blockId, direction, x, y, z);
+                EmitRectangle(
+                    blockId,
+                    direction,
+                    x,
+                    startY,
+                    z,
+                    1,
+                    endY - startY + 1);
             }
 
-            public void ValidateCompletion()
+            public FaceRectangleMeshData Complete()
             {
-                if (opaqueWriteIndex != OpaqueCount ||
-                    transparentWriteIndex != TransparentCount)
-                {
-                    throw new InvalidOperationException(
-                        "Generated face counts changed between count and write passes.");
-                }
-            }
-
-            private void Write(
-                ushort blockId,
-                byte direction,
-                int x,
-                int y,
-                int z,
-                byte[] offsets,
-                uint[] tileIndices,
-                byte[] directions,
-                int index)
-            {
-                int offsetIndex = index * 3;
-                offsets[offsetIndex] = checked((byte)x);
-                offsets[offsetIndex + 1] = checked((byte)y);
-                offsets[offsetIndex + 2] = checked((byte)z);
-                tileIndices[index] = GetFaceTile(blockId, direction);
-                directions[index] = direction;
+                uint[] opaque = opaqueRectangles.ToArray();
+                uint[] transparent = transparentRectangles.ToArray();
+                return new FaceRectangleMeshData(
+                    OpaqueFaceCount,
+                    opaque,
+                    TransparentFaceCount,
+                    transparent);
             }
 
             private uint GetFaceTile(ushort blockId, byte direction)
@@ -621,7 +665,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                             ? 2
                             : throw new InvalidOperationException(
                                 "Generated face uses an unknown block identifier.");
-                return faceTiles![materialIndex * 6 + direction];
+                return faceTiles[materialIndex * 6 + direction];
             }
 
             private static uint[] BuildFaceTiles(

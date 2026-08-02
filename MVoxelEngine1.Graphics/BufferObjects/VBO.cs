@@ -54,6 +54,21 @@ namespace MVoxelEngine1.Graphics.BufferObjects
             GL.BufferData(BufferTarget.ArrayBuffer, length, data, BufferUsageHint.StaticDraw);
         }
 
+        public VBO(uint[] data, int wordCount, RenderPass pass = RenderPass.Opaque)
+        {
+            if ((uint)wordCount > (uint)data.Length)
+                throw new ArgumentOutOfRangeException(nameof(wordCount));
+
+            Pass = pass;
+            ID = GL.GenBuffer();
+            GL.BindBuffer(BufferTarget.ArrayBuffer, ID);
+            GL.BufferData(
+                BufferTarget.ArrayBuffer,
+                checked(wordCount * sizeof(uint)),
+                data,
+                BufferUsageHint.StaticDraw);
+        }
+
         // Bind this VBO to GL_ARRAY_BUFFER target.
         public void Bind()
         {

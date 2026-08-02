@@ -93,6 +93,43 @@ namespace MVoxelEngine1.Tests
         }
 
         [Fact]
+        public void FlatGeneratedSurfaceUsesExactRectangles()
+        {
+            BlockTextureAtlas atlas = LoadDefaultRuntimeData();
+            var source = new GeneratedChunkSpanData(
+                CreateColumns(),
+                width: 16,
+                height: 16,
+                depth: 16,
+                chunkBaseY: 0,
+                stoneBlockId: (ushort)BaseBlockType.Stone,
+                soilBlockId: (ushort)BaseBlockType.Soil,
+                waterBlockId: (ushort)BaseBlockType.Water);
+            ChunkPrerenderData data = CreatePrerenderData(source);
+            ChunkRender.terrainTextureAtlas = atlas;
+            var optimized = new ChunkRender(
+                data,
+                FaceGenerationMode.Optimized,
+                null,
+                null);
+            var reference = new ChunkRender(
+                data,
+                FaceGenerationMode.Reference,
+                source.GetBlockLocal,
+                new ReferenceNeighborBlockPlanes());
+
+            Assert.Equal(
+                GetFaceRecords(reference.UploadData),
+                GetFaceRecords(optimized.UploadData));
+            Assert.True(
+                optimized.UploadData.OpaqueRectangleCount <
+                optimized.UploadData.OpaqueFaceCount);
+            Assert.True(
+                optimized.UploadData.TransparentRectangleCount <
+                optimized.UploadData.TransparentFaceCount);
+        }
+
+        [Fact]
         public void MaterializationPreservesBlocksAndReferenceFaces()
         {
             using TestWorkspace workspace = TestPaths.CreateWorkspace();
@@ -265,15 +302,11 @@ namespace MVoxelEngine1.Tests
             AddFaceRecords(
                 result,
                 "opaque",
-                data.OpaqueOffsets.ToArray(),
-                data.OpaqueTileIndices.ToArray(),
-                data.OpaqueFaceDirections.ToArray());
+                data.OpaqueRectangles.Span);
             AddFaceRecords(
                 result,
                 "transparent",
-                data.TransparentOffsets.ToArray(),
-                data.TransparentTileIndices.ToArray(),
-                data.TransparentFaceDirections.ToArray());
+                data.TransparentRectangles.Span);
             result.Sort(StringComparer.Ordinal);
             return result.ToArray();
         }
@@ -281,16 +314,14 @@ namespace MVoxelEngine1.Tests
         private static void AddFaceRecords(
             List<string> destination,
             string renderPass,
-            byte[] offsets,
-            uint[] tileIndices,
-            byte[] directions)
+            ReadOnlySpan<uint> rectangles)
         {
-            for (int index = 0; index < directions.Length; index++)
+            var reader = new PackedFaceRectangleReader(rectangles);
+            while (reader.MoveNext())
             {
-                int offset = index * 3;
                 destination.Add(
-                    $"{renderPass}:{offsets[offset]}:{offsets[offset + 1]}:" +
-                    $"{offsets[offset + 2]}:{directions[index]}:{tileIndices[index]}");
+                    $"{renderPass}:{reader.X}:{reader.Y}:{reader.Z}:" +
+                    $"{reader.Direction}:{reader.TileIndex}");
             }
         }
 
@@ -302,33 +333,28 @@ namespace MVoxelEngine1.Tests
             ushort secondTransparentBlock)
         {
             AssertPassTiles(
-                data.OpaqueOffsets.ToArray(),
-                data.OpaqueTileIndices.ToArray(),
-                data.OpaqueFaceDirections.ToArray(),
+                data.OpaqueRectangles.Span,
                 atlas,
                 _ => opaqueBlock);
             AssertPassTiles(
-                data.TransparentOffsets.ToArray(),
-                data.TransparentTileIndices.ToArray(),
-                data.TransparentFaceDirections.ToArray(),
+                data.TransparentRectangles.Span,
                 atlas,
                 y => y == 1 ? firstTransparentBlock : secondTransparentBlock);
         }
 
         private static void AssertPassTiles(
-            byte[] offsets,
-            uint[] tileIndices,
-            byte[] directions,
+            ReadOnlySpan<uint> rectangles,
             BlockTextureAtlas atlas,
             Func<byte, ushort> blockAtY)
         {
-            for (int index = 0; index < directions.Length; index++)
+            var reader = new PackedFaceRectangleReader(rectangles);
+            while (reader.MoveNext())
             {
-                ushort blockId = blockAtY(offsets[index * 3 + 1]);
-                Faces face = (Faces)directions[index];
+                ushort blockId = blockAtY(checked((byte)reader.Y));
+                Faces face = (Faces)reader.Direction;
                 ByteVector2 coordinate = atlas.GetBlockUVs(blockId, face)[2];
                 uint expected = (uint)(coordinate.y * atlas.tilesX + coordinate.x);
-                Assert.Equal(expected, tileIndices[index]);
+                Assert.Equal(expected, reader.TileIndex);
             }
         }
     }

@@ -507,12 +507,9 @@ namespace MVoxelEngine1.Application.Simulation
             bool transparent)
         {
             int count = transparent ? data.TransparentFaceCount : data.OpaqueFaceCount;
-            ReadOnlySpan<byte> offsets = transparent
-                ? data.TransparentOffsets.Span
-                : data.OpaqueOffsets.Span;
-            ReadOnlySpan<byte> directions = transparent
-                ? data.TransparentFaceDirections.Span
-                : data.OpaqueFaceDirections.Span;
+            ReadOnlySpan<uint> rectangles = transparent
+                ? data.TransparentRectangles.Span
+                : data.OpaqueRectangles.Span;
             var blockIds = new ushort[count];
             var neighborBlockIds = new ushort[count];
             int originX = checked((int)data.ChunkWorldX);
@@ -522,12 +519,17 @@ namespace MVoxelEngine1.Application.Simulation
             int maxY = GameManager.settings.chunkMaxY;
             int maxZ = GameManager.settings.chunkMaxZ;
 
-            for (int index = 0; index < count; index++)
+            var reader = new PackedFaceRectangleReader(rectangles);
+            int index = 0;
+            while (reader.MoveNext())
             {
-                int localX = offsets[index * 3];
-                int localY = offsets[index * 3 + 1];
-                int localZ = offsets[index * 3 + 2];
-                (int dx, int dy, int dz) = GetFaceNormal(directions[index]);
+                if (index >= count)
+                    throw new InvalidDataException("Packed face count exceeds its declared count.");
+
+                int localX = reader.X;
+                int localY = reader.Y;
+                int localZ = reader.Z;
+                (int dx, int dy, int dz) = GetFaceNormal(reader.Direction);
                 int neighborX = localX + dx;
                 int neighborY = localY + dy;
                 int neighborZ = localZ + dz;
@@ -541,7 +543,11 @@ namespace MVoxelEngine1.Application.Simulation
                             originX + neighborX,
                             originY + neighborY,
                             originZ + neighborZ);
+                index++;
             }
+
+            if (index != count)
+                throw new InvalidDataException("Packed face count does not match its declared count.");
 
             return new FaceDiagnostics(blockIds, neighborBlockIds);
         }
@@ -714,7 +720,11 @@ namespace MVoxelEngine1.Application.Simulation
             WriteVector("shaderChunkPosition", data.ChunkWorldX + 1, data.ChunkWorldY + 1, data.ChunkWorldZ + 1);
             writer.WriteBoolean("fullyOccluded", data.FullyOccluded);
             writer.WriteNumber("opaqueFaceCount", data.OpaqueFaceCount);
+            writer.WriteNumber("opaqueRectangleCount", data.OpaqueRectangleCount);
             writer.WriteNumber("transparentFaceCount", data.TransparentFaceCount);
+            writer.WriteNumber(
+                "transparentRectangleCount",
+                data.TransparentRectangleCount);
             WriteFaces("opaqueFaces", data, record.OpaqueDiagnostics, transparent: false);
             WriteFaces("transparentFaces", data, record.TransparentDiagnostics, transparent: true);
             writer.WriteEndObject();
@@ -827,26 +837,25 @@ namespace MVoxelEngine1.Application.Simulation
             bool transparent)
         {
             int count = transparent ? data.TransparentFaceCount : data.OpaqueFaceCount;
-            ReadOnlySpan<byte> offsets = transparent
-                ? data.TransparentOffsets.Span
-                : data.OpaqueOffsets.Span;
-            ReadOnlySpan<uint> tileIndices = transparent
-                ? data.TransparentTileIndices.Span
-                : data.OpaqueTileIndices.Span;
-            ReadOnlySpan<byte> faceDirections = transparent
-                ? data.TransparentFaceDirections.Span
-                : data.OpaqueFaceDirections.Span;
+            ReadOnlySpan<uint> rectangles = transparent
+                ? data.TransparentRectangles.Span
+                : data.OpaqueRectangles.Span;
             int originX = checked((int)data.ChunkWorldX);
             int originY = checked((int)data.ChunkWorldY);
             int originZ = checked((int)data.ChunkWorldZ);
 
             writer.WriteStartArray(propertyName);
-            for (int index = 0; index < count; index++)
+            var reader = new PackedFaceRectangleReader(rectangles);
+            int index = 0;
+            while (reader.MoveNext())
             {
-                int localX = offsets[index * 3];
-                int localY = offsets[index * 3 + 1];
-                int localZ = offsets[index * 3 + 2];
-                byte direction = faceDirections[index];
+                if (index >= count)
+                    throw new InvalidDataException("Packed face count exceeds its declared count.");
+
+                int localX = reader.X;
+                int localY = reader.Y;
+                int localZ = reader.Z;
+                byte direction = reader.Direction;
                 (int dx, int dy, int dz) = GetFaceNormal(direction);
                 int worldX = originX + localX;
                 int worldY = originY + localY;
@@ -857,7 +866,7 @@ namespace MVoxelEngine1.Application.Simulation
                 writer.WriteStartObject();
                 writer.WriteString("renderPass", transparent ? "transparent" : "opaque");
                 WriteVector("offset", localX, localY, localZ);
-                writer.WriteNumber("tileIndex", tileIndices[index]);
+                writer.WriteNumber("tileIndex", reader.TileIndex);
                 writer.WriteNumber("faceDirection", direction);
                 writer.WriteString("faceName", GetFaceName(direction));
                 WriteVector("voxelWorld", worldX, worldY, worldZ);
@@ -867,8 +876,11 @@ namespace MVoxelEngine1.Application.Simulation
                 writer.WriteNumber("neighborBlockIdAtUpload", neighborBlockId);
                 WriteBlockName("neighborBlockNameAtUpload", neighborBlockId);
                 writer.WriteEndObject();
+                index++;
             }
             writer.WriteEndArray();
+            if (index != count)
+                throw new InvalidDataException("Packed face count does not match its declared count.");
         }
 
         private void WriteCamera(CameraCapture camera)
@@ -1058,12 +1070,8 @@ namespace MVoxelEngine1.Application.Simulation
             {
                 UploadRecord upload => checked(
                     RecordOverheadEstimate +
-                    upload.Data.OpaqueOffsets.Length +
-                    upload.Data.OpaqueTileIndices.Length * sizeof(uint) +
-                    upload.Data.OpaqueFaceDirections.Length +
-                    upload.Data.TransparentOffsets.Length +
-                    upload.Data.TransparentTileIndices.Length * sizeof(uint) +
-                    upload.Data.TransparentFaceDirections.Length +
+                    upload.Data.OpaqueRectangles.Length * sizeof(uint) +
+                    upload.Data.TransparentRectangles.Length * sizeof(uint) +
                     upload.OpaqueDiagnostics.BlockIds.Length * sizeof(ushort) +
                     upload.OpaqueDiagnostics.NeighborBlockIds.Length * sizeof(ushort) +
                     upload.TransparentDiagnostics.BlockIds.Length * sizeof(ushort) +
@@ -1106,16 +1114,20 @@ namespace MVoxelEngine1.Application.Simulation
 
         private static void ValidateUploadData(ChunkRenderUploadData data)
         {
-            if (data.OpaqueOffsets.Length != data.OpaqueFaceCount * 3 ||
-                data.OpaqueTileIndices.Length != data.OpaqueFaceCount ||
-                data.OpaqueFaceDirections.Length != data.OpaqueFaceCount)
+            if (PackedFaceRectangle.GetRectangleCount(
+                    data.OpaqueRectangles.Span) != data.OpaqueRectangleCount ||
+                PackedFaceRectangle.CountLogicalFaces(
+                    data.OpaqueRectangles.Span) != data.OpaqueFaceCount)
             {
                 throw new InvalidDataException($"Opaque render data {data.RenderDataId} has inconsistent buffer lengths.");
             }
 
-            if (data.TransparentOffsets.Length != data.TransparentFaceCount * 3 ||
-                data.TransparentTileIndices.Length != data.TransparentFaceCount ||
-                data.TransparentFaceDirections.Length != data.TransparentFaceCount)
+            if (PackedFaceRectangle.GetRectangleCount(
+                    data.TransparentRectangles.Span) !=
+                    data.TransparentRectangleCount ||
+                PackedFaceRectangle.CountLogicalFaces(
+                    data.TransparentRectangles.Span) !=
+                    data.TransparentFaceCount)
             {
                 throw new InvalidDataException($"Transparent render data {data.RenderDataId} has inconsistent buffer lengths.");
             }
