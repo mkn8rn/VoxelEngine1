@@ -12,6 +12,9 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
         public required long AllWaterChunks { get; init; }
         public required long NonUniformChunks { get; init; }
         public required double AggregatedProfileMilliseconds { get; init; }
+        public required double HeightMapMilliseconds { get; init; }
+        public required double SmoothValueNoiseMilliseconds { get; init; }
+        public required double ProfileDerivationMilliseconds { get; init; }
         public required double VerticalClassificationMilliseconds { get; init; }
         public required double SpanMapMilliseconds { get; init; }
         public required double ChunkConstructionMilliseconds { get; init; }
@@ -45,6 +48,9 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
         private static long allWaterChunks;
         private static long nonUniformChunks;
         private static long aggregatedProfileTicks;
+        private static long heightMapTicks;
+        private static long smoothValueNoiseTicks;
+        private static long profileDerivationTicks;
         private static long verticalClassificationTicks;
         private static long spanMapTicks;
         private static long chunkConstructionTicks;
@@ -77,6 +83,9 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
             Volatile.Write(ref allWaterChunks, 0);
             Volatile.Write(ref nonUniformChunks, 0);
             Volatile.Write(ref aggregatedProfileTicks, 0);
+            Volatile.Write(ref heightMapTicks, 0);
+            Volatile.Write(ref smoothValueNoiseTicks, 0);
+            Volatile.Write(ref profileDerivationTicks, 0);
             Volatile.Write(ref verticalClassificationTicks, 0);
             Volatile.Write(ref spanMapTicks, 0);
             Volatile.Write(ref chunkConstructionTicks, 0);
@@ -114,6 +123,15 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
             Interlocked.Add(ref chunkConstructionTicks, constructionTicks);
             Interlocked.Add(ref registrarTicks, registrationTicks);
         }
+
+        public static void RecordSmoothValueNoise(long elapsedTicks) =>
+            Interlocked.Add(ref smoothValueNoiseTicks, elapsedTicks);
+
+        public static void RecordHeightMap(long elapsedTicks) =>
+            Interlocked.Add(ref heightMapTicks, elapsedTicks);
+
+        public static void RecordProfileDerivation(long elapsedTicks) =>
+            Interlocked.Add(ref profileDerivationTicks, elapsedTicks);
 
         public static void RecordChunkKind(int uniformOverride)
         {
@@ -193,6 +211,9 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
             AllWaterChunks = Volatile.Read(ref allWaterChunks),
             NonUniformChunks = Volatile.Read(ref nonUniformChunks),
             AggregatedProfileMilliseconds = ToMilliseconds(Volatile.Read(ref aggregatedProfileTicks)),
+            HeightMapMilliseconds = ToMilliseconds(Volatile.Read(ref heightMapTicks)),
+            SmoothValueNoiseMilliseconds = ToMilliseconds(Volatile.Read(ref smoothValueNoiseTicks)),
+            ProfileDerivationMilliseconds = ToMilliseconds(Volatile.Read(ref profileDerivationTicks)),
             VerticalClassificationMilliseconds = ToMilliseconds(Volatile.Read(ref verticalClassificationTicks)),
             SpanMapMilliseconds = ToMilliseconds(Volatile.Read(ref spanMapTicks)),
             ChunkConstructionMilliseconds = ToMilliseconds(Volatile.Read(ref chunkConstructionTicks)),

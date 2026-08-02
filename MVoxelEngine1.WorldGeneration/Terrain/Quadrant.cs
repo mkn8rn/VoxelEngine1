@@ -6,6 +6,7 @@ using MVoxelEngine1.Infrastructure.Models.Terrain;
 using MVoxelEngine1.Tools.Noise;
 using OpenTK.Mathematics;
 using System;
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -227,11 +228,21 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
 
             int sizeX = GameManager.settings.chunkMaxX;
             int sizeZ = GameManager.settings.chunkMaxZ;
-            profile.BlockColumns = new BlockColumnProfile[sizeX * sizeZ];
+            int profileCount = checked(sizeX * sizeZ);
+            profile.BlockColumns = new BlockColumnProfile[profileCount];
 
             int baseWorldX = columnCx * sizeX;
             int baseWorldZ = columnCz * sizeZ;
+            bool recordPerformance = StartupPerformanceRecorder.IsRunning;
+            long phaseStart = recordPerformance
+                ? Stopwatch.GetTimestamp()
+                : 0;
             var hm = GetOrCreateHeightmap(_seed, baseWorldX, baseWorldZ);
+            if (recordPerformance)
+            {
+                GenerationPerformanceRecorder.RecordHeightMap(
+                    GenerationPerformanceRecorder.GetElapsedTicks(phaseStart));
+            }
 
             var ranges = new ColumnUniformRanges
             {
@@ -248,84 +259,112 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                 WaterEndMinimum = int.MaxValue
             };
 
-            // Build block columns and their exact uniform range summary.
-            for (int x = 0; x < sizeX; x++)
+            if (recordPerformance)
+                phaseStart = Stopwatch.GetTimestamp();
+            float[] noiseValues = ArrayPool<float>.Shared.Rent(profileCount);
+            try
             {
-                for (int z = 0; z < sizeZ; z++)
+                TerrainGenerationUtils.FillSmoothValueNoise01(
+                    baseWorldX,
+                    baseWorldZ,
+                    sizeX,
+                    sizeZ,
+                    _seed,
+                    noiseValues.AsSpan(0, profileCount));
+                if (recordPerformance)
                 {
-                    int surface = (int)hm[x, z];
+                    GenerationPerformanceRecorder.RecordSmoothValueNoise(
+                        GenerationPerformanceRecorder.GetElapsedTicks(phaseStart));
+                    phaseStart = Stopwatch.GetTimestamp();
+                }
 
-                    // Cheap slope at (x,z)
-                    int x0 = Math.Max(x - 1, 0), x1 = Math.Min(x + 1, sizeX - 1);
-                    int z0 = Math.Max(z - 1, 0), z1 = Math.Min(z + 1, sizeZ - 1);
-                    float dx = hm[x1, z] - hm[x0, z];
-                    float dz = hm[x, z1] - hm[x, z0];
-                    float grad = MathF.Sqrt(dx * dx + dz * dz);
-                    float slope01 = MathF.Min(1f, grad / 6f);
+                // Build block columns and their exact uniform range summary.
+                for (int x = 0; x < sizeX; x++)
+                {
+                    for (int z = 0; z < sizeZ; z++)
+                    {
+                        int surface = (int)hm[x, z];
 
-                    var (stoneStart, stoneEnd, soilStart, soilEnd, waterStart, waterEnd) =
-                        TerrainGenerationUtils.DeriveWorldStoneSoilSpans(
-                            surface,
-                            Biome,
-                            baseWorldX + x,
-                            baseWorldZ + z,
-                            _seed,
-                            slope01);
+                        // Cheap slope at (x,z)
+                        int x0 = Math.Max(x - 1, 0), x1 = Math.Min(x + 1, sizeX - 1);
+                        int z0 = Math.Max(z - 1, 0), z1 = Math.Min(z + 1, sizeZ - 1);
+                        float dx = hm[x1, z] - hm[x0, z];
+                        float dz = hm[x, z1] - hm[x, z0];
+                        float grad = MathF.Sqrt(dx * dx + dz * dz);
+                        float slope01 = MathF.Min(1f, grad / 6f);
+                        int profileIndex = x * sizeZ + z;
 
-                    profile.BlockColumns[x * sizeZ + z] = new BlockColumnProfile
-                    {
-                        Surface = surface,
-                        StoneStart = stoneStart,
-                        StoneEnd = stoneEnd,
-                        SoilStart = soilStart,
-                        SoilEnd = soilEnd,
-                        WaterStart = waterStart,
-                        WaterEnd = waterEnd
-                    };
+                        var (stoneStart, stoneEnd, soilStart, soilEnd, waterStart, waterEnd) =
+                            TerrainGenerationUtils.DeriveWorldStoneSoilSpansFromNoise(
+                                surface,
+                                Biome,
+                                slope01,
+                                noiseValues[profileIndex]);
 
-                    bool hasStone = stoneStart >= 0 && stoneEnd >= stoneStart;
-                    bool hasSoil = soilStart >= 0 && soilEnd >= soilStart;
-                    bool hasWater = waterStart >= 0 && waterEnd >= waterStart;
+                        profile.BlockColumns[profileIndex] = new BlockColumnProfile
+                        {
+                            Surface = surface,
+                            StoneStart = stoneStart,
+                            StoneEnd = stoneEnd,
+                            SoilStart = soilStart,
+                            SoilEnd = soilEnd,
+                            WaterStart = waterStart,
+                            WaterEnd = waterEnd
+                        };
 
-                    if (hasStone)
-                    {
-                        ranges.HasMaterial = true;
-                        if (stoneStart < ranges.MinimumMaterialStart) ranges.MinimumMaterialStart = stoneStart;
-                        if (stoneEnd > ranges.MaximumMaterialEnd) ranges.MaximumMaterialEnd = stoneEnd;
-                        if (stoneStart > ranges.StoneStartMaximum) ranges.StoneStartMaximum = stoneStart;
-                        if (stoneEnd < ranges.StoneEndMinimum) ranges.StoneEndMinimum = stoneEnd;
-                    }
-                    else
-                    {
-                        ranges.AllColumnsHaveStone = false;
-                    }
+                        bool hasStone = stoneStart >= 0 && stoneEnd >= stoneStart;
+                        bool hasSoil = soilStart >= 0 && soilEnd >= soilStart;
+                        bool hasWater = waterStart >= 0 && waterEnd >= waterStart;
 
-                    if (hasSoil)
-                    {
-                        ranges.HasMaterial = true;
-                        if (soilStart < ranges.MinimumMaterialStart) ranges.MinimumMaterialStart = soilStart;
-                        if (soilEnd > ranges.MaximumMaterialEnd) ranges.MaximumMaterialEnd = soilEnd;
-                        if (soilStart > ranges.SoilStartMaximum) ranges.SoilStartMaximum = soilStart;
-                        if (soilEnd < ranges.SoilEndMinimum) ranges.SoilEndMinimum = soilEnd;
-                    }
-                    else
-                    {
-                        ranges.AllColumnsHaveSoil = false;
-                    }
+                        if (hasStone)
+                        {
+                            ranges.HasMaterial = true;
+                            if (stoneStart < ranges.MinimumMaterialStart) ranges.MinimumMaterialStart = stoneStart;
+                            if (stoneEnd > ranges.MaximumMaterialEnd) ranges.MaximumMaterialEnd = stoneEnd;
+                            if (stoneStart > ranges.StoneStartMaximum) ranges.StoneStartMaximum = stoneStart;
+                            if (stoneEnd < ranges.StoneEndMinimum) ranges.StoneEndMinimum = stoneEnd;
+                        }
+                        else
+                        {
+                            ranges.AllColumnsHaveStone = false;
+                        }
 
-                    if (hasWater)
-                    {
-                        ranges.HasMaterial = true;
-                        if (waterStart < ranges.MinimumMaterialStart) ranges.MinimumMaterialStart = waterStart;
-                        if (waterEnd > ranges.MaximumMaterialEnd) ranges.MaximumMaterialEnd = waterEnd;
-                        if (waterStart > ranges.WaterStartMaximum) ranges.WaterStartMaximum = waterStart;
-                        if (waterEnd < ranges.WaterEndMinimum) ranges.WaterEndMinimum = waterEnd;
-                    }
-                    else
-                    {
-                        ranges.AllColumnsHaveWater = false;
+                        if (hasSoil)
+                        {
+                            ranges.HasMaterial = true;
+                            if (soilStart < ranges.MinimumMaterialStart) ranges.MinimumMaterialStart = soilStart;
+                            if (soilEnd > ranges.MaximumMaterialEnd) ranges.MaximumMaterialEnd = soilEnd;
+                            if (soilStart > ranges.SoilStartMaximum) ranges.SoilStartMaximum = soilStart;
+                            if (soilEnd < ranges.SoilEndMinimum) ranges.SoilEndMinimum = soilEnd;
+                        }
+                        else
+                        {
+                            ranges.AllColumnsHaveSoil = false;
+                        }
+
+                        if (hasWater)
+                        {
+                            ranges.HasMaterial = true;
+                            if (waterStart < ranges.MinimumMaterialStart) ranges.MinimumMaterialStart = waterStart;
+                            if (waterEnd > ranges.MaximumMaterialEnd) ranges.MaximumMaterialEnd = waterEnd;
+                            if (waterStart > ranges.WaterStartMaximum) ranges.WaterStartMaximum = waterStart;
+                            if (waterEnd < ranges.WaterEndMinimum) ranges.WaterEndMinimum = waterEnd;
+                        }
+                        else
+                        {
+                            ranges.AllColumnsHaveWater = false;
+                        }
                     }
                 }
+                if (recordPerformance)
+                {
+                    GenerationPerformanceRecorder.RecordProfileDerivation(
+                        GenerationPerformanceRecorder.GetElapsedTicks(phaseStart));
+                }
+            }
+            finally
+            {
+                ArrayPool<float>.Shared.Return(noiseValues);
             }
 
             profile.UniformRanges = ranges;

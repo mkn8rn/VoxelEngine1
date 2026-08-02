@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Buffers;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -10,6 +11,19 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
 {
     internal static class TerrainGenerationUtils
     {
+        private readonly struct NoiseAxisSample
+        {
+            internal NoiseAxisSample(int grid, float smooth)
+            {
+                Grid = grid;
+                Smooth = smooth;
+            }
+
+            internal int Grid { get; }
+
+            internal float Smooth { get; }
+        }
+
         // ---------------- Soil smoothing constants ----------------
         // Larger => smoother, bigger coherent patches (8..24 is typical)
         private const int NoiseCellSize = 12;
@@ -39,6 +53,20 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             long seed,
             float slope01 = 0f)
         {
+            return DeriveWorldStoneSoilSpansFromNoise(
+                surfaceY,
+                biome,
+                slope01,
+                SmoothValueNoise01(worldX, worldZ, seed, NoiseCellSize));
+        }
+
+        internal static (int stoneStart, int stoneEnd, int soilStart, int soilEnd, int waterStart, int waterEnd)
+        DeriveWorldStoneSoilSpansFromNoise(
+            int surfaceY,
+            Biome biome,
+            float slope01,
+            float noise01)
+        {
             // ---- Biome specs ----
             int stoneMinY = biome.stoneMinYLevel; int stoneMaxY = biome.stoneMaxYLevel;
             int soilMinY = biome.soilMinYLevel; int soilMaxY = biome.soilMaxYLevel;
@@ -48,7 +76,6 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             if (slope01 < 0f) slope01 = 0f; else if (slope01 > 1f) slope01 = 1f;
 
             // ---- Smooth value noise in [-1,1] (low frequency) ----
-            float noise01 = SmoothValueNoise01(worldX, worldZ, seed, NoiseCellSize);
             float noiseSigned = noise01 * 2f - 1f; // [-1..1]
 
             // ---- Stone span ----
@@ -147,49 +174,241 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             }
 
             return (stoneStart, stoneEnd, soilStart, soilEnd, waterStart, waterEnd);
+        }
 
-            // ------------------ Helpers ------------------
-            static uint Hash(int x, int z, long s)
+        internal static void FillSmoothValueNoise01(
+            int baseX,
+            int baseZ,
+            int sizeX,
+            int sizeZ,
+            long seed,
+            Span<float> destination)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(sizeX);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(sizeZ);
+            int valueCount = checked(sizeX * sizeZ);
+            if (destination.Length < valueCount)
             {
-                unchecked
+                throw new ArgumentException(
+                    "The destination is smaller than the requested noise map.",
+                    nameof(destination));
+            }
+
+            int firstSizeX = GetFirstContiguousLength(baseX, sizeX);
+            int firstSizeZ = GetFirstContiguousLength(baseZ, sizeZ);
+            FillSmoothValueNoiseSegment(
+                baseX,
+                baseZ,
+                firstSizeX,
+                firstSizeZ,
+                seed,
+                destination,
+                destinationOffset: 0,
+                destinationRowStride: sizeZ);
+
+            int secondSizeZ = sizeZ - firstSizeZ;
+            if (secondSizeZ > 0)
+            {
+                FillSmoothValueNoiseSegment(
+                    baseX,
+                    int.MinValue,
+                    firstSizeX,
+                    secondSizeZ,
+                    seed,
+                    destination,
+                    destinationOffset: firstSizeZ,
+                    destinationRowStride: sizeZ);
+            }
+
+            int secondSizeX = sizeX - firstSizeX;
+            if (secondSizeX == 0)
+                return;
+
+            int secondXOffset = checked(firstSizeX * sizeZ);
+            FillSmoothValueNoiseSegment(
+                int.MinValue,
+                baseZ,
+                secondSizeX,
+                firstSizeZ,
+                seed,
+                destination,
+                destinationOffset: secondXOffset,
+                destinationRowStride: sizeZ);
+
+            if (secondSizeZ > 0)
+            {
+                FillSmoothValueNoiseSegment(
+                    int.MinValue,
+                    int.MinValue,
+                    secondSizeX,
+                    secondSizeZ,
+                    seed,
+                    destination,
+                    destinationOffset: checked(secondXOffset + firstSizeZ),
+                    destinationRowStride: sizeZ);
+            }
+        }
+
+        private static void FillSmoothValueNoiseSegment(
+            int baseX,
+            int baseZ,
+            int sizeX,
+            int sizeZ,
+            long seed,
+            Span<float> destination,
+            int destinationOffset,
+            int destinationRowStride)
+        {
+
+            NoiseAxisSample[] xBuffer =
+                ArrayPool<NoiseAxisSample>.Shared.Rent(sizeX);
+            NoiseAxisSample[]? zBuffer = null;
+            float[]? latticeBuffer = null;
+            try
+            {
+                zBuffer = ArrayPool<NoiseAxisSample>.Shared.Rent(sizeZ);
+                Span<NoiseAxisSample> xSamples = xBuffer.AsSpan(0, sizeX);
+                Span<NoiseAxisSample> zSamples = zBuffer.AsSpan(0, sizeZ);
+                int minimumGridX = int.MaxValue;
+                int maximumGridX = int.MinValue;
+                for (int x = 0; x < sizeX; x++)
                 {
-                    uint h = 2166136261u;
-                    h ^= (uint)x; h *= 16777619u;
-                    h ^= (uint)z; h *= 16777619u;
-                    h ^= (uint)s; h *= 16777619u;
-                    h ^= (uint)(s >> 32); h *= 16777619u;
-                    h ^= h >> 15; h *= 0x2c1b3c6d; h ^= h >> 12; h *= 0x297a2d39; h ^= h >> 15;
-                    return h;
+                    int worldX = unchecked(baseX + x);
+                    int gridX = FloorDiv(worldX, NoiseCellSize);
+                    float fraction =
+                        (worldX - gridX * NoiseCellSize) / (float)NoiseCellSize;
+                    xSamples[x] = new NoiseAxisSample(
+                        gridX,
+                        SmoothStep(fraction));
+                    if (gridX < minimumGridX) minimumGridX = gridX;
+                    if (gridX > maximumGridX) maximumGridX = gridX;
+                }
+
+                int minimumGridZ = int.MaxValue;
+                int maximumGridZ = int.MinValue;
+                for (int z = 0; z < sizeZ; z++)
+                {
+                    int worldZ = unchecked(baseZ + z);
+                    int gridZ = FloorDiv(worldZ, NoiseCellSize);
+                    float fraction =
+                        (worldZ - gridZ * NoiseCellSize) / (float)NoiseCellSize;
+                    zSamples[z] = new NoiseAxisSample(
+                        gridZ,
+                        SmoothStep(fraction));
+                    if (gridZ < minimumGridZ) minimumGridZ = gridZ;
+                    if (gridZ > maximumGridZ) maximumGridZ = gridZ;
+                }
+
+                int latticeSizeX = checked(maximumGridX - minimumGridX + 2);
+                int latticeSizeZ = checked(maximumGridZ - minimumGridZ + 2);
+                int latticeCount = checked(latticeSizeX * latticeSizeZ);
+                latticeBuffer = ArrayPool<float>.Shared.Rent(latticeCount);
+                Span<float> lattice = latticeBuffer.AsSpan(0, latticeCount);
+                for (int latticeX = 0; latticeX < latticeSizeX; latticeX++)
+                {
+                    int gridX = unchecked(minimumGridX + latticeX);
+                    int rowOffset = latticeX * latticeSizeZ;
+                    for (int latticeZ = 0; latticeZ < latticeSizeZ; latticeZ++)
+                    {
+                        int gridZ = unchecked(minimumGridZ + latticeZ);
+                        lattice[rowOffset + latticeZ] =
+                            HashToUnitFloat(gridX, gridZ, seed);
+                    }
+                }
+
+                for (int x = 0; x < sizeX; x++)
+                {
+                    NoiseAxisSample xSample = xSamples[x];
+                    int latticeX = xSample.Grid - minimumGridX;
+                    int firstRow = latticeX * latticeSizeZ;
+                    int secondRow = firstRow + latticeSizeZ;
+                    int destinationRow = checked(
+                        destinationOffset + x * destinationRowStride);
+                    for (int z = 0; z < sizeZ; z++)
+                    {
+                        NoiseAxisSample zSample = zSamples[z];
+                        int latticeZ = zSample.Grid - minimumGridZ;
+                        float valueX0 = Lerp(
+                            lattice[firstRow + latticeZ],
+                            lattice[secondRow + latticeZ],
+                            xSample.Smooth);
+                        float valueX1 = Lerp(
+                            lattice[firstRow + latticeZ + 1],
+                            lattice[secondRow + latticeZ + 1],
+                            xSample.Smooth);
+                        destination[destinationRow + z] =
+                            Lerp(valueX0, valueX1, zSample.Smooth);
+                    }
                 }
             }
-
-            // Smooth value noise in [0..1] using bilinear interpolation on a coarse integer grid
-            static float SmoothValueNoise01(int x, int z, long s, int cell)
+            finally
             {
-                int gx = FloorDiv(x, cell);
-                int gz = FloorDiv(z, cell);
-                float fx = (x - gx * cell) / (float)cell;
-                float fz = (z - gz * cell) / (float)cell;
-
-                uint h00 = Hash(gx, gz, s);
-                uint h10 = Hash(gx + 1, gz, s);
-                uint h01 = Hash(gx, gz + 1, s);
-                uint h11 = Hash(gx + 1, gz + 1, s);
-
-                // map to [0..1]
-                float v00 = (h00 & 0x3FFFFF) / 4194303f;
-                float v10 = (h10 & 0x3FFFFF) / 4194303f;
-                float v01 = (h01 & 0x3FFFFF) / 4194303f;
-                float v11 = (h11 & 0x3FFFFF) / 4194303f;
-
-                float vx0 = Lerp(v00, v10, SmoothStep(fx));
-                float vx1 = Lerp(v01, v11, SmoothStep(fx));
-                return Lerp(vx0, vx1, SmoothStep(fz));
+                if (latticeBuffer is not null)
+                    ArrayPool<float>.Shared.Return(latticeBuffer);
+                if (zBuffer is not null)
+                    ArrayPool<NoiseAxisSample>.Shared.Return(zBuffer);
+                ArrayPool<NoiseAxisSample>.Shared.Return(xBuffer);
             }
-
-            static float Lerp(float a, float b, float t) => a + (b - a) * t;
-            static float SmoothStep(float t) => t * t * (3f - 2f * t);
-            static int FloorDiv(int a, int b) => (int)Math.Floor(a / (double)b);
         }
+
+        private static int GetFirstContiguousLength(
+            int baseCoordinate,
+            int length)
+        {
+            long availableBeforeWrap =
+                (long)int.MaxValue - baseCoordinate + 1L;
+            return (int)Math.Min(length, availableBeforeWrap);
+        }
+
+        internal static float SmoothValueNoise01(
+            int x,
+            int z,
+            long seed,
+            int cell = NoiseCellSize)
+        {
+            int gridX = FloorDiv(x, cell);
+            int gridZ = FloorDiv(z, cell);
+            float fractionX = (x - gridX * cell) / (float)cell;
+            float fractionZ = (z - gridZ * cell) / (float)cell;
+
+            float value00 = HashToUnitFloat(gridX, gridZ, seed);
+            float value10 = HashToUnitFloat(gridX + 1, gridZ, seed);
+            float value01 = HashToUnitFloat(gridX, gridZ + 1, seed);
+            float value11 = HashToUnitFloat(gridX + 1, gridZ + 1, seed);
+
+            float valueX0 = Lerp(value00, value10, SmoothStep(fractionX));
+            float valueX1 = Lerp(value01, value11, SmoothStep(fractionX));
+            return Lerp(valueX0, valueX1, SmoothStep(fractionZ));
+        }
+
+        private static float HashToUnitFloat(int x, int z, long seed) =>
+            (Hash(x, z, seed) & 0x3FFFFF) / 4194303f;
+
+        private static uint Hash(int x, int z, long seed)
+        {
+            unchecked
+            {
+                uint hash = 2166136261u;
+                hash ^= (uint)x; hash *= 16777619u;
+                hash ^= (uint)z; hash *= 16777619u;
+                hash ^= (uint)seed; hash *= 16777619u;
+                hash ^= (uint)(seed >> 32); hash *= 16777619u;
+                hash ^= hash >> 15;
+                hash *= 0x2c1b3c6d;
+                hash ^= hash >> 12;
+                hash *= 0x297a2d39;
+                hash ^= hash >> 15;
+                return hash;
+            }
+        }
+
+        private static float Lerp(float first, float second, float amount) =>
+            first + (second - first) * amount;
+
+        private static float SmoothStep(float value) =>
+            value * value * (3f - 2f * value);
+
+        private static int FloorDiv(int dividend, int divisor) =>
+            (int)Math.Floor(dividend / (double)divisor);
     }
 }

@@ -244,6 +244,15 @@ namespace MVoxelEngine1.Tests
                 diagnostics.AggregatedProfileMilliseconds,
                 nameof(diagnostics.AggregatedProfileMilliseconds));
             AssertPositiveFinite(
+                diagnostics.HeightMapMilliseconds,
+                nameof(diagnostics.HeightMapMilliseconds));
+            AssertPositiveFinite(
+                diagnostics.SmoothValueNoiseMilliseconds,
+                nameof(diagnostics.SmoothValueNoiseMilliseconds));
+            AssertPositiveFinite(
+                diagnostics.ProfileDerivationMilliseconds,
+                nameof(diagnostics.ProfileDerivationMilliseconds));
+            AssertPositiveFinite(
                 diagnostics.VerticalClassificationMilliseconds,
                 nameof(diagnostics.VerticalClassificationMilliseconds));
             AssertPositiveFinite(
