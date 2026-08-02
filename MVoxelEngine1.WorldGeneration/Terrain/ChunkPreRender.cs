@@ -275,6 +275,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                 NeighborTransparentPlaneNegZ = NeighborTransparentPlaneNegZFace,
                 NeighborTransparentPlanePosZ = NeighborTransparentPlanePosZFace,
                 chunkData = chunkData,
+                GeneratedSpans = generatedSpans,
                 SectionDescs = sectionDescs,
                 sectionsX = sectionsX,
                 sectionsY = sectionsY,
@@ -482,6 +483,16 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                 return null;
             }
 
+            if (generatedSpans is not null)
+            {
+                MeshPrepassStats = default;
+                return new ChunkRender(
+                    BuildPrerenderData(null),
+                    faceGenerationMode,
+                    GetBlockLocal,
+                    referenceNeighbors);
+            }
+
             if (AllOneBlockChunk)
             {
                 int vol = dimX * dimY * dimZ;
@@ -583,6 +594,16 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             ArgumentNullException.ThrowIfNull(neighbors);
             if (AllAirChunk)
                 return ReferenceFaceGenerator.Empty();
+            if (generatedSpans is not null)
+            {
+                return ReferenceFaceGenerator.Generate(
+                    dimX,
+                    dimY,
+                    dimZ,
+                    generatedSpans.GetBlockLocal,
+                    neighbors,
+                    TerrainLoader.IsOpaque);
+            }
             if (AllOneBlockChunk)
             {
                 return ReferenceFaceGenerator.GenerateUniform(

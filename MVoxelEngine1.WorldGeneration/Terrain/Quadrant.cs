@@ -1,5 +1,6 @@
 ﻿using MVoxelEngine1.Infrastructure.Managers;
 using MVoxelEngine1.Infrastructure.Models.Generation.Biomes;
+using MVoxelEngine1.Infrastructure.Models.Generation;
 using MVoxelEngine1.Infrastructure.Diagnostics;
 using MVoxelEngine1.Infrastructure.Models.Terrain;
 using MVoxelEngine1.Tools.Noise;
@@ -18,18 +19,6 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
         public BlockColumnProfile[] BlockColumns;
         public ColumnUniformRanges UniformRanges;
         public bool BlockColumnsBuilt;
-    }
-
-    // Per single BLOCK (local x,z inside a chunk) vertical column absolute world extents.
-    internal struct BlockColumnProfile
-    {
-        public int Surface;    // world surface height for this precise block column
-        public int StoneStart; // world stone span start (inclusive) or -1 absent
-        public int StoneEnd;   // world stone span end (inclusive) or -1
-        public int SoilStart;  // world soil span start (inclusive) or -1
-        public int SoilEnd;    // world soil span end (inclusive) or -1
-        public int WaterStart; // world water span start (surface+1) or -1 when no water above surface
-        public int WaterEnd;   // world water span end (biome water level inclusive) or -1
     }
 
     internal struct ColumnUniformRanges

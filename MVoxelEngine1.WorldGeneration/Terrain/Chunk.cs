@@ -41,6 +41,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
         private readonly int dimY;
         private readonly int dimZ;
         private const ushort EMPTY = (ushort)BaseBlockType.Empty;
+        private GeneratedChunkSpanData? generatedSpans;
 
         private Biome biome;
 
@@ -201,7 +202,16 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                 return;
             }
             long generationStart = StartupPerformanceRecorder.IsRunning ? Stopwatch.GetTimestamp() : 0;
-            GenerateInitialChunkData(columnSpanMap);
+            generatedSpans = new GeneratedChunkSpanData(
+                columnSpanMap,
+                dimX,
+                dimY,
+                dimZ,
+                (int)position.Y,
+                (ushort)BaseBlockType.Stone,
+                (ushort)BaseBlockType.Soil,
+                (ushort)BaseBlockType.Water);
+            BuildAllBoundaryPlanesInitial();
             if (generationStart != 0)
                 GenerationPerformanceRecorder.RecordNonUniformGeneration(
                     GenerationPerformanceRecorder.GetElapsedTicks(generationStart));
@@ -214,6 +224,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
 
         public Section GetOrCreateSection(int sx, int sy, int sz)
         {
+            MaterializeGeneratedSpans();
             var sec = sections[sx, sy, sz];
             if (sec == null)
             {
@@ -240,6 +251,8 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
         {
             if ((uint)lx >= (uint)dimX || (uint)ly >= (uint)dimY || (uint)lz >= (uint)dimZ)
                 return EMPTY;
+            if (generatedSpans is not null)
+                return generatedSpans.GetBlockLocal(lx, ly, lz);
 
             int sx = lx >> SECTION_SHIFT;
             int sy = ly >> SECTION_SHIFT;
@@ -256,6 +269,8 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
         {
             if ((uint)lx >= (uint)dimX || (uint)ly >= (uint)dimY || (uint)lz >= (uint)dimZ)
                 return;
+
+            MaterializeGeneratedSpans();
 
             LocalToSection(lx, ly, lz, out int sx, out int sy, out int sz, out int ox, out int oy, out int oz);
             var sec = GetOrCreateSection(sx, sy, sz);

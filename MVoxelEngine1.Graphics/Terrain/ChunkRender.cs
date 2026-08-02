@@ -18,6 +18,7 @@ using MVoxelEngine1.Infrastructure.Models;
 using MVoxelEngine1.Graphics.Terrain.Sections;
 using System.Linq;
 using System.Threading;
+using System.Diagnostics;
 
 namespace MVoxelEngine1.Graphics.Terrain
 {
@@ -156,16 +157,33 @@ namespace MVoxelEngine1.Graphics.Terrain
                 fullyOccluded = true; return;
             }
 
+            bool recordPerformance = StartupPerformanceRecorder.IsRunning;
+            bool usesGeneratedSpans = prerenderData.GeneratedSpans is not null;
+            long buildStart = recordPerformance ? Stopwatch.GetTimestamp() : 0;
             sectionRender = new SectionRender(prerenderData, terrainTextureAtlas);
             sectionRender.Build(out instanceCount, out instanceOffsetBuffer, out instanceTileIndexBuffer, out instanceFaceDirBuffer,
                                 out transparentInstanceCount, out transparentInstanceOffsetBuffer, out transparentInstanceTileIndexBuffer, out transparentInstanceFaceDirBuffer);
+            if (recordPerformance)
+            {
+                MeshPerformanceRecorder.RecordBuiltChunk(
+                    usesGeneratedSpans,
+                    MeshPerformanceRecorder.GetElapsedTicks(buildStart));
+            }
         }
 
         private void GenerateReferenceFaces(
             Func<int, int, int, ushort> getLocalBlock,
             ReferenceNeighborBlockPlanes referenceNeighbors)
         {
-            ReferenceFaceGenerationResult faces = allOneBlock && allOneBlockId != 0
+            ReferenceFaceGenerationResult faces = prerenderData.GeneratedSpans is not null
+                ? ReferenceFaceGenerator.Generate(
+                    maxX,
+                    maxY,
+                    maxZ,
+                    prerenderData.GeneratedSpans.GetBlockLocal,
+                    referenceNeighbors,
+                    TerrainLoader.IsOpaque)
+                : allOneBlock && allOneBlockId != 0
                 ? ReferenceFaceGenerator.GenerateUniform(
                     maxX,
                     maxY,

@@ -100,6 +100,9 @@ namespace MVoxelEngine1.Tests
             AssertBenchmarkParameters(result.Parameters);
             AssertPositiveFinite(result.GameLoadMilliseconds, nameof(result.GameLoadMilliseconds));
             AssertPositiveFinite(
+                result.SeedAcceptedMilliseconds,
+                nameof(result.SeedAcceptedMilliseconds));
+            AssertPositiveFinite(
                 result.InitialGenerationStartMilliseconds,
                 nameof(result.InitialGenerationStartMilliseconds));
             Assert.True(result.InitialGenerationMilliseconds > 0);
@@ -120,6 +123,9 @@ namespace MVoxelEngine1.Tests
             AssertPositiveFinite(
                 result.GenerationToRenderMilliseconds,
                 nameof(result.GenerationToRenderMilliseconds));
+            AssertPositiveFinite(
+                result.GenerationToRenderCompleteMilliseconds,
+                nameof(result.GenerationToRenderCompleteMilliseconds));
             Assert.InRange(result.WorkingSetBytes, 1, 16L * 1024 * 1024 * 1024);
             Assert.InRange(result.PeakWorkingSetBytes, 1, 16L * 1024 * 1024 * 1024);
             Assert.True(result.PeakWorkingSetBytes >= result.WorkingSetBytes);
@@ -129,6 +135,12 @@ namespace MVoxelEngine1.Tests
                 result.ProcessorTimeMilliseconds,
                 nameof(result.ProcessorTimeMilliseconds));
             AssertGenerationDiagnostics(result.GenerationDiagnostics);
+            AssertMeshDiagnostics(result.MeshDiagnostics);
+            Assert.True(
+                result.SeedAcceptedMilliseconds >= result.GameLoadMilliseconds);
+            Assert.True(
+                result.InitialGenerationStartMilliseconds >=
+                result.SeedAcceptedMilliseconds);
             Assert.True(
                 result.InitialGenerationCompleteMilliseconds >=
                 result.InitialGenerationStartMilliseconds +
@@ -144,11 +156,21 @@ namespace MVoxelEngine1.Tests
                 result.GpuStreamingStartMilliseconds >=
                 result.InitialChunkMeshBuildCompleteMilliseconds);
             Assert.True(
-                result.GenerationToRenderMilliseconds >=
+                result.GpuStreamingStartMilliseconds >=
+                result.SeedAcceptedMilliseconds);
+            Assert.True(
+                result.GenerationToRenderCompleteMilliseconds >=
                 result.GpuStreamingStartMilliseconds);
             Assert.True(
                 result.CameraAppearanceMilliseconds >=
-                result.GenerationToRenderMilliseconds);
+                result.GenerationToRenderCompleteMilliseconds);
+            Assert.InRange(
+                Math.Abs(
+                    result.GenerationToRenderCompleteMilliseconds -
+                    result.SeedAcceptedMilliseconds -
+                    result.GenerationToRenderMilliseconds),
+                0,
+                0.0001);
             Assert.Equal(
                 ReadConsoleTiming(standardOutput, "[World] Initial generation complete in "),
                 result.InitialGenerationMilliseconds);
@@ -236,39 +258,56 @@ namespace MVoxelEngine1.Tests
             AssertPositiveFinite(
                 diagnostics.NonUniformGenerationMilliseconds,
                 nameof(diagnostics.NonUniformGenerationMilliseconds));
-            AssertPositiveFinite(
-                diagnostics.NonUniformColumnScanMilliseconds,
-                nameof(diagnostics.NonUniformColumnScanMilliseconds));
-            AssertPositiveFinite(
-                diagnostics.NonUniformUniformSectionMilliseconds,
-                nameof(diagnostics.NonUniformUniformSectionMilliseconds));
-            AssertPositiveFinite(
-                diagnostics.NonUniformTerrainEmissionMilliseconds,
-                nameof(diagnostics.NonUniformTerrainEmissionMilliseconds));
-            AssertPositiveFinite(
-                diagnostics.NonUniformWaterEmissionMilliseconds,
-                nameof(diagnostics.NonUniformWaterEmissionMilliseconds));
-            AssertPositiveFinite(
-                diagnostics.NonUniformCollapseMilliseconds,
-                nameof(diagnostics.NonUniformCollapseMilliseconds));
-            AssertPositiveFinite(
-                diagnostics.NonUniformFinalizeMilliseconds,
-                nameof(diagnostics.NonUniformFinalizeMilliseconds));
-            Assert.True(diagnostics.FinalizedSections > 0);
-            Assert.True(diagnostics.ScratchSections > 0);
-            Assert.True(diagnostics.UniformSections > 0);
-            Assert.True(
-                diagnostics.EmptySections +
-                diagnostics.UniformSections +
-                diagnostics.PackedSections +
-                diagnostics.MultiPackedSections +
-                diagnostics.ExpandedSections == diagnostics.FinalizedSections);
+            Assert.Equal(0, diagnostics.NonUniformColumnScanMilliseconds);
+            Assert.Equal(0, diagnostics.NonUniformUniformSectionMilliseconds);
+            Assert.Equal(0, diagnostics.NonUniformTerrainEmissionMilliseconds);
+            Assert.Equal(0, diagnostics.NonUniformWaterEmissionMilliseconds);
+            Assert.Equal(0, diagnostics.NonUniformCollapseMilliseconds);
+            Assert.Equal(0, diagnostics.NonUniformFinalizeMilliseconds);
+            Assert.Equal(0, diagnostics.FinalizedSections);
+            Assert.Equal(0, diagnostics.ScratchSections);
+            Assert.Equal(0, diagnostics.EscalatedScratchSections);
+            Assert.Equal(0, diagnostics.EmptySections);
+            Assert.Equal(0, diagnostics.PackedSections);
+            Assert.Equal(0, diagnostics.MultiPackedSections);
+            Assert.Equal(0, diagnostics.ExpandedSections);
             AssertPositiveFinite(
                 diagnostics.BoundaryPlaneMilliseconds,
                 nameof(diagnostics.BoundaryPlaneMilliseconds));
             AssertPositiveFinite(
                 diagnostics.RegistrarMilliseconds,
                 nameof(diagnostics.RegistrarMilliseconds));
+        }
+
+        private static void AssertMeshDiagnostics(
+            MeshPerformanceSnapshot diagnostics)
+        {
+            Assert.True(diagnostics.BuiltChunks > 0);
+            Assert.True(diagnostics.GeneratedSpanChunks > 0);
+            Assert.True(diagnostics.SectionChunks > 0);
+            Assert.Equal(
+                diagnostics.BuiltChunks,
+                diagnostics.GeneratedSpanChunks + diagnostics.SectionChunks);
+            Assert.True(diagnostics.GeneratedSpanOpaqueFaces > 0);
+            Assert.True(diagnostics.GeneratedSpanTransparentFaces > 0);
+            AssertPositiveFinite(
+                diagnostics.AggregatedBuildMilliseconds,
+                nameof(diagnostics.AggregatedBuildMilliseconds));
+            AssertPositiveFinite(
+                diagnostics.GeneratedSpanBuildMilliseconds,
+                nameof(diagnostics.GeneratedSpanBuildMilliseconds));
+            AssertPositiveFinite(
+                diagnostics.SectionBuildMilliseconds,
+                nameof(diagnostics.SectionBuildMilliseconds));
+            AssertPositiveFinite(
+                diagnostics.GeneratedSpanCountPassMilliseconds,
+                nameof(diagnostics.GeneratedSpanCountPassMilliseconds));
+            AssertPositiveFinite(
+                diagnostics.GeneratedSpanPreparationMilliseconds,
+                nameof(diagnostics.GeneratedSpanPreparationMilliseconds));
+            AssertPositiveFinite(
+                diagnostics.GeneratedSpanWritePassMilliseconds,
+                nameof(diagnostics.GeneratedSpanWritePassMilliseconds));
         }
 
         private static void AssertNonNegativeFinite(double value, string metricName)

@@ -179,6 +179,7 @@ namespace MVoxelEngine1.WorldGeneration
         // Individual chunk serialization into binary format
         private void WriteSingleChunkBinary(BinaryWriter bw, Chunk chunk)
         {
+            chunk.MaterializeGeneratedSpansForStorage();
             int dimX = GameManager.settings.chunkMaxX;
             int dimY = GameManager.settings.chunkMaxY;
             int dimZ = GameManager.settings.chunkMaxZ;

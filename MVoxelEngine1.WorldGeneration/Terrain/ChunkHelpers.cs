@@ -65,6 +65,17 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
         private void BuildAllBoundaryPlanesInitial()
         {
             long performanceStart = StartupPerformanceRecorder.IsRunning ? Stopwatch.GetTimestamp() : 0;
+            if (generatedSpans is not null)
+            {
+                BuildGeneratedSpanBoundaryPlanes();
+                if (performanceStart != 0)
+                {
+                    GenerationPerformanceRecorder.RecordBoundaryPlanes(
+                        GenerationPerformanceRecorder.GetElapsedTicks(performanceStart));
+                }
+                return;
+            }
+
             EnsurePlaneArrays();
             Array.Clear(PlaneNegX);
             Array.Clear(PlanePosX);

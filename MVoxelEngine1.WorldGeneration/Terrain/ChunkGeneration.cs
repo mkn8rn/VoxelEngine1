@@ -40,8 +40,37 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
         ///   4. Water pass (adds water runs using cached per-column world water spans from BlockColumnProfile).
         ///   5. Whole‑chunk single block collapse if all created sections are uniform with the same id.
         ///   6. Finalize non‑uniform sections & build boundary planes.
-        internal void GenerateInitialChunkData(BlockColumnProfile[] columnSpanMap)
+        private void MaterializeGeneratedSpans()
         {
+            GeneratedChunkSpanData? source = generatedSpans;
+            if (source is null)
+                return;
+
+            InitializeSectionGrid();
+            AllOneBlockChunk = false;
+            AllOneBlockBlockId = 0;
+            try
+            {
+                GenerateInitialChunkData(source);
+                generatedSpans = null;
+            }
+            catch
+            {
+                InitializeSectionGrid();
+                AllOneBlockChunk = false;
+                AllOneBlockBlockId = 0;
+                throw;
+            }
+        }
+
+        internal void MaterializeGeneratedSpansForStorage()
+        {
+            MaterializeGeneratedSpans();
+        }
+
+        internal void GenerateInitialChunkData(GeneratedChunkSpanData spanData)
+        {
+            BlockColumnProfile[] columnSpanMap = spanData.Columns;
             if (columnSpanMap == null) throw new InvalidOperationException("columnSpanMap must be provided for non-uniform chunk generation.");
 
             bool recordPerformance = StartupPerformanceRecorder.IsRunning;
@@ -59,9 +88,9 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             int maxX = dimX, maxY = dimY, maxZ = dimZ;
             int chunkBaseY = (int)position.Y;
             int topOfChunk = chunkBaseY + maxY - 1;                   // inclusive local top
-            const ushort StoneId = (ushort)BaseBlockType.Stone;
-            const ushort SoilId = (ushort)BaseBlockType.Soil;
-            const ushort WaterId = (ushort)BaseBlockType.Water;       // surface fill water (now sourced from BlockColumnProfile water span)
+            ushort StoneId = spanData.StoneBlockId;
+            ushort SoilId = spanData.SoilBlockId;
+            ushort WaterId = spanData.WaterBlockId;
 
             int sectionSize = Section.SECTION_SIZE;              // expected 16
             int sectionVolume = Section.VOXELS_PER_SECTION;      // expected 4096
