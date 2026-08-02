@@ -758,9 +758,33 @@ namespace MVoxelEngine1.WorldGeneration
             MarkRenderNeighborsDirty(key);
         }
 
-        // Helpers to snapshot neighbor planes so the renderer reads stable, per-build copies.
-        private static ushort[] SnapshotUShorts(ushort[] src) => src == null ? null : (ushort[])src.Clone();
-        private static ulong[] SnapshotULongs(ulong[] src) => src == null ? null : (ulong[])src.Clone();
+        private static ushort[] SnapshotUShorts(
+            ushort[] src,
+            ref long arrays,
+            ref long bytes)
+        {
+            if (src == null)
+                return null;
+
+            ushort[] snapshot = (ushort[])src.Clone();
+            arrays++;
+            bytes += (long)snapshot.Length * sizeof(ushort);
+            return snapshot;
+        }
+
+        private static ulong[] SnapshotULongs(
+            ulong[] src,
+            ref long arrays,
+            ref long bytes)
+        {
+            if (src == null)
+                return null;
+
+            ulong[] snapshot = (ulong[])src.Clone();
+            arrays++;
+            bytes += (long)snapshot.Length * sizeof(ulong);
+            return snapshot;
+        }
 
         private bool TryPrepareOptimizedNeighbors(
             (int cx, int cy, int cz) key,
@@ -793,6 +817,13 @@ namespace MVoxelEngine1.WorldGeneration
             TryGetChunk((key.cx, key.cy, key.cz - 1), out var back);
             TryGetChunk((key.cx, key.cy, key.cz + 1), out var front);
 
+            bool recordPerformance = StartupPerformanceRecorder.IsRunning;
+            long snapshotStart = recordPerformance ? Stopwatch.GetTimestamp() : 0;
+            long opaqueArrays = 0;
+            long transparentArrays = 0;
+            long opaqueBytes = 0;
+            long transparentBytes = 0;
+
 
             ch.NeighborNegXFaceSolidPosX = false;
             ch.NeighborPosXFaceSolidNegX = false;
@@ -818,38 +849,84 @@ namespace MVoxelEngine1.WorldGeneration
             if (left != null)
             {
                 ch.NeighborNegXFaceSolidPosX = left.FaceSolidPosX;
-                ch.NeighborPlaneNegXFace = SnapshotULongs(left.PlanePosX);                 // opaque snapshot
-                ch.NeighborTransparentPlaneNegXFace = SnapshotUShorts(left.TransparentPlanePosX); // transparent snapshot
+                ch.NeighborPlaneNegXFace = SnapshotULongs(
+                    left.PlanePosX,
+                    ref opaqueArrays,
+                    ref opaqueBytes);
+                ch.NeighborTransparentPlaneNegXFace = SnapshotUShorts(
+                    left.TransparentPlanePosX,
+                    ref transparentArrays,
+                    ref transparentBytes);
             }
             if (right != null)
             {
                 ch.NeighborPosXFaceSolidNegX = right.FaceSolidNegX;
-                ch.NeighborPlanePosXFace = SnapshotULongs(right.PlaneNegX);
-                ch.NeighborTransparentPlanePosXFace = SnapshotUShorts(right.TransparentPlaneNegX);
+                ch.NeighborPlanePosXFace = SnapshotULongs(
+                    right.PlaneNegX,
+                    ref opaqueArrays,
+                    ref opaqueBytes);
+                ch.NeighborTransparentPlanePosXFace = SnapshotUShorts(
+                    right.TransparentPlaneNegX,
+                    ref transparentArrays,
+                    ref transparentBytes);
             }
             if (down != null)
             {
                 ch.NeighborNegYFaceSolidPosY = down.FaceSolidPosY;
-                ch.NeighborPlaneNegYFace = SnapshotULongs(down.PlanePosY);
-                ch.NeighborTransparentPlaneNegYFace = SnapshotUShorts(down.TransparentPlanePosY);
+                ch.NeighborPlaneNegYFace = SnapshotULongs(
+                    down.PlanePosY,
+                    ref opaqueArrays,
+                    ref opaqueBytes);
+                ch.NeighborTransparentPlaneNegYFace = SnapshotUShorts(
+                    down.TransparentPlanePosY,
+                    ref transparentArrays,
+                    ref transparentBytes);
             }
             if (up != null)
             {
                 ch.NeighborPosYFaceSolidNegY = up.FaceSolidNegY;
-                ch.NeighborPlanePosYFace = SnapshotULongs(up.PlaneNegY);
-                ch.NeighborTransparentPlanePosYFace = SnapshotUShorts(up.TransparentPlaneNegY);
+                ch.NeighborPlanePosYFace = SnapshotULongs(
+                    up.PlaneNegY,
+                    ref opaqueArrays,
+                    ref opaqueBytes);
+                ch.NeighborTransparentPlanePosYFace = SnapshotUShorts(
+                    up.TransparentPlaneNegY,
+                    ref transparentArrays,
+                    ref transparentBytes);
             }
             if (back != null)
             {
                 ch.NeighborNegZFaceSolidPosZ = back.FaceSolidPosZ;
-                ch.NeighborPlaneNegZFace = SnapshotULongs(back.PlanePosZ);
-                ch.NeighborTransparentPlaneNegZFace = SnapshotUShorts(back.TransparentPlanePosZ);
+                ch.NeighborPlaneNegZFace = SnapshotULongs(
+                    back.PlanePosZ,
+                    ref opaqueArrays,
+                    ref opaqueBytes);
+                ch.NeighborTransparentPlaneNegZFace = SnapshotUShorts(
+                    back.TransparentPlanePosZ,
+                    ref transparentArrays,
+                    ref transparentBytes);
             }
             if (front != null)
             {
                 ch.NeighborPosZFaceSolidNegZ = front.FaceSolidNegZ;
-                ch.NeighborPlanePosZFace = SnapshotULongs(front.PlaneNegZ);
-                ch.NeighborTransparentPlanePosZFace = SnapshotUShorts(front.TransparentPlaneNegZ);
+                ch.NeighborPlanePosZFace = SnapshotULongs(
+                    front.PlaneNegZ,
+                    ref opaqueArrays,
+                    ref opaqueBytes);
+                ch.NeighborTransparentPlanePosZFace = SnapshotUShorts(
+                    front.TransparentPlaneNegZ,
+                    ref transparentArrays,
+                    ref transparentBytes);
+            }
+
+            if (recordPerformance)
+            {
+                MeshPerformanceRecorder.RecordNeighborPlaneSnapshots(
+                    MeshPerformanceRecorder.GetElapsedTicks(snapshotStart),
+                    opaqueArrays,
+                    transparentArrays,
+                    opaqueBytes,
+                    transparentBytes);
             }
         }
 

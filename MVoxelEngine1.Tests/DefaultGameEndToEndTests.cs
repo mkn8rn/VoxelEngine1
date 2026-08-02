@@ -316,6 +316,14 @@ namespace MVoxelEngine1.Tests
             AssertPositiveFinite(
                 diagnostics.GeneratedSpanWritePassMilliseconds,
                 nameof(diagnostics.GeneratedSpanWritePassMilliseconds));
+            Assert.True(diagnostics.NeighborPlaneSnapshotChunks > 0);
+            Assert.True(diagnostics.NeighborOpaquePlaneSnapshotArrays > 0);
+            Assert.True(diagnostics.NeighborTransparentPlaneSnapshotArrays > 0);
+            Assert.True(diagnostics.NeighborOpaquePlaneSnapshotBytes > 0);
+            Assert.True(diagnostics.NeighborTransparentPlaneSnapshotBytes > 0);
+            AssertPositiveFinite(
+                diagnostics.NeighborPlaneSnapshotMilliseconds,
+                nameof(diagnostics.NeighborPlaneSnapshotMilliseconds));
         }
 
         private static void AssertNonNegativeFinite(double value, string metricName)
