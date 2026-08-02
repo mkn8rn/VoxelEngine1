@@ -180,6 +180,7 @@ namespace MVoxelEngine1.WorldGeneration
         private void WriteSingleChunkBinary(BinaryWriter bw, Chunk chunk)
         {
             chunk.MaterializeGeneratedSpansForStorage();
+            Section[,,] sectionGrid = chunk.GetReadOnlySectionGrid();
             int dimX = GameManager.settings.chunkMaxX;
             int dimY = GameManager.settings.chunkMaxY;
             int dimZ = GameManager.settings.chunkMaxZ;
@@ -210,7 +211,7 @@ namespace MVoxelEngine1.WorldGeneration
                 {
                     for (int sz = 0; sz < chunk.sectionsZ; sz++, sectionLinear++)
                     {
-                        var sec = chunk.sections[sx, sy, sz];
+                        var sec = sectionGrid[sx, sy, sz];
                         long sectionOffset = bw.BaseStream.Position;
                         if (sectionOffset > uint.MaxValue)
                         {
