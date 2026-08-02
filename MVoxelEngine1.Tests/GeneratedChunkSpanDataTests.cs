@@ -137,6 +137,78 @@ namespace MVoxelEngine1.Tests
         }
 
         [Fact]
+        public void GeneratedDimensionsBeyondPackedFormatAreRejected()
+        {
+            BlockTextureAtlas atlas = LoadDefaultRuntimeData();
+            var source = new GeneratedChunkSpanData(
+                new BlockColumnProfile[257],
+                width: 257,
+                height: 1,
+                depth: 1,
+                chunkBaseY: 0,
+                stoneBlockId: (ushort)BaseBlockType.Stone,
+                soilBlockId: (ushort)BaseBlockType.Soil,
+                waterBlockId: (ushort)BaseBlockType.Water);
+            ChunkPrerenderData data = CreatePrerenderData(source);
+            ChunkRender.terrainTextureAtlas = atlas;
+            using var pool = new PackedFaceNativePool();
+
+            Assert.Throws<InvalidDataException>(() => new ChunkRender(
+                data,
+                FaceGenerationMode.Optimized,
+                null,
+                null,
+                pool));
+        }
+
+        [Fact]
+        public void WriterPreservesNonstandardMaterialPassOrder()
+        {
+            BlockTextureAtlas atlas = LoadDefaultRuntimeData();
+            var source = new GeneratedChunkSpanData(
+                new[]
+                {
+                    new BlockColumnProfile
+                    {
+                        StoneStart = 0,
+                        StoneEnd = 0,
+                        SoilStart = 1,
+                        SoilEnd = 1,
+                        WaterStart = 2,
+                        WaterEnd = 2
+                    }
+                },
+                width: 1,
+                height: 4,
+                depth: 1,
+                chunkBaseY: 0,
+                stoneBlockId: 256,
+                soilBlockId: (ushort)BaseBlockType.Stone,
+                waterBlockId: 257);
+            ChunkPrerenderData data = CreatePrerenderData(source);
+            ChunkRender.terrainTextureAtlas = atlas;
+            using var pool = new PackedFaceNativePool();
+            using var optimized = new ChunkRender(
+                data,
+                FaceGenerationMode.Optimized,
+                null,
+                null,
+                pool);
+            using var reference = new ChunkRender(
+                data,
+                FaceGenerationMode.Reference,
+                source.GetBlockLocal,
+                new ReferenceNeighborBlockPlanes(),
+                pool);
+
+            Assert.Equal(6, optimized.UploadData.OpaqueFaceCount);
+            Assert.Equal(10, optimized.UploadData.TransparentFaceCount);
+            Assert.Equal(
+                GetFaceRecords(reference.UploadData),
+                GetFaceRecords(optimized.UploadData));
+        }
+
+        [Fact]
         public void PersistentNativePoolResetsGrownWorkspaceBetweenChunks()
         {
             BlockTextureAtlas atlas = LoadDefaultRuntimeData();
