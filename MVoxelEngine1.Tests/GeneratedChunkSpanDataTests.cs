@@ -8,6 +8,7 @@ using MVoxelEngine1.Infrastructure.Models.Generation;
 using MVoxelEngine1.Infrastructure.Models.Terrain;
 using MVoxelEngine1.WorldGeneration.Terrain;
 using OpenTK.Mathematics;
+using System.Runtime.CompilerServices;
 
 namespace MVoxelEngine1.Tests
 {
@@ -127,6 +128,32 @@ namespace MVoxelEngine1.Tests
             Assert.True(
                 optimized.UploadData.TransparentRectangleCount <
                 optimized.UploadData.TransparentFaceCount);
+        }
+
+        [Fact]
+        public void RendererReleasesBorrowedNeighborPlanesAfterFaceBuild()
+        {
+            BlockTextureAtlas atlas = LoadDefaultRuntimeData();
+            var source = new GeneratedChunkSpanData(
+                CreateColumns(),
+                width: 16,
+                height: 16,
+                depth: 16,
+                chunkBaseY: 0,
+                stoneBlockId: (ushort)BaseBlockType.Stone,
+                soilBlockId: (ushort)BaseBlockType.Soil,
+                waterBlockId: (ushort)BaseBlockType.Water);
+            (ChunkRender renderer, WeakReference<ulong[]> neighbor) =
+                CreateRendererWithBorrowedNeighbor(source, atlas);
+
+            for (int collection = 0; collection < 3; collection++)
+            {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+            }
+
+            Assert.False(neighbor.TryGetTarget(out _));
+            GC.KeepAlive(renderer);
         }
 
         [Fact]
@@ -293,6 +320,26 @@ namespace MVoxelEngine1.Tests
                 NeighborTransparentPlaneNegZ = new ushort[source.Width * source.Height],
                 NeighborTransparentPlanePosZ = new ushort[source.Width * source.Height]
             };
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static (
+            ChunkRender Renderer,
+            WeakReference<ulong[]> Neighbor)
+            CreateRendererWithBorrowedNeighbor(
+                GeneratedChunkSpanData source,
+                BlockTextureAtlas atlas)
+        {
+            ChunkPrerenderData data = CreatePrerenderData(source);
+            ulong[] neighbor = data.NeighborPlaneNegX;
+            var weakNeighbor = new WeakReference<ulong[]>(neighbor);
+            ChunkRender.terrainTextureAtlas = atlas;
+            var renderer = new ChunkRender(
+                data,
+                FaceGenerationMode.Optimized,
+                null,
+                null);
+            return (renderer, weakNeighbor);
         }
 
         private static string[] GetFaceRecords(ChunkRenderUploadData data)
