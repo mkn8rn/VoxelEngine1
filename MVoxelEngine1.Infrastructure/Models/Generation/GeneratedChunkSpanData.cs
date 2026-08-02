@@ -23,13 +23,16 @@ namespace MVoxelEngine1.Infrastructure.Models.Generation
             int chunkBaseY,
             ushort stoneBlockId,
             ushort soilBlockId,
-            ushort waterBlockId)
+            ushort waterBlockId,
+            byte materialMask = 0b111)
         {
             ArgumentNullException.ThrowIfNull(columns);
             if (width <= 0 || height <= 0 || depth <= 0)
                 throw new ArgumentOutOfRangeException(nameof(width));
             if (columns.Length != checked(width * depth))
                 throw new ArgumentException("Column count does not match chunk dimensions.", nameof(columns));
+            if ((materialMask & ~0b111) != 0)
+                throw new ArgumentOutOfRangeException(nameof(materialMask));
 
             Columns = columns;
             Width = width;
@@ -39,6 +42,7 @@ namespace MVoxelEngine1.Infrastructure.Models.Generation
             StoneBlockId = stoneBlockId;
             SoilBlockId = soilBlockId;
             WaterBlockId = waterBlockId;
+            MaterialMask = materialMask;
         }
 
         public BlockColumnProfile[] Columns { get; }
@@ -56,6 +60,8 @@ namespace MVoxelEngine1.Infrastructure.Models.Generation
         public ushort SoilBlockId { get; }
 
         public ushort WaterBlockId { get; }
+
+        public byte MaterialMask { get; }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public ushort GetBlockLocal(int x, int y, int z)

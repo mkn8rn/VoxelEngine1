@@ -44,6 +44,8 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             {
                 for (int material = 0; material < 3; material++)
                 {
+                    if ((source.MaterialMask & (1 << material)) == 0)
+                        continue;
                     Array.Fill(bottomFaces, -1, 0, horizontalCellCount);
                     Array.Fill(topFaces, -1, 0, horizontalCellCount);
                     ushort blockId = GetGeneratedMaterialBlockId(

@@ -209,6 +209,54 @@ namespace MVoxelEngine1.Tests
         }
 
         [Fact]
+        public void MaterialMaskSkipsOnlyAbsentMaterials()
+        {
+            BlockTextureAtlas atlas = LoadDefaultRuntimeData();
+            var source = new GeneratedChunkSpanData(
+                new[]
+                {
+                    new BlockColumnProfile
+                    {
+                        StoneStart = 0,
+                        StoneEnd = 0,
+                        SoilStart = -1,
+                        SoilEnd = -1,
+                        WaterStart = -1,
+                        WaterEnd = -1
+                    }
+                },
+                width: 1,
+                height: 1,
+                depth: 1,
+                chunkBaseY: 0,
+                stoneBlockId: (ushort)BaseBlockType.Stone,
+                soilBlockId: (ushort)BaseBlockType.Soil,
+                waterBlockId: (ushort)BaseBlockType.Water,
+                materialMask: 0b001);
+            ChunkPrerenderData data = CreatePrerenderData(source);
+            ChunkRender.terrainTextureAtlas = atlas;
+            using var pool = new PackedFaceNativePool();
+            using var optimized = new ChunkRender(
+                data,
+                FaceGenerationMode.Optimized,
+                null,
+                null,
+                pool);
+            using var reference = new ChunkRender(
+                data,
+                FaceGenerationMode.Reference,
+                source.GetBlockLocal,
+                new ReferenceNeighborBlockPlanes(),
+                pool);
+
+            Assert.Equal((byte)0b001, source.MaterialMask);
+            Assert.Equal(6, optimized.UploadData.OpaqueFaceCount);
+            Assert.Equal(
+                GetFaceRecords(reference.UploadData),
+                GetFaceRecords(optimized.UploadData));
+        }
+
+        [Fact]
         public void PersistentNativePoolResetsGrownWorkspaceBetweenChunks()
         {
             BlockTextureAtlas atlas = LoadDefaultRuntimeData();
