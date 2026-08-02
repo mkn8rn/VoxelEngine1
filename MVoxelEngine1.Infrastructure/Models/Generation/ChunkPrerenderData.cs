@@ -121,6 +121,7 @@ namespace MVoxelEngine1.Infrastructure.Models.Generation
 
         public object SectionRender;
 
+        public GeneratedChunkSpanData? GeneratedSpans;
         public SectionPrerenderDesc[] SectionDescs;
         public int sectionsX, sectionsY, sectionsZ, sectionSize;
         public int maxX;

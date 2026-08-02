@@ -47,6 +47,7 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
         public required double TargetGenerationToRenderMilliseconds { get; init; }
         public required long MaximumWorkingSetBytesLimit { get; init; }
         public required double GameLoadMilliseconds { get; init; }
+        public required double SeedAcceptedMilliseconds { get; init; }
         public required double InitialGenerationStartMilliseconds { get; init; }
         public required long InitialGenerationMilliseconds { get; init; }
         public required double InitialGenerationCompleteMilliseconds { get; init; }
@@ -58,12 +59,14 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
         public required double CameraAppearanceMilliseconds { get; init; }
         public required double GpuStreamingStartMilliseconds { get; init; }
         public required double GenerationToRenderMilliseconds { get; init; }
+        public required double GenerationToRenderCompleteMilliseconds { get; init; }
         public required long WorkingSetBytes { get; init; }
         public required long PeakWorkingSetBytes { get; init; }
         public required long ManagedHeapBytes { get; init; }
         public required long TotalAllocatedBytes { get; init; }
         public required double ProcessorTimeMilliseconds { get; init; }
         public required GenerationPerformanceSnapshot GenerationDiagnostics { get; init; }
+        public required MeshPerformanceSnapshot MeshDiagnostics { get; init; }
         public required DateTimeOffset RecordedAtUtc { get; init; }
     }
 
@@ -77,6 +80,7 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
         private static string game = string.Empty;
         private static int seed;
         private static long gameLoadTicks;
+        private static long seedAcceptedTicks;
         private static long initialGenerationStartTicks;
         private static long initialGenerationMilliseconds = UnrecordedMilliseconds;
         private static long initialGenerationCompleteTicks;
@@ -88,6 +92,7 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
         private static long cameraAppearanceTicks;
         private static long gpuStreamingStartTicks;
         private static long generationToRenderTicks;
+        private static long generationToRenderCompleteTicks;
 
         public static bool IsRunning => Volatile.Read(ref timer) is not null;
 
@@ -95,6 +100,7 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
 
         public static bool IsComplete =>
             Volatile.Read(ref gameLoadTicks) > 0 &&
+            Volatile.Read(ref seedAcceptedTicks) > 0 &&
             Volatile.Read(ref initialGenerationStartTicks) > 0 &&
             Volatile.Read(ref initialGenerationMilliseconds) >= 0 &&
             Volatile.Read(ref initialGenerationCompleteTicks) > 0 &&
@@ -105,7 +111,8 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
             Volatile.Read(ref renderTicks) > 0 &&
             Volatile.Read(ref cameraAppearanceTicks) > 0 &&
             Volatile.Read(ref gpuStreamingStartTicks) > 0 &&
-            Volatile.Read(ref generationToRenderTicks) > 0;
+            Volatile.Read(ref generationToRenderTicks) > 0 &&
+            Volatile.Read(ref generationToRenderCompleteTicks) > 0;
 
         public static void Begin(string gameName, int worldSeed)
         {
@@ -117,6 +124,7 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
                 game = gameName;
                 seed = worldSeed;
                 gameLoadTicks = 0;
+                seedAcceptedTicks = 0;
                 initialGenerationStartTicks = 0;
                 initialGenerationTimer = null;
                 initialChunkMeshBuildTimer = null;
@@ -130,12 +138,31 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
                 cameraAppearanceTicks = 0;
                 gpuStreamingStartTicks = 0;
                 generationToRenderTicks = 0;
+                generationToRenderCompleteTicks = 0;
                 GenerationPerformanceRecorder.Reset();
+                MeshPerformanceRecorder.Reset();
                 timer = Stopwatch.StartNew();
             }
         }
 
         public static void RecordGameLoaded() => RecordElapsed(ref gameLoadTicks);
+
+        public static void RecordSeedAccepted()
+        {
+            Stopwatch? activeTimer = Volatile.Read(ref timer);
+            if (activeTimer is null)
+                return;
+
+            long elapsedTicks = Math.Max(1, activeTimer.Elapsed.Ticks);
+            if (Interlocked.CompareExchange(
+                    ref seedAcceptedTicks,
+                    elapsedTicks,
+                    0) != 0)
+            {
+                throw new InvalidOperationException(
+                    "The benchmark seed was already accepted.");
+            }
+        }
 
         public static void BeginInitialGeneration() =>
             BeginPhase(
@@ -179,13 +206,26 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
             if (activeTimer is null)
                 return null;
 
-            long elapsedTicks = Math.Max(1, activeTimer.Elapsed.Ticks);
-            return Interlocked.CompareExchange(
-                       ref generationToRenderTicks,
-                       elapsedTicks,
-                       0) == 0
-                ? ToMilliseconds(elapsedTicks)
-                : null;
+            lock (Sync)
+            {
+                if (generationToRenderCompleteTicks > 0)
+                    return null;
+
+                long acceptedTicks = Volatile.Read(ref seedAcceptedTicks);
+                if (acceptedTicks <= 0)
+                {
+                    throw new InvalidOperationException(
+                        "The benchmark seed was not accepted.");
+                }
+
+                long completeTicks = Math.Max(1, activeTimer.Elapsed.Ticks);
+                long durationTicks = Math.Max(1, completeTicks - acceptedTicks);
+                Volatile.Write(ref generationToRenderTicks, durationTicks);
+                Volatile.Write(
+                    ref generationToRenderCompleteTicks,
+                    completeTicks);
+                return ToMilliseconds(durationTicks);
+            }
         }
 
         public static StartupPerformanceSnapshot CreateSnapshot()
@@ -208,6 +248,8 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
                 MaximumWorkingSetBytesLimit =
                     StartupPerformanceSnapshot.MaximumWorkingSetBytes,
                 GameLoadMilliseconds = ToMilliseconds(Volatile.Read(ref gameLoadTicks)),
+                SeedAcceptedMilliseconds =
+                    ToMilliseconds(Volatile.Read(ref seedAcceptedTicks)),
                 InitialGenerationStartMilliseconds =
                     ToMilliseconds(Volatile.Read(ref initialGenerationStartTicks)),
                 InitialGenerationMilliseconds = Volatile.Read(ref initialGenerationMilliseconds),
@@ -224,12 +266,16 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
                 GpuStreamingStartMilliseconds = ToMilliseconds(Volatile.Read(ref gpuStreamingStartTicks)),
                 GenerationToRenderMilliseconds =
                     ToMilliseconds(Volatile.Read(ref generationToRenderTicks)),
+                GenerationToRenderCompleteMilliseconds =
+                    ToMilliseconds(
+                        Volatile.Read(ref generationToRenderCompleteTicks)),
                 WorkingSetBytes = process.WorkingSet64,
                 PeakWorkingSetBytes = process.PeakWorkingSet64,
                 ManagedHeapBytes = GC.GetTotalMemory(forceFullCollection: false),
                 TotalAllocatedBytes = GC.GetTotalAllocatedBytes(precise: false),
                 ProcessorTimeMilliseconds = process.TotalProcessorTime.TotalMilliseconds,
                 GenerationDiagnostics = GenerationPerformanceRecorder.CreateSnapshot(),
+                MeshDiagnostics = MeshPerformanceRecorder.CreateSnapshot(),
                 RecordedAtUtc = DateTimeOffset.UtcNow
             };
         }

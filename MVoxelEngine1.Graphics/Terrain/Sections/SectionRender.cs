@@ -46,6 +46,20 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             out byte[] transparentFaceDirs)
         {
             int maxX = data.maxX; int maxY = data.maxY; int maxZ = data.maxZ;
+            if (data.GeneratedSpans is not null)
+            {
+                BuildGeneratedSpans(
+                    out opaqueFaceCount,
+                    out opaqueOffsets,
+                    out opaqueTileIndices,
+                    out opaqueFaceDirs,
+                    out transparentFaceCount,
+                    out transparentOffsets,
+                    out transparentTileIndices,
+                    out transparentFaceDirs);
+                return;
+            }
+
             if (maxX == 0 || maxY == 0 || maxZ == 0 || data.SectionDescs == null)
             {
                 opaqueFaceCount = 0; opaqueOffsets = Array.Empty<byte>(); opaqueTileIndices = Array.Empty<uint>(); opaqueFaceDirs = Array.Empty<byte>();

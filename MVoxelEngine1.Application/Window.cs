@@ -90,6 +90,7 @@ namespace MVoxelEngine1.Application
             blockTextureAtlas.Bind();
 
             // Initialize the World rendering
+            StartupPerformanceRecorder.RecordSeedAccepted();
             world = new World() ?? throw new Exception("world is null");
 
             // Initialize the Player (and its Camera)
