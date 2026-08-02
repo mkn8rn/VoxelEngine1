@@ -17,6 +17,12 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
         public required double GeneratedSpanCountPassMilliseconds { get; init; }
         public required double GeneratedSpanPreparationMilliseconds { get; init; }
         public required double GeneratedSpanWritePassMilliseconds { get; init; }
+        public required long NeighborPlaneSnapshotChunks { get; init; }
+        public required long NeighborOpaquePlaneSnapshotArrays { get; init; }
+        public required long NeighborTransparentPlaneSnapshotArrays { get; init; }
+        public required long NeighborOpaquePlaneSnapshotBytes { get; init; }
+        public required long NeighborTransparentPlaneSnapshotBytes { get; init; }
+        public required double NeighborPlaneSnapshotMilliseconds { get; init; }
     }
 
     public static class MeshPerformanceRecorder
@@ -34,6 +40,12 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
         private static long generatedSpanCountPassTicks;
         private static long generatedSpanPreparationTicks;
         private static long generatedSpanWritePassTicks;
+        private static long neighborPlaneSnapshotChunks;
+        private static long neighborOpaquePlaneSnapshotArrays;
+        private static long neighborTransparentPlaneSnapshotArrays;
+        private static long neighborOpaquePlaneSnapshotBytes;
+        private static long neighborTransparentPlaneSnapshotBytes;
+        private static long neighborPlaneSnapshotTicks;
 
         public static void Reset()
         {
@@ -50,6 +62,12 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
             Volatile.Write(ref generatedSpanCountPassTicks, 0);
             Volatile.Write(ref generatedSpanPreparationTicks, 0);
             Volatile.Write(ref generatedSpanWritePassTicks, 0);
+            Volatile.Write(ref neighborPlaneSnapshotChunks, 0);
+            Volatile.Write(ref neighborOpaquePlaneSnapshotArrays, 0);
+            Volatile.Write(ref neighborTransparentPlaneSnapshotArrays, 0);
+            Volatile.Write(ref neighborOpaquePlaneSnapshotBytes, 0);
+            Volatile.Write(ref neighborTransparentPlaneSnapshotBytes, 0);
+            Volatile.Write(ref neighborPlaneSnapshotTicks, 0);
         }
 
         public static void RecordBuiltChunk(
@@ -89,6 +107,25 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
                 transparentRectangles);
         }
 
+        public static void RecordNeighborPlaneSnapshots(
+            long elapsedTicks,
+            long opaqueArrays,
+            long transparentArrays,
+            long opaqueBytes,
+            long transparentBytes)
+        {
+            Interlocked.Increment(ref neighborPlaneSnapshotChunks);
+            Interlocked.Add(ref neighborOpaquePlaneSnapshotArrays, opaqueArrays);
+            Interlocked.Add(
+                ref neighborTransparentPlaneSnapshotArrays,
+                transparentArrays);
+            Interlocked.Add(ref neighborOpaquePlaneSnapshotBytes, opaqueBytes);
+            Interlocked.Add(
+                ref neighborTransparentPlaneSnapshotBytes,
+                transparentBytes);
+            Interlocked.Add(ref neighborPlaneSnapshotTicks, elapsedTicks);
+        }
+
         public static MeshPerformanceSnapshot CreateSnapshot() => new()
         {
             BuiltChunks = Volatile.Read(ref builtChunks),
@@ -111,7 +148,19 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
             GeneratedSpanPreparationMilliseconds = ToMilliseconds(
                 Volatile.Read(ref generatedSpanPreparationTicks)),
             GeneratedSpanWritePassMilliseconds = ToMilliseconds(
-                Volatile.Read(ref generatedSpanWritePassTicks))
+                Volatile.Read(ref generatedSpanWritePassTicks)),
+            NeighborPlaneSnapshotChunks = Volatile.Read(
+                ref neighborPlaneSnapshotChunks),
+            NeighborOpaquePlaneSnapshotArrays = Volatile.Read(
+                ref neighborOpaquePlaneSnapshotArrays),
+            NeighborTransparentPlaneSnapshotArrays = Volatile.Read(
+                ref neighborTransparentPlaneSnapshotArrays),
+            NeighborOpaquePlaneSnapshotBytes = Volatile.Read(
+                ref neighborOpaquePlaneSnapshotBytes),
+            NeighborTransparentPlaneSnapshotBytes = Volatile.Read(
+                ref neighborTransparentPlaneSnapshotBytes),
+            NeighborPlaneSnapshotMilliseconds = ToMilliseconds(
+                Volatile.Read(ref neighborPlaneSnapshotTicks))
         };
 
         public static long GetElapsedTicks(long startTimestamp) =>
