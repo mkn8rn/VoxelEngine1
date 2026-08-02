@@ -315,7 +315,6 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
 
                         profile.BlockColumns[profileIndex] = new BlockColumnProfile
                         {
-                            Surface = surface,
                             StoneStart = stoneStart,
                             StoneEnd = stoneEnd,
                             SoilStart = soilStart,

@@ -4,7 +4,6 @@ namespace MVoxelEngine1.Infrastructure.Models.Generation
 {
     public struct BlockColumnProfile
     {
-        public int Surface;
         public int StoneStart;
         public int StoneEnd;
         public int SoilStart;
