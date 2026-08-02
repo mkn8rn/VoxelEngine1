@@ -25,6 +25,31 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             _fallbackTileCache = new TileIndexCache();
         }
 
+        public FaceRectangleMeshData Build()
+        {
+            if (data.GeneratedSpans is not null)
+                return BuildGeneratedSpanRectangles();
+
+            BuildLegacyFaces(
+                out int opaqueFaceCount,
+                out byte[] opaqueOffsets,
+                out uint[] opaqueTileIndices,
+                out byte[] opaqueFaceDirs,
+                out int transparentFaceCount,
+                out byte[] transparentOffsets,
+                out uint[] transparentTileIndices,
+                out byte[] transparentFaceDirs);
+            return FaceRectangleMeshData.FromFaces(
+                opaqueFaceCount,
+                opaqueOffsets,
+                opaqueTileIndices,
+                opaqueFaceDirs,
+                transparentFaceCount,
+                transparentOffsets,
+                transparentTileIndices,
+                transparentFaceDirs);
+        }
+
         // Builds: one instance per emitted face for both opaque and (future) transparent passes.
         // Uses per-section specialized paths and a fallback per-section brute scan for opaque faces.
         // Transparent faces are emitted ONLY for sections that actually fall through to the fallback path.
@@ -35,7 +60,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
         //  opaqueFaceDirs:  opaqueFaceCount bytes (0..5) orientation (LEFT,RIGHT,BOTTOM,TOP,BACK,FRONT)
         //  transparentFaceCount: number of transparent faces (instances)
         //  transparentOffsets / transparentTileIndices / transparentFaceDirs
-        public void Build(
+        private void BuildLegacyFaces(
             out int opaqueFaceCount,
             out byte[] opaqueOffsets,
             out uint[] opaqueTileIndices,
@@ -46,20 +71,6 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             out byte[] transparentFaceDirs)
         {
             int maxX = data.maxX; int maxY = data.maxY; int maxZ = data.maxZ;
-            if (data.GeneratedSpans is not null)
-            {
-                BuildGeneratedSpans(
-                    out opaqueFaceCount,
-                    out opaqueOffsets,
-                    out opaqueTileIndices,
-                    out opaqueFaceDirs,
-                    out transparentFaceCount,
-                    out transparentOffsets,
-                    out transparentTileIndices,
-                    out transparentFaceDirs);
-                return;
-            }
-
             if (maxX == 0 || maxY == 0 || maxZ == 0 || data.SectionDescs == null)
             {
                 opaqueFaceCount = 0; opaqueOffsets = Array.Empty<byte>(); opaqueTileIndices = Array.Empty<uint>(); opaqueFaceDirs = Array.Empty<byte>();

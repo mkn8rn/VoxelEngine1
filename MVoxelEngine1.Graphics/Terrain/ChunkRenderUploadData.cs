@@ -12,13 +12,9 @@ namespace MVoxelEngine1.Graphics.Terrain
             bool fullyOccluded,
             FaceGenerationMode faceGenerationMode,
             int opaqueFaceCount,
-            byte[]? opaqueOffsets,
-            uint[]? opaqueTileIndices,
-            byte[]? opaqueFaceDirections,
+            uint[]? opaqueRectangles,
             int transparentFaceCount,
-            byte[]? transparentOffsets,
-            uint[]? transparentTileIndices,
-            byte[]? transparentFaceDirections)
+            uint[]? transparentRectangles)
         {
             RenderDataId = renderDataId;
             ChunkWorldX = chunkWorldX;
@@ -27,13 +23,21 @@ namespace MVoxelEngine1.Graphics.Terrain
             FullyOccluded = fullyOccluded;
             FaceGenerationMode = faceGenerationMode;
             OpaqueFaceCount = opaqueFaceCount;
-            OpaqueOffsets = opaqueOffsets ?? Array.Empty<byte>();
-            OpaqueTileIndices = opaqueTileIndices ?? Array.Empty<uint>();
-            OpaqueFaceDirections = opaqueFaceDirections ?? Array.Empty<byte>();
+            OpaqueRectangles = opaqueRectangles ?? Array.Empty<uint>();
+            OpaqueRectangleCount = PackedFaceRectangle.GetRectangleCount(
+                OpaqueRectangles.Span);
             TransparentFaceCount = transparentFaceCount;
-            TransparentOffsets = transparentOffsets ?? Array.Empty<byte>();
-            TransparentTileIndices = transparentTileIndices ?? Array.Empty<uint>();
-            TransparentFaceDirections = transparentFaceDirections ?? Array.Empty<byte>();
+            TransparentRectangles = transparentRectangles ?? Array.Empty<uint>();
+            TransparentRectangleCount = PackedFaceRectangle.GetRectangleCount(
+                TransparentRectangles.Span);
+            if (PackedFaceRectangle.CountLogicalFaces(OpaqueRectangles.Span) !=
+                    opaqueFaceCount ||
+                PackedFaceRectangle.CountLogicalFaces(
+                    TransparentRectangles.Span) != transparentFaceCount)
+            {
+                throw new InvalidDataException(
+                    "Packed face counts do not match their logical face counts.");
+            }
         }
 
         public long RenderDataId { get; }
@@ -50,18 +54,14 @@ namespace MVoxelEngine1.Graphics.Terrain
 
         public int OpaqueFaceCount { get; }
 
-        public ReadOnlyMemory<byte> OpaqueOffsets { get; }
+        public int OpaqueRectangleCount { get; }
 
-        public ReadOnlyMemory<uint> OpaqueTileIndices { get; }
-
-        public ReadOnlyMemory<byte> OpaqueFaceDirections { get; }
+        public ReadOnlyMemory<uint> OpaqueRectangles { get; }
 
         public int TransparentFaceCount { get; }
 
-        public ReadOnlyMemory<byte> TransparentOffsets { get; }
+        public int TransparentRectangleCount { get; }
 
-        public ReadOnlyMemory<uint> TransparentTileIndices { get; }
-
-        public ReadOnlyMemory<byte> TransparentFaceDirections { get; }
+        public ReadOnlyMemory<uint> TransparentRectangles { get; }
     }
 }

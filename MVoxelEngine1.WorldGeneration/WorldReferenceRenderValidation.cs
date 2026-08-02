@@ -21,15 +21,13 @@ namespace MVoxelEngine1.WorldGeneration
             if (data is not null)
             {
                 ReadActualReferenceFaces(
-                    data.OpaqueOffsets.Span,
-                    data.OpaqueFaceDirections.Span,
+                    data.OpaqueRectangles.Span,
                     data.OpaqueFaceCount,
                     opaqueFaces,
                     key,
                     "opaque");
                 ReadActualReferenceFaces(
-                    data.TransparentOffsets.Span,
-                    data.TransparentFaceDirections.Span,
+                    data.TransparentRectangles.Span,
                     data.TransparentFaceCount,
                     transparentFaces,
                     key,
@@ -113,14 +111,13 @@ namespace MVoxelEngine1.WorldGeneration
         }
 
         private static void ReadActualReferenceFaces(
-            ReadOnlySpan<byte> offsets,
-            ReadOnlySpan<byte> directions,
+            ReadOnlySpan<uint> rectangles,
             int count,
             HashSet<int> destination,
             (int cx, int cy, int cz) chunkKey,
             string renderPass)
         {
-            if (offsets.Length != checked(count * 3) || directions.Length != count)
+            if (PackedFaceRectangle.CountLogicalFaces(rectangles) != count)
             {
                 throw new InvalidOperationException(
                     $"Reference {renderPass} arrays have invalid lengths for chunk {chunkKey}.");
@@ -129,12 +126,14 @@ namespace MVoxelEngine1.WorldGeneration
             int maxX = GameManager.settings.chunkMaxX;
             int maxY = GameManager.settings.chunkMaxY;
             int maxZ = GameManager.settings.chunkMaxZ;
-            for (int index = 0; index < count; index++)
+            var reader = new PackedFaceRectangleReader(rectangles);
+            int index = 0;
+            while (reader.MoveNext())
             {
-                int x = offsets[index * 3];
-                int y = offsets[index * 3 + 1];
-                int z = offsets[index * 3 + 2];
-                byte direction = directions[index];
+                int x = reader.X;
+                int y = reader.Y;
+                int z = reader.Z;
+                byte direction = reader.Direction;
                 if ((uint)x >= (uint)maxX ||
                     (uint)y >= (uint)maxY ||
                     (uint)z >= (uint)maxZ ||
@@ -150,7 +149,12 @@ namespace MVoxelEngine1.WorldGeneration
                     throw new InvalidOperationException(
                         $"Reference {renderPass} data has a duplicate face for chunk {chunkKey}.");
                 }
+                index++;
             }
+
+            if (index != count)
+                throw new InvalidOperationException(
+                    $"Reference {renderPass} data has an invalid face count for chunk {chunkKey}.");
         }
 
         private static int EncodeReferenceFace(

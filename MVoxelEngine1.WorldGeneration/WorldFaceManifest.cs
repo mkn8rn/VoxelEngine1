@@ -586,9 +586,7 @@ namespace MVoxelEngine1.WorldGeneration
                 world,
                 chunk,
                 data.OpaqueFaceCount,
-                data.OpaqueOffsets.Span,
-                data.OpaqueTileIndices.Span,
-                data.OpaqueFaceDirections.Span,
+                data.OpaqueRectangles.Span,
                 CanonicalRenderPass.Opaque,
                 result,
                 expectedTileIndices);
@@ -596,9 +594,7 @@ namespace MVoxelEngine1.WorldGeneration
                 world,
                 chunk,
                 data.TransparentFaceCount,
-                data.TransparentOffsets.Span,
-                data.TransparentTileIndices.Span,
-                data.TransparentFaceDirections.Span,
+                data.TransparentRectangles.Span,
                 CanonicalRenderPass.Transparent,
                 result,
                 expectedTileIndices);
@@ -714,16 +710,12 @@ namespace MVoxelEngine1.WorldGeneration
             World world,
             WorldRenderChunk chunk,
             int faceCount,
-            ReadOnlySpan<byte> offsets,
-            ReadOnlySpan<uint> tileIndices,
-            ReadOnlySpan<byte> directions,
+            ReadOnlySpan<uint> rectangles,
             CanonicalRenderPass renderPass,
             List<CanonicalRenderFace> destination,
             Dictionary<int, uint> expectedTileIndices)
         {
-            if (offsets.Length != checked(faceCount * 3) ||
-                tileIndices.Length != faceCount ||
-                directions.Length != faceCount)
+            if (PackedFaceRectangle.CountLogicalFaces(rectangles) != faceCount)
             {
                 throw new InvalidOperationException(
                     $"Chunk ({chunk.ChunkX}, {chunk.ChunkY}, {chunk.ChunkZ}) has invalid upload arrays.");
@@ -736,12 +728,14 @@ namespace MVoxelEngine1.WorldGeneration
             int originY = checked(chunk.ChunkY * maxY);
             int originZ = checked(chunk.ChunkZ * maxZ);
 
-            for (int index = 0; index < faceCount; index++)
+            var reader = new PackedFaceRectangleReader(rectangles);
+            int index = 0;
+            while (reader.MoveNext())
             {
-                int localX = offsets[index * 3];
-                int localY = offsets[index * 3 + 1];
-                int localZ = offsets[index * 3 + 2];
-                byte direction = directions[index];
+                int localX = reader.X;
+                int localY = reader.Y;
+                int localZ = reader.Z;
+                byte direction = reader.Direction;
                 if ((uint)localX >= (uint)maxX ||
                     (uint)localY >= (uint)maxY ||
                     (uint)localZ >= (uint)maxZ ||
@@ -763,11 +757,11 @@ namespace MVoxelEngine1.WorldGeneration
                     blockId,
                     direction,
                     expectedTileIndices);
-                if (tileIndices[index] != expectedTileIndex)
+                if (reader.TileIndex != expectedTileIndex)
                 {
                     throw new InvalidOperationException(
                         $"Chunk ({chunk.ChunkX}, {chunk.ChunkY}, {chunk.ChunkZ}) has " +
-                        $"tile {tileIndices[index]} for block {blockId} direction {direction}, " +
+                        $"tile {reader.TileIndex} for block {blockId} direction {direction}, " +
                         $"but the runtime texture atlas requires tile {expectedTileIndex}.");
                 }
 
@@ -792,7 +786,12 @@ namespace MVoxelEngine1.WorldGeneration
                     renderPass,
                     blockId,
                     neighborBlockId));
+                index++;
             }
+
+            if (index != faceCount)
+                throw new InvalidOperationException(
+                    $"Chunk ({chunk.ChunkX}, {chunk.ChunkY}, {chunk.ChunkZ}) has an invalid face count.");
         }
 
         private static uint GetExpectedTileIndex(

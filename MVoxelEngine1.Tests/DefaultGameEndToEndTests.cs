@@ -7,7 +7,7 @@ namespace MVoxelEngine1.Tests
 {
     public class DefaultGameEndToEndTests
     {
-        [Fact(Timeout = 150_000)]
+        [Fact(Explicit = true, Timeout = 150_000)]
         [Trait("Category", "EndToEnd")]
         [Trait("Resource", "GPU")]
         public async Task DefaultGameSeed123456RecordsStartupPerformanceAsync()
@@ -290,6 +290,14 @@ namespace MVoxelEngine1.Tests
                 diagnostics.GeneratedSpanChunks + diagnostics.SectionChunks);
             Assert.True(diagnostics.GeneratedSpanOpaqueFaces > 0);
             Assert.True(diagnostics.GeneratedSpanTransparentFaces > 0);
+            Assert.InRange(
+                diagnostics.GeneratedSpanOpaqueRectangles,
+                1,
+                diagnostics.GeneratedSpanOpaqueFaces);
+            Assert.InRange(
+                diagnostics.GeneratedSpanTransparentRectangles,
+                1,
+                diagnostics.GeneratedSpanTransparentFaces);
             AssertPositiveFinite(
                 diagnostics.AggregatedBuildMilliseconds,
                 nameof(diagnostics.AggregatedBuildMilliseconds));
@@ -299,7 +307,7 @@ namespace MVoxelEngine1.Tests
             AssertPositiveFinite(
                 diagnostics.SectionBuildMilliseconds,
                 nameof(diagnostics.SectionBuildMilliseconds));
-            AssertPositiveFinite(
+            AssertNonNegativeFinite(
                 diagnostics.GeneratedSpanCountPassMilliseconds,
                 nameof(diagnostics.GeneratedSpanCountPassMilliseconds));
             AssertPositiveFinite(

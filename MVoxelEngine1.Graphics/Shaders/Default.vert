@@ -3,17 +3,11 @@
 // Per-vertex base quad attributes (unit quad in XY plane at z=0)
 layout (location = 0) in vec3 aPosition;  // (x,y,0) with x,y in {0,1}
 
-// Opaque per-instance attributes
-layout (location = 2) in vec3 iOffset;      // block position (integer coordinates) within chunk
-layout (location = 3) in uint iTileIndex;   // tile index in atlas
-layout (location = 4) in uint iFaceDir;     // face orientation: 0=L,1=R,2=Bottom,3=Top,4=Back,5=Front
+layout (location = 2) in uvec2 iRectangle;
+layout (location = 5) in uvec2 tRectangle;
 
-// Transparent per-instance attributes
-layout (location = 5) in vec3 tOffset;      // transparent face position
-layout (location = 6) in uint tTileIndex;   // transparent tile index
-layout (location = 7) in uint tFaceDir;     // transparent face orientation
-
-out vec2 texCoord;
+out vec2 rectangleUv;
+flat out uint atlasTileIndex;
 
 uniform mat4 model;
 uniform mat4 view;
@@ -23,8 +17,8 @@ uniform vec3 chunkPosition; // chunk base world position
 uniform float tilesX;       // atlas tiles horizontally
 uniform float tilesY;       // atlas tiles vertically
 
-// Switch selecting which instance attribute list to use this draw call.
-// 0.0 => opaque attribute set (2/3/4). Non-zero => transparent set (5/6/7).
+// Select the instance attribute for this draw call.
+// Zero selects attribute 2. A nonzero value selects attribute 5.
 uniform float useTransparentList; // 0.0 or 1.0
 
 // Outward orientation mapping
@@ -49,18 +43,23 @@ void main()
 
     // Select attribute set based on uniform
     bool useT = (useTransparentList > 0.5);
-    uint tileIndex = useT ? tTileIndex : iTileIndex;
-    uint faceDir = useT ? tFaceDir : iFaceDir;
-    vec3 instanceOffset = useT ? tOffset : iOffset;
-    
-    uint tx = tileIndex % uint(tilesX);
-    uint ty = tileIndex / uint(tilesX);
-    vec2 tileOffset = vec2(float(tx), float(ty));
+    uvec2 rectangle = useT ? tRectangle : iRectangle;
+    uint packedPosition = rectangle.x;
+    uint packedAttributes = rectangle.y;
+    uint faceDir = (packedPosition >> 24u) & 7u;
+    vec3 instanceOffset = vec3(
+        float(packedPosition & 255u),
+        float((packedPosition >> 8u) & 255u),
+        float((packedPosition >> 16u) & 255u));
+    vec2 rectangleExtent = vec2(
+        float((packedAttributes & 255u) + 1u),
+        float(((packedAttributes >> 8u) & 255u) + 1u));
+    rectangleUv = baseUV * rectangleExtent;
+    atlasTileIndex = packedAttributes >> 16u;
 
-    vec3 oriented = FacePosition(faceDir, baseUV, instanceOffset);
+    vec3 oriented = FacePosition(faceDir, rectangleUv, instanceOffset);
     vec3 worldPosition = oriented + chunkPosition;
 
     gl_Position = vec4(worldPosition, 1.0) * model * view * projection; // do not change order!
 
-    texCoord = (baseUV + tileOffset) / vec2(tilesX, tilesY);
 }

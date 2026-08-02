@@ -30,39 +30,26 @@ namespace MVoxelEngine1.Graphics.Terrain
         private bool isBuilt = false;
         private Vector3 chunkWorldPosition;
 
-        // Opaque instance data
-        private byte[] instanceOffsetBuffer; // 3 bytes per face (opaque)
-        private uint[] instanceTileIndexBuffer; // 1 uint per face (opaque)
-        private byte[] instanceFaceDirBuffer; // 1 byte per face (opaque)
-        private int instanceCount;            // opaque instance count
-
-        // Transparent instance data groundwork (emitted by SectionRender fallback currently)
-        private byte[] transparentInstanceOffsetBuffer;   // 3 bytes per face (transparent)
-        private uint[] transparentInstanceTileIndexBuffer; // 1 uint per face (transparent)
-        private byte[] transparentInstanceFaceDirBuffer;   // 1 byte per face (transparent)
-        private int transparentInstanceCount;              // transparent instance count
+        private uint[] opaqueRectangleBuffer = Array.Empty<uint>();
+        private int opaqueFaceCount;
+        private int opaqueRectangleCount;
+        private uint[] transparentRectangleBuffer = Array.Empty<uint>();
+        private int transparentFaceCount;
+        private int transparentRectangleCount;
 
         private VAO opaqueVAO;                // opaque pass VAO
         private VAO transparentVAO;           // transparent pass VAO
         private VBO quadPosVBO;               // shared static quad positions (attrib 0)
-        private VBO instanceOffsetVBO;        // opaque offsets (attrib 2)
-        private VBO instanceTileIndexVBO;     // opaque tile indices (attrib 3)
-        private VBO instanceFaceDirVBO;       // opaque face dirs (attrib 4)
-        private VBO transparentOffsetVBO;     // transparent offsets (attrib 5)
-        private VBO transparentTileIndexVBO;  // transparent tile indices (attrib 6)
-        private VBO transparentFaceDirVBO;    // transparent face dirs (attrib 7)
+        private VBO opaqueRectangleVBO;
+        private VBO transparentRectangleVBO;
         private IBO quadIndexIBO; // index buffer for the shared quad
 
         // Built flags for each buffer object; ensure deletion only when created.
         private bool opaqueVaoBuilt;
         private bool transparentVaoBuilt;
         private bool quadPosBuilt;
-        private bool instanceOffsetBuilt;
-        private bool instanceTileIndexBuilt;
-        private bool instanceFaceDirBuilt;
-        private bool transparentOffsetBuilt;
-        private bool transparentTileIndexBuilt;
-        private bool transparentFaceDirBuilt;
+        private bool opaqueRectangleBuilt;
+        private bool transparentRectangleBuilt;
         private bool quadIndexBuilt;
 
         public static BlockTextureAtlas terrainTextureAtlas { get; set; }
@@ -122,14 +109,10 @@ namespace MVoxelEngine1.Graphics.Terrain
                 chunkWorldPosition.Z,
                 fullyOccluded,
                 faceGenerationMode,
-                instanceCount,
-                instanceOffsetBuffer,
-                instanceTileIndexBuffer,
-                instanceFaceDirBuffer,
-                transparentInstanceCount,
-                transparentInstanceOffsetBuffer,
-                transparentInstanceTileIndexBuffer,
-                transparentInstanceFaceDirBuffer);
+                opaqueFaceCount,
+                opaqueRectangleBuffer,
+                transparentFaceCount,
+                transparentRectangleBuffer);
         }
 
         private void GenerateFaces(
@@ -161,14 +144,24 @@ namespace MVoxelEngine1.Graphics.Terrain
             bool usesGeneratedSpans = prerenderData.GeneratedSpans is not null;
             long buildStart = recordPerformance ? Stopwatch.GetTimestamp() : 0;
             sectionRender = new SectionRender(prerenderData, terrainTextureAtlas);
-            sectionRender.Build(out instanceCount, out instanceOffsetBuffer, out instanceTileIndexBuffer, out instanceFaceDirBuffer,
-                                out transparentInstanceCount, out transparentInstanceOffsetBuffer, out transparentInstanceTileIndexBuffer, out transparentInstanceFaceDirBuffer);
+            SetMeshData(sectionRender.Build());
             if (recordPerformance)
             {
                 MeshPerformanceRecorder.RecordBuiltChunk(
                     usesGeneratedSpans,
                     MeshPerformanceRecorder.GetElapsedTicks(buildStart));
             }
+        }
+
+        private void SetMeshData(FaceRectangleMeshData mesh)
+        {
+            opaqueFaceCount = mesh.OpaqueFaceCount;
+            opaqueRectangleBuffer = mesh.OpaqueRectangles;
+            opaqueRectangleCount = mesh.OpaqueRectangleCount;
+            transparentFaceCount = mesh.TransparentFaceCount;
+            transparentRectangleBuffer = mesh.TransparentRectangles;
+            transparentRectangleCount = mesh.TransparentRectangleCount;
+            fullyOccluded = opaqueFaceCount == 0 && transparentFaceCount == 0;
         }
 
         private void GenerateReferenceFaces(
@@ -200,21 +193,21 @@ namespace MVoxelEngine1.Graphics.Terrain
                     TerrainLoader.IsOpaque,
                     prerenderData.SectionDescs);
 
-            instanceCount = faces.OpaqueFaceCount;
-            instanceOffsetBuffer = faces.OpaqueOffsets;
-            instanceFaceDirBuffer = faces.OpaqueDirections;
-            instanceTileIndexBuffer = BuildReferenceTileIndices(
+            uint[] opaqueTileIndices = BuildReferenceTileIndices(
                 faces.OpaqueBlockIds,
                 faces.OpaqueDirections);
-
-            transparentInstanceCount = faces.TransparentFaceCount;
-            transparentInstanceOffsetBuffer = faces.TransparentOffsets;
-            transparentInstanceFaceDirBuffer = faces.TransparentDirections;
-            transparentInstanceTileIndexBuffer = BuildReferenceTileIndices(
+            uint[] transparentTileIndices = BuildReferenceTileIndices(
                 faces.TransparentBlockIds,
                 faces.TransparentDirections);
-
-            fullyOccluded = instanceCount == 0 && transparentInstanceCount == 0;
+            SetMeshData(FaceRectangleMeshData.FromFaces(
+                faces.OpaqueFaceCount,
+                faces.OpaqueOffsets,
+                opaqueTileIndices,
+                faces.OpaqueDirections,
+                faces.TransparentFaceCount,
+                faces.TransparentOffsets,
+                transparentTileIndices,
+                faces.TransparentDirections));
         }
 
         private static uint[] BuildReferenceTileIndices(
@@ -259,7 +252,7 @@ namespace MVoxelEngine1.Graphics.Terrain
             quadPosBuilt = true;
 
             // ----- OPAQUE VAO -----
-            if (instanceCount > 0)
+            if (opaqueRectangleCount > 0)
             {
                 opaqueVAO = new VAO();
                 opaqueVAO.Bind();
@@ -268,49 +261,29 @@ namespace MVoxelEngine1.Graphics.Terrain
                 quadPosVBO.Bind();
                 opaqueVAO.LinkToVAO(0, 3, VertexAttribPointerType.UnsignedByte, false, quadPosVBO);
 
-                // Instance offsets (location 2)
-                instanceOffsetVBO = new VBO(instanceOffsetBuffer ?? Array.Empty<byte>(), instanceOffsetBuffer?.Length ?? 0);
-                opaqueVAO.LinkToVAO(2, 3, VertexAttribPointerType.UnsignedByte, false, instanceOffsetVBO);
+                opaqueRectangleVBO = new VBO(
+                    opaqueRectangleBuffer ?? Array.Empty<uint>(),
+                    checked(opaqueRectangleCount * PackedFaceRectangle.WordsPerRectangle));
+                opaqueVAO.LinkIntegerToVAO(
+                    2,
+                    PackedFaceRectangle.WordsPerRectangle,
+                    VertexAttribIntegerType.UnsignedInt,
+                    opaqueRectangleVBO);
                 opaqueVAO.SetDivisor(2, 1);
-                instanceOffsetBuilt = true;
-
-                // Tile indices (location 3)
-                byte[] tileBytes;
-                if (instanceTileIndexBuffer == null || instanceTileIndexBuffer.Length == 0)
-                {
-                    tileBytes = Array.Empty<byte>();
-                }
-                else
-                {
-                    tileBytes = new byte[instanceTileIndexBuffer.Length * sizeof(uint)];
-                    System.Buffer.BlockCopy(instanceTileIndexBuffer, 0, tileBytes, 0, tileBytes.Length);
-                }
-                instanceTileIndexVBO = new VBO(tileBytes, tileBytes.Length);
-                opaqueVAO.LinkIntegerToVAO(3, 1, VertexAttribIntegerType.UnsignedInt, instanceTileIndexVBO);
-                opaqueVAO.SetDivisor(3, 1);
-                instanceTileIndexBuilt = true;
-
-                // Face dirs (location 4)
-                var faceDirBytes = instanceFaceDirBuffer ?? Array.Empty<byte>();
-                instanceFaceDirVBO = new VBO(faceDirBytes, faceDirBytes.Length);
-                opaqueVAO.LinkIntegerToVAO(4, 1, VertexAttribIntegerType.UnsignedByte, instanceFaceDirVBO);
-                opaqueVAO.SetDivisor(4, 1);
-                instanceFaceDirBuilt = true;
+                opaqueRectangleBuilt = true;
 
                 // Attach IBO to this VAO
                 quadIndexIBO.Bind();
 
                 // Explicitly disable transparent-only attributes on this VAO
                 opaqueVAO.SetAttribEnabled(5, false);
-                opaqueVAO.SetAttribEnabled(6, false);
-                opaqueVAO.SetAttribEnabled(7, false);
 
                 // Mark this VAO as built for safe deletion later.
                 opaqueVaoBuilt = true;
             }
 
             // ----- TRANSPARENT VAO -----
-            if (transparentInstanceCount > 0)
+            if (transparentRectangleCount > 0)
             {
                 transparentVAO = new VAO();
                 transparentVAO.Bind();
@@ -319,49 +292,30 @@ namespace MVoxelEngine1.Graphics.Terrain
                 quadPosVBO.Bind();
                 transparentVAO.LinkToVAO(0, 3, VertexAttribPointerType.UnsignedByte, false, quadPosVBO);
 
-                // Offsets (location 5)
-                transparentOffsetVBO = new VBO(transparentInstanceOffsetBuffer ?? Array.Empty<byte>(), transparentInstanceOffsetBuffer?.Length ?? 0);
-                transparentVAO.LinkToVAO(5, 3, VertexAttribPointerType.UnsignedByte, false, transparentOffsetVBO);
+                transparentRectangleVBO = new VBO(
+                    transparentRectangleBuffer ?? Array.Empty<uint>(),
+                    checked(transparentRectangleCount * PackedFaceRectangle.WordsPerRectangle),
+                    RenderPass.Transparent);
+                transparentVAO.LinkIntegerToVAO(
+                    5,
+                    PackedFaceRectangle.WordsPerRectangle,
+                    VertexAttribIntegerType.UnsignedInt,
+                    transparentRectangleVBO);
                 transparentVAO.SetDivisor(5, 1);
-                transparentOffsetBuilt = true;
-
-                // Tile indices (location 6)
-                byte[] tTileBytes;
-                if (transparentInstanceTileIndexBuffer == null || transparentInstanceTileIndexBuffer.Length == 0)
-                {
-                    tTileBytes = Array.Empty<byte>();
-                }
-                else
-                {
-                    tTileBytes = new byte[transparentInstanceTileIndexBuffer.Length * sizeof(uint)];
-                    System.Buffer.BlockCopy(transparentInstanceTileIndexBuffer, 0, tTileBytes, 0, tTileBytes.Length);
-                }
-                transparentTileIndexVBO = new VBO(tTileBytes, tTileBytes.Length);
-                transparentVAO.LinkIntegerToVAO(6, 1, VertexAttribIntegerType.UnsignedInt, transparentTileIndexVBO);
-                transparentVAO.SetDivisor(6, 1);
-                transparentTileIndexBuilt = true;
-
-                // Face dirs (location 7)
-                var tFaceDirBytes = transparentInstanceFaceDirBuffer ?? Array.Empty<byte>();
-                transparentFaceDirVBO = new VBO(tFaceDirBytes, tFaceDirBytes.Length);
-                transparentVAO.LinkIntegerToVAO(7, 1, VertexAttribIntegerType.UnsignedByte, transparentFaceDirVBO);
-                transparentVAO.SetDivisor(7, 1);
-                transparentFaceDirBuilt = true;
+                transparentRectangleBuilt = true;
 
                 // Attach IBO to this VAO
                 quadIndexIBO.Bind();
 
                 // Explicitly disable opaque-only attributes on this VAO
                 transparentVAO.SetAttribEnabled(2, false);
-                transparentVAO.SetAttribEnabled(3, false);
-                transparentVAO.SetAttribEnabled(4, false);
 
                 // Mark this VAO as built for safe deletion later.
                 transparentVaoBuilt = true;
             }
 
             isBuilt = true;
-            if (instanceCount != 0 || transparentInstanceCount != 0)
+            if (opaqueFaceCount != 0 || transparentFaceCount != 0)
             {
                 double? generationToRender =
                     StartupPerformanceRecorder.RecordGenerationToRender();
@@ -379,7 +333,7 @@ namespace MVoxelEngine1.Graphics.Terrain
             ProcessPendingDeletes();
             if (!isBuilt) Build();
 
-            if (fullyOccluded || instanceCount == 0)
+            if (fullyOccluded || opaqueRectangleCount == 0)
                 return;
 
             Vector3 adjustedChunkPosition = chunkWorldPosition + new Vector3(1f, 1f, 1f);
@@ -394,7 +348,12 @@ namespace MVoxelEngine1.Graphics.Terrain
                 quadIndexIBO.Bind(); // ensure IBO bound to this VAO if driver disassociates
 
                 program.SetUniform("useTransparentList", 0f);
-                GL.DrawElementsInstanced(PrimitiveType.Triangles, 6, DrawElementsType.UnsignedShort, IntPtr.Zero, instanceCount);
+                GL.DrawElementsInstanced(
+                    PrimitiveType.Triangles,
+                    6,
+                    DrawElementsType.UnsignedShort,
+                    IntPtr.Zero,
+                    opaqueRectangleCount);
             }
         }
 
@@ -405,7 +364,7 @@ namespace MVoxelEngine1.Graphics.Terrain
             ProcessPendingDeletes();
             if (!isBuilt) Build();
 
-            if (fullyOccluded || transparentInstanceCount == 0)
+            if (fullyOccluded || transparentRectangleCount == 0)
                 return;
 
             Vector3 adjustedChunkPosition = chunkWorldPosition + new Vector3(1f, 1f, 1f);
@@ -422,7 +381,12 @@ namespace MVoxelEngine1.Graphics.Terrain
                 GL.Enable(EnableCap.Blend);
                 GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
                 program.SetUniform("useTransparentList", 1f);
-                GL.DrawElementsInstanced(PrimitiveType.Triangles, 6, DrawElementsType.UnsignedShort, IntPtr.Zero, transparentInstanceCount);
+                GL.DrawElementsInstanced(
+                    PrimitiveType.Triangles,
+                    6,
+                    DrawElementsType.UnsignedShort,
+                    IntPtr.Zero,
+                    transparentRectangleCount);
                 GL.Disable(EnableCap.Blend);
             }
         }
@@ -445,12 +409,8 @@ namespace MVoxelEngine1.Graphics.Terrain
             if (opaqueVaoBuilt) { opaqueVAO.Delete(); opaqueVAO = null; opaqueVaoBuilt = false; }
             if (transparentVaoBuilt) { transparentVAO.Delete(); transparentVAO = null; transparentVaoBuilt = false; }
             if (quadPosBuilt) { quadPosVBO.Delete(); quadPosVBO = null; quadPosBuilt = false; }
-            if (instanceOffsetBuilt) { instanceOffsetVBO.Delete(); instanceOffsetVBO = null; instanceOffsetBuilt = false; }
-            if (instanceTileIndexBuilt) { instanceTileIndexVBO.Delete(); instanceTileIndexVBO = null; instanceTileIndexBuilt = false; }
-            if (instanceFaceDirBuilt) { instanceFaceDirVBO.Delete(); instanceFaceDirVBO = null; instanceFaceDirBuilt = false; }
-            if (transparentOffsetBuilt) { transparentOffsetVBO.Delete(); transparentOffsetVBO = null; transparentOffsetBuilt = false; }
-            if (transparentTileIndexBuilt) { transparentTileIndexVBO.Delete(); transparentTileIndexVBO = null; transparentTileIndexBuilt = false; }
-            if (transparentFaceDirBuilt) { transparentFaceDirVBO.Delete(); transparentFaceDirVBO = null; transparentFaceDirBuilt = false; }
+            if (opaqueRectangleBuilt) { opaqueRectangleVBO.Delete(); opaqueRectangleVBO = null; opaqueRectangleBuilt = false; }
+            if (transparentRectangleBuilt) { transparentRectangleVBO.Delete(); transparentRectangleVBO = null; transparentRectangleBuilt = false; }
             if (quadIndexBuilt) { quadIndexIBO.Delete(); quadIndexIBO = null; quadIndexBuilt = false; }
 
             isBuilt = false;
