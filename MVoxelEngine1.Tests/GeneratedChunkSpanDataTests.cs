@@ -71,16 +71,19 @@ namespace MVoxelEngine1.Tests
 
             ChunkPrerenderData data = CreatePrerenderData(source);
             ChunkRender.terrainTextureAtlas = atlas;
-            var optimized = new ChunkRender(
+            using var pool = new PackedFaceNativePool();
+            using var optimized = new ChunkRender(
                 data,
                 FaceGenerationMode.Optimized,
                 null,
-                null);
-            var reference = new ChunkRender(
+                null,
+                pool);
+            using var reference = new ChunkRender(
                 data,
                 FaceGenerationMode.Reference,
                 source.GetBlockLocal,
-                new ReferenceNeighborBlockPlanes());
+                new ReferenceNeighborBlockPlanes(),
+                pool);
 
             Assert.Equal(6, optimized.UploadData.OpaqueFaceCount);
             Assert.Equal(11, optimized.UploadData.TransparentFaceCount);
@@ -108,16 +111,19 @@ namespace MVoxelEngine1.Tests
                 waterBlockId: (ushort)BaseBlockType.Water);
             ChunkPrerenderData data = CreatePrerenderData(source);
             ChunkRender.terrainTextureAtlas = atlas;
-            var optimized = new ChunkRender(
+            using var pool = new PackedFaceNativePool();
+            using var optimized = new ChunkRender(
                 data,
                 FaceGenerationMode.Optimized,
                 null,
-                null);
-            var reference = new ChunkRender(
+                null,
+                pool);
+            using var reference = new ChunkRender(
                 data,
                 FaceGenerationMode.Reference,
                 source.GetBlockLocal,
-                new ReferenceNeighborBlockPlanes());
+                new ReferenceNeighborBlockPlanes(),
+                pool);
 
             Assert.Equal(
                 GetFaceRecords(reference.UploadData),
@@ -128,6 +134,135 @@ namespace MVoxelEngine1.Tests
             Assert.True(
                 optimized.UploadData.TransparentRectangleCount <
                 optimized.UploadData.TransparentFaceCount);
+        }
+
+        [Fact]
+        public void PersistentNativePoolResetsGrownWorkspaceBetweenChunks()
+        {
+            BlockTextureAtlas atlas = LoadDefaultRuntimeData();
+            var largeColumns = new BlockColumnProfile[160 * 160];
+            for (int x = 0; x < 160; x++)
+            {
+                for (int z = 0; z < 160; z++)
+                {
+                    largeColumns[x * 160 + z] = new BlockColumnProfile
+                    {
+                        StoneStart = 0,
+                        StoneEnd = (x + z) & 1,
+                        SoilStart = -1,
+                        SoilEnd = -1,
+                        WaterStart = -1,
+                        WaterEnd = -1
+                    };
+                }
+            }
+
+            var largeSource = new GeneratedChunkSpanData(
+                largeColumns,
+                width: 160,
+                height: 2,
+                depth: 160,
+                chunkBaseY: 0,
+                stoneBlockId: (ushort)BaseBlockType.Stone,
+                soilBlockId: (ushort)BaseBlockType.Soil,
+                waterBlockId: (ushort)BaseBlockType.Water);
+            ChunkRender.terrainTextureAtlas = atlas;
+            using var pool = new PackedFaceNativePool();
+            using var large = new ChunkRender(
+                CreatePrerenderData(largeSource),
+                FaceGenerationMode.Optimized,
+                null,
+                null,
+                pool);
+
+            Assert.True(large.UploadData.OpaqueWordCount > 65_536);
+            large.Dispose();
+
+            var smallSource = new GeneratedChunkSpanData(
+                new[]
+                {
+                    new BlockColumnProfile
+                    {
+                        StoneStart = 0,
+                        StoneEnd = 0,
+                        SoilStart = -1,
+                        SoilEnd = -1,
+                        WaterStart = -1,
+                        WaterEnd = -1
+                    }
+                },
+                width: 1,
+                height: 1,
+                depth: 1,
+                chunkBaseY: 0,
+                stoneBlockId: (ushort)BaseBlockType.Stone,
+                soilBlockId: (ushort)BaseBlockType.Soil,
+                waterBlockId: (ushort)BaseBlockType.Water);
+            ChunkPrerenderData smallData = CreatePrerenderData(smallSource);
+            using var optimized = new ChunkRender(
+                smallData,
+                FaceGenerationMode.Optimized,
+                null,
+                null,
+                pool);
+            using var reference = new ChunkRender(
+                smallData,
+                FaceGenerationMode.Reference,
+                smallSource.GetBlockLocal,
+                new ReferenceNeighborBlockPlanes(),
+                pool);
+
+            Assert.Equal(
+                GetFaceRecords(reference.UploadData),
+                GetFaceRecords(optimized.UploadData));
+        }
+
+        [Fact]
+        public void NativeUploadRetentionOwnsGeneratedBuffersUntilRelease()
+        {
+            BlockTextureAtlas atlas = LoadDefaultRuntimeData();
+            var source = new GeneratedChunkSpanData(
+                CreateColumns(),
+                width: 16,
+                height: 16,
+                depth: 16,
+                chunkBaseY: 0,
+                stoneBlockId: (ushort)BaseBlockType.Stone,
+                soilBlockId: (ushort)BaseBlockType.Soil,
+                waterBlockId: (ushort)BaseBlockType.Water);
+            ChunkPrerenderData prerenderData = CreatePrerenderData(source);
+            ChunkRender.terrainTextureAtlas = atlas;
+            var pool = new PackedFaceNativePool();
+            var renderer = new ChunkRender(
+                prerenderData,
+                FaceGenerationMode.Optimized,
+                null,
+                null,
+                pool);
+            ChunkRenderUploadData data = renderer.UploadData;
+            using ChunkRenderUploadRetention retention = data.Retain();
+
+            renderer.Dispose();
+            renderer.Dispose();
+
+            Assert.Throws<ObjectDisposedException>(() =>
+                data.ReadOpaque(
+                    static view => view.Length,
+                    static rectangles => rectangles.Length));
+            Assert.True(retention.ReadOpaque(
+                static view => view.Length,
+                static _ => throw new InvalidOperationException()) > 0);
+            retention.Dispose();
+
+            Assert.Throws<ObjectDisposedException>(() =>
+                retention.ReadOpaque(
+                    static view => view.Length,
+                    static rectangles => rectangles.Length));
+            Assert.Throws<ObjectDisposedException>(() =>
+                data.ReadOpaque(
+                    static view => view.Length,
+                    static rectangles => rectangles.Length));
+            pool.Dispose();
         }
 
         [Fact]
@@ -143,7 +278,8 @@ namespace MVoxelEngine1.Tests
                 stoneBlockId: (ushort)BaseBlockType.Stone,
                 soilBlockId: (ushort)BaseBlockType.Soil,
                 waterBlockId: (ushort)BaseBlockType.Water);
-            (ChunkRender renderer, WeakReference<ulong[]> neighbor) =
+            (ChunkRender renderer, WeakReference<ulong[]> neighbor,
+                PackedFaceNativePool pool) =
                 CreateRendererWithBorrowedNeighbor(source, atlas);
 
             for (int collection = 0; collection < 3; collection++)
@@ -154,6 +290,8 @@ namespace MVoxelEngine1.Tests
 
             Assert.False(neighbor.TryGetTarget(out _));
             GC.KeepAlive(renderer);
+            renderer.Dispose();
+            pool.Dispose();
         }
 
         [Fact]
@@ -465,7 +603,8 @@ namespace MVoxelEngine1.Tests
         [MethodImpl(MethodImplOptions.NoInlining)]
         private static (
             ChunkRender Renderer,
-            WeakReference<ulong[]> Neighbor)
+            WeakReference<ulong[]> Neighbor,
+            PackedFaceNativePool Pool)
             CreateRendererWithBorrowedNeighbor(
                 GeneratedChunkSpanData source,
                 BlockTextureAtlas atlas)
@@ -474,26 +613,38 @@ namespace MVoxelEngine1.Tests
             ulong[] neighbor = data.NeighborPlaneNegX;
             var weakNeighbor = new WeakReference<ulong[]>(neighbor);
             ChunkRender.terrainTextureAtlas = atlas;
+            var pool = new PackedFaceNativePool();
             var renderer = new ChunkRender(
                 data,
                 FaceGenerationMode.Optimized,
                 null,
-                null);
-            return (renderer, weakNeighbor);
+                null,
+                pool);
+            return (renderer, weakNeighbor, pool);
         }
 
         private static string[] GetFaceRecords(ChunkRenderUploadData data)
         {
             var result = new List<string>(
                 data.OpaqueFaceCount + data.TransparentFaceCount);
-            AddFaceRecords(
-                result,
-                "opaque",
-                data.OpaqueRectangles.Span);
-            AddFaceRecords(
-                result,
-                "transparent",
-                data.TransparentRectangles.Span);
+            data.ReadOpaque(view =>
+            {
+                AddFaceRecords(result, "opaque", view.AsSpan());
+                return 0;
+            }, rectangles =>
+            {
+                AddFaceRecords(result, "opaque", rectangles);
+                return 0;
+            });
+            data.ReadTransparent(view =>
+            {
+                AddFaceRecords(result, "transparent", view.AsSpan());
+                return 0;
+            }, rectangles =>
+            {
+                AddFaceRecords(result, "transparent", rectangles);
+                return 0;
+            });
             result.Sort(StringComparer.Ordinal);
             return result.ToArray();
         }
@@ -519,14 +670,34 @@ namespace MVoxelEngine1.Tests
             ushort firstTransparentBlock,
             ushort secondTransparentBlock)
         {
-            AssertPassTiles(
-                data.OpaqueRectangles.Span,
-                atlas,
-                _ => opaqueBlock);
-            AssertPassTiles(
-                data.TransparentRectangles.Span,
-                atlas,
-                y => y == 1 ? firstTransparentBlock : secondTransparentBlock);
+            data.ReadOpaque(view =>
+            {
+                AssertPassTiles(view.AsSpan(), atlas, _ => opaqueBlock);
+                return 0;
+            }, rectangles =>
+            {
+                AssertPassTiles(rectangles, atlas, _ => opaqueBlock);
+                return 0;
+            });
+            data.ReadTransparent(view =>
+            {
+                AssertPassTiles(
+                    view.AsSpan(),
+                    atlas,
+                    y => y == 1
+                        ? firstTransparentBlock
+                        : secondTransparentBlock);
+                return 0;
+            }, rectangles =>
+            {
+                AssertPassTiles(
+                    rectangles,
+                    atlas,
+                    y => y == 1
+                        ? firstTransparentBlock
+                        : secondTransparentBlock);
+                return 0;
+            });
         }
 
         private static void AssertPassTiles(

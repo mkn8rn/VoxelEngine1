@@ -114,6 +114,7 @@ namespace MVoxelEngine1.Application
         protected override void OnUnload()
         {
             world?.Dispose();
+            ChunkRender.ProcessPendingDeletes();
             base.OnUnload();
         }
 

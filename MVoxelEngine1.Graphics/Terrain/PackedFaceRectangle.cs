@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Supprocom.NativeAllocationManagement;
 
 namespace MVoxelEngine1.Graphics.Terrain
 {
@@ -291,8 +292,14 @@ namespace MVoxelEngine1.Graphics.Terrain
         }
     }
 
-    internal sealed class FaceRectangleMeshData
+    internal sealed class FaceRectangleMeshData : IDisposable
     {
+        private readonly uint[]? managedOpaqueRectangles;
+        private readonly uint[]? managedTransparentRectangles;
+        private NativeTransfer<uint>? nativeOpaqueRectangles;
+        private NativeTransfer<uint>? nativeTransparentRectangles;
+        private int disposed;
+
         internal FaceRectangleMeshData(
             int opaqueFaceCount,
             uint[] opaqueRectangles,
@@ -300,24 +307,90 @@ namespace MVoxelEngine1.Graphics.Terrain
             uint[] transparentRectangles)
         {
             OpaqueFaceCount = opaqueFaceCount;
-            OpaqueRectangles = opaqueRectangles;
+            managedOpaqueRectangles = opaqueRectangles;
+            OpaqueWordCount = opaqueRectangles.Length;
             TransparentFaceCount = transparentFaceCount;
-            TransparentRectangles = transparentRectangles;
+            managedTransparentRectangles = transparentRectangles;
+            TransparentWordCount = transparentRectangles.Length;
+        }
+
+        internal FaceRectangleMeshData(
+            int opaqueFaceCount,
+            NativeTransfer<uint>? opaqueRectangles,
+            int transparentFaceCount,
+            NativeTransfer<uint>? transparentRectangles)
+        {
+            try
+            {
+                nativeOpaqueRectangles = NativeTransfer<uint>.Move(
+                    ref opaqueRectangles);
+                OpaqueWordCount = nativeOpaqueRectangles.Length;
+                nativeTransparentRectangles = NativeTransfer<uint>.Move(
+                    ref transparentRectangles);
+                TransparentWordCount = nativeTransparentRectangles.Length;
+                OpaqueFaceCount = opaqueFaceCount;
+                TransparentFaceCount = transparentFaceCount;
+            }
+            catch
+            {
+                try
+                {
+                    nativeOpaqueRectangles?.Dispose();
+                    nativeOpaqueRectangles = null;
+                }
+                finally
+                {
+                    nativeTransparentRectangles?.Dispose();
+                    nativeTransparentRectangles = null;
+                }
+
+                throw;
+            }
+            finally
+            {
+                opaqueRectangles?.Dispose();
+                transparentRectangles?.Dispose();
+            }
         }
 
         internal int OpaqueFaceCount { get; }
 
-        internal uint[] OpaqueRectangles { get; }
+        internal int OpaqueWordCount { get; }
 
         internal int OpaqueRectangleCount =>
-            OpaqueRectangles.Length / PackedFaceRectangle.WordsPerRectangle;
+            OpaqueWordCount / PackedFaceRectangle.WordsPerRectangle;
 
         internal int TransparentFaceCount { get; }
 
-        internal uint[] TransparentRectangles { get; }
+        internal int TransparentWordCount { get; }
 
         internal int TransparentRectangleCount =>
-            TransparentRectangles.Length / PackedFaceRectangle.WordsPerRectangle;
+            TransparentWordCount / PackedFaceRectangle.WordsPerRectangle;
+
+        internal TResult ReadOpaque<TResult>(
+            NativeLeaseFunc<uint, TResult> nativeReader,
+            PackedFaceReader<TResult> managedReader)
+        {
+            if (Volatile.Read(ref disposed) != 0)
+                throw new ObjectDisposedException(nameof(FaceRectangleMeshData));
+
+            return nativeOpaqueRectangles is not null
+                ? nativeOpaqueRectangles.Read(nativeReader)
+                : managedReader(managedOpaqueRectangles ?? Array.Empty<uint>());
+        }
+
+        internal TResult ReadTransparent<TResult>(
+            NativeLeaseFunc<uint, TResult> nativeReader,
+            PackedFaceReader<TResult> managedReader)
+        {
+            if (Volatile.Read(ref disposed) != 0)
+                throw new ObjectDisposedException(nameof(FaceRectangleMeshData));
+
+            return nativeTransparentRectangles is not null
+                ? nativeTransparentRectangles.Read(nativeReader)
+                : managedReader(
+                    managedTransparentRectangles ?? Array.Empty<uint>());
+        }
 
         internal static FaceRectangleMeshData FromFaces(
             int opaqueFaceCount,
@@ -344,6 +417,23 @@ namespace MVoxelEngine1.Graphics.Terrain
                     transparentDirections));
         }
 
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref disposed, 1) != 0)
+                return;
+
+            try
+            {
+                nativeOpaqueRectangles?.Dispose();
+                nativeOpaqueRectangles = null;
+            }
+            finally
+            {
+                nativeTransparentRectangles?.Dispose();
+                nativeTransparentRectangles = null;
+            }
+        }
+
         private static uint[] PackFaces(
             int faceCount,
             byte[] offsets,
@@ -358,7 +448,8 @@ namespace MVoxelEngine1.Graphics.Terrain
                     "Face arrays have inconsistent lengths.");
             }
 
-            var result = new uint[checked(faceCount * PackedFaceRectangle.WordsPerRectangle)];
+            var result = new uint[checked(
+                faceCount * PackedFaceRectangle.WordsPerRectangle)];
             for (int index = 0; index < faceCount; index++)
             {
                 int offsetIndex = index * 3;

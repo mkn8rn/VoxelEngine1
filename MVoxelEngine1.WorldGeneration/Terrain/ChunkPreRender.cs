@@ -474,7 +474,8 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
 
         internal ChunkRender? CreateRender(
             FaceGenerationMode faceGenerationMode,
-            ReferenceNeighborBlockPlanes? referenceNeighbors)
+            ReferenceNeighborBlockPlanes? referenceNeighbors,
+            PackedFaceNativePool packedFacePool)
         {
             if (AllAirChunk ||
                 (faceGenerationMode == FaceGenerationMode.Optimized &&
@@ -490,7 +491,8 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                     BuildPrerenderData(null),
                     faceGenerationMode,
                     GetBlockLocal,
-                    referenceNeighbors);
+                    referenceNeighbors,
+                    packedFacePool);
             }
 
             if (AllOneBlockChunk)
@@ -515,7 +517,8 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                     prerenderUniform,
                     faceGenerationMode,
                     GetBlockLocal,
-                    referenceNeighbors);
+                    referenceNeighbors,
+                    packedFacePool);
             }
 
             // Aggregate opaque stats directly from sections (no flatten) and detect any transparent content.
@@ -578,7 +581,8 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                 prerender,
                 faceGenerationMode,
                 GetBlockLocal,
-                referenceNeighbors);
+                referenceNeighbors,
+                packedFacePool);
         }
 
         internal void PublishRender(ChunkRender? renderer)

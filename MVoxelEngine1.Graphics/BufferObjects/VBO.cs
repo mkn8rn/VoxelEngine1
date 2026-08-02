@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using System.Runtime.InteropServices;
 
 namespace MVoxelEngine1.Graphics.BufferObjects
 {
@@ -66,6 +67,24 @@ namespace MVoxelEngine1.Graphics.BufferObjects
                 BufferTarget.ArrayBuffer,
                 checked(wordCount * sizeof(uint)),
                 data,
+                BufferUsageHint.StaticDraw);
+        }
+
+        public VBO(
+            ReadOnlySpan<uint> data,
+            RenderPass pass = RenderPass.Opaque)
+        {
+            if (data.IsEmpty)
+                throw new ArgumentException("The VBO data cannot be empty.", nameof(data));
+
+            Pass = pass;
+            ID = GL.GenBuffer();
+            GL.BindBuffer(BufferTarget.ArrayBuffer, ID);
+            ref uint first = ref MemoryMarshal.GetReference(data);
+            GL.BufferData(
+                BufferTarget.ArrayBuffer,
+                checked(data.Length * sizeof(uint)),
+                ref first,
                 BufferUsageHint.StaticDraw);
         }
 

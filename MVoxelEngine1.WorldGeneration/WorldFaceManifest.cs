@@ -582,22 +582,52 @@ namespace MVoxelEngine1.WorldGeneration
         {
             var result = new List<CanonicalRenderFace>(checked(
                 data.OpaqueFaceCount + data.TransparentFaceCount));
-            CapturePass(
-                world,
-                chunk,
-                data.OpaqueFaceCount,
-                data.OpaqueRectangles.Span,
-                CanonicalRenderPass.Opaque,
-                result,
-                expectedTileIndices);
-            CapturePass(
-                world,
-                chunk,
-                data.TransparentFaceCount,
-                data.TransparentRectangles.Span,
-                CanonicalRenderPass.Transparent,
-                result,
-                expectedTileIndices);
+            data.ReadOpaque(view =>
+            {
+                CapturePass(
+                    world,
+                    chunk,
+                    data.OpaqueFaceCount,
+                    view.AsSpan(),
+                    CanonicalRenderPass.Opaque,
+                    result,
+                    expectedTileIndices);
+                return 0;
+            }, rectangles =>
+            {
+                CapturePass(
+                    world,
+                    chunk,
+                    data.OpaqueFaceCount,
+                    rectangles,
+                    CanonicalRenderPass.Opaque,
+                    result,
+                    expectedTileIndices);
+                return 0;
+            });
+            data.ReadTransparent(view =>
+            {
+                CapturePass(
+                    world,
+                    chunk,
+                    data.TransparentFaceCount,
+                    view.AsSpan(),
+                    CanonicalRenderPass.Transparent,
+                    result,
+                    expectedTileIndices);
+                return 0;
+            }, rectangles =>
+            {
+                CapturePass(
+                    world,
+                    chunk,
+                    data.TransparentFaceCount,
+                    rectangles,
+                    CanonicalRenderPass.Transparent,
+                    result,
+                    expectedTileIndices);
+                return 0;
+            });
             return result;
         }
 

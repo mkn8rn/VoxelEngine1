@@ -5,13 +5,16 @@ using MVoxelEngine1.Graphics.Textures;
 using MVoxelEngine1.Infrastructure.Diagnostics;
 using System.Diagnostics;
 using System.Buffers;
-using System.Collections.Generic;
+using Supprocom.NativeAllocationManagement;
+using System.Runtime.CompilerServices;
 
 namespace MVoxelEngine1.Graphics.Terrain.Sections
 {
     internal partial class SectionRender
     {
-        private FaceRectangleMeshData BuildGeneratedSpanRectangles()
+        private FaceRectangleMeshData BuildGeneratedSpanRectangles(
+            NativePool<uint> nativePool,
+            PackedFaceStagingWorkspace stagingWorkspace)
         {
             GeneratedChunkSpanData source = data.GeneratedSpans ??
                 throw new InvalidOperationException("Generated span data is not available.");
@@ -21,7 +24,10 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             int horizontalCellCount = checked(source.Width * source.Depth);
             int[] bottomFaces = ArrayPool<int>.Shared.Rent(horizontalCellCount);
             int[] topFaces = ArrayPool<int>.Shared.Rent(horizontalCellCount);
-            var writer = new GeneratedFaceRectangleWriter(source, atlas);
+            var writer = new GeneratedFaceRectangleWriter(
+                source,
+                atlas,
+                stagingWorkspace);
             long preparationTicks = recordPerformance
                 ? MeshPerformanceRecorder.GetElapsedTicks(phaseStart)
                 : 0;
@@ -59,7 +65,33 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                         ref writer);
                 }
 
-                result = writer.Complete();
+                writer.CommitBuffers();
+                using NativeBuilder<uint> opaqueRectangles =
+                    nativePool.CreateBuilder(writer.OpaqueWordCount);
+                using NativeBuilder<uint> transparentRectangles =
+                    nativePool.CreateBuilder(writer.TransparentWordCount);
+                if (writer.OpaqueWordCount != 0)
+                    opaqueRectangles.Append(writer.OpaqueWords);
+                if (writer.TransparentWordCount != 0)
+                    transparentRectangles.Append(writer.TransparentWords);
+
+                NativeTransfer<uint>? opaque = null;
+                NativeTransfer<uint>? transparent = null;
+                try
+                {
+                    opaque = opaqueRectangles.Complete();
+                    transparent = transparentRectangles.Complete();
+                    result = new FaceRectangleMeshData(
+                        writer.OpaqueFaceCount,
+                        NativeTransfer<uint>.Move(ref opaque),
+                        writer.TransparentFaceCount,
+                        NativeTransfer<uint>.Move(ref transparent));
+                }
+                finally
+                {
+                    opaque?.Dispose();
+                    transparent?.Dispose();
+                }
             }
             finally
             {
@@ -569,17 +601,24 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
         {
             private readonly GeneratedChunkSpanData source;
             private readonly uint[] faceTiles;
-            private readonly List<uint> opaqueRectangles;
-            private readonly List<uint> transparentRectangles;
+            private readonly PackedFaceStagingWorkspace stagingWorkspace;
+            private uint[] opaqueWords;
+            private uint[] transparentWords;
+            private int opaqueWordCount;
+            private int transparentWordCount;
 
             public GeneratedFaceRectangleWriter(
                 GeneratedChunkSpanData source,
-                BlockTextureAtlas atlas)
+                BlockTextureAtlas atlas,
+                PackedFaceStagingWorkspace stagingWorkspace)
             {
                 this.source = source;
                 faceTiles = BuildFaceTiles(source, atlas);
-                opaqueRectangles = new List<uint>(12_288);
-                transparentRectangles = new List<uint>(1_536);
+                this.stagingWorkspace = stagingWorkspace;
+                opaqueWords = stagingWorkspace.OpaqueBuffer;
+                transparentWords = stagingWorkspace.TransparentBuffer;
+                opaqueWordCount = 0;
+                transparentWordCount = 0;
                 OpaqueFaceCount = 0;
                 TransparentFaceCount = 0;
             }
@@ -588,6 +627,17 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
 
             public int TransparentFaceCount { get; private set; }
 
+            public int OpaqueWordCount => opaqueWordCount;
+
+            public int TransparentWordCount => transparentWordCount;
+
+            public ReadOnlySpan<uint> OpaqueWords =>
+                opaqueWords.AsSpan(0, opaqueWordCount);
+
+            public ReadOnlySpan<uint> TransparentWords =>
+                transparentWords.AsSpan(0, transparentWordCount);
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public void EmitRectangle(
                 ushort blockId,
                 byte direction,
@@ -608,24 +658,29 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     extentV,
                     tileIndex);
                 int logicalFaceCount = checked(extentU * extentV);
-                List<uint> destination;
                 if (TerrainLoader.IsOpaque(blockId))
                 {
                     OpaqueFaceCount = checked(
                         OpaqueFaceCount + logicalFaceCount);
-                    destination = opaqueRectangles;
+                    AppendPair(
+                        ref opaqueWords,
+                        ref opaqueWordCount,
+                        position,
+                        attributes);
                 }
                 else
                 {
                     TransparentFaceCount = checked(
                         TransparentFaceCount + logicalFaceCount);
-                    destination = transparentRectangles;
+                    AppendPair(
+                        ref transparentWords,
+                        ref transparentWordCount,
+                        position,
+                        attributes);
                 }
-
-                destination.Add(position);
-                destination.Add(attributes);
             }
 
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public void EmitYRange(
                 ushort blockId,
                 byte direction,
@@ -644,17 +699,10 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     endY - startY + 1);
             }
 
-            public FaceRectangleMeshData Complete()
-            {
-                uint[] opaque = opaqueRectangles.ToArray();
-                uint[] transparent = transparentRectangles.ToArray();
-                return new FaceRectangleMeshData(
-                    OpaqueFaceCount,
-                    opaque,
-                    TransparentFaceCount,
-                    transparent);
-            }
+            public void CommitBuffers() =>
+                stagingWorkspace.Adopt(opaqueWords, transparentWords);
 
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
             private uint GetFaceTile(ushort blockId, byte direction)
             {
                 int materialIndex = blockId == source.StoneBlockId
@@ -666,6 +714,27 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                             : throw new InvalidOperationException(
                                 "Generated face uses an unknown block identifier.");
                 return faceTiles[materialIndex * 6 + direction];
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            private static void AppendPair(
+                ref uint[] destination,
+                ref int count,
+                uint first,
+                uint second)
+            {
+                int required = checked(count + 2);
+                if (required > destination.Length)
+                {
+                    int nextLength = Math.Max(
+                        required,
+                        checked(destination.Length * 2));
+                    Array.Resize(ref destination, nextLength);
+                }
+
+                destination[count] = first;
+                destination[count + 1] = second;
+                count = required;
             }
 
             private static uint[] BuildFaceTiles(

@@ -44,6 +44,11 @@ namespace MVoxelEngine1.WorldGeneration
         private CancellationTokenSource meshBuildCts;           // drives current mesh build worker set
 
         private readonly FaceGenerationMode faceGenerationMode;
+        private readonly ThreadLocal<PackedFaceNativePool> packedFacePools =
+            new(
+                static () => new PackedFaceNativePool(),
+                trackAllValues: true);
+        private int packedFaceResourcesDisposed;
         private readonly ReaderWriterLockSlim renderStateLock =
             new(LockRecursionPolicy.SupportsRecursion);
 
@@ -362,7 +367,8 @@ namespace MVoxelEngine1.WorldGeneration
                         : 0;
                     ChunkRender? renderer = chunk.CreateRender(
                         faceGenerationMode,
-                        referenceNeighbors);
+                        referenceNeighbors,
+                        packedFacePools.Value!);
                     chunk.PublishRender(renderer);
                     if (faceGenerationMode == FaceGenerationMode.Reference)
                         ValidateReferenceRenderData(key, chunk);
@@ -706,7 +712,8 @@ namespace MVoxelEngine1.WorldGeneration
                         long buildStart = StartupPerformanceRecorder.IsRunning ? Stopwatch.GetTimestamp() : 0;
                         ChunkRender? renderer = ch.CreateRender(
                             faceGenerationMode,
-                            referenceNeighbors);
+                            referenceNeighbors,
+                            packedFacePools.Value!);
                         ch.PublishRender(renderer);
                         if (faceGenerationMode == FaceGenerationMode.Reference)
                             ValidateReferenceRenderData(key, ch);
@@ -1065,6 +1072,22 @@ namespace MVoxelEngine1.WorldGeneration
                 chunkPositionQueue?.Dispose();
                 bufferChunkPositionQueue?.Dispose();
                 meshBuildQueue?.Dispose();
+                Task[] renderWorkers = (generationWorkers ?? Array.Empty<Task>())
+                    .Concat(meshBuildWorkers ?? Array.Empty<Task>())
+                    .Concat(schedulingWorkers ?? Array.Empty<Task>())
+                    .ToArray();
+                if (renderWorkers.All(worker => worker.IsCompleted))
+                {
+                    DisposePackedFaceResources();
+                }
+                else
+                {
+                    _ = Task.WhenAll(renderWorkers).ContinueWith(
+                        _ => DisposePackedFaceResources(),
+                        CancellationToken.None,
+                        TaskContinuationOptions.ExecuteSynchronously,
+                        TaskScheduler.Default);
+                }
                 renderStateLock.Dispose();
                 bool generationWorkersStopped =
                     generationWorkers is null ||
@@ -1078,6 +1101,39 @@ namespace MVoxelEngine1.WorldGeneration
                     initialSchedulingPass.Dispose();
                 }
             }
+        }
+
+        private void DisposePackedFaceResources()
+        {
+            if (Interlocked.Exchange(
+                    ref packedFaceResourcesDisposed,
+                    1) != 0)
+            {
+                return;
+            }
+
+            var renderers = new HashSet<ChunkRender>();
+            foreach (Chunk chunk in activeChunks.Values)
+            {
+                if (chunk.chunkRender is not null)
+                    renderers.Add(chunk.chunkRender);
+            }
+            foreach (Chunk chunk in unbuiltChunks.Values)
+            {
+                if (chunk.chunkRender is not null)
+                    renderers.Add(chunk.chunkRender);
+            }
+            foreach (Chunk chunk in passiveChunks.Values)
+            {
+                if (chunk.chunkRender is not null)
+                    renderers.Add(chunk.chunkRender);
+            }
+
+            foreach (ChunkRender renderer in renderers)
+                renderer.Dispose();
+            foreach (PackedFaceNativePool pool in packedFacePools.Values)
+                pool.Dispose();
+            packedFacePools.Dispose();
         }
 
         // Manual save entry point

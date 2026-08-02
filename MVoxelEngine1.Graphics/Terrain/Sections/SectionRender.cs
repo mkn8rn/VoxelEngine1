@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using MVoxelEngine1.Infrastructure.Loaders;
+using Supprocom.NativeAllocationManagement;
 
 namespace MVoxelEngine1.Graphics.Terrain.Sections
 {
@@ -12,6 +13,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
     {
         private readonly ChunkPrerenderData data;
         private readonly BlockTextureAtlas atlas;
+        private readonly PackedFaceNativePool packedFacePool;
         private const ushort EMPTY = 0;
         // Cache to avoid repeated atlas UV -> tile lookups in fallback / generic emission paths.
         private readonly TileIndexCache _fallbackTileCache;
@@ -19,16 +21,29 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool Occludes(ushort id) => id != 0 && TerrainLoader.IsOpaque(id);
 
-        public SectionRender(ChunkPrerenderData data, BlockTextureAtlas atlas)
+        public SectionRender(
+            ChunkPrerenderData data,
+            BlockTextureAtlas atlas,
+            PackedFaceNativePool packedFacePool)
         {
-            this.data = data; this.atlas = atlas;
+            this.data = data;
+            this.atlas = atlas;
+            this.packedFacePool = packedFacePool;
             _fallbackTileCache = new TileIndexCache();
         }
 
-        public FaceRectangleMeshData Build()
+        public FaceRectangleMeshData Build() => packedFacePool.Build(this);
+
+        internal FaceRectangleMeshData Build(
+            NativePool<uint> nativePool,
+            PackedFaceStagingWorkspace stagingWorkspace)
         {
             if (data.GeneratedSpans is not null)
-                return BuildGeneratedSpanRectangles();
+            {
+                return BuildGeneratedSpanRectangles(
+                    nativePool,
+                    stagingWorkspace);
+            }
 
             BuildLegacyFaces(
                 out int opaqueFaceCount,
