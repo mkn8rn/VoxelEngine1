@@ -85,6 +85,8 @@ namespace MVoxelEngine1.WorldGeneration
         private BlockingCollection<Vector3> chunkPositionQueue; // gen tasks (LoD1 + active rings)
         private readonly ConcurrentDictionary<(int cx, int cy, int cz), byte> chunkGenSchedule = new(); // track enqueued but not yet generated
         private readonly InitialGenerationCompletionGate initialGenerationCompletion = new();
+        private readonly InitialGenerationMeshWorkGate initialGenerationMeshWork = new();
+        private readonly InitialSchedulingPassGate initialSchedulingPass = new();
 
         // Buffer (pre-generation) queue: chunks beyond LoD1 up to buffer distance; saved then released
         private BlockingCollection<Vector3> bufferChunkPositionQueue; // buffer gen tasks
@@ -162,6 +164,8 @@ namespace MVoxelEngine1.WorldGeneration
             Console.WriteLine("World resources initialized.");
 
             bool streamGeneration = FlagManager.flags.renderStreamingIfAllowed ?? throw new InvalidOperationException("Render streaming flag is not set.");
+            if (!streamGeneration)
+                initialGenerationMeshWork.BeginDeferral();
 
             Console.WriteLine($"Initializing region: {RegionID}");
 
@@ -183,11 +187,13 @@ namespace MVoxelEngine1.WorldGeneration
                 StartGenerationWorkers(initialGen);
                 EnqueueInitialChunkPositions();
                 EnqueueInitialBufferChunkPositions();
+                initialSchedulingPass.WaitUntilCompleted();
                 WaitForInitialChunkGeneration();
                 StopGenerationWorkers();
 
                 // 2. Build initial LoD1 render data after generation completes.
                 BuildInitialChunkRenders(initialMesh);
+                initialGenerationMeshWork.CompleteDeferral();
 
                 // 3. Start steady-state workers (may be same counts; restart for clarity per spec)
                 StartGenerationWorkers(finalGen);
@@ -482,6 +488,8 @@ namespace MVoxelEngine1.WorldGeneration
                         // If the quad exists and already contains this chunk instance, ensure it is re-registered in world dictionaries
                         if (batchExists && existingBatch.TryGetChunk(cx, cy, cz, out var existing))
                         {
+                            bool shouldScheduleMeshWork =
+                                initialGenerationMeshWork.ShouldSchedule;
                             bool insideCore = Math.Abs(cx - playerCxSnapshot) <= lodDist && Math.Abs(cz - playerCzSnapshot) <= lodDist && Math.Abs(cy - playerCySnapshot) <= lodDist;
                             bool insidePlusOne = Math.Abs(cx - playerCxSnapshot) <= lodDist + 1 && Math.Abs(cz - playerCzSnapshot) <= lodDist + 1 && Math.Abs(cy - playerCySnapshot) <= lodDist;
                             bool registered = false;
@@ -496,7 +504,8 @@ namespace MVoxelEngine1.WorldGeneration
                                     passiveChunks.ContainsKey(key);
                                 if (!alreadyRegistered)
                                 {
-                                    MarkRenderNeighborsDirtyForTopologyChange(key);
+                                    if (shouldScheduleMeshWork)
+                                        MarkRenderNeighborsDirtyForTopologyChange(key);
                                     if (insideCore)
                                     {
                                         unbuiltChunks[key] = existing;
@@ -507,11 +516,11 @@ namespace MVoxelEngine1.WorldGeneration
                                         passiveChunks[key] = existing;
                                         registered = true;
                                     }
-                                    if (registered)
+                                    if (registered && shouldScheduleMeshWork)
                                         MarkRenderNeighborsDirtyForTopologyChange(key);
                                 }
                             }
-                            if (insideCore)
+                            if (insideCore && shouldScheduleMeshWork)
                             {
                                 EnqueueMeshBuild(key, markDirty: false);
                             }
@@ -553,6 +562,8 @@ namespace MVoxelEngine1.WorldGeneration
 
                         Quadrant.ChunkRegistrar registrar = (chunkKey, chunkInstance, insideLod1) =>
                         {
+                            bool shouldScheduleMeshWork =
+                                initialGenerationMeshWork.ShouldSchedule;
                             // Skip if already recorded (race safety)
                             if (activeChunks.ContainsKey(chunkKey) || unbuiltChunks.ContainsKey(chunkKey) || passiveChunks.ContainsKey(chunkKey)) return;
                             using IDisposable stateScope =
@@ -563,13 +574,17 @@ namespace MVoxelEngine1.WorldGeneration
                             {
                                 return;
                             }
-                            MarkRenderNeighborsDirtyForTopologyChange(chunkKey);
+                            if (shouldScheduleMeshWork)
+                                MarkRenderNeighborsDirtyForTopologyChange(chunkKey);
                             if (insideLod1)
                                 unbuiltChunks[chunkKey] = chunkInstance;
                             else
                                 passiveChunks[chunkKey] = chunkInstance;
-                            MarkRenderNeighborsDirtyForTopologyChange(chunkKey);
-                            state.RegisteredChunks.Enqueue(chunkKey);
+                            if (shouldScheduleMeshWork)
+                            {
+                                MarkRenderNeighborsDirtyForTopologyChange(chunkKey);
+                                state.RegisteredChunks.Enqueue(chunkKey);
+                            }
                             // Remove scheduling markers for this specific chunk if present
                             RemoveGenerationSchedule(chunkGenSchedule, chunkKey);
                             RemoveGenerationSchedule(bufferGenSchedule, chunkKey);
@@ -589,10 +604,13 @@ namespace MVoxelEngine1.WorldGeneration
                         if (remainingWorkers == 0 && state.Columns.IsEmpty && state.RemainingColumns <= 0)
                         {
                             RemoveGeneratingBatch((bx, bz));
-                            while (state.RegisteredChunks.TryDequeue(out var registered))
-                                MarkRenderNeighborsDirty(registered);
+                            if (initialGenerationMeshWork.ShouldSchedule)
+                            {
+                                while (state.RegisteredChunks.TryDequeue(out var registered))
+                                    MarkRenderNeighborsDirty(registered);
 
-                            ScheduleVisibleChunksInBatch(bx, bz);
+                                ScheduleVisibleChunksInBatch(bx, bz);
+                            }
                         }
 
                         RemoveGenerationSchedule(isBuffer ? bufferGenSchedule : chunkGenSchedule, key);
@@ -983,6 +1001,10 @@ namespace MVoxelEngine1.WorldGeneration
                     {
                         Console.WriteLine($"[World] Chunk scheduling error: {ex.Message}");
                     }
+                    finally
+                    {
+                        initialSchedulingPass.NotifyCompleted();
+                    }
                 }
                 // Periodic save check (lightweight)
                 MaybePeriodicSave();
@@ -1032,7 +1054,10 @@ namespace MVoxelEngine1.WorldGeneration
                     schedulingWorkers is null ||
                     schedulingWorkers.All(worker => worker.IsCompleted);
                 if (generationWorkersStopped && schedulingWorkersStopped)
+                {
                     initialGenerationCompletion.Dispose();
+                    initialSchedulingPass.Dispose();
+                }
             }
         }
 
@@ -1147,6 +1172,9 @@ namespace MVoxelEngine1.WorldGeneration
         // Schedules mesh builds for all chunks in a quad that fall inside the current active LoD radius.
         private void ScheduleVisibleChunksInBatch(int bx, int bz)
         {
+            if (!initialGenerationMeshWork.ShouldSchedule)
+                return;
+
             using IDisposable stateScope =
                 AcquireRenderStateWriteScope();
             int lodDist = GameManager.settings.lod1RenderDistance;

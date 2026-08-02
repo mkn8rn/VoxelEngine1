@@ -271,6 +271,9 @@ namespace MVoxelEngine1.WorldGeneration
 
         private void MarkRenderNeighborsDirty((int cx, int cy, int cz) key)
         {
+            if (!initialGenerationMeshWork.ShouldSchedule)
+                return;
+
             using IDisposable stateScope =
                 AcquireRenderStateWriteScope();
             foreach (var dir in NeighborDirs)
@@ -289,6 +292,9 @@ namespace MVoxelEngine1.WorldGeneration
 
         private void MarkRenderActiveChunksDirty()
         {
+            if (!initialGenerationMeshWork.ShouldSchedule)
+                return;
+
             using IDisposable stateScope =
                 AcquireRenderStateWriteScope();
             foreach (var key in activeChunks.Keys)
@@ -297,6 +303,9 @@ namespace MVoxelEngine1.WorldGeneration
 
         private void EnqueueMeshBuild((int cx, int cy, int cz) key, bool markDirty = true)
         {
+            if (!initialGenerationMeshWork.ShouldSchedule)
+                return;
+
             // If marking dirty, ensure chunk is marked dirty even if not enqueued for build (will be built next time)
             if (markDirty)
             {
