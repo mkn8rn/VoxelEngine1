@@ -237,6 +237,33 @@ namespace MVoxelEngine1.Tests
                 diagnostics.NonUniformGenerationMilliseconds,
                 nameof(diagnostics.NonUniformGenerationMilliseconds));
             AssertPositiveFinite(
+                diagnostics.NonUniformColumnScanMilliseconds,
+                nameof(diagnostics.NonUniformColumnScanMilliseconds));
+            AssertPositiveFinite(
+                diagnostics.NonUniformUniformSectionMilliseconds,
+                nameof(diagnostics.NonUniformUniformSectionMilliseconds));
+            AssertPositiveFinite(
+                diagnostics.NonUniformTerrainEmissionMilliseconds,
+                nameof(diagnostics.NonUniformTerrainEmissionMilliseconds));
+            AssertPositiveFinite(
+                diagnostics.NonUniformWaterEmissionMilliseconds,
+                nameof(diagnostics.NonUniformWaterEmissionMilliseconds));
+            AssertPositiveFinite(
+                diagnostics.NonUniformCollapseMilliseconds,
+                nameof(diagnostics.NonUniformCollapseMilliseconds));
+            AssertPositiveFinite(
+                diagnostics.NonUniformFinalizeMilliseconds,
+                nameof(diagnostics.NonUniformFinalizeMilliseconds));
+            Assert.True(diagnostics.FinalizedSections > 0);
+            Assert.True(diagnostics.ScratchSections > 0);
+            Assert.True(diagnostics.UniformSections > 0);
+            Assert.True(
+                diagnostics.EmptySections +
+                diagnostics.UniformSections +
+                diagnostics.PackedSections +
+                diagnostics.MultiPackedSections +
+                diagnostics.ExpandedSections == diagnostics.FinalizedSections);
+            AssertPositiveFinite(
                 diagnostics.BoundaryPlaneMilliseconds,
                 nameof(diagnostics.BoundaryPlaneMilliseconds));
             AssertPositiveFinite(

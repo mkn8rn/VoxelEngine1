@@ -567,6 +567,16 @@ namespace MVoxelEngine1.WorldGeneration.Utils
 
         private static int GetOrAddPaletteIndex(Section sec, ushort blockId)
         {
+            if (sec.PaletteLookup == null)
+            {
+                sec.Palette = sec.Palette == null
+                    ? new List<ushort> { Section.AIR }
+                    : new List<ushort>(sec.Palette);
+                sec.PaletteLookup = new Dictionary<ushort, int>(sec.Palette.Count);
+                for (int i = 0; i < sec.Palette.Count; i++)
+                    sec.PaletteLookup[sec.Palette[i]] = i;
+            }
+
             if (sec.PaletteLookup.TryGetValue(blockId, out int idx))
                 return idx;
             idx = sec.Palette.Count;

@@ -6,7 +6,9 @@ using MVoxelEngine1.Tools.Noise;
 using MVoxelEngine1.WorldGeneration.Utils;
 using MVoxelEngine1.Infrastructure.Models.Generation;
 using MVoxelEngine1.Infrastructure.Loaders;
+using MVoxelEngine1.Infrastructure.Diagnostics;
 using System.Buffers;
+using System.Diagnostics;
 using System.Numerics;
 
 namespace MVoxelEngine1.WorldGeneration.Terrain
@@ -41,6 +43,15 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
         internal void GenerateInitialChunkData(BlockColumnProfile[] columnSpanMap)
         {
             if (columnSpanMap == null) throw new InvalidOperationException("columnSpanMap must be provided for non-uniform chunk generation.");
+
+            bool recordPerformance = StartupPerformanceRecorder.IsRunning;
+            long phaseStart = recordPerformance ? Stopwatch.GetTimestamp() : 0;
+            long columnScanTicks = 0;
+            long uniformSectionTicks = 0;
+            long terrainEmissionTicks = 0;
+            long waterEmissionTicks = 0;
+            long collapseTicks = 0;
+            long finalizeTicks = 0;
 
             // ------------------------------------------------------------------
             // Basic chunk constants (hoisted to locals)
@@ -81,11 +92,12 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             Span<ulong> anySpanBits = stackalloc ulong[columnWordCount];
             anySpanBits.Clear();
 
-            // Per-section full coverage bitsets (stone/soil)
-            Span<ulong> sectionStoneFullBits = stackalloc ulong[sectionsYLocal * columnWordCount];
-            sectionStoneFullBits.Clear();
-            Span<ulong> sectionSoilFullBits = stackalloc ulong[sectionsYLocal * columnWordCount];
-            sectionSoilFullBits.Clear();
+            // Count full columns for each local section.
+            int sectionEntryCount = sectionsX * sectionsYLocal * sectionsZ;
+            Span<ushort> sectionStoneFullColumns = stackalloc ushort[sectionEntryCount];
+            sectionStoneFullColumns.Clear();
+            Span<ushort> sectionSoilFullColumns = stackalloc ushort[sectionEntryCount];
+            sectionSoilFullColumns.Clear();
 
             int globalMinSectionY = int.MaxValue;
             int globalMaxSectionY = -1;
@@ -108,11 +120,6 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             }
 
             // Inline helpers (kept compact to avoid bracket bloat)
-            void SetSectionFullBitInline(Span<ulong> arr, int sectionIndex, int colIndex)
-            {
-                int baseIdx = sectionIndex * columnWordCount;
-                arr[baseIdx + (colIndex >> 6)] |= 1UL << (colIndex & 63);
-            }
             void SetUnionBitInline(Span<ulong> bits, int colIndex) => bits[colIndex >> 6] |= 1UL << (colIndex & 63);
 
             // ------------------------------------------------------------------
@@ -138,6 +145,8 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                     if (!hasStone && !hasSoil) continue; // nothing in this column for this chunk slab
 
                     ref ColumnSpans spanRef = ref columns[colIndex];
+                    int sectionColumnBase = (((x >> SECTION_SHIFT_LOCAL) * sectionsYLocal) * sectionsZ) +
+                        (z >> SECTION_SHIFT_LOCAL);
 
                     // Clip stone span into chunk local space
                     if (hasStone)
@@ -198,7 +207,8 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                                 int soilStartSec = spanRef.soilStart >> SECTION_SHIFT_LOCAL;
                                 if (soilStartSec <= fullEnd) fullEnd = soilStartSec - 1; // stone cannot extend into soil section
                             }
-                            for (int sy = fullStart; sy <= fullEnd; sy++) SetSectionFullBitInline(sectionStoneFullBits, sy, colIndex);
+                            for (int sy = fullStart; sy <= fullEnd; sy++)
+                                sectionStoneFullColumns[sectionColumnBase + (sy * sectionsZ)]++;
                         }
                     }
                     // Full soil sections (clip below stone end)
@@ -221,7 +231,9 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                             int stoneEndSec = spanRef.stoneEnd >> SECTION_SHIFT_LOCAL;
                             if (stoneEndSec >= fullStart) fullStart = stoneEndSec + 1; // soil cannot claim overlap directly above stone tail inside same section
                         }
-                        if (fullStart <= fullEnd) for (int sy = fullStart; sy <= fullEnd; sy++) SetSectionFullBitInline(sectionSoilFullBits, sy, colIndex);
+                        if (fullStart <= fullEnd)
+                            for (int sy = fullStart; sy <= fullEnd; sy++)
+                                sectionSoilFullColumns[sectionColumnBase + (sy * sectionsZ)]++;
                     }
                 }
             }
@@ -232,76 +244,54 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                 if (globalMaxSectionY >= sectionsYLocal) globalMaxSectionY = sectionsYLocal - 1;
             }
 
+            if (recordPerformance)
+            {
+                columnScanTicks = GenerationPerformanceRecorder.GetElapsedTicks(phaseStart);
+                phaseStart = Stopwatch.GetTimestamp();
+            }
+
             // ------------------------------------------------------------------
             // Phase 2: Section uniform classification (stone precedence over soil)
             // ------------------------------------------------------------------
-            Span<bool> sectionUniformStone = stackalloc bool[sectionsYLocal]; sectionUniformStone.Clear();
-            Span<bool> sectionUniformSoil = stackalloc bool[sectionsYLocal]; sectionUniformSoil.Clear();
+            Span<byte> uniformSectionKinds = stackalloc byte[sectionEntryCount];
+            uniformSectionKinds.Clear();
 
-            for (int sy = globalMinSectionY; sy <= globalMaxSectionY; sy++)
+            for (int sx = 0; sx < sectionsX; sx++)
+                for (int sy = globalMinSectionY; sy <= globalMaxSectionY; sy++)
+                    for (int sz = 0; sz < sectionsZ; sz++)
+                    {
+                        int sectionIndex = (((sx * sectionsYLocal) + sy) * sectionsZ) + sz;
+                        ushort sectionBlockId;
+                        if (sectionStoneFullColumns[sectionIndex] == Section.SECTION_SIZE * Section.SECTION_SIZE)
+                            sectionBlockId = StoneId;
+                        else if (sectionSoilFullColumns[sectionIndex] == Section.SECTION_SIZE * Section.SECTION_SIZE)
+                            sectionBlockId = SoilId;
+                        else
+                            continue;
+
+                        uniformSectionKinds[sectionIndex] = 1;
+                        sections[sx, sy, sz] = new Section
+                        {
+                            IsAllAir = false,
+                            Kind = Section.RepresentationKind.Uniform,
+                            UniformBlockId = sectionBlockId,
+                            OpaqueVoxelCount = sectionVolume,
+                            VoxelCount = sectionVolume,
+                            CompletelyFull = true,
+                            MetadataBuilt = true,
+                            HasBounds = true,
+                            MinLX = 0, MinLY = 0, MinLZ = 0,
+                            MaxLX = (byte)sectionMask, MaxLY = (byte)sectionMask, MaxLZ = (byte)sectionMask,
+                            StructuralDirty = false,
+                            IdMapDirty = false
+                        };
+                    }
+
+            if (recordPerformance)
             {
-                bool stoneUniform = true;
-                bool soilUniform = true;
-                int baseIndex = sy * columnWordCount;
-
-                // small loop (word count small). compare to ulong.MaxValue
-                for (int w = 0; w < columnWordCount; w++)
-                {
-                    if (sectionStoneFullBits[baseIndex + w] != ulong.MaxValue) stoneUniform = false;
-                    if (sectionSoilFullBits[baseIndex + w] != ulong.MaxValue) soilUniform = false;
-                    if (!stoneUniform && !soilUniform) break;
-                }
-
-                if (stoneUniform)
-                {
-                    sectionUniformStone[sy] = true;
-                    // Fill entire layer with uniform stone shortcuts
-                    for (int sx = 0; sx < sectionsX; sx++)
-                        for (int sz = 0; sz < sectionsZ; sz++)
-                            if (sections[sx, sy, sz] == null)
-                                sections[sx, sy, sz] = new Section
-                                {
-                                    IsAllAir = false,
-                                    Kind = Section.RepresentationKind.Uniform,
-                                    UniformBlockId = StoneId,
-                                    OpaqueVoxelCount = sectionVolume,
-                                    VoxelCount = sectionVolume,
-                                    CompletelyFull = true,
-                                    MetadataBuilt = true,
-                                    HasBounds = true,
-                                    MinLX = 0, MinLY = 0, MinLZ = 0,
-                                    MaxLX = (byte)sectionMask, MaxLY = (byte)sectionMask, MaxLZ = (byte)sectionMask,
-                                    StructuralDirty = false, IdMapDirty = false
-                                };
-                    continue; // stone precedes soil
-                }
-
-                if (soilUniform)
-                {
-                    sectionUniformSoil[sy] = true;
-                    for (int sx = 0; sx < sectionsX; sx++)
-                        for (int sz = 0; sz < sectionsZ; sz++)
-                            if (sections[sx, sy, sz] == null)
-                                sections[sx, sy, sz] = new Section
-                                {
-                                    IsAllAir = false,
-                                    Kind = Section.RepresentationKind.Uniform,
-                                    UniformBlockId = SoilId,
-                                    OpaqueVoxelCount = sectionVolume,
-                                    VoxelCount = sectionVolume,
-                                    CompletelyFull = true,
-                                    MetadataBuilt = true,
-                                    HasBounds = true,
-                                    MinLX = 0, MinLY = 0, MinLZ = 0,
-                                    MaxLX = (byte)sectionMask, MaxLY = (byte)sectionMask, MaxLZ = (byte)sectionMask,
-                                    StructuralDirty = false, IdMapDirty = false
-                                };
-                }
+                uniformSectionTicks = GenerationPerformanceRecorder.GetElapsedTicks(phaseStart);
+                phaseStart = Stopwatch.GetTimestamp();
             }
-
-            int uniformWordCount = (sectionsYLocal + 63) >> 6;
-            Span<ulong> uniformSkipBits = stackalloc ulong[uniformWordCount]; uniformSkipBits.Clear();
-            for (int sy = 0; sy < sectionsYLocal; sy++) if (sectionUniformStone[sy] || sectionUniformSoil[sy]) uniformSkipBits[sy >> 6] |= 1UL << (sy & 63);
 
             // ------------------------------------------------------------------
             // Phase 3: Emit partial non-uniform stone/soil column runs
@@ -353,8 +343,8 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
 
                         for (int sy = earliestSec; sy <= latestSec; sy++)
                         {
-                            // Skip already uniform sections quickly using bit test
-                            if ((uniformSkipBits[sy >> 6] & (1UL << (sy & 63))) != 0UL) continue;
+                            int sectionIndex = (((sxIndex * sectionsYLocal) + sy) * sectionsZ) + szIndex;
+                            if (uniformSectionKinds[sectionIndex] != 0) continue;
 
                             int sectionBase = sectionBaseYArr[sy];
                             int sectionEnd = sectionEndYArr[sy];
@@ -439,6 +429,12 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                         }
                     }
                 }
+            }
+
+            if (recordPerformance)
+            {
+                terrainEmissionTicks = GenerationPerformanceRecorder.GetElapsedTicks(phaseStart);
+                phaseStart = Stopwatch.GetTimestamp();
             }
 
             // ------------------------------------------------------------------
@@ -528,6 +524,12 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                 }
             }
 
+            if (recordPerformance)
+            {
+                waterEmissionTicks = GenerationPerformanceRecorder.GetElapsedTicks(phaseStart);
+                phaseStart = Stopwatch.GetTimestamp();
+            }
+
             // ------------------------------------------------------------------
             // Phase 5: Whole-chunk single block collapse (uniform after generation path)
             // ------------------------------------------------------------------
@@ -553,18 +555,70 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                         }
             }
 
+            if (recordPerformance)
+            {
+                collapseTicks = GenerationPerformanceRecorder.GetElapsedTicks(phaseStart);
+                phaseStart = Stopwatch.GetTimestamp();
+            }
+
             // ------------------------------------------------------------------
             // Phase 6: Finalize sections (build representation + metadata) & boundary planes
             // ------------------------------------------------------------------
+            long finalizedSectionCount = 0;
+            long scratchSectionCount = 0;
+            long escalatedScratchSectionCount = 0;
+            long emptySectionCount = 0;
+            long uniformSectionCount = 0;
+            long packedSectionCount = 0;
+            long multiPackedSectionCount = 0;
+            long expandedSectionCount = 0;
             for (int sx = 0; sx < sectionsX; sx++)
                 for (int sy = 0; sy < sectionsY; sy++)
                     for (int sz = 0; sz < sectionsZ; sz++)
                     {
                         var sec = sections[sx, sy, sz]; if (sec == null) continue;
-                        SectionUtils.GenerationFinalizeSection(sec);
+                        finalizedSectionCount++;
+                        if (sec.BuildScratch != null)
+                        {
+                            scratchSectionCount++;
+                            if (sec.BuildScratch.AnyEscalated)
+                                escalatedScratchSectionCount++;
+                        }
+                        if (sec.BuildScratch != null || !sec.MetadataBuilt || sec.StructuralDirty || sec.IdMapDirty)
+                            SectionUtils.GenerationFinalizeSection(sec);
+                        switch (sec.Kind)
+                        {
+                            case Section.RepresentationKind.Empty: emptySectionCount++; break;
+                            case Section.RepresentationKind.Uniform: uniformSectionCount++; break;
+                            case Section.RepresentationKind.Packed: packedSectionCount++; break;
+                            case Section.RepresentationKind.MultiPacked: multiPackedSectionCount++; break;
+                            case Section.RepresentationKind.Expanded: expandedSectionCount++; break;
+                        }
                     }
 
+            if (recordPerformance)
+                finalizeTicks = GenerationPerformanceRecorder.GetElapsedTicks(phaseStart);
+
             BuildAllBoundaryPlanesInitial();
+            if (recordPerformance)
+            {
+                GenerationPerformanceRecorder.RecordFinalizedSections(
+                    finalizedSectionCount,
+                    scratchSectionCount,
+                    escalatedScratchSectionCount,
+                    emptySectionCount,
+                    uniformSectionCount,
+                    packedSectionCount,
+                    multiPackedSectionCount,
+                    expandedSectionCount);
+                GenerationPerformanceRecorder.RecordNonUniformPhases(
+                    columnScanTicks,
+                    uniformSectionTicks,
+                    terrainEmissionTicks,
+                    waterEmissionTicks,
+                    collapseTicks,
+                    finalizeTicks);
+            }
         }
     }
 }

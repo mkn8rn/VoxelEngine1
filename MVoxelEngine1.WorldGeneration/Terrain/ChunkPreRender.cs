@@ -353,7 +353,16 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                                     ushort id = SectionUtils.GetBlock(sec, lx, ly, lz);
                                     if (id != 0 && !TerrainLoader.IsOpaque(id))
                                     {
-                                        int pi = sec.PaletteLookup != null && sec.PaletteLookup.TryGetValue(id, out int pidx) ? pidx : -1;
+                                        int pi = -1;
+                                        if (sec.PaletteLookup != null && sec.PaletteLookup.TryGetValue(id, out int pidx))
+                                            pi = pidx;
+                                        else
+                                            for (int paletteIndex = 1; paletteIndex < sec.Palette.Count; paletteIndex++)
+                                                if (sec.Palette[paletteIndex] == id)
+                                                {
+                                                    pi = paletteIndex;
+                                                    break;
+                                                }
                                         if (pi >= 0)
                                         {
                                             int localListIndex = Array.IndexOf(transparentPaletteIndices, pi);
