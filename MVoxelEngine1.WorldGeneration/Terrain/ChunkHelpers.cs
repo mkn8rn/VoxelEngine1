@@ -218,7 +218,8 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                                 }
                             }
 
-                            // Transparent boundary ids on -X face (always derived for any representation)
+                            // Transparent boundary ids on -X face.
+                            if (secNeg.HasTransparent)
                             {
                                 // iterate voxels at x=0 for transparent ids
                                 bool uniformTransparent = secNeg.Kind == Section.RepresentationKind.Uniform && secNeg.UniformBlockId != Section.AIR && !TerrainLoader.IsOpaque(secNeg.UniformBlockId);
@@ -335,6 +336,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                             }
 
                             // Transparent boundary ids on +X face
+                            if (secPos.HasTransparent)
                             {
                                 bool uniformTransparentPos = secPos.Kind == Section.RepresentationKind.Uniform && secPos.UniformBlockId != Section.AIR && !TerrainLoader.IsOpaque(secPos.UniformBlockId);
                                 if (uniformTransparentPos)
@@ -461,6 +463,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                             }
 
                             // Transparent -Y
+                            if (secNeg.HasTransparent)
                             {
                                 bool uniformTransparentNegY = secNeg.Kind == Section.RepresentationKind.Uniform && secNeg.UniformBlockId != Section.AIR && !TerrainLoader.IsOpaque(secNeg.UniformBlockId);
                                 if (uniformTransparentNegY)
@@ -574,6 +577,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                             }
 
                             // Transparent +Y
+                            if (secPos.HasTransparent)
                             {
                                 bool uniformTransparentPosY = secPos.Kind == Section.RepresentationKind.Uniform && secPos.UniformBlockId != Section.AIR && !TerrainLoader.IsOpaque(secPos.UniformBlockId);
                                 if (uniformTransparentPosY)
@@ -700,6 +704,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                             }
 
                             // Transparent -Z
+                            if (secNeg.HasTransparent)
                             {
                                 bool uniformTransparentNegZ = secNeg.Kind == Section.RepresentationKind.Uniform && secNeg.UniformBlockId != Section.AIR && !TerrainLoader.IsOpaque(secNeg.UniformBlockId);
                                 if (uniformTransparentNegZ)
@@ -813,6 +818,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                             }
 
                             // Transparent +Z
+                            if (secPos.HasTransparent)
                             {
                                 bool uniformTransparentPosZ = secPos.Kind == Section.RepresentationKind.Uniform && secPos.UniformBlockId != Section.AIR && !TerrainLoader.IsOpaque(secPos.UniformBlockId);
                                 if (uniformTransparentPosZ)

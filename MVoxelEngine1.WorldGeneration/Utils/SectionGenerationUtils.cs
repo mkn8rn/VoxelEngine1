@@ -27,10 +27,7 @@ namespace MVoxelEngine1.WorldGeneration.Utils
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static ushort MaskRangeLutGet(int s, int e) => MaskRangeLut[s, e];
 
-        // Helper: ensure transparent boundary face masks are built (only when transparent bits exist) and build EmptyBits/EmptyCount.
-        // EmptyBits represent air voxels (bit set => air). This complements opaque + transparent occupancy and is built for
-        // all finalized representations (Empty, Sparse, Packed, MultiPacked, DenseExpanded, Uniform partial). Uniform full non‑air
-        // sections have no air so EmptyBits remain null (EmptyCount=0). Empty representation allocates a full bitset of air.
+        // Complete transparent masks and air metadata. Voxel storage already identifies each air coordinate.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void FinalizeTransparentAndEmptyMasks(Section sec)
         {
@@ -40,15 +37,9 @@ namespace MVoxelEngine1.WorldGeneration.Utils
                 BuildTransparentFaceMasks(sec, sec.TransparentBits);
             }
 
-            // Build EmptyBits (air) tracking.
             if (sec.Kind == Section.RepresentationKind.Empty || (sec.IsAllAir && sec.VoxelCount == 0))
             {
-                // All air section (no voxels or empty representation): allocate full air bitset if not present.
-                if (sec.EmptyBits == null)
-                {
-                    sec.EmptyBits = new ulong[64];
-                    for (int i = 0; i < 64; i++) sec.EmptyBits[i] = ulong.MaxValue;
-                }
+                sec.EmptyBits = null;
                 sec.EmptyCount = Section.VOXELS_PER_SECTION;
                 sec.HasAir = true;
                 return;
@@ -60,27 +51,10 @@ namespace MVoxelEngine1.WorldGeneration.Utils
                 sec.EmptyBits = null; sec.EmptyCount = 0; sec.HasAir = false; return;
             }
 
-            // Compute occupancy union (opaque | transparent). If neither present (should not happen except uninitialized), skip.
-            if (sec.OpaqueBits == null && sec.TransparentBits == null)
-            {
-                // Either all air already handled, or metadata not yet built; leave as-is.
-                return;
-            }
-
-            ulong[] emptyBits = new ulong[64];
-            int emptyCount = 0;
-            for (int i = 0; i < 64; i++)
-            {
-                ulong occ = 0UL;
-                if (sec.OpaqueBits != null) occ |= sec.OpaqueBits[i];
-                if (sec.TransparentBits != null) occ |= sec.TransparentBits[i];
-                ulong empty = ~occ; // bit set => air
-                emptyBits[i] = empty;
-                emptyCount += BitOperations.PopCount(empty);
-            }
+            int emptyCount = Section.VOXELS_PER_SECTION - sec.OpaqueVoxelCount - sec.TransparentCount;
+            sec.EmptyBits = null;
             if (emptyCount > 0)
             {
-                sec.EmptyBits = emptyBits;
                 sec.EmptyCount = emptyCount;
                 sec.HasAir = true;
             }
@@ -465,8 +439,8 @@ namespace MVoxelEngine1.WorldGeneration.Utils
                     }
                     // Partial fill single id -> 1‑bit packed form (palette [AIR, id]).
                     sec.Kind = Section.RepresentationKind.Packed;
-                    sec.Palette = new List<ushort> { AIR, candidateId };
-                    sec.PaletteLookup = new Dictionary<ushort, int> { { AIR, 0 }, { candidateId, 1 } };
+                    sec.Palette = GetSharedGenerationPalette(candidateId);
+                    sec.PaletteLookup = null;
                     sec.BitsPerIndex = 1;
                     sec.BitData = RentBitData(128); // 4096 bits / 32
                     Array.Clear(sec.BitData, 0, 128);

@@ -18,6 +18,7 @@ namespace MVoxelEngine1.WorldGeneration.Utils
         // -------------------------------------------------------------------------------------------------
         private static readonly ConcurrentBag<ulong[]> _occupancyPool = new();
         private static readonly ConcurrentBag<ushort[]> _densePool = new();
+        private static readonly ConcurrentDictionary<ulong, List<ushort>> SharedGenerationPalettes = new();
         // Pool for escalated per-column 16-length voxel arrays
         private static readonly ConcurrentBag<ushort[]> _escalatedColumnPool = new();
 
@@ -66,6 +67,115 @@ namespace MVoxelEngine1.WorldGeneration.Utils
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static ushort[] RentDense() => _densePool.TryTake(out var a) ? a : new ushort[4096];
+
+        private static List<ushort> GetSharedGenerationPalette(ushort id)
+        {
+            ulong key = (1UL << 48) | id;
+            return SharedGenerationPalettes.GetOrAdd(
+                key,
+                static packedKey => new List<ushort>(2)
+                {
+                    Section.AIR,
+                    (ushort)packedKey
+                });
+        }
+
+        private static List<ushort> GetGenerationPalette(SectionBuildScratch scratch)
+        {
+            int count = scratch.DistinctCount;
+            if (count <= 3)
+            {
+                ulong key = (ulong)count << 48;
+                for (int i = 0; i < count; i++)
+                    key |= (ulong)scratch.Distinct[i] << (i * 16);
+
+                return SharedGenerationPalettes.GetOrAdd(
+                    key,
+                    static packedKey =>
+                    {
+                        int packedCount = (int)(packedKey >> 48);
+                        var palette = new List<ushort>(packedCount + 1) { Section.AIR };
+                        for (int i = 0; i < packedCount; i++)
+                            palette.Add((ushort)(packedKey >> (i * 16)));
+                        return palette;
+                    });
+            }
+
+            var result = new List<ushort>(count + 1) { Section.AIR };
+            for (int i = 0; i < count; i++)
+                result.Add(scratch.Distinct[i]);
+            return result;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static int FindPaletteIndex(List<ushort> palette, ushort id)
+        {
+            for (int i = 1; i < palette.Count; i++)
+                if (palette[i] == id)
+                    return i;
+            throw new InvalidOperationException("The generated section palette does not contain the block ID.");
+        }
+
+        private static void BuildFaceMasksFromColumns(
+            Section sec,
+            ReadOnlySpan<ushort> columnMasks,
+            bool transparent)
+        {
+            ulong[] negX = null;
+            ulong[] posX = null;
+            ulong[] negY = null;
+            ulong[] posY = null;
+            ulong[] negZ = null;
+            ulong[] posZ = null;
+
+            static void OrVerticalMask(ref ulong[] plane, int row, ushort mask)
+            {
+                if (mask == 0) return;
+                plane ??= new ulong[4];
+                plane[row >> 2] |= (ulong)mask << ((row & 3) << 4);
+            }
+
+            static void SetBit(ref ulong[] plane, int index)
+            {
+                plane ??= new ulong[4];
+                plane[index >> 6] |= 1UL << (index & 63);
+            }
+
+            for (int z = 0; z < Section.SECTION_SIZE; z++)
+                for (int x = 0; x < Section.SECTION_SIZE; x++)
+                {
+                    ushort mask = columnMasks[(z << 4) | x];
+                    if (mask == 0) continue;
+
+                    if (x == 0) OrVerticalMask(ref negX, z, mask);
+                    if (x == Section.SECTION_SIZE - 1) OrVerticalMask(ref posX, z, mask);
+                    if (z == 0) OrVerticalMask(ref negZ, x, mask);
+                    if (z == Section.SECTION_SIZE - 1) OrVerticalMask(ref posZ, x, mask);
+
+                    int horizontalIndex = (x << 4) | z;
+                    if ((mask & 1) != 0) SetBit(ref negY, horizontalIndex);
+                    if ((mask & 0x8000) != 0) SetBit(ref posY, horizontalIndex);
+                }
+
+            if (transparent)
+            {
+                sec.TransparentFaceNegXBits = negX;
+                sec.TransparentFacePosXBits = posX;
+                sec.TransparentFaceNegYBits = negY;
+                sec.TransparentFacePosYBits = posY;
+                sec.TransparentFaceNegZBits = negZ;
+                sec.TransparentFacePosZBits = posZ;
+            }
+            else
+            {
+                sec.FaceNegXBits = negX;
+                sec.FacePosXBits = posX;
+                sec.FaceNegYBits = negY;
+                sec.FacePosYBits = posY;
+                sec.FaceNegZBits = negZ;
+                sec.FacePosZBits = posZ;
+            }
+        }
 
         // -------------------------------------------------------------------------------------------------
         // Scratch pooling: Each in‑progress section maintains a SectionBuildScratch instance holding
@@ -245,8 +355,7 @@ namespace MVoxelEngine1.WorldGeneration.Utils
                     {
                         bool op = TerrainLoader.IsOpaque(col.Id0);
                         int y0s = col.Y0Start; int y0e = col.Y0End;
-                        ushort runMask = 0;
-                        for (int y = y0s; y <= y0e; y++) runMask |= (ushort)(1 << y);
+                        ushort runMask = _maskTable[Index(y0s, y0e)];
                         if (op)
                         {
                             opaqueMask |= runMask;
@@ -263,8 +372,7 @@ namespace MVoxelEngine1.WorldGeneration.Utils
                     {
                         bool op = TerrainLoader.IsOpaque(col.Id1);
                         int y1s = col.Y1Start; int y1e = col.Y1End;
-                        ushort runMask = 0;
-                        for (int y = y1s; y <= y1e; y++) runMask |= (ushort)(1 << y);
+                        ushort runMask = _maskTable[Index(y1s, y1e)];
                         if (op)
                         {
                             opaqueMask |= runMask;
@@ -459,30 +567,30 @@ namespace MVoxelEngine1.WorldGeneration.Utils
                 ushort only = scratch.Distinct[0];
                 bool op = TerrainLoader.IsOpaque(only);
                 sec.Kind = Section.RepresentationKind.Packed;
-                sec.Palette = new List<ushort> { Section.AIR, only };
-                sec.PaletteLookup = new Dictionary<ushort, int>(2) { { Section.AIR, 0 }, { only, 1 } };
+                sec.Palette = GetSharedGenerationPalette(only);
+                sec.PaletteLookup = null;
                 sec.BitsPerIndex = 1;
-                sec.BitData = RentBitData(2048);
+                sec.BitData = RentBitData(128);
                 Array.Clear(sec.BitData, 0, sec.BitData.Length);
 
                 ulong[] opaqueBits = op ? new ulong[64] : null;
                 ulong[] transparentBitsMask = !op ? new ulong[64] : null;
                 for (int i = 0; i < COLUMN_COUNT; i++)
                 {
-                    int baseLi = i << 4;
                     ushort mask = op ? columnOpaqueMask[i] : columnTransparentMask[i];
                     if (mask == 0) continue;
-                    for (int y = 0; y < 16; y++)
-                    {
-                        if ((mask & (1 << y)) == 0) continue;
-                        int li = baseLi + y;
-                        WriteBits(sec, li, 1); // palette index 1
-                        if (op) opaqueBits[li >> 6] |= 1UL << (li & 63); else transparentBitsMask[li >> 6] |= 1UL << (li & 63);
-                    }
+                    WriteColumnMaskToBitData(sec.BitData, i, mask);
+                    if (op)
+                        WriteColumnMask(opaqueBits, i, mask);
+                    else
+                        WriteColumnMask(transparentBitsMask, i, mask);
                 }
                 sec.OpaqueBits = opaqueBits;
                 sec.TransparentBits = transparentBitsMask;
-                if (opaqueBits != null) BuildFaceMasks(sec, opaqueBits);
+                if (opaqueBits != null)
+                    BuildFaceMasksFromColumns(sec, columnOpaqueMask, false);
+                if (transparentBitsMask != null)
+                    BuildFaceMasksFromColumns(sec, columnTransparentMask, true);
                 sec.IsAllAir = false;
                 sec.MetadataBuilt = true;
                 sec.StructuralDirty = false;
@@ -508,13 +616,8 @@ namespace MVoxelEngine1.WorldGeneration.Utils
             if (chooseMultiPacked)
             {
                 sec.Kind = Section.RepresentationKind.MultiPacked;
-                sec.Palette = new List<ushort>(paletteCount) { Section.AIR };
-                sec.PaletteLookup = new Dictionary<ushort, int>(paletteCount) { { Section.AIR, 0 } };
-                for (int i = 0; i < scratch.DistinctCount; i++)
-                {
-                    ushort id = scratch.Distinct[i];
-                    if (!sec.PaletteLookup.ContainsKey(id)) { sec.PaletteLookup[id] = sec.Palette.Count; sec.Palette.Add(id); }
-                }
+                sec.Palette = GetGenerationPalette(scratch);
+                sec.PaletteLookup = null;
                 int pcMinusOne = sec.Palette.Count - 1;
                 sec.BitsPerIndex = pcMinusOne <= 0 ? 1 : (int)BitOperations.Log2((uint)pcMinusOne) + 1;
                 long totalBits = (long)sec.BitsPerIndex * totalVoxels;
@@ -529,17 +632,40 @@ namespace MVoxelEngine1.WorldGeneration.Utils
                     int ci = activeColumns[i];
                     ref readonly var col = ref scratch.GetReadonlyColumn(ci);
                     int baseLi = ci << 4;
+                    if (opaqueBits != null)
+                        WriteColumnMask(opaqueBits, ci, columnOpaqueMask[ci]);
+                    if (transparentBitsMask != null)
+                        WriteColumnMask(transparentBitsMask, ci, columnTransparentMask[ci]);
+
+                    if (sec.BitsPerIndex == 2)
+                    {
+                        uint packedColumn = 0;
+                        void WriteTwoBitRun(ushort id, int ys, int ye)
+                        {
+                            if (id == Section.AIR) return;
+                            uint paletteIndex = (uint)FindPaletteIndex(sec.Palette, id);
+                            int startBit = ys << 1;
+                            int bitCount = (ye - ys + 1) << 1;
+                            ulong rangeMask = ((1UL << bitCount) - 1UL) << startBit;
+                            packedColumn |= (paletteIndex * 0x55555555U) & (uint)rangeMask;
+                        }
+
+                        if (col.RunCount >= 1)
+                            WriteTwoBitRun(col.Id0, col.Y0Start, col.Y0End);
+                        if (col.RunCount == 2)
+                            WriteTwoBitRun(col.Id1, col.Y1Start, col.Y1End);
+                        sec.BitData[ci] = packedColumn;
+                        continue;
+                    }
+
                     void WriteRun(ushort id, int ys, int ye)
                     {
                         if (id == Section.AIR) return;
-                        int pi = sec.PaletteLookup[id];
-                        bool op = TerrainLoader.IsOpaque(id);
+                        int pi = FindPaletteIndex(sec.Palette, id);
                         for (int y = ys; y <= ye; y++)
                         {
                             int li = baseLi + y;
                             WriteBits(sec, li, pi);
-                            if (op) { if (opaqueBits != null) opaqueBits[li >> 6] |= 1UL << (li & 63); }
-                            else { if (transparentBitsMask != null) transparentBitsMask[li >> 6] |= 1UL << (li & 63); }
                         }
                     }
                     if (col.RunCount >= 1) WriteRun(col.Id0, col.Y0Start, col.Y0End);
@@ -547,7 +673,10 @@ namespace MVoxelEngine1.WorldGeneration.Utils
                 }
                 sec.OpaqueBits = opaqueBits;
                 sec.TransparentBits = transparentBitsMask;
-                if (opaqueBits != null) BuildFaceMasks(sec, opaqueBits);
+                if (opaqueBits != null)
+                    BuildFaceMasksFromColumns(sec, columnOpaqueMask, false);
+                if (transparentBitsMask != null)
+                    BuildFaceMasksFromColumns(sec, columnTransparentMask, true);
                 sec.IsAllAir = false;
             }
             else
