@@ -20,18 +20,44 @@ namespace MVoxelEngine1.WorldGeneration
 
             if (data is not null)
             {
-                ReadActualReferenceFaces(
-                    data.OpaqueRectangles.Span,
-                    data.OpaqueFaceCount,
-                    opaqueFaces,
-                    key,
-                    "opaque");
-                ReadActualReferenceFaces(
-                    data.TransparentRectangles.Span,
-                    data.TransparentFaceCount,
-                    transparentFaces,
-                    key,
-                    "transparent");
+                data.ReadOpaque(view =>
+                {
+                    ReadActualReferenceFaces(
+                        view.AsSpan(),
+                        data.OpaqueFaceCount,
+                        opaqueFaces,
+                        key,
+                        "opaque");
+                    return 0;
+                }, rectangles =>
+                {
+                    ReadActualReferenceFaces(
+                        rectangles,
+                        data.OpaqueFaceCount,
+                        opaqueFaces,
+                        key,
+                        "opaque");
+                    return 0;
+                });
+                data.ReadTransparent(view =>
+                {
+                    ReadActualReferenceFaces(
+                        view.AsSpan(),
+                        data.TransparentFaceCount,
+                        transparentFaces,
+                        key,
+                        "transparent");
+                    return 0;
+                }, rectangles =>
+                {
+                    ReadActualReferenceFaces(
+                        rectangles,
+                        data.TransparentFaceCount,
+                        transparentFaces,
+                        key,
+                        "transparent");
+                    return 0;
+                });
             }
 
             int maxX = GameManager.settings.chunkMaxX;

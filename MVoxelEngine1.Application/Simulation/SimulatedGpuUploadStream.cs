@@ -65,6 +65,7 @@ namespace MVoxelEngine1.Application.Simulation
             long FrameIndex,
             ChunkIdentity Chunk,
             ChunkRenderUploadData Data,
+            ChunkRenderUploadRetention Retention,
             FaceDiagnostics OpaqueDiagnostics,
             FaceDiagnostics TransparentDiagnostics) : StreamRecord;
 
@@ -488,28 +489,75 @@ namespace MVoxelEngine1.Application.Simulation
             if (chunk.IsOpenGlUploaded)
                 throw new InvalidOperationException("Headless render data was uploaded through OpenGL.");
 
-            ValidateUploadData(data);
-            ChunkIdentity identity = CaptureChunkIdentity(chunk);
-            var record = new UploadRecord(
-                frameIndex,
-                identity,
-                data,
-                CaptureFaceDiagnostics(data, chunk, transparent: false),
-                CaptureFaceDiagnostics(data, chunk, transparent: true));
-            uploadedRenderData.Add(data.RenderDataId, identity);
-            uploadCount++;
-            QueueRecord(record);
+            ChunkRenderUploadRetention? retention = data.Retain();
+            try
+            {
+                ValidateUploadData(data, retention);
+                ChunkIdentity identity = CaptureChunkIdentity(chunk);
+                var record = new UploadRecord(
+                    frameIndex,
+                    identity,
+                    data,
+                    retention,
+                    CaptureFaceDiagnostics(
+                        data,
+                        retention,
+                        chunk,
+                        transparent: false),
+                    CaptureFaceDiagnostics(
+                        data,
+                        retention,
+                        chunk,
+                        transparent: true));
+                QueueRecord(record);
+                retention = null;
+                uploadedRenderData.Add(data.RenderDataId, identity);
+                uploadCount++;
+            }
+            finally
+            {
+                retention?.Dispose();
+            }
+        }
+
+        private FaceDiagnostics CaptureFaceDiagnostics(
+            ChunkRenderUploadData data,
+            ChunkRenderUploadRetention retention,
+            WorldRenderChunk chunk,
+            bool transparent)
+        {
+            int count = transparent ? data.TransparentFaceCount : data.OpaqueFaceCount;
+            return transparent
+                ? retention.ReadTransparent(
+                    view => CaptureFaceDiagnostics(
+                        data,
+                        chunk,
+                        count,
+                        view.AsSpan()),
+                    rectangles => CaptureFaceDiagnostics(
+                        data,
+                        chunk,
+                        count,
+                        rectangles))
+                : retention.ReadOpaque(
+                    view => CaptureFaceDiagnostics(
+                        data,
+                        chunk,
+                        count,
+                        view.AsSpan()),
+                    rectangles => CaptureFaceDiagnostics(
+                        data,
+                        chunk,
+                        count,
+                        rectangles));
         }
 
         private FaceDiagnostics CaptureFaceDiagnostics(
             ChunkRenderUploadData data,
             WorldRenderChunk chunk,
-            bool transparent)
+            int count,
+            ReadOnlySpan<uint> rectangles)
         {
-            int count = transparent ? data.TransparentFaceCount : data.OpaqueFaceCount;
-            ReadOnlySpan<uint> rectangles = transparent
-                ? data.TransparentRectangles.Span
-                : data.OpaqueRectangles.Span;
             var blockIds = new ushort[count];
             var neighborBlockIds = new ushort[count];
             int originX = checked((int)data.ChunkWorldX);
@@ -599,9 +647,17 @@ namespace MVoxelEngine1.Application.Simulation
 
         private void ReleaseRecordRetention(QueuedRecord queued)
         {
-            Interlocked.Add(ref retainedPayloadBytes, -queued.RetainedPayloadBytes);
-            Interlocked.Decrement(ref retainedRecordCount);
-            retainedRecordSlots.Release();
+            try
+            {
+                if (queued.Record is UploadRecord upload)
+                    upload.Retention.Dispose();
+            }
+            finally
+            {
+                Interlocked.Add(ref retainedPayloadBytes, -queued.RetainedPayloadBytes);
+                Interlocked.Decrement(ref retainedRecordCount);
+                retainedRecordSlots.Release();
+            }
         }
 
         private void ThrowIfWriterFailed()
@@ -725,8 +781,18 @@ namespace MVoxelEngine1.Application.Simulation
             writer.WriteNumber(
                 "transparentRectangleCount",
                 data.TransparentRectangleCount);
-            WriteFaces("opaqueFaces", data, record.OpaqueDiagnostics, transparent: false);
-            WriteFaces("transparentFaces", data, record.TransparentDiagnostics, transparent: true);
+            WriteFaces(
+                "opaqueFaces",
+                data,
+                record.Retention,
+                record.OpaqueDiagnostics,
+                transparent: false);
+            WriteFaces(
+                "transparentFaces",
+                data,
+                record.Retention,
+                record.TransparentDiagnostics,
+                transparent: true);
             writer.WriteEndObject();
         }
 
@@ -833,13 +899,69 @@ namespace MVoxelEngine1.Application.Simulation
         private void WriteFaces(
             string propertyName,
             ChunkRenderUploadData data,
+            ChunkRenderUploadRetention retention,
             FaceDiagnostics diagnostics,
             bool transparent)
         {
             int count = transparent ? data.TransparentFaceCount : data.OpaqueFaceCount;
-            ReadOnlySpan<uint> rectangles = transparent
-                ? data.TransparentRectangles.Span
-                : data.OpaqueRectangles.Span;
+            if (transparent)
+            {
+                retention.ReadTransparent(view =>
+                {
+                    WriteFaces(
+                        propertyName,
+                        data,
+                        diagnostics,
+                        true,
+                        count,
+                        view.AsSpan());
+                    return 0;
+                }, rectangles =>
+                {
+                    WriteFaces(
+                        propertyName,
+                        data,
+                        diagnostics,
+                        true,
+                        count,
+                        rectangles);
+                    return 0;
+                });
+            }
+            else
+            {
+                retention.ReadOpaque(view =>
+                {
+                    WriteFaces(
+                        propertyName,
+                        data,
+                        diagnostics,
+                        false,
+                        count,
+                        view.AsSpan());
+                    return 0;
+                }, rectangles =>
+                {
+                    WriteFaces(
+                        propertyName,
+                        data,
+                        diagnostics,
+                        false,
+                        count,
+                        rectangles);
+                    return 0;
+                });
+            }
+        }
+
+        private void WriteFaces(
+            string propertyName,
+            ChunkRenderUploadData data,
+            FaceDiagnostics diagnostics,
+            bool transparent,
+            int count,
+            ReadOnlySpan<uint> rectangles)
+        {
             int originX = checked((int)data.ChunkWorldX);
             int originY = checked((int)data.ChunkWorldY);
             int originZ = checked((int)data.ChunkWorldZ);
@@ -1070,8 +1192,8 @@ namespace MVoxelEngine1.Application.Simulation
             {
                 UploadRecord upload => checked(
                     RecordOverheadEstimate +
-                    upload.Data.OpaqueRectangles.Length * sizeof(uint) +
-                    upload.Data.TransparentRectangles.Length * sizeof(uint) +
+                    upload.Data.OpaqueWordCount * sizeof(uint) +
+                    upload.Data.TransparentWordCount * sizeof(uint) +
                     upload.OpaqueDiagnostics.BlockIds.Length * sizeof(ushort) +
                     upload.OpaqueDiagnostics.NeighborBlockIds.Length * sizeof(ushort) +
                     upload.TransparentDiagnostics.BlockIds.Length * sizeof(ushort) +
@@ -1112,22 +1234,36 @@ namespace MVoxelEngine1.Application.Simulation
             }
         }
 
-        private static void ValidateUploadData(ChunkRenderUploadData data)
+        private static void ValidateUploadData(
+            ChunkRenderUploadData data,
+            ChunkRenderUploadRetention retention)
         {
-            if (PackedFaceRectangle.GetRectangleCount(
-                    data.OpaqueRectangles.Span) != data.OpaqueRectangleCount ||
-                PackedFaceRectangle.CountLogicalFaces(
-                    data.OpaqueRectangles.Span) != data.OpaqueFaceCount)
+            bool opaqueValid = retention.ReadOpaque(view =>
+                PackedFaceRectangle.GetRectangleCount(view.AsSpan()) ==
+                    data.OpaqueRectangleCount &&
+                PackedFaceRectangle.CountLogicalFaces(view.AsSpan()) ==
+                    data.OpaqueFaceCount,
+                rectangles =>
+                    PackedFaceRectangle.GetRectangleCount(rectangles) ==
+                        data.OpaqueRectangleCount &&
+                    PackedFaceRectangle.CountLogicalFaces(rectangles) ==
+                        data.OpaqueFaceCount);
+            if (!opaqueValid)
             {
                 throw new InvalidDataException($"Opaque render data {data.RenderDataId} has inconsistent buffer lengths.");
             }
 
-            if (PackedFaceRectangle.GetRectangleCount(
-                    data.TransparentRectangles.Span) !=
-                    data.TransparentRectangleCount ||
-                PackedFaceRectangle.CountLogicalFaces(
-                    data.TransparentRectangles.Span) !=
-                    data.TransparentFaceCount)
+            bool transparentValid = retention.ReadTransparent(view =>
+                PackedFaceRectangle.GetRectangleCount(view.AsSpan()) ==
+                    data.TransparentRectangleCount &&
+                PackedFaceRectangle.CountLogicalFaces(view.AsSpan()) ==
+                    data.TransparentFaceCount,
+                rectangles =>
+                    PackedFaceRectangle.GetRectangleCount(rectangles) ==
+                        data.TransparentRectangleCount &&
+                    PackedFaceRectangle.CountLogicalFaces(rectangles) ==
+                        data.TransparentFaceCount);
+            if (!transparentValid)
             {
                 throw new InvalidDataException($"Transparent render data {data.RenderDataId} has inconsistent buffer lengths.");
             }

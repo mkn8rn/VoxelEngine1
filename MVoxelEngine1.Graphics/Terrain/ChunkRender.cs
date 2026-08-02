@@ -22,7 +22,7 @@ using System.Diagnostics;
 
 namespace MVoxelEngine1.Graphics.Terrain
 {
-    public partial class ChunkRender
+    public partial class ChunkRender : IDisposable
     {
         private static readonly ConcurrentQueue<ChunkRender> pendingDeletion = new();
         private static long nextRenderDataId;
@@ -30,12 +30,11 @@ namespace MVoxelEngine1.Graphics.Terrain
         private bool isBuilt = false;
         private Vector3 chunkWorldPosition;
 
-        private uint[] opaqueRectangleBuffer = Array.Empty<uint>();
         private int opaqueFaceCount;
         private int opaqueRectangleCount;
-        private uint[] transparentRectangleBuffer = Array.Empty<uint>();
         private int transparentFaceCount;
         private int transparentRectangleCount;
+        private int deletionScheduled;
 
         private VAO opaqueVAO;                // opaque pass VAO
         private VAO transparentVAO;           // transparent pass VAO
@@ -87,8 +86,10 @@ namespace MVoxelEngine1.Graphics.Terrain
             ChunkPrerenderData prerenderData,
             FaceGenerationMode faceGenerationMode,
             Func<int, int, int, ushort>? getLocalBlock,
-            ReferenceNeighborBlockPlanes? referenceNeighbors)
+            ReferenceNeighborBlockPlanes? referenceNeighbors,
+            PackedFaceNativePool packedFacePool)
         {
+            ArgumentNullException.ThrowIfNull(packedFacePool);
             this.prepassSolidCount = prerenderData.PrepassSolidCount;
             this.prepassExposureEstimate = prerenderData.PrepassExposureEstimate;
             this.chunkMeta = prerenderData.chunkData;
@@ -97,29 +98,38 @@ namespace MVoxelEngine1.Graphics.Terrain
             faceNegX = prerenderData.FaceNegX; facePosX = prerenderData.FacePosX; faceNegY = prerenderData.FaceNegY; facePosY = prerenderData.FacePosY; faceNegZ = prerenderData.FaceNegZ; facePosZ = prerenderData.FacePosZ;
             nNegXPosX = prerenderData.NeighborNegXPosX; nPosXNegX = prerenderData.NeighborPosXNegX; nNegYPosY = prerenderData.NeighborNegYPosY; nPosYNegY = prerenderData.NeighborPosYNegY; nNegZPosZ = prerenderData.NeighborNegZPosZ; nPosZNegZ = prerenderData.NeighborPosZNegZ;
             allOneBlock = prerenderData.AllOneBlock; allOneBlockId = prerenderData.AllOneBlockId;
-            GenerateFaces(
-                prerenderData,
-                faceGenerationMode,
-                getLocalBlock,
-                referenceNeighbors);
-            uploadData = new ChunkRenderUploadData(
-                Interlocked.Increment(ref nextRenderDataId),
-                chunkWorldPosition.X,
-                chunkWorldPosition.Y,
-                chunkWorldPosition.Z,
-                fullyOccluded,
-                faceGenerationMode,
-                opaqueFaceCount,
-                opaqueRectangleBuffer,
-                transparentFaceCount,
-                transparentRectangleBuffer);
+            FaceRectangleMeshData? meshData = null;
+            try
+            {
+                meshData = GenerateFaces(
+                    prerenderData,
+                    faceGenerationMode,
+                    getLocalBlock,
+                    referenceNeighbors,
+                    packedFacePool);
+                SetMeshCounts(meshData);
+                uploadData = new ChunkRenderUploadData(
+                    Interlocked.Increment(ref nextRenderDataId),
+                    chunkWorldPosition.X,
+                    chunkWorldPosition.Y,
+                    chunkWorldPosition.Z,
+                    fullyOccluded,
+                    faceGenerationMode,
+                    meshData);
+                meshData = null;
+            }
+            finally
+            {
+                meshData?.Dispose();
+            }
         }
 
-        private void GenerateFaces(
+        private FaceRectangleMeshData GenerateFaces(
             ChunkPrerenderData prerenderData,
             FaceGenerationMode faceGenerationMode,
             Func<int, int, int, ushort>? getLocalBlock,
-            ReferenceNeighborBlockPlanes? referenceNeighbors)
+            ReferenceNeighborBlockPlanes? referenceNeighbors,
+            PackedFaceNativePool packedFacePool)
         {
             if (faceGenerationMode == FaceGenerationMode.Reference)
             {
@@ -128,11 +138,10 @@ namespace MVoxelEngine1.Graphics.Terrain
                 if (referenceNeighbors is null)
                     throw new ArgumentNullException(nameof(referenceNeighbors));
 
-                GenerateReferenceFaces(
+                return GenerateReferenceFaces(
                     prerenderData,
                     getLocalBlock,
                     referenceNeighbors);
-                return;
             }
 
             if (faceGenerationMode != FaceGenerationMode.Optimized)
@@ -141,7 +150,12 @@ namespace MVoxelEngine1.Graphics.Terrain
             if (prepassSolidCount > 0 && faceNegX && facePosX && faceNegY && facePosY && faceNegZ && facePosZ &&
                 nNegXPosX && nPosXNegX && nNegYPosY && nPosYNegY && nNegZPosZ && nPosZNegZ)
             {
-                fullyOccluded = true; return;
+                fullyOccluded = true;
+                return new FaceRectangleMeshData(
+                    0,
+                    Array.Empty<uint>(),
+                    0,
+                    Array.Empty<uint>());
             }
 
             bool recordPerformance = StartupPerformanceRecorder.IsRunning;
@@ -149,28 +163,28 @@ namespace MVoxelEngine1.Graphics.Terrain
             long buildStart = recordPerformance ? Stopwatch.GetTimestamp() : 0;
             var sectionRender = new SectionRender(
                 prerenderData,
-                terrainTextureAtlas);
-            SetMeshData(sectionRender.Build());
+                terrainTextureAtlas,
+                packedFacePool);
+            FaceRectangleMeshData meshData = sectionRender.Build();
             if (recordPerformance)
             {
                 MeshPerformanceRecorder.RecordBuiltChunk(
                     usesGeneratedSpans,
                     MeshPerformanceRecorder.GetElapsedTicks(buildStart));
             }
+            return meshData;
         }
 
-        private void SetMeshData(FaceRectangleMeshData mesh)
+        private void SetMeshCounts(FaceRectangleMeshData mesh)
         {
             opaqueFaceCount = mesh.OpaqueFaceCount;
-            opaqueRectangleBuffer = mesh.OpaqueRectangles;
             opaqueRectangleCount = mesh.OpaqueRectangleCount;
             transparentFaceCount = mesh.TransparentFaceCount;
-            transparentRectangleBuffer = mesh.TransparentRectangles;
             transparentRectangleCount = mesh.TransparentRectangleCount;
             fullyOccluded = opaqueFaceCount == 0 && transparentFaceCount == 0;
         }
 
-        private void GenerateReferenceFaces(
+        private FaceRectangleMeshData GenerateReferenceFaces(
             ChunkPrerenderData prerenderData,
             Func<int, int, int, ushort> getLocalBlock,
             ReferenceNeighborBlockPlanes referenceNeighbors)
@@ -206,7 +220,7 @@ namespace MVoxelEngine1.Graphics.Terrain
             uint[] transparentTileIndices = BuildReferenceTileIndices(
                 faces.TransparentBlockIds,
                 faces.TransparentDirections);
-            SetMeshData(FaceRectangleMeshData.FromFaces(
+            return FaceRectangleMeshData.FromFaces(
                 faces.OpaqueFaceCount,
                 faces.OpaqueOffsets,
                 opaqueTileIndices,
@@ -214,7 +228,7 @@ namespace MVoxelEngine1.Graphics.Terrain
                 faces.TransparentFaceCount,
                 faces.TransparentOffsets,
                 transparentTileIndices,
-                faces.TransparentDirections));
+                faces.TransparentDirections);
         }
 
         private static uint[] BuildReferenceTileIndices(
@@ -247,6 +261,8 @@ namespace MVoxelEngine1.Graphics.Terrain
         public void Build()
         {
             if (isBuilt) return;
+            if (Volatile.Read(ref deletionScheduled) != 0)
+                throw new ObjectDisposedException(nameof(ChunkRender));
 
             StartupPerformanceRecorder.RecordGpuStreamingStart();
 
@@ -268,9 +284,9 @@ namespace MVoxelEngine1.Graphics.Terrain
                 quadPosVBO.Bind();
                 opaqueVAO.LinkToVAO(0, 3, VertexAttribPointerType.UnsignedByte, false, quadPosVBO);
 
-                opaqueRectangleVBO = new VBO(
-                    opaqueRectangleBuffer ?? Array.Empty<uint>(),
-                    checked(opaqueRectangleCount * PackedFaceRectangle.WordsPerRectangle));
+                opaqueRectangleVBO = uploadData.ReadOpaque(
+                    static view => new VBO(view.AsSpan()),
+                    static rectangles => new VBO(rectangles));
                 opaqueVAO.LinkIntegerToVAO(
                     2,
                     PackedFaceRectangle.WordsPerRectangle,
@@ -299,10 +315,13 @@ namespace MVoxelEngine1.Graphics.Terrain
                 quadPosVBO.Bind();
                 transparentVAO.LinkToVAO(0, 3, VertexAttribPointerType.UnsignedByte, false, quadPosVBO);
 
-                transparentRectangleVBO = new VBO(
-                    transparentRectangleBuffer ?? Array.Empty<uint>(),
-                    checked(transparentRectangleCount * PackedFaceRectangle.WordsPerRectangle),
-                    RenderPass.Transparent);
+                transparentRectangleVBO = uploadData.ReadTransparent(
+                    static view => new VBO(
+                        view.AsSpan(),
+                        RenderPass.Transparent),
+                    static rectangles => new VBO(
+                        rectangles,
+                        RenderPass.Transparent));
                 transparentVAO.LinkIntegerToVAO(
                     5,
                     PackedFaceRectangle.WordsPerRectangle,
@@ -405,9 +424,15 @@ namespace MVoxelEngine1.Graphics.Terrain
 
         public void ScheduleDelete()
         {
-            if (!isBuilt) return;
-            pendingDeletion.Enqueue(this);
+            if (Interlocked.Exchange(ref deletionScheduled, 1) != 0)
+                return;
+
+            uploadData.Dispose();
+            if (isBuilt)
+                pendingDeletion.Enqueue(this);
         }
+
+        public void Dispose() => ScheduleDelete();
 
         private void DeleteGL()
         {
