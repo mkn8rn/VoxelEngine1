@@ -66,6 +66,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
         internal void MaterializeGeneratedSpansForStorage()
         {
             MaterializeGeneratedSpans();
+            _ = EnsureSectionGrid();
         }
 
         internal void GenerateInitialChunkData(GeneratedChunkSpanData spanData)
@@ -299,7 +300,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                             continue;
 
                         uniformSectionKinds[sectionIndex] = 1;
-                        sections[sx, sy, sz] = new Section
+                        sectionGrid![sx, sy, sz] = new Section
                         {
                             IsAllAir = false,
                             Kind = Section.RepresentationKind.Uniform,
@@ -406,11 +407,11 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                             }
                             if (localStoneStart < 0 && localSoilStart < 0) continue; // nothing hits this section
 
-                            var secRef = sections[sxIndex, sy, szIndex];
+                            var secRef = sectionGrid![sxIndex, sy, szIndex];
                             if (secRef == null)
                             {
                                 secRef = new Section();
-                                sections[sxIndex, sy, szIndex] = secRef;
+                                sectionGrid[sxIndex, sy, szIndex] = secRef;
                             }
                             var scratch = SectionUtils.EnsureScratch(secRef);
 
@@ -503,11 +504,11 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
 
                     for (int sy = startSec; sy <= endSec; sy++)
                     {
-                        var secRef = sections[sxIndex, sy, szIndex];
+                        var secRef = sectionGrid![sxIndex, sy, szIndex];
                         if (secRef == null)
                         {
                             secRef = new Section();
-                            sections[sxIndex, sy, szIndex] = secRef;
+                            sectionGrid[sxIndex, sy, szIndex] = secRef;
                         }
 
                         int sectionBase = sectionBaseYArr[sy];
@@ -567,7 +568,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                 for (int sy = 0; sy < sectionsY && allUniformSame; sy++)
                     for (int sz = 0; sz < sectionsZ && allUniformSame; sz++)
                     {
-                        var sec = sections[sx, sy, sz];
+                        var sec = sectionGrid![sx, sy, sz];
                         if (sec == null) continue;
                         if (sec.Kind != Section.RepresentationKind.Uniform || sec.UniformBlockId == Section.AIR) { allUniformSame = false; break; }
                         if (uniformId == 0) uniformId = sec.UniformBlockId; else if (uniformId != sec.UniformBlockId) { allUniformSame = false; break; }
@@ -579,7 +580,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                     for (int sy = 0; sy < sectionsY; sy++)
                         for (int sz = 0; sz < sectionsZ; sz++)
                         {
-                            var sec = sections[sx, sy, sz]; if (sec == null) continue;
+                            var sec = sectionGrid![sx, sy, sz]; if (sec == null) continue;
                             if (sec.Kind == Section.RepresentationKind.Uniform) { sec.IdMapDirty = false; sec.StructuralDirty = false; sec.MetadataBuilt = true; }
                         }
             }
@@ -605,7 +606,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                 for (int sy = 0; sy < sectionsY; sy++)
                     for (int sz = 0; sz < sectionsZ; sz++)
                     {
-                        var sec = sections[sx, sy, sz]; if (sec == null) continue;
+                        var sec = sectionGrid![sx, sy, sz]; if (sec == null) continue;
                         finalizedSectionCount++;
                         if (sec.BuildScratch != null)
                         {

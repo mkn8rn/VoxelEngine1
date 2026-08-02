@@ -174,7 +174,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                     for (int sz = 0; sz < sectionsZ; sz++)
                     {
                         // Neg X: section local face at x=0 contributes to global plane x==0
-                        var secNeg = sections[sxNeg, sy, sz];
+                        var secNeg = sectionGrid![sxNeg, sy, sz];
                         if (secNeg != null)
                         {
                             // Uniform opaque sections (non-air and IsOpaque) intentionally leave Face*Bits null but imply fully solid face
@@ -292,7 +292,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                         }
 
                         // Pos X: section local face at x=15 contributes to global plane x==dimX-1
-                        var secPos = sections[sxPos, sy, sz];
+                        var secPos = sectionGrid![sxPos, sy, sz];
                         if (secPos != null)
                         {
                             if (secPos.Kind == Section.RepresentationKind.Uniform && secPos.UniformBlockId != Section.AIR && TerrainLoader.IsOpaque(secPos.UniformBlockId))
@@ -419,7 +419,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                 {
                     for (int sz = 0; sz < sectionsZ; sz++)
                     {
-                        var secNeg = sections[sx, syNeg, sz];
+                        var secNeg = sectionGrid![sx, syNeg, sz];
                         if (secNeg != null)
                         {
                             if (secNeg.Kind == Section.RepresentationKind.Uniform && secNeg.UniformBlockId != Section.AIR && TerrainLoader.IsOpaque(secNeg.UniformBlockId))
@@ -533,7 +533,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                             }
                         }
 
-                        var secPos = sections[sx, syPos, sz];
+                        var secPos = sectionGrid![sx, syPos, sz];
                         if (secPos != null)
                         {
                             if (secPos.Kind == Section.RepresentationKind.Uniform && secPos.UniformBlockId != Section.AIR && TerrainLoader.IsOpaque(secPos.UniformBlockId))
@@ -660,7 +660,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                 {
                     for (int sy = 0; sy < sectionsY; sy++)
                     {
-                        var secNeg = sections[sx, sy, szNeg];
+                        var secNeg = sectionGrid![sx, sy, szNeg];
                         if (secNeg != null)
                         {
                             if (secNeg.Kind == Section.RepresentationKind.Uniform && secNeg.UniformBlockId != Section.AIR && TerrainLoader.IsOpaque(secNeg.UniformBlockId))
@@ -774,7 +774,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                             }
                         }
 
-                        var secPos = sections[sx, sy, szPos];
+                        var secPos = sectionGrid![sx, sy, szPos];
                         if (secPos != null)
                         {
                             if (secPos.Kind == Section.RepresentationKind.Uniform && secPos.UniformBlockId != Section.AIR && TerrainLoader.IsOpaque(secPos.UniformBlockId))
@@ -900,6 +900,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
 
         private void CreateUniformSections(ushort blockId)
         {
+            Section[,,] grid = EnsureSectionGrid();
             int S = Section.SECTION_SIZE;
             int voxelsPerSection = S * S * S;
             bool isTransparentUniform = blockId != Section.AIR && !TerrainLoader.IsOpaque(blockId); // water / glass etc.
@@ -935,7 +936,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                             // Build transparent boundary face masks immediately so prerender has them without further metadata rebuild.
                             SectionUtils.BuildTransparentFaceMasks(sec, sec.TransparentBits);
                         }
-                        sections[sx, sy, sz] = sec;
+                        grid[sx, sy, sz] = sec;
                     }
         }
     }

@@ -29,7 +29,8 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
         public string saveDirectory;
         public long generationSeed;
 
-        public Section[,,] sections;
+        private Section[,,]? sectionGrid;
+        public Section[,,] sections => EnsureSectionGrid();
         public int sectionsX;
         public int sectionsY;
         public int sectionsZ;
@@ -138,14 +139,16 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             // Select biome deterministically (needed for both generated & loaded chunks)
             biome = BiomeManager.SelectBiomeForChunk(seed, (int)position.X, (int)position.Z);
 
-            InitializeSectionGrid();
+            InitializeSectionDimensions();
+            if (!autoGenerate)
+                InitializeSectionGrid();
             if (autoGenerate)
             {
                 InitializeChunkData(columnSpanMap); // triggers GenerateInitialChunkData or uniform shortcut
             }
         }
 
-        public void InitializeSectionGrid()
+        private void InitializeSectionDimensions()
         {
             int S = Section.SECTION_SIZE;
             if (dimX % S != 0 || dimY % S != 0 || dimZ % S != 0)
@@ -156,8 +159,22 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             sectionsX = dimX / S;
             sectionsY = dimY / S;
             sectionsZ = dimZ / S;
-            sections = new Section[sectionsX, sectionsY, sectionsZ];
         }
+
+        public void InitializeSectionGrid()
+        {
+            InitializeSectionDimensions();
+            sectionGrid = new Section[sectionsX, sectionsY, sectionsZ];
+        }
+
+        private Section[,,] EnsureSectionGrid()
+        {
+            if (sectionGrid is null)
+                InitializeSectionGrid();
+            return sectionGrid!;
+        }
+
+        internal bool HasMaterializedSectionGrid => sectionGrid is not null;
 
         internal void InitializeChunkData(BlockColumnProfile[] columnSpanMap)
         {
@@ -225,11 +242,12 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
         public Section GetOrCreateSection(int sx, int sy, int sz)
         {
             MaterializeGeneratedSpans();
-            var sec = sections[sx, sy, sz];
+            Section[,,] grid = EnsureSectionGrid();
+            var sec = grid[sx, sy, sz];
             if (sec == null)
             {
                 sec = new Section();
-                sections[sx, sy, sz] = sec;
+                grid[sx, sy, sz] = sec;
             }
             return sec;
         }
@@ -254,10 +272,14 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             if (generatedSpans is not null)
                 return generatedSpans.GetBlockLocal(lx, ly, lz);
 
+            Section[,,]? grid = sectionGrid;
+            if (grid is null)
+                return EMPTY;
+
             int sx = lx >> SECTION_SHIFT;
             int sy = ly >> SECTION_SHIFT;
             int sz = lz >> SECTION_SHIFT;
-            var sec = sections[sx, sy, sz];
+            var sec = grid[sx, sy, sz];
             if (sec == null) return EMPTY;
             int ox = lx & SECTION_MASK;
             int oy = ly & SECTION_MASK;
@@ -270,7 +292,16 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             if ((uint)lx >= (uint)dimX || (uint)ly >= (uint)dimY || (uint)lz >= (uint)dimZ)
                 return;
 
+            if (AllAirChunk && blockId == EMPTY)
+                return;
+
             MaterializeGeneratedSpans();
+            AllAirChunk = false;
+            AllStoneChunk = false;
+            AllSoilChunk = false;
+            AllWaterChunk = false;
+            AllOneBlockChunk = false;
+            AllOneBlockBlockId = 0;
 
             LocalToSection(lx, ly, lz, out int sx, out int sy, out int sz, out int ox, out int oy, out int oz);
             var sec = GetOrCreateSection(sx, sy, sz);

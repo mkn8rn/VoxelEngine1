@@ -532,8 +532,13 @@ namespace MVoxelEngine1.WorldGeneration
                     Console.WriteLine($"[World] Chunk ctor failed ({cx},{cy},{cz}) phase={phase}: {ctorEx.Message}");
                     return null;
                 }
-                if (chunk.sections == null || chunk.sections.GetLength(0)!=sxCount)
-                    chunk.sections = new Section[sxCount, syCount, szCount];
+                Section[,,] sectionGrid = chunk.sections;
+                if (sectionGrid.GetLength(0) != sxCount ||
+                    sectionGrid.GetLength(1) != syCount ||
+                    sectionGrid.GetLength(2) != szCount)
+                {
+                    return null;
+                }
 
                 phase = "ParseSections";
                 int linear=0;
@@ -545,28 +550,28 @@ namespace MVoxelEngine1.WorldGeneration
                         {
                             uint off = offsets[linear];
                             string sectionTag = $"sec({sx},{sy},{sz})";
-                            if (off==0) { chunk.sections[sx,sy,sz] = new Section(); continue; }
+                            if (off==0) { sectionGrid[sx,sy,sz] = new Section(); continue; }
                             try
                             {
                                 phase = $"SeekSection:{sectionTag}";
-                                if (off + 3 > ms.Length) { chunk.sections[sx,sy,sz] = new Section(); continue; }
+                                if (off + 3 > ms.Length) { sectionGrid[sx,sy,sz] = new Section(); continue; }
                                 ms.Position = off;
                                 byte kindByte = br.ReadByte();
                                 var kind = (Section.RepresentationKind)kindByte;
                                 if (kind == (Section.RepresentationKind)2) kind = Section.RepresentationKind.Expanded; // coerce unsupported
                                 ushort payloadLen = br.ReadUInt16();
-                                if (payloadLen==0 || ms.Position + payloadLen > ms.Length) { chunk.sections[sx,sy,sz] = new Section(); continue; }
+                                if (payloadLen==0 || ms.Position + payloadLen > ms.Length) { sectionGrid[sx,sy,sz] = new Section(); continue; }
                                 phase = $"ReadSectionPayload:{sectionTag}";
                                 byte[] spayload = br.ReadBytes(payloadLen);
-                                if (spayload.Length != payloadLen) { chunk.sections[sx,sy,sz] = new Section(); continue; }
+                                if (spayload.Length != payloadLen) { sectionGrid[sx,sy,sz] = new Section(); continue; }
                                 phase = $"ParseSectionPayload:{sectionTag}";
                                 var sec = ParseSectionFromPayload(kind, spayload);
-                                chunk.sections[sx,sy,sz] = sec ?? new Section();
+                                sectionGrid[sx,sy,sz] = sec ?? new Section();
                             }
                             catch (Exception exSection)
                             {
                                 Console.WriteLine($"[World] Exception parsing {sectionTag} c=({cx},{cy},{cz}) phase={phase}: {exSection.Message}");
-                                chunk.sections[sx,sy,sz] = new Section();
+                                sectionGrid[sx,sy,sz] = new Section();
                             }
                         }
                     }
