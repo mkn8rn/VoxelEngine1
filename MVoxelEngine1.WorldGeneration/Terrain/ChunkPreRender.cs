@@ -299,7 +299,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                 {
                     for (int sz = 0; sz < sectionsZ; sz++, idx++)
                     {
-                        var sec = sections[sx, sy, sz];
+                        var sec = sectionGrid![sx, sy, sz];
                         if (sec == null)
                         {
                             arr[idx] = default;
@@ -530,7 +530,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                 {
                     for (int sz = 0; sz < sectionsZ; sz++)
                     {
-                        var sec = sections[sx, sy, sz];
+                        var sec = sectionGrid![sx, sy, sz];
                         if (sec == null) continue;
                         if (sec.OpaqueVoxelCount > 0)
                         {

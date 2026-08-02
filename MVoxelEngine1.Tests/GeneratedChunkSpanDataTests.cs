@@ -170,15 +170,15 @@ namespace MVoxelEngine1.Tests
             LoadDefaultTerrainData(workspace.GameDataRoot);
             BiomeManager.LoadAllBiomes();
             Chunk chunk = CreateGeneratedChunk(workspace, CreateColumns());
+            Assert.False(chunk.HasMaterializedSectionGrid);
             ushort[] beforeBlocks = ReadAllBlocks(chunk, 16);
             ReferenceFaceGenerationResult beforeFaces = chunk.GenerateReferenceFaces(
                 new ReferenceNeighborBlockPlanes());
 
-            Assert.All(
-                chunk.sections.Cast<Section?>(),
-                section => Assert.Null(section));
+            Assert.False(chunk.HasMaterializedSectionGrid);
             chunk.MaterializeGeneratedSpansForStorage();
 
+            Assert.True(chunk.HasMaterializedSectionGrid);
             Assert.Equal(beforeBlocks, ReadAllBlocks(chunk, 16));
             Assert.Contains(chunk.sections.Cast<Section?>(), section => section is not null);
             ReferenceFaceGenerationResult afterFaces = chunk.GenerateReferenceFaces(
@@ -213,10 +213,71 @@ namespace MVoxelEngine1.Tests
             int editIndex = ((editX * 16) + editY) * 16 + editZ;
             expected[editIndex] = runtimeBlockId;
 
+            Assert.False(chunk.HasMaterializedSectionGrid);
             chunk.SetBlockLocal(editX, editY, editZ, runtimeBlockId);
 
+            Assert.True(chunk.HasMaterializedSectionGrid);
             Assert.Equal(expected, ReadAllBlocks(chunk, 16));
             Assert.Equal(runtimeBlockId, chunk.GetBlockLocal(editX, editY, editZ));
+        }
+
+        [Fact]
+        public void AllAirReadsAndAirWritesKeepSectionGridDeferred()
+        {
+            using TestWorkspace workspace = TestPaths.CreateWorkspace();
+            ConfigureChunkTests(workspace);
+            Chunk chunk = CreateUniformChunk(workspace, Chunk.UniformOverride.AllAir);
+
+            Assert.True(chunk.AllAirChunk);
+            Assert.False(chunk.HasMaterializedSectionGrid);
+            Assert.Equal((ushort)BaseBlockType.Empty, chunk.GetBlockLocal(4, 5, 6));
+
+            chunk.SetBlockLocal(4, 5, 6, (ushort)BaseBlockType.Empty);
+
+            Assert.True(chunk.AllAirChunk);
+            Assert.False(chunk.HasMaterializedSectionGrid);
+        }
+
+        [Fact]
+        public void FirstAllAirNonAirEditMaterializesGridAndClearsUniformFlags()
+        {
+            using TestWorkspace workspace = TestPaths.CreateWorkspace();
+            ConfigureChunkTests(workspace);
+            Chunk chunk = CreateUniformChunk(workspace, Chunk.UniformOverride.AllAir);
+            const ushort blockId = (ushort)BaseBlockType.Stone;
+
+            chunk.SetBlockLocal(4, 5, 6, blockId);
+
+            Assert.True(chunk.HasMaterializedSectionGrid);
+            Assert.False(chunk.AllAirChunk);
+            Assert.False(chunk.AllStoneChunk);
+            Assert.False(chunk.AllSoilChunk);
+            Assert.False(chunk.AllWaterChunk);
+            Assert.False(chunk.AllOneBlockChunk);
+            Assert.Equal(blockId, chunk.GetBlockLocal(4, 5, 6));
+            Assert.Equal((ushort)BaseBlockType.Empty, chunk.GetBlockLocal(4, 5, 7));
+        }
+
+        [Fact]
+        public void UniformAndLoadedChunksMaterializeRequiredSectionGrids()
+        {
+            using TestWorkspace workspace = TestPaths.CreateWorkspace();
+            ConfigureChunkTests(workspace);
+
+            Chunk stone = CreateUniformChunk(workspace, Chunk.UniformOverride.AllStone);
+            Chunk water = CreateUniformChunk(workspace, Chunk.UniformOverride.AllWater);
+            Chunk loaded = new(
+                Vector3.Zero,
+                123456,
+                GetChunkDirectory(workspace),
+                autoGenerate: false);
+
+            Assert.True(stone.HasMaterializedSectionGrid);
+            Assert.True(water.HasMaterializedSectionGrid);
+            Assert.True(loaded.HasMaterializedSectionGrid);
+            Assert.Equal((ushort)BaseBlockType.Stone, stone.GetBlockLocal(4, 5, 6));
+            Assert.Equal((ushort)BaseBlockType.Water, water.GetBlockLocal(4, 5, 6));
+            Assert.Equal((ushort)BaseBlockType.Empty, loaded.GetBlockLocal(4, 5, 6));
         }
 
         private static BlockTextureAtlas LoadDefaultRuntimeData(
@@ -242,15 +303,46 @@ namespace MVoxelEngine1.Tests
             TestWorkspace workspace,
             BlockColumnProfile[] columns)
         {
-            string chunks = Path.Combine(workspace.Root, "Chunks");
-            Directory.CreateDirectory(chunks);
             return new Chunk(
                 Vector3.Zero,
                 123456,
-                chunks,
+                GetChunkDirectory(workspace),
                 autoGenerate: true,
                 Chunk.UniformOverride.None,
                 columns);
+        }
+
+        private static Chunk CreateUniformChunk(
+            TestWorkspace workspace,
+            Chunk.UniformOverride uniformOverride)
+        {
+            return new Chunk(
+                Vector3.Zero,
+                123456,
+                GetChunkDirectory(workspace),
+                autoGenerate: true,
+                uniformOverride,
+                Array.Empty<BlockColumnProfile>());
+        }
+
+        private static string GetChunkDirectory(TestWorkspace workspace)
+        {
+            string chunks = Path.Combine(workspace.Root, "Chunks");
+            Directory.CreateDirectory(chunks);
+            return chunks;
+        }
+
+        private static void ConfigureChunkTests(TestWorkspace workspace)
+        {
+            SimulatedGpuUploadTestSupport.ConfigureSmallWorld(
+                workspace.GameDataRoot,
+                maximumWorldHeight: 16,
+                lod1RenderDistance: 0,
+                chunkSizeY: 16,
+                chunkSizeX: 16,
+                chunkSizeZ: 16);
+            LoadDefaultTerrainData(workspace.GameDataRoot);
+            BiomeManager.LoadAllBiomes();
         }
 
         private static BlockColumnProfile[] CreateColumns()
