@@ -901,43 +901,51 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
         private void CreateUniformSections(ushort blockId)
         {
             Section[,,] grid = EnsureSectionGrid();
-            int S = Section.SECTION_SIZE;
-            int voxelsPerSection = S * S * S;
-            bool isTransparentUniform = blockId != Section.AIR && !TerrainLoader.IsOpaque(blockId); // water / glass etc.
+            Section section = CreateUniformSection(blockId);
+            sharedUniformSection = section;
             for (int sx = 0; sx < sectionsX; sx++)
                 for (int sy = 0; sy < sectionsY; sy++)
                     for (int sz = 0; sz < sectionsZ; sz++)
-                    {
-                        var sec = new Section
-                        {
-                            IsAllAir = false,
-                            Kind = Section.RepresentationKind.Uniform,
-                            UniformBlockId = blockId,
-                            OpaqueVoxelCount = isTransparentUniform ? 0 : voxelsPerSection,
-                            VoxelCount = voxelsPerSection,
-                            CompletelyFull = !isTransparentUniform, // only opaque uniform flagged full for fast paths
-                            MetadataBuilt = true,
-                            HasBounds = true,
-                            MinLX = 0,
-                            MinLY = 0,
-                            MinLZ = 0,
-                            MaxLX = 15,
-                            MaxLY = 15,
-                            MaxLZ = 15
-                        };
-                        if (isTransparentUniform)
-                        {
-                            // Uniform transparent override (e.g. water): record transparent occupancy eagerly (all 4096 bits set)
-                            sec.TransparentCount = voxelsPerSection;
-                            sec.HasTransparent = true;
-                            sec.TransparentBits = new ulong[64];
-                            for (int i = 0; i < 64; i++) sec.TransparentBits[i] = ulong.MaxValue;
-                            sec.InternalExposure = 0; // no opaque exposure
-                            // Build transparent boundary face masks immediately so prerender has them without further metadata rebuild.
-                            SectionUtils.BuildTransparentFaceMasks(sec, sec.TransparentBits);
-                        }
-                        grid[sx, sy, sz] = sec;
-                    }
+                        grid[sx, sy, sz] = section;
+        }
+
+        private static Section CreateUniformSection(ushort blockId)
+        {
+            int S = Section.SECTION_SIZE;
+            int voxelsPerSection = S * S * S;
+            bool isTransparentUniform = blockId != Section.AIR && !TerrainLoader.IsOpaque(blockId); // water / glass etc.
+            var section = new Section
+            {
+                IsAllAir = false,
+                Kind = Section.RepresentationKind.Uniform,
+                UniformBlockId = blockId,
+                OpaqueVoxelCount = isTransparentUniform ? 0 : voxelsPerSection,
+                VoxelCount = voxelsPerSection,
+                CompletelyFull = !isTransparentUniform, // only opaque uniform flagged full for fast paths
+                MetadataBuilt = true,
+                HasBounds = true,
+                MinLX = 0,
+                MinLY = 0,
+                MinLZ = 0,
+                MaxLX = 15,
+                MaxLY = 15,
+                MaxLZ = 15
+            };
+            if (isTransparentUniform)
+            {
+                // Uniform transparent override (e.g. water): record transparent occupancy eagerly (all 4096 bits set)
+                section.TransparentCount = voxelsPerSection;
+                section.HasTransparent = true;
+                section.TransparentBits = new ulong[64];
+                for (int i = 0; i < 64; i++) section.TransparentBits[i] = ulong.MaxValue;
+                section.InternalExposure = 0; // no opaque exposure
+                // Build transparent boundary face masks immediately so prerender has them without further metadata rebuild.
+                SectionUtils.BuildTransparentFaceMasks(
+                    section,
+                    section.TransparentBits);
+            }
+
+            return section;
         }
     }
 }

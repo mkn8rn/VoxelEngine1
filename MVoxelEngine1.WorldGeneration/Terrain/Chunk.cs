@@ -30,7 +30,8 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
         public long generationSeed;
 
         private Section[,,]? sectionGrid;
-        public Section[,,] sections => EnsureSectionGrid();
+        private Section? sharedUniformSection;
+        public Section[,,] sections => GetIndependentSectionGrid();
         public int sectionsX;
         public int sectionsY;
         public int sectionsZ;
@@ -165,6 +166,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
         {
             InitializeSectionDimensions();
             sectionGrid = new Section[sectionsX, sectionsY, sectionsZ];
+            sharedUniformSection = null;
         }
 
         private Section[,,] EnsureSectionGrid()
@@ -175,6 +177,36 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
         }
 
         internal bool HasMaterializedSectionGrid => sectionGrid is not null;
+
+        internal bool UsesSharedUniformSection => sharedUniformSection is not null;
+
+        internal Section[,,] GetReadOnlySectionGrid() => EnsureSectionGrid();
+
+        private Section[,,] GetIndependentSectionGrid()
+        {
+            Section[,,] grid = EnsureSectionGrid();
+            Section? shared = sharedUniformSection;
+            if (shared is null)
+                return grid;
+
+            for (int sx = 0; sx < sectionsX; sx++)
+            {
+                for (int sy = 0; sy < sectionsY; sy++)
+                {
+                    for (int sz = 0; sz < sectionsZ; sz++)
+                    {
+                        if (ReferenceEquals(grid[sx, sy, sz], shared))
+                        {
+                            grid[sx, sy, sz] = CreateUniformSection(
+                                shared.UniformBlockId);
+                        }
+                    }
+                }
+            }
+
+            sharedUniformSection = null;
+            return grid;
+        }
 
         internal void InitializeChunkData(BlockColumnProfile[] columnSpanMap)
         {
@@ -247,6 +279,11 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             if (sec == null)
             {
                 sec = new Section();
+                grid[sx, sy, sz] = sec;
+            }
+            else if (ReferenceEquals(sec, sharedUniformSection))
+            {
+                sec = CreateUniformSection(sec.UniformBlockId);
                 grid[sx, sy, sz] = sec;
             }
             return sec;
