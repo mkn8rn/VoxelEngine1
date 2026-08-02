@@ -22,6 +22,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
         // Optional uniform override supplied by batch classification to skip normal span derivation path.
         internal enum UniformOverride { None = 0, AllAir, AllStone, AllSoil, AllWater } // AllWater added for slabs fully submerged between surface+1 and cached water level
         private readonly UniformOverride _uniformOverride;
+        private readonly byte generatedMaterialMask;
 
         public Vector3 position { get; set; }
         public ChunkRender? chunkRender;
@@ -117,12 +118,17 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                        string chunkDataDirectory,
                        bool autoGenerate,
                        UniformOverride uniformOverride = UniformOverride.None,
-                       BlockColumnProfile[] columnSpanMap = null)
+                       BlockColumnProfile[] columnSpanMap = null,
+                       byte generatedMaterialMask = 0b111)
         {
+            if ((generatedMaterialMask & ~0b111) != 0)
+                throw new ArgumentOutOfRangeException(
+                    nameof(generatedMaterialMask));
             position = chunkPosition;
             saveDirectory = chunkDataDirectory;
             generationSeed = seed;
             _uniformOverride = uniformOverride;
+            this.generatedMaterialMask = generatedMaterialMask;
 
             dimX = GameManager.settings.chunkMaxX;
             dimY = GameManager.settings.chunkMaxY;
@@ -259,7 +265,8 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                 (int)position.Y,
                 (ushort)BaseBlockType.Stone,
                 (ushort)BaseBlockType.Soil,
-                (ushort)BaseBlockType.Water);
+                (ushort)BaseBlockType.Water,
+                generatedMaterialMask);
             BuildAllBoundaryPlanesInitial();
             if (generationStart != 0)
                 GenerationPerformanceRecorder.RecordNonUniformGeneration(

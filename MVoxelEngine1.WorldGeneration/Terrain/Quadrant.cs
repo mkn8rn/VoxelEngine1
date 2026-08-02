@@ -28,14 +28,20 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
         public int MinimumMaterialStart;
         public int MaximumMaterialEnd;
         public bool AllColumnsHaveStone;
+        public int StoneStartMinimum;
         public int StoneStartMaximum;
         public int StoneEndMinimum;
+        public int StoneEndMaximum;
         public bool AllColumnsHaveSoil;
+        public int SoilStartMinimum;
         public int SoilStartMaximum;
         public int SoilEndMinimum;
+        public int SoilEndMaximum;
         public bool AllColumnsHaveWater;
+        public int WaterStartMinimum;
         public int WaterStartMaximum;
         public int WaterEndMinimum;
+        public int WaterEndMaximum;
     }
 
     // previously named Batch - you may see out of date comments referencing Batch.
@@ -249,14 +255,20 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                 MinimumMaterialStart = int.MaxValue,
                 MaximumMaterialEnd = int.MinValue,
                 AllColumnsHaveStone = true,
+                StoneStartMinimum = int.MaxValue,
                 StoneStartMaximum = int.MinValue,
                 StoneEndMinimum = int.MaxValue,
+                StoneEndMaximum = int.MinValue,
                 AllColumnsHaveSoil = true,
+                SoilStartMinimum = int.MaxValue,
                 SoilStartMaximum = int.MinValue,
                 SoilEndMinimum = int.MaxValue,
+                SoilEndMaximum = int.MinValue,
                 AllColumnsHaveWater = true,
+                WaterStartMinimum = int.MaxValue,
                 WaterStartMaximum = int.MinValue,
-                WaterEndMinimum = int.MaxValue
+                WaterEndMinimum = int.MaxValue,
+                WaterEndMaximum = int.MinValue
             };
 
             if (recordPerformance)
@@ -321,8 +333,10 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                             ranges.HasMaterial = true;
                             if (stoneStart < ranges.MinimumMaterialStart) ranges.MinimumMaterialStart = stoneStart;
                             if (stoneEnd > ranges.MaximumMaterialEnd) ranges.MaximumMaterialEnd = stoneEnd;
+                            if (stoneStart < ranges.StoneStartMinimum) ranges.StoneStartMinimum = stoneStart;
                             if (stoneStart > ranges.StoneStartMaximum) ranges.StoneStartMaximum = stoneStart;
                             if (stoneEnd < ranges.StoneEndMinimum) ranges.StoneEndMinimum = stoneEnd;
+                            if (stoneEnd > ranges.StoneEndMaximum) ranges.StoneEndMaximum = stoneEnd;
                         }
                         else
                         {
@@ -334,8 +348,10 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                             ranges.HasMaterial = true;
                             if (soilStart < ranges.MinimumMaterialStart) ranges.MinimumMaterialStart = soilStart;
                             if (soilEnd > ranges.MaximumMaterialEnd) ranges.MaximumMaterialEnd = soilEnd;
+                            if (soilStart < ranges.SoilStartMinimum) ranges.SoilStartMinimum = soilStart;
                             if (soilStart > ranges.SoilStartMaximum) ranges.SoilStartMaximum = soilStart;
                             if (soilEnd < ranges.SoilEndMinimum) ranges.SoilEndMinimum = soilEnd;
+                            if (soilEnd > ranges.SoilEndMaximum) ranges.SoilEndMaximum = soilEnd;
                         }
                         else
                         {
@@ -347,8 +363,10 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                             ranges.HasMaterial = true;
                             if (waterStart < ranges.MinimumMaterialStart) ranges.MinimumMaterialStart = waterStart;
                             if (waterEnd > ranges.MaximumMaterialEnd) ranges.MaximumMaterialEnd = waterEnd;
+                            if (waterStart < ranges.WaterStartMinimum) ranges.WaterStartMinimum = waterStart;
                             if (waterStart > ranges.WaterStartMaximum) ranges.WaterStartMaximum = waterStart;
                             if (waterEnd < ranges.WaterEndMinimum) ranges.WaterEndMinimum = waterEnd;
+                            if (waterEnd > ranges.WaterEndMaximum) ranges.WaterEndMaximum = waterEnd;
                         }
                         else
                         {
@@ -404,12 +422,29 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             int columnCx,
             int columnCz,
             int cy,
-            int sizeY)
+            int sizeY,
+            out byte materialMask)
         {
             var (lx, lz) = LocalIndices(columnCx, columnCz);
             ref readonly ColumnUniformRanges ranges = ref _profiles[lx, lz].UniformRanges;
             int baseY = cy * sizeY;
             int topY = baseY + sizeY - 1;
+            materialMask = 0;
+            if (ranges.StoneStartMinimum <= topY &&
+                ranges.StoneEndMaximum >= baseY)
+            {
+                materialMask |= 1;
+            }
+            if (ranges.SoilStartMinimum <= topY &&
+                ranges.SoilEndMaximum >= baseY)
+            {
+                materialMask |= 2;
+            }
+            if (ranges.WaterStartMinimum <= topY &&
+                ranges.WaterEndMaximum >= baseY)
+            {
+                materialMask |= 4;
+            }
 
             if (ranges.AllColumnsHaveWater &&
                 ranges.WaterStartMaximum <= baseY &&
@@ -496,7 +531,8 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                     cx,
                     cz,
                     cy,
-                    sizeY);
+                    sizeY,
+                    out byte materialMask);
                 if (recordPerformance)
                     classificationTicks += GenerationPerformanceRecorder.GetElapsedTicks(phaseStart);
                 Chunk.UniformOverride overrideKind = classified switch
@@ -510,7 +546,14 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
 
                 var worldPos = new Vector3(columnBaseX, cy * sizeY, columnBaseZ);
                 phaseStart = recordPerformance ? Stopwatch.GetTimestamp() : 0;
-                var chunk = new Chunk(worldPos, seed, chunkSaveDirectory, autoGenerate: true, uniformOverride: overrideKind, columnSpanMap: spanMap);
+                var chunk = new Chunk(
+                    worldPos,
+                    seed,
+                    chunkSaveDirectory,
+                    autoGenerate: true,
+                    uniformOverride: overrideKind,
+                    columnSpanMap: spanMap,
+                    generatedMaterialMask: materialMask);
                 if (recordPerformance)
                 {
                     constructionTicks += GenerationPerformanceRecorder.GetElapsedTicks(phaseStart);
