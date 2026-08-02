@@ -105,47 +105,61 @@ namespace MVoxelEngine1.WorldGeneration
         private void EnqueueInitialBufferChunkPositions()
         {
             int lodDist = GameManager.settings.lod1RenderDistance;
-            int bufferLimit = GameManager.settings.chunkGenerationBufferInitial; // farthest ring for initial buffer pregen
-            if (bufferLimit <= lodDist) return; // no buffer range
-            int maxRadius = (int)Math.Min(bufferLimit - 1, GameManager.settings.regionWidthInChunks); // exclusive of bufferLimit? we interpret bufferLimit as outside radius count -> schedule up to bufferLimit-1 beyond last lod radius; adjust to inclusive semantics below
-            // Clarify: We treat bufferLimit as absolute outer radius inclusive -> schedule radii [lodDist, bufferLimit]
-            maxRadius = (int)Math.Min(bufferLimit, GameManager.settings.regionWidthInChunks);
+            int bufferLimit = GameManager.settings.chunkGenerationBufferInitial;
+            if (bufferLimit <= lodDist)
+                return;
+
+            int maxRadius = (int)Math.Min(
+                bufferLimit,
+                GameManager.settings.regionWidthInChunks);
             int sizeX = GameManager.settings.chunkMaxX;
             int sizeY = GameManager.settings.chunkMaxY;
             int sizeZ = GameManager.settings.chunkMaxZ;
-            int verticalRows = GameManager.settings.lod1RenderDistance; // reuse vertical range heuristic
+            int verticalRows = GameManager.settings.lod1RenderDistance;
             int scheduled = 0;
-            // Non-blocking: perform scheduling work on a background task so constructor / caller continues.
-            Task.Run(() =>
+
+            for (int radius = lodDist; radius <= maxRadius; radius++)
             {
-                for (int radius = lodDist; radius <= maxRadius; radius++)
+                int min = -radius;
+                int max = radius;
+                for (int x = min; x <= max; x++)
                 {
-                    int min = -radius; int max = radius;
-                    for (int x = min; x <= max; x++)
+                    for (int z = min; z <= max; z++)
                     {
-                        for (int z = min; z <= max; z++)
+                        if (Math.Abs(x) != radius && Math.Abs(z) != radius)
+                            continue;
+
+                        for (int vy = 0; vy < verticalRows; vy++)
                         {
-                            if (Math.Abs(x) != radius && Math.Abs(z) != radius) continue; // perimeter
-                            for (int vy = 0; vy < verticalRows; vy++)
+                            int wx = x * sizeX;
+                            int wy = vy * sizeY;
+                            int wz = z * sizeZ;
+                            var key = ChunkIndexKey(wx, wy, wz);
+                            if (unbuiltChunks.ContainsKey(key) ||
+                                activeChunks.ContainsKey(key) ||
+                                passiveChunks.ContainsKey(key) ||
+                                chunkGenSchedule.ContainsKey(key) ||
+                                bufferGenSchedule.ContainsKey(key) ||
+                                ChunkFileExists(key.cx, key.cy, key.cz) ||
+                                !bufferGenSchedule.TryAdd(key, 0))
                             {
-                                int wx = x * sizeX;
-                                int wy = vy * sizeY;
-                                int wz = z * sizeZ;
-                                var key = ChunkIndexKey(wx, wy, wz);
-                                if (unbuiltChunks.ContainsKey(key) || activeChunks.ContainsKey(key) || passiveChunks.ContainsKey(key)) continue;
-                                if (chunkGenSchedule.ContainsKey(key)) continue;
-                                if (bufferGenSchedule.ContainsKey(key)) continue;
-                                if (ChunkFileExists(key.cx, key.cy, key.cz)) continue; // already on disk
-                                if (!bufferGenSchedule.TryAdd(key, 0)) continue;
-                                bufferChunkPositionQueue.Add(new Vector3(wx, wy, wz));
-                                scheduled++;
+                                continue;
                             }
+
+                            bufferChunkPositionQueue.Add(
+                                new Vector3(wx, wy, wz));
+                            scheduled++;
                         }
                     }
                 }
-                if (scheduled > 0)
-                    Console.WriteLine($"[World] Scheduled {scheduled} initial buffer pregen chunks (radius {lodDist}..{maxRadius}) (async).");
-            });
+            }
+
+            if (scheduled > 0)
+            {
+                Console.WriteLine(
+                    $"[World] Scheduled {scheduled} initial buffer pregen chunks " +
+                    $"(radius {lodDist}..{maxRadius}).");
+            }
         }
 
         private void EnqueueRuntimeBufferChunkPositions()
@@ -213,7 +227,7 @@ namespace MVoxelEngine1.WorldGeneration
                 return; // outside configured world region
             }
             // If this chunk had previously been scheduled for buffer pre-generation, drop that request now.
-            bufferGenSchedule.TryRemove(key, out _);
+            RemoveGenerationSchedule(bufferGenSchedule, key);
             // Promotion: if currently passive and becomes force or inside LoD1 scheduling region, move to unbuilt and schedule build.
             if (passiveChunks.TryGetValue(key, out var passive))
             {
@@ -325,13 +339,13 @@ namespace MVoxelEngine1.WorldGeneration
                 if (chunkGenSchedule.ContainsKey(key) || unbuiltChunks.ContainsKey(key) || activeChunks.ContainsKey(key) || passiveChunks.ContainsKey(key))
                 {
                     // Ensure it is not still marked as buffer
-                    bufferGenSchedule.TryRemove(key, out _);
+                    RemoveGenerationSchedule(bufferGenSchedule, key);
                     continue;
                 }
                 // Cull when outside current buffer horizon or vertical range
                 if (Math.Abs(key.cx - playerCx) > bufferRadius || Math.Abs(key.cz - playerCz) > bufferRadius || Math.Abs(key.cy - playerCy) > verticalRange)
                 {
-                    bufferGenSchedule.TryRemove(key, out _); // generation worker will skip dequeued stale entries
+                    RemoveGenerationSchedule(bufferGenSchedule, key); // generation worker will skip dequeued stale entries
                 }
             }
         }
@@ -455,7 +469,7 @@ namespace MVoxelEngine1.WorldGeneration
                     {
                         MarkRenderNeighborsDirtyForTopologyChange(key);
                         cancelledChunks[key] = 0;
-                        chunkGenSchedule.TryRemove(key, out _);
+                        RemoveGenerationSchedule(chunkGenSchedule, key);
                         meshBuildSchedule.TryRemove(key, out _);
                         dirtyChunks.TryRemove(key, out _);
                         TrackBatch(key);

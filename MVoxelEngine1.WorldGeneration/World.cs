@@ -84,6 +84,7 @@ namespace MVoxelEngine1.WorldGeneration
         private Task[] generationWorkers;
         private BlockingCollection<Vector3> chunkPositionQueue; // gen tasks (LoD1 + active rings)
         private readonly ConcurrentDictionary<(int cx, int cy, int cz), byte> chunkGenSchedule = new(); // track enqueued but not yet generated
+        private readonly InitialGenerationCompletionGate initialGenerationCompletion = new();
 
         // Buffer (pre-generation) queue: chunks beyond LoD1 up to buffer distance; saved then released
         private BlockingCollection<Vector3> bufferChunkPositionQueue; // buffer gen tasks
@@ -276,18 +277,33 @@ namespace MVoxelEngine1.WorldGeneration
             Console.WriteLine("[World] Waiting for initial chunk + buffer generation...");
             StartupPerformanceRecorder.BeginInitialGeneration();
 
-            // Progress loop now also waits for any in‑flight quad (generatingBatches)
-            while (chunkGenSchedule.Count > 0 || bufferGenSchedule.Count > 0 || generatingBatches.Count > 0)
-            {
-                int remainingActive = chunkGenSchedule.Count;
-                int remainingBuffer = bufferGenSchedule.Count;
-                int inflightBatches = generatingBatches.Count;
-                int generatedChunks = unbuiltChunks.Count + activeChunks.Count; // passive excluded from initial LoD1 mesh requirement
-                Console.WriteLine($"[World] Initial generation progress: scheduledActive={remainingActive}, scheduledBuffer={remainingBuffer}, inFlightQuads={inflightBatches}, generatedChunks={generatedChunks}");
-                Thread.Sleep(500);
-            }
+            initialGenerationCompletion.WaitUntilComplete(
+                IsInitialGenerationComplete);
+
             long elapsedMilliseconds = StartupPerformanceRecorder.CompleteInitialGeneration();
             Console.WriteLine($"[World] Initial generation complete in {elapsedMilliseconds} ms. (Generated chunks: {unbuiltChunks.Count + activeChunks.Count})");
+        }
+
+        private void RemoveGenerationSchedule(
+            ConcurrentDictionary<(int cx, int cy, int cz), byte> schedule,
+            (int cx, int cy, int cz) key)
+        {
+            if (schedule.TryRemove(key, out _) && schedule.IsEmpty)
+                initialGenerationCompletion.NotifyCollectionBecameEmpty();
+        }
+
+        private bool IsInitialGenerationComplete()
+        {
+            using IDisposable stateScope = AcquireRenderStateReadScope();
+            return chunkGenSchedule.IsEmpty &&
+                   bufferGenSchedule.IsEmpty &&
+                   generatingBatches.IsEmpty;
+        }
+
+        private void RemoveGeneratingBatch((int bx, int bz) key)
+        {
+            if (generatingBatches.TryRemove(key, out _) && generatingBatches.IsEmpty)
+                initialGenerationCompletion.NotifyCollectionBecameEmpty();
         }
 
         public IDisposable AcquireRenderStateReadScope()
@@ -447,7 +463,7 @@ namespace MVoxelEngine1.WorldGeneration
                         var key = (cx, cy, cz);
                         long regionLimit = GameManager.settings.regionWidthInChunks;
                         if (Math.Abs(cx) > regionLimit || Math.Abs(cy) > regionLimit || Math.Abs(cz) > regionLimit)
-                        { if (isBuffer) bufferGenSchedule.TryRemove(key, out _); else chunkGenSchedule.TryRemove(key, out _); continue; }
+                        { RemoveGenerationSchedule(isBuffer ? bufferGenSchedule : chunkGenSchedule, key); continue; }
 
                         var (bx, bz) = Quadrant.GetBatchIndices(cx, cz);
                         bool batchExists = loadedBatches.TryGetValue((bx, bz), out var existingBatch);
@@ -461,7 +477,7 @@ namespace MVoxelEngine1.WorldGeneration
                         int batchMaxCz = batchMinCz + Quadrant.QUAD_SIZE - 1;
                         bool intersects = !(batchMaxCx < playerCxSnapshot - activeRadiusPlusOne || batchMinCx > playerCxSnapshot + activeRadiusPlusOne || batchMaxCz < playerCzSnapshot - activeRadiusPlusOne || batchMinCz > playerCzSnapshot + activeRadiusPlusOne);
                         if (!intersects)
-                        { if (isBuffer) bufferGenSchedule.TryRemove(key, out _); else chunkGenSchedule.TryRemove(key, out _); continue; }
+                        { RemoveGenerationSchedule(isBuffer ? bufferGenSchedule : chunkGenSchedule, key); continue; }
 
                         // If the quad exists and already contains this chunk instance, ensure it is re-registered in world dictionaries
                         if (batchExists && existingBatch.TryGetChunk(cx, cy, cz, out var existing))
@@ -499,13 +515,13 @@ namespace MVoxelEngine1.WorldGeneration
                             {
                                 EnqueueMeshBuild(key, markDirty: false);
                             }
-                            if (isBuffer) bufferGenSchedule.TryRemove(key, out _); else chunkGenSchedule.TryRemove(key, out _);
+                            RemoveGenerationSchedule(isBuffer ? bufferGenSchedule : chunkGenSchedule, key);
                             continue;
                         }
 
                         // Quick skip if chunk already materialized in dictionaries
                         if (activeChunks.ContainsKey(key) || unbuiltChunks.ContainsKey(key) || passiveChunks.ContainsKey(key))
-                        { if (isBuffer) bufferGenSchedule.TryRemove(key, out _); else chunkGenSchedule.TryRemove(key, out _); continue; }
+                        { RemoveGenerationSchedule(isBuffer ? bufferGenSchedule : chunkGenSchedule, key); continue; }
 
                         // Acquire or create generation state for this quad
                         var state = generatingBatches.GetOrAdd((bx, bz), _ => new BatchGenerationState());
@@ -555,8 +571,8 @@ namespace MVoxelEngine1.WorldGeneration
                             MarkRenderNeighborsDirtyForTopologyChange(chunkKey);
                             state.RegisteredChunks.Enqueue(chunkKey);
                             // Remove scheduling markers for this specific chunk if present
-                            chunkGenSchedule.TryRemove(chunkKey, out _);
-                            bufferGenSchedule.TryRemove(chunkKey, out _);
+                            RemoveGenerationSchedule(chunkGenSchedule, chunkKey);
+                            RemoveGenerationSchedule(bufferGenSchedule, chunkKey);
                         };
 
                         while (!token.IsCancellationRequested && state.Columns.TryDequeue(out var column))
@@ -572,14 +588,14 @@ namespace MVoxelEngine1.WorldGeneration
                         int remainingWorkers = Interlocked.Decrement(ref state.ActiveWorkers);
                         if (remainingWorkers == 0 && state.Columns.IsEmpty && state.RemainingColumns <= 0)
                         {
-                            generatingBatches.TryRemove((bx, bz), out _);
+                            RemoveGeneratingBatch((bx, bz));
                             while (state.RegisteredChunks.TryDequeue(out var registered))
                                 MarkRenderNeighborsDirty(registered);
 
                             ScheduleVisibleChunksInBatch(bx, bz);
                         }
 
-                        if (isBuffer) bufferGenSchedule.TryRemove(key, out _); else chunkGenSchedule.TryRemove(key, out _);
+                        RemoveGenerationSchedule(isBuffer ? bufferGenSchedule : chunkGenSchedule, key);
                     }
                     catch (Exception exIter)
                     { Console.WriteLine($"[World] Quad-oriented generation error at pos={lastPos}: {exIter}"); }
@@ -1009,6 +1025,14 @@ namespace MVoxelEngine1.WorldGeneration
                 bufferChunkPositionQueue?.Dispose();
                 meshBuildQueue?.Dispose();
                 renderStateLock.Dispose();
+                bool generationWorkersStopped =
+                    generationWorkers is null ||
+                    generationWorkers.All(worker => worker.IsCompleted);
+                bool schedulingWorkersStopped =
+                    schedulingWorkers is null ||
+                    schedulingWorkers.All(worker => worker.IsCompleted);
+                if (generationWorkersStopped && schedulingWorkersStopped)
+                    initialGenerationCompletion.Dispose();
             }
         }
 
