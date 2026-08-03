@@ -39,20 +39,45 @@ namespace MVoxelEngine1.WorldGeneration
             stateLock.ExitWriteLock();
         }
 
-        public void MoveUnbuiltToActive<TKey, TValue>(
+        public int MoveCompletedUnbuiltToActive<TKey, TValue>(
             ConcurrentDictionary<TKey, TValue> unbuilt,
             ConcurrentDictionary<TKey, TValue> active,
             ConcurrentDictionary<TKey, long> dirty,
-            TKey key,
-            TValue value)
+            TKey[] keys,
+            TValue?[] completedValues)
             where TKey : notnull
+            where TValue : class
         {
+            if (keys.Length != completedValues.Length)
+            {
+                throw new ArgumentException(
+                    "Completed render keys and values must have equal lengths.");
+            }
+
             EnterWrite();
             try
             {
-                active[key] = value;
-                unbuilt.TryRemove(key, out _);
-                dirty.TryRemove(key, out _);
+                int movedCount = 0;
+                for (int index = 0; index < keys.Length; index++)
+                {
+                    TValue? completedValue = completedValues[index];
+                    if (completedValue is null)
+                        continue;
+
+                    TKey key = keys[index];
+                    if (!unbuilt.TryGetValue(key, out TValue? currentValue) ||
+                        !ReferenceEquals(currentValue, completedValue))
+                    {
+                        continue;
+                    }
+
+                    active[key] = completedValue;
+                    unbuilt.TryRemove(key, out _);
+                    dirty.TryRemove(key, out _);
+                    movedCount++;
+                }
+
+                return movedCount;
             }
             finally
             {
