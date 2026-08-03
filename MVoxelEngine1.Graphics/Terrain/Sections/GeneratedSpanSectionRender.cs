@@ -501,45 +501,87 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
 
             if ((source.MaterialMask & 0b011) != 0)
             {
-                if (firstHasGround)
+                if (firstHasGround &&
+                    secondHasGround &&
+                    firstGroundStart == secondGroundStart)
                 {
-                    int firstStart = Math.Max(firstGroundStart, chunkStart);
-                    int firstEnd = Math.Min(firstGroundEnd, chunkEnd);
-                    if (firstStart <= firstEnd)
+                    if (firstGroundEnd > secondGroundEnd)
                     {
-                        EmitGroundDifference(
-                            source,
-                            firstColumn,
-                            firstStart,
-                            firstEnd,
-                            secondHasGround,
-                            secondGroundStart,
-                            secondGroundEnd,
-                            firstDirection,
-                            firstX,
-                            firstZ,
-                            ref writer);
+                        int start = Math.Max(secondGroundEnd + 1, chunkStart);
+                        int end = Math.Min(firstGroundEnd, chunkEnd);
+                        if (start <= end)
+                        {
+                            EmitGroundSegment(
+                                source,
+                                firstColumn,
+                                start,
+                                end,
+                                firstDirection,
+                                firstX,
+                                firstZ,
+                                ref writer);
+                        }
+                    }
+                    else if (secondGroundEnd > firstGroundEnd)
+                    {
+                        int start = Math.Max(firstGroundEnd + 1, chunkStart);
+                        int end = Math.Min(secondGroundEnd, chunkEnd);
+                        if (start <= end)
+                        {
+                            EmitGroundSegment(
+                                source,
+                                secondColumn,
+                                start,
+                                end,
+                                secondDirection,
+                                secondX,
+                                secondZ,
+                                ref writer);
+                        }
                     }
                 }
-
-                if (secondHasGround)
+                else
                 {
-                    int secondStart = Math.Max(secondGroundStart, chunkStart);
-                    int secondEnd = Math.Min(secondGroundEnd, chunkEnd);
-                    if (secondStart <= secondEnd)
+                    if (firstHasGround)
                     {
-                        EmitGroundDifference(
-                            source,
-                            secondColumn,
-                            secondStart,
-                            secondEnd,
-                            firstHasGround,
-                            firstGroundStart,
-                            firstGroundEnd,
-                            secondDirection,
-                            secondX,
-                            secondZ,
-                            ref writer);
+                        int firstStart = Math.Max(firstGroundStart, chunkStart);
+                        int firstEnd = Math.Min(firstGroundEnd, chunkEnd);
+                        if (firstStart <= firstEnd)
+                        {
+                            EmitGroundDifference(
+                                source,
+                                firstColumn,
+                                firstStart,
+                                firstEnd,
+                                secondHasGround,
+                                secondGroundStart,
+                                secondGroundEnd,
+                                firstDirection,
+                                firstX,
+                                firstZ,
+                                ref writer);
+                        }
+                    }
+
+                    if (secondHasGround)
+                    {
+                        int secondStart = Math.Max(secondGroundStart, chunkStart);
+                        int secondEnd = Math.Min(secondGroundEnd, chunkEnd);
+                        if (secondStart <= secondEnd)
+                        {
+                            EmitGroundDifference(
+                                source,
+                                secondColumn,
+                                secondStart,
+                                secondEnd,
+                                firstHasGround,
+                                firstGroundStart,
+                                firstGroundEnd,
+                                secondDirection,
+                                secondX,
+                                secondZ,
+                                ref writer);
+                        }
                     }
                 }
             }
@@ -570,7 +612,10 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             {
                 int firstStart = Math.Max(firstColumn.WaterStart, chunkStart);
                 int firstEnd = Math.Min(firstColumn.WaterEnd, chunkEnd);
-                if (firstStart <= firstEnd)
+                bool fullyCovered = secondOccupied &&
+                    secondOccupiedStart <= firstStart &&
+                    secondOccupiedEnd >= firstEnd;
+                if (firstStart <= firstEnd && !fullyCovered)
                 {
                     EmitMaterialDifference(
                         firstStart,
@@ -594,7 +639,10 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                 secondColumn.WaterStart,
                 chunkStart);
             int secondWaterEnd = Math.Min(secondColumn.WaterEnd, chunkEnd);
-            if (secondWaterStart <= secondWaterEnd)
+            bool secondFullyCovered = firstOccupied &&
+                firstOccupiedStart <= secondWaterStart &&
+                firstOccupiedEnd >= secondWaterEnd;
+            if (secondWaterStart <= secondWaterEnd && !secondFullyCovered)
             {
                 EmitMaterialDifference(
                     secondWaterStart,
