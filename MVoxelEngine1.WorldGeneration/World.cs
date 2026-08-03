@@ -17,6 +17,7 @@ using MVoxelEngine1.Infrastructure.Models.Generation;
 using MVoxelEngine1.Infrastructure.Models;
 using MVoxelEngine1.Infrastructure.Diagnostics;
 using OpenTK.Graphics.OpenGL4;
+using Supprocom.NativeAllocationManagement;
 
 namespace MVoxelEngine1.WorldGeneration
 {
@@ -441,6 +442,26 @@ namespace MVoxelEngine1.WorldGeneration
         private void ChunkGenerationWorker(CancellationToken token)
         {
             string chunkSaveDirectory = Path.Combine(loader.currentWorldSaveDirectory, loader.currentWorldSavedChunksSubDirectory);
+            int profileCount = checked(
+                GameManager.settings.chunkMaxX *
+                GameManager.settings.chunkMaxZ);
+            int workspaceLength = checked(profileCount * 2);
+            using NativePool<float> generationPool = new(
+                preLease: workspaceLength,
+                returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            using NativeWorkspace<float> generationWorkspace =
+                generationPool.CreateWorkspace(workspaceLength);
+            RunChunkGenerationWorker(
+                token,
+                chunkSaveDirectory,
+                in generationWorkspace);
+        }
+
+        private void RunChunkGenerationWorker(
+            CancellationToken token,
+            string chunkSaveDirectory,
+            scoped in NativeWorkspace<float> generationWorkspace)
+        {
             Vector3 lastPos = default;
             try
             {
@@ -595,6 +616,7 @@ namespace MVoxelEngine1.WorldGeneration
                                 playerCxSnapshot, playerCySnapshot, playerCzSnapshot,
                                 lodDist, verticalRange, regionLimit, loader.seed, chunkSaveDirectory,
                                 sizeX, sizeY, sizeZ,
+                                in generationWorkspace,
                                 registrar);
                             Interlocked.Decrement(ref state.RemainingColumns);
                         }

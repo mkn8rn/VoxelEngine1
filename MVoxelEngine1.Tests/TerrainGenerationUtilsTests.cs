@@ -2,7 +2,9 @@ using System.Buffers;
 using System.Diagnostics;
 using System.Text.Json;
 using MVoxelEngine1.Infrastructure.Models.Generation.Biomes;
+using MVoxelEngine1.Tools.Noise;
 using MVoxelEngine1.WorldGeneration.Terrain;
+using Supprocom.NativeAllocationManagement;
 
 namespace MVoxelEngine1.Tests
 {
@@ -145,6 +147,67 @@ namespace MVoxelEngine1.Tests
                     Assert.Equal(scalar, precomputed);
                 }
             }
+        }
+
+        [Theory]
+        [InlineData(0, 0, 160, 160, 123456L)]
+        [InlineData(-2080, -2080, 31, 29, 123456L)]
+        [InlineData(2147483600, -2147483640, 160, 160, -9223372036854775807L)]
+        public void NativeHeightWorkspaceMatchesFormerMatrixBits(
+            int baseX,
+            int baseZ,
+            int sizeX,
+            int sizeZ,
+            long seed)
+        {
+            int valueCount = checked(sizeX * sizeZ);
+            var expected = new float[sizeX, sizeZ];
+            var noise = new OpenSimplexNoise(seed);
+            const float scale = 0.001f;
+            const float minimumHeight = 1f;
+            const float maximumHeight = 1000f;
+            for (int x = 0; x < sizeX; x++)
+            {
+                int worldX = unchecked(x + baseX);
+                for (int z = 0; z < sizeZ; z++)
+                {
+                    float noiseValue = (float)noise.Evaluate(
+                        worldX * scale,
+                        unchecked(z + baseZ) * scale);
+                    float normalizedValue = noiseValue * 0.5f + 0.5f;
+                    expected[x, z] = normalizedValue *
+                        (maximumHeight - minimumHeight) + minimumHeight;
+                }
+            }
+
+            using NativePool<float> pool = new(
+                preLease: valueCount,
+                returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            using NativeWorkspace<float> workspace =
+                pool.CreateWorkspace(valueCount);
+            _ = workspace.Process(
+                valueCount,
+                values => Quadrant.FillHeightMap(
+                    seed,
+                    baseX,
+                    baseZ,
+                    sizeX,
+                    sizeZ,
+                    values),
+                values =>
+                {
+                    for (int x = 0; x < sizeX; x++)
+                    {
+                        for (int z = 0; z < sizeZ; z++)
+                        {
+                            Assert.Equal(
+                                BitConverter.SingleToInt32Bits(expected[x, z]),
+                                BitConverter.SingleToInt32Bits(
+                                    values[x * sizeZ + z]));
+                        }
+                    }
+                    return 0;
+                });
         }
 
         [Fact(Explicit = true, Timeout = 180_000)]
