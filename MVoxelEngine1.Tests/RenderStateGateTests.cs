@@ -9,8 +9,8 @@ namespace MVoxelEngine1.Tests
         public async Task ReaderCannotMissChunkDuringStateMove()
         {
             using var gate = new RenderStateGate();
-            var unbuilt = new ConcurrentDictionary<string, int>();
-            var active = new ConcurrentDictionary<string, int>();
+            var unbuilt = new ConcurrentDictionary<string, object>();
+            var active = new ConcurrentDictionary<string, object>();
             var dirty = new ConcurrentDictionary<string, long>();
             using var activeCheckCompleted = new ManualResetEventSlim(false);
             using var releaseReader = new ManualResetEventSlim(false);
@@ -18,8 +18,19 @@ namespace MVoxelEngine1.Tests
             CancellationToken cancellationToken =
                 TestContext.Current.CancellationToken;
             const string Key = "chunk";
-            unbuilt[Key] = 42;
+            const string PendingKey = "pending";
+            const string ReplacedKey = "replaced";
+            object value = new();
+            object pendingValue = new();
+            object staleValue = new();
+            object replacementValue = new();
+            unbuilt[Key] = value;
+            unbuilt[PendingKey] = pendingValue;
+            unbuilt[ReplacedKey] = replacementValue;
             dirty[Key] = 7;
+            dirty[PendingKey] = 8;
+            dirty[ReplacedKey] = 9;
+            int movedCount = 0;
 
             Task<bool> reader = Task.Run(() =>
             {
@@ -49,12 +60,12 @@ namespace MVoxelEngine1.Tests
             Task writer = Task.Run(() =>
             {
                 writerStarted.Set();
-                gate.MoveUnbuiltToActive(
+                movedCount = gate.MoveCompletedUnbuiltToActive(
                     unbuilt,
                     active,
                     dirty,
-                    Key,
-                    42);
+                    new[] { Key, PendingKey, ReplacedKey },
+                    new[] { value, null, staleValue });
             }, cancellationToken);
 
             Assert.True(writerStarted.Wait(
@@ -78,9 +89,16 @@ namespace MVoxelEngine1.Tests
             }
 
             using IDisposable finalStateScope = gate.AcquireReadScope();
-            Assert.Equal(42, active[Key]);
+            Assert.Same(value, active[Key]);
             Assert.False(unbuilt.ContainsKey(Key));
             Assert.False(dirty.ContainsKey(Key));
+            Assert.Same(pendingValue, unbuilt[PendingKey]);
+            Assert.False(active.ContainsKey(PendingKey));
+            Assert.Equal(8, dirty[PendingKey]);
+            Assert.Same(replacementValue, unbuilt[ReplacedKey]);
+            Assert.False(active.ContainsKey(ReplacedKey));
+            Assert.Equal(9, dirty[ReplacedKey]);
+            Assert.Equal(1, Volatile.Read(ref movedCount));
         }
     }
 }

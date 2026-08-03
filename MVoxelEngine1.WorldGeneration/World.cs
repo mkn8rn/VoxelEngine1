@@ -317,9 +317,11 @@ namespace MVoxelEngine1.WorldGeneration
             {
                 MaxDegreeOfParallelism = Math.Max(1, maximumParallelism)
             };
+            var completedChunks = new Chunk?[targetSet.Length];
 
-            Parallel.ForEach(targetSet, options, key =>
+            Parallel.For(0, targetSet.Length, options, index =>
             {
+                (int cx, int cy, int cz) key = targetSet[index];
                 try
                 {
                     Chunk chunk;
@@ -364,12 +366,7 @@ namespace MVoxelEngine1.WorldGeneration
                             Stopwatch.GetElapsedTime(buildStart));
                     }
 
-                    renderStateGate.MoveUnbuiltToActive(
-                        unbuiltChunks,
-                        activeChunks,
-                        dirtyChunks,
-                        key,
-                        chunk);
+                    completedChunks[index] = chunk;
                 }
                 catch (Exception ex)
                 {
@@ -381,6 +378,13 @@ namespace MVoxelEngine1.WorldGeneration
                     meshBuildSchedule.TryRemove(key, out _);
                 }
             });
+
+            renderStateGate.MoveCompletedUnbuiltToActive(
+                unbuiltChunks,
+                activeChunks,
+                dirtyChunks,
+                targetSet,
+                completedChunks);
 
             while (meshBuildQueue.TryTake(out _))
             {
