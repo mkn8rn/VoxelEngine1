@@ -49,36 +49,7 @@ namespace MVoxelEngine1.WorldGeneration
                 static () => new PackedFaceNativePool(),
                 trackAllValues: true);
         private int packedFaceResourcesDisposed;
-        private readonly ReaderWriterLockSlim renderStateLock =
-            new(LockRecursionPolicy.SupportsRecursion);
-
-        private sealed class RenderStateScope : IDisposable
-        {
-            private ReaderWriterLockSlim? stateLock;
-            private readonly bool write;
-
-            public RenderStateScope(
-                ReaderWriterLockSlim stateLock,
-                bool write)
-            {
-                this.stateLock = stateLock;
-                this.write = write;
-            }
-
-            public void Dispose()
-            {
-                ReaderWriterLockSlim? currentLock = Interlocked.Exchange(
-                    ref stateLock,
-                    null);
-                if (currentLock is null)
-                    return;
-
-                if (write)
-                    currentLock.ExitWriteLock();
-                else
-                    currentLock.ExitReadLock();
-            }
-        }
+        private readonly RenderStateGate renderStateGate = new();
 
         // Asynchronous scheduling pipeline
         private int chunkScheduleWorkerCount = 1; 
@@ -319,25 +290,29 @@ namespace MVoxelEngine1.WorldGeneration
 
         public IDisposable AcquireRenderStateReadScope()
         {
-            renderStateLock.EnterReadLock();
-            return new RenderStateScope(
-                renderStateLock,
-                write: false);
+            return renderStateGate.AcquireReadScope();
         }
 
         private IDisposable AcquireRenderStateWriteScope()
         {
-            renderStateLock.EnterWriteLock();
-            return new RenderStateScope(
-                renderStateLock,
-                write: true);
+            return renderStateGate.AcquireWriteScope();
         }
 
         private void BuildInitialChunkRenders(int maximumParallelism)
         {
             Console.WriteLine("[World] Building initial chunk meshes in parallel.");
             StartupPerformanceRecorder.BeginInitialChunkMeshBuild();
-            (int cx, int cy, int cz)[] targetSet = unbuiltChunks.Keys.ToArray();
+            (int cx, int cy, int cz)[] targetSet;
+            renderStateGate.EnterRead();
+            try
+            {
+                targetSet = unbuiltChunks.Keys.ToArray();
+            }
+            finally
+            {
+                renderStateGate.ExitRead();
+            }
+
             var options = new ParallelOptions
             {
                 MaxDegreeOfParallelism = Math.Max(1, maximumParallelism)
@@ -347,15 +322,26 @@ namespace MVoxelEngine1.WorldGeneration
             {
                 try
                 {
-                    if (!unbuiltChunks.TryGetValue(key, out Chunk? chunk))
-                        return;
-
+                    Chunk chunk;
                     ReferenceNeighborBlockPlanes? referenceNeighbors = null;
-                    bool neighborsReady = faceGenerationMode == FaceGenerationMode.Reference
-                        ? TryCreateReferenceNeighborBlockPlanes(
-                            key,
-                            out referenceNeighbors)
-                        : TryPrepareOptimizedNeighbors(key, chunk);
+                    bool neighborsReady;
+                    renderStateGate.EnterRead();
+                    try
+                    {
+                        if (!unbuiltChunks.TryGetValue(key, out chunk!))
+                            return;
+
+                        neighborsReady = faceGenerationMode == FaceGenerationMode.Reference
+                            ? TryCreateReferenceNeighborBlockPlanes(
+                                key,
+                                out referenceNeighbors)
+                            : TryPrepareOptimizedNeighbors(key, chunk);
+                    }
+                    finally
+                    {
+                        renderStateGate.ExitRead();
+                    }
+
                     if (!neighborsReady)
                     {
                         throw new InvalidOperationException(
@@ -378,9 +364,12 @@ namespace MVoxelEngine1.WorldGeneration
                             Stopwatch.GetElapsedTime(buildStart));
                     }
 
-                    activeChunks[key] = chunk;
-                    unbuiltChunks.TryRemove(key, out _);
-                    dirtyChunks.TryRemove(key, out _);
+                    renderStateGate.MoveUnbuiltToActive(
+                        unbuiltChunks,
+                        activeChunks,
+                        dirtyChunks,
+                        key,
+                        chunk);
                 }
                 catch (Exception ex)
                 {
@@ -1088,7 +1077,7 @@ namespace MVoxelEngine1.WorldGeneration
                         TaskContinuationOptions.ExecuteSynchronously,
                         TaskScheduler.Default);
                 }
-                renderStateLock.Dispose();
+                renderStateGate.Dispose();
                 bool generationWorkersStopped =
                     generationWorkers is null ||
                     generationWorkers.All(worker => worker.IsCompleted);
