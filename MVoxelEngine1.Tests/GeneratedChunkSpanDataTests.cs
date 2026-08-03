@@ -103,6 +103,64 @@ namespace MVoxelEngine1.Tests
         }
 
         [Fact]
+        public void OptimizedInternalNeighborsUseRuntimeOpacity()
+        {
+            BlockTextureAtlas atlas = LoadDefaultRuntimeData();
+            const ushort opaqueRuntimeBlock = (ushort)BaseBlockType.Stone;
+            const ushort firstTransparentRuntimeBlock = 256;
+            const ushort secondTransparentRuntimeBlock = 257;
+            var source = new GeneratedChunkSpanData(
+                new[]
+                {
+                    new BlockColumnProfile
+                    {
+                        StoneStart = 0,
+                        StoneEnd = 0,
+                        SoilStart = 1,
+                        SoilEnd = 1,
+                        WaterStart = 2,
+                        WaterEnd = 2
+                    },
+                    new BlockColumnProfile
+                    {
+                        StoneStart = 1,
+                        StoneEnd = 1,
+                        SoilStart = 2,
+                        SoilEnd = 2,
+                        WaterStart = 0,
+                        WaterEnd = 0
+                    }
+                },
+                width: 2,
+                height: 4,
+                depth: 1,
+                chunkBaseY: 0,
+                stoneBlockId: opaqueRuntimeBlock,
+                soilBlockId: firstTransparentRuntimeBlock,
+                waterBlockId: secondTransparentRuntimeBlock);
+
+            ChunkPrerenderData data = CreatePrerenderData(source);
+            ChunkRender.terrainTextureAtlas = atlas;
+            using var pool = new PackedFaceNativePool();
+            using var optimized = new ChunkRender(
+                data,
+                FaceGenerationMode.Optimized,
+                null,
+                null,
+                pool);
+            using var reference = new ChunkRender(
+                data,
+                FaceGenerationMode.Reference,
+                source.GetBlockLocal,
+                new ReferenceNeighborBlockPlanes(),
+                pool);
+
+            Assert.Equal(
+                GetFaceRecords(reference.UploadData),
+                GetFaceRecords(optimized.UploadData));
+        }
+
+        [Fact]
         public void FlatGeneratedSurfaceUsesExactRectangles()
         {
             BlockTextureAtlas atlas = LoadDefaultRuntimeData();

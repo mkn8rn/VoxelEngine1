@@ -31,6 +31,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             int horizontalCellCount = checked(source.Width * source.Depth);
             int[] bottomFaces = ArrayPool<int>.Shared.Rent(horizontalCellCount);
             int[] topFaces = ArrayPool<int>.Shared.Rent(horizontalCellCount);
+            var materials = new GeneratedMaterialRuntime(source);
             var writer = new GeneratedFaceRectangleWriter(
                 source,
                 atlas,
@@ -48,13 +49,12 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                         continue;
                     Array.Fill(bottomFaces, -1, 0, horizontalCellCount);
                     Array.Fill(topFaces, -1, 0, horizontalCellCount);
-                    ushort blockId = GetGeneratedMaterialBlockId(
-                        source,
-                        material);
-                    bool blockOpaque = TerrainLoader.IsOpaque(blockId);
+                    ushort blockId = materials.GetBlockId(material);
+                    bool blockOpaque = materials.IsOpaque(material);
                     writer.SelectMaterial(material, blockOpaque);
                     GenerateGeneratedMaterial(
                         source,
+                        materials,
                         material,
                         blockId,
                         blockOpaque,
@@ -129,6 +129,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
 
         private void GenerateGeneratedMaterial(
             GeneratedChunkSpanData source,
+            in GeneratedMaterialRuntime materials,
             int material,
             ushort blockId,
             bool blockOpaque,
@@ -149,6 +150,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                         out int intervalEnd);
                     GenerateGeneratedIntervalRectangles(
                         source,
+                        materials,
                         column,
                         blockId,
                         blockOpaque,
@@ -162,16 +164,6 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                 }
             }
         }
-
-        private static ushort GetGeneratedMaterialBlockId(
-            GeneratedChunkSpanData source,
-            int material) => material switch
-            {
-                0 => source.StoneBlockId,
-                1 => source.SoilBlockId,
-                2 => source.WaterBlockId,
-                _ => throw new ArgumentOutOfRangeException(nameof(material))
-            };
 
         private static void GetGeneratedMaterialInterval(
             in BlockColumnProfile column,
@@ -200,6 +192,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
 
         private void GenerateGeneratedIntervalRectangles(
             GeneratedChunkSpanData source,
+            in GeneratedMaterialRuntime materials,
             in BlockColumnProfile column,
             ushort blockId,
             bool blockOpaque,
@@ -242,11 +235,16 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             }
             else
             {
-                ushort neighborId = source.GetBlockWorld(column, worldStart - 1);
+                GetGeneratedBlock(
+                    materials,
+                    column,
+                    worldStart - 1,
+                    out ushort neighborId,
+                    out bool neighborOpaque);
                 if (FaceVisible(
                     blockOpaque,
                     blockId,
-                    TerrainLoader.IsOpaque(neighborId),
+                    neighborOpaque,
                     neighborId))
                 {
                     bottomFaces[horizontalIndex] = localStart;
@@ -270,11 +268,16 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             }
             else
             {
-                ushort neighborId = source.GetBlockWorld(column, worldEnd + 1);
+                GetGeneratedBlock(
+                    materials,
+                    column,
+                    worldEnd + 1,
+                    out ushort neighborId,
+                    out bool neighborOpaque);
                 if (FaceVisible(
                     blockOpaque,
                     blockId,
-                    TerrainLoader.IsOpaque(neighborId),
+                    neighborOpaque,
                     neighborId))
                 {
                     topFaces[horizontalIndex] = localEnd;
@@ -300,6 +303,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             {
                 EmitGeneratedColumnRange(
                     source,
+                    materials,
                     source.Columns[(x - 1) * source.Depth + z],
                     blockId,
                     blockOpaque,
@@ -330,6 +334,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             {
                 EmitGeneratedColumnRange(
                     source,
+                    materials,
                     source.Columns[(x + 1) * source.Depth + z],
                     blockId,
                     blockOpaque,
@@ -360,6 +365,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             {
                 EmitGeneratedColumnRange(
                     source,
+                    materials,
                     source.Columns[x * source.Depth + z - 1],
                     blockId,
                     blockOpaque,
@@ -390,6 +396,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             {
                 EmitGeneratedColumnRange(
                     source,
+                    materials,
                     source.Columns[x * source.Depth + z + 1],
                     blockId,
                     blockOpaque,
@@ -466,6 +473,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
 
         private static void EmitGeneratedColumnRange(
             GeneratedChunkSpanData source,
+            in GeneratedMaterialRuntime materials,
             in BlockColumnProfile neighborColumn,
             ushort blockId,
             bool blockOpaque,
@@ -480,16 +488,17 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             while (current <= worldEnd)
             {
                 GetGeneratedNeighborRun(
-                    source,
+                    materials,
                     neighborColumn,
                     current,
                     worldEnd,
                     out ushort neighborId,
+                    out bool neighborOpaque,
                     out int runEnd);
                 if (FaceVisible(
                     blockOpaque,
                     blockId,
-                    TerrainLoader.IsOpaque(neighborId),
+                    neighborOpaque,
                     neighborId))
                 {
                     writer.EmitYRange(
@@ -559,11 +568,12 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
         }
 
         private static void GetGeneratedNeighborRun(
-            GeneratedChunkSpanData source,
+            in GeneratedMaterialRuntime materials,
             in BlockColumnProfile column,
             int worldY,
             int maximumWorldY,
             out ushort blockId,
+            out bool blockOpaque,
             out int runEnd)
         {
             if (column.StoneStart >= 0 &&
@@ -571,7 +581,8 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                 worldY >= column.StoneStart &&
                 worldY <= column.StoneEnd)
             {
-                blockId = source.StoneBlockId;
+                blockId = materials.StoneBlockId;
+                blockOpaque = materials.StoneOpaque;
                 runEnd = Math.Min(column.StoneEnd, maximumWorldY);
                 return;
             }
@@ -580,7 +591,8 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                 worldY >= column.SoilStart &&
                 worldY <= column.SoilEnd)
             {
-                blockId = source.SoilBlockId;
+                blockId = materials.SoilBlockId;
+                blockOpaque = materials.SoilOpaque;
                 runEnd = Math.Min(column.SoilEnd, maximumWorldY);
                 return;
             }
@@ -589,12 +601,14 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                 worldY >= column.WaterStart &&
                 worldY <= column.WaterEnd)
             {
-                blockId = source.WaterBlockId;
+                blockId = materials.WaterBlockId;
+                blockOpaque = materials.WaterOpaque;
                 runEnd = Math.Min(column.WaterEnd, maximumWorldY);
                 return;
             }
 
             blockId = 0;
+            blockOpaque = false;
             runEnd = maximumWorldY;
             if (column.StoneStart >= 0 && column.StoneStart > worldY)
                 runEnd = Math.Min(runEnd, column.StoneStart - 1);
@@ -602,6 +616,46 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                 runEnd = Math.Min(runEnd, column.SoilStart - 1);
             if (column.WaterStart >= 0 && column.WaterStart > worldY)
                 runEnd = Math.Min(runEnd, column.WaterStart - 1);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void GetGeneratedBlock(
+            in GeneratedMaterialRuntime materials,
+            in BlockColumnProfile column,
+            int worldY,
+            out ushort blockId,
+            out bool blockOpaque)
+        {
+            if (column.StoneStart >= 0 &&
+                column.StoneEnd >= column.StoneStart &&
+                worldY >= column.StoneStart &&
+                worldY <= column.StoneEnd)
+            {
+                blockId = materials.StoneBlockId;
+                blockOpaque = materials.StoneOpaque;
+                return;
+            }
+            if (column.SoilStart >= 0 &&
+                column.SoilEnd >= column.SoilStart &&
+                worldY >= column.SoilStart &&
+                worldY <= column.SoilEnd)
+            {
+                blockId = materials.SoilBlockId;
+                blockOpaque = materials.SoilOpaque;
+                return;
+            }
+            if (column.WaterStart >= 0 &&
+                column.WaterEnd >= column.WaterStart &&
+                worldY >= column.WaterStart &&
+                worldY <= column.WaterEnd)
+            {
+                blockId = materials.WaterBlockId;
+                blockOpaque = materials.WaterOpaque;
+                return;
+            }
+
+            blockId = 0;
+            blockOpaque = false;
         }
 
         private static void GetBoundaryNeighbor(
@@ -629,6 +683,49 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             if (neighborOpaque)
                 return false;
             return neighborBlockId == 0 || neighborBlockId != sourceBlockId;
+        }
+
+        private readonly struct GeneratedMaterialRuntime
+        {
+            public GeneratedMaterialRuntime(GeneratedChunkSpanData source)
+            {
+                StoneBlockId = source.StoneBlockId;
+                SoilBlockId = source.SoilBlockId;
+                WaterBlockId = source.WaterBlockId;
+                StoneOpaque = TerrainLoader.IsOpaque(StoneBlockId);
+                SoilOpaque = TerrainLoader.IsOpaque(SoilBlockId);
+                WaterOpaque = TerrainLoader.IsOpaque(WaterBlockId);
+            }
+
+            public ushort StoneBlockId { get; }
+
+            public ushort SoilBlockId { get; }
+
+            public ushort WaterBlockId { get; }
+
+            public bool StoneOpaque { get; }
+
+            public bool SoilOpaque { get; }
+
+            public bool WaterOpaque { get; }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public ushort GetBlockId(int material) => material switch
+            {
+                0 => StoneBlockId,
+                1 => SoilBlockId,
+                2 => WaterBlockId,
+                _ => throw new ArgumentOutOfRangeException(nameof(material))
+            };
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public bool IsOpaque(int material) => material switch
+            {
+                0 => StoneOpaque,
+                1 => SoilOpaque,
+                2 => WaterOpaque,
+                _ => throw new ArgumentOutOfRangeException(nameof(material))
+            };
         }
 
         private struct GeneratedFaceRectangleWriter
