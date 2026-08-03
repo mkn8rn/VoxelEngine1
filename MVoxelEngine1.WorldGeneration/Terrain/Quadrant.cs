@@ -6,11 +6,11 @@ using MVoxelEngine1.Infrastructure.Models.Terrain;
 using MVoxelEngine1.Tools.Noise;
 using OpenTK.Mathematics;
 using System;
-using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
+using Supprocom.NativeAllocationManagement;
 
 namespace MVoxelEngine1.WorldGeneration.Terrain
 {
@@ -60,8 +60,6 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
         // ------------------------------------------------------------
         // Noise instances cached by seed for procedural height generation.
         private static readonly ConcurrentDictionary<long, OpenSimplexNoise> _noiseCache = new();
-        // Heightmap cache keyed by (seed, chunkBaseX, chunkBaseZ). Each heightmap covers one 16x16 chunk footprint.
-        private static readonly ConcurrentDictionary<(long seed, int baseX, int baseZ), float[,]> _heightmapCacheGlobal = new();
 
         // ------------------------------------------------------------
         // Per‑batch storage
@@ -80,18 +78,6 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
         private bool _seedSet;
 
         private readonly ChunkColumnProfile[,] _profiles = new ChunkColumnProfile[QUAD_SIZE, QUAD_SIZE];
-
-        // ------------------------------------------------------------
-        // Cached block-column span arrays and uniform range summaries
-        // ------------------------------------------------------------
-        // Key: (columnCx, columnCz) in chunk coordinates.
-        // Value: array sized (chunkMaxX * chunkMaxZ) of BlockColumnProfile mapping each local (x,z) block column inside the chunk.
-        // Index convention: index = localX * chunkMaxZ + localZ.
-        private readonly ConcurrentDictionary<(int cx, int cz), BlockColumnProfile[]> _columnLocalSpanCache = new();
-
-        // Stores the regionLimit/vertical chunk count used when maps were built so we can detect incompatible requests (legacy: retained, no longer used for sizing).
-        private long _spanCacheRegionLimit = -1; // -1 => uninitialized
-        private int _spanCacheChunkHeight = -1;
 
         // ------------------------------------------------------------
         // Batch state flags
@@ -193,63 +179,149 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             return _noiseCache.GetOrAdd(seed, s => new OpenSimplexNoise(s));
         }
 
-        // Builds a 16x16 heightmap for a chunk footprint (origin at baseX, baseZ) using current world settings.
-        private static float[,] GenerateHeightMap(long seed, int baseX, int baseZ)
+        internal static void FillHeightMap(
+            long seed,
+            int baseX,
+            int baseZ,
+            int sizeX,
+            int sizeZ,
+            Span<float> destination)
         {
-            int maxX = GameManager.settings.chunkMaxX;
-            int maxZ = GameManager.settings.chunkMaxZ;
-            float[,] heightmap = new float[maxX, maxZ];
-            var noise = GetNoise(seed);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(sizeX);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(sizeZ);
+            int valueCount = checked(sizeX * sizeZ);
+            if (destination.Length < valueCount)
+            {
+                throw new ArgumentException(
+                    "The destination is smaller than the height map.",
+                    nameof(destination));
+            }
+
+            OpenSimplexNoise noise = GetNoise(seed);
 
             const float scale = 0.001f;
             const float minHeight = 1f;
             const float maxHeight = 1000f;
 
-            for (int x = 0; x < maxX; x++)
+            for (int x = 0; x < sizeX; x++)
             {
-                for (int z = 0; z < maxZ; z++)
+                int rowOffset = x * sizeZ;
+                int worldX = unchecked(x + baseX);
+                for (int z = 0; z < sizeZ; z++)
                 {
-                    float noiseValue = (float)noise.Evaluate((x + baseX) * scale, (z + baseZ) * scale);
+                    float noiseValue = (float)noise.Evaluate(
+                        worldX * scale,
+                        unchecked(z + baseZ) * scale);
                     float normalizedValue = noiseValue * 0.5f + 0.5f;
-                    heightmap[x, z] = normalizedValue * (maxHeight - minHeight) + minHeight;
+                    destination[rowOffset + z] = normalizedValue *
+                        (maxHeight - minHeight) + minHeight;
                 }
             }
-            return heightmap;
         }
 
-        // Retrieves a cached heightmap or generates and caches if missing.
-        private static float[,] GetOrCreateHeightmap(long seed, int baseWorldX, int baseWorldZ)
-        {
-            return _heightmapCacheGlobal.GetOrAdd((seed, baseWorldX, baseWorldZ), key => GenerateHeightMap(key.seed, key.baseX, key.baseZ));
-        }
-
-        // Ensure per-block column data exists for the specified chunk column (lazy build).
-        private void EnsureBlockColumnsBuilt(int columnCx, int columnCz)
+        private void EnsureBlockColumnsBuilt(
+            int columnCx,
+            int columnCz,
+            scoped in NativeWorkspace<float> generationWorkspace)
         {
             var (lx, lz) = LocalIndices(columnCx, columnCz);
-            ref var profile = ref _profiles[lx, lz];
-            if (profile.BlockColumnsBuilt) return;
-            if (!_seedSet) throw new InvalidOperationException("Seed not set before building block columns.");
-            if (Biome == null) throw new InvalidOperationException("Biome must be set before building block columns.");
+            ref ChunkColumnProfile profile = ref _profiles[lx, lz];
+            if (profile.BlockColumnsBuilt)
+                return;
+            if (!_seedSet)
+                throw new InvalidOperationException(
+                    "Seed not set before building block columns.");
+            Biome biome = Biome ?? throw new InvalidOperationException(
+                "Biome must be set before building block columns.");
 
             int sizeX = GameManager.settings.chunkMaxX;
             int sizeZ = GameManager.settings.chunkMaxZ;
             int profileCount = checked(sizeX * sizeZ);
-            profile.BlockColumns = new BlockColumnProfile[profileCount];
-
-            int baseWorldX = columnCx * sizeX;
-            int baseWorldZ = columnCz * sizeZ;
+            int workspaceLength = checked(profileCount * 2);
+            var blockColumns = new BlockColumnProfile[profileCount];
+            int baseWorldX = unchecked(columnCx * sizeX);
+            int baseWorldZ = unchecked(columnCz * sizeZ);
             bool recordPerformance = StartupPerformanceRecorder.IsRunning;
-            long phaseStart = recordPerformance
-                ? Stopwatch.GetTimestamp()
-                : 0;
-            var hm = GetOrCreateHeightmap(_seed, baseWorldX, baseWorldZ);
+
+            ColumnUniformRanges ranges = generationWorkspace.Process(
+                workspaceLength,
+                values => FillGenerationWorkspace(
+                    values,
+                    profileCount,
+                    baseWorldX,
+                    baseWorldZ,
+                    sizeX,
+                    sizeZ,
+                    _seed,
+                    recordPerformance),
+                values => BuildBlockColumns(
+                    values,
+                    profileCount,
+                    sizeX,
+                    sizeZ,
+                    biome,
+                    blockColumns,
+                    recordPerformance));
+
+            profile.BlockColumns = blockColumns;
+            profile.UniformRanges = ranges;
+            profile.BlockColumnsBuilt = true;
+        }
+
+        private static void FillGenerationWorkspace(
+            Span<float> values,
+            int profileCount,
+            int baseWorldX,
+            int baseWorldZ,
+            int sizeX,
+            int sizeZ,
+            long seed,
+            bool recordPerformance)
+        {
+            Span<float> heights = values.Slice(0, profileCount);
+            Span<float> noiseValues = values.Slice(profileCount, profileCount);
+            long phaseStart = recordPerformance ? Stopwatch.GetTimestamp() : 0;
+            FillHeightMap(
+                seed,
+                baseWorldX,
+                baseWorldZ,
+                sizeX,
+                sizeZ,
+                heights);
             if (recordPerformance)
             {
                 GenerationPerformanceRecorder.RecordHeightMap(
                     GenerationPerformanceRecorder.GetElapsedTicks(phaseStart));
+                phaseStart = Stopwatch.GetTimestamp();
             }
 
+            TerrainGenerationUtils.FillSmoothValueNoise01(
+                baseWorldX,
+                baseWorldZ,
+                sizeX,
+                sizeZ,
+                seed,
+                noiseValues);
+            if (recordPerformance)
+            {
+                GenerationPerformanceRecorder.RecordSmoothValueNoise(
+                    GenerationPerformanceRecorder.GetElapsedTicks(phaseStart));
+            }
+        }
+
+        private static ColumnUniformRanges BuildBlockColumns(
+            ReadOnlySpan<float> values,
+            int profileCount,
+            int sizeX,
+            int sizeZ,
+            Biome biome,
+            BlockColumnProfile[] blockColumns,
+            bool recordPerformance)
+        {
+            ReadOnlySpan<float> heights = values.Slice(0, profileCount);
+            ReadOnlySpan<float> noiseValues = values.Slice(
+                profileCount,
+                profileCount);
             var ranges = new ColumnUniformRanges
             {
                 MinimumMaterialStart = int.MaxValue,
@@ -270,148 +342,115 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                 WaterEndMinimum = int.MaxValue,
                 WaterEndMaximum = int.MinValue
             };
+            long phaseStart = recordPerformance ? Stopwatch.GetTimestamp() : 0;
 
-            if (recordPerformance)
-                phaseStart = Stopwatch.GetTimestamp();
-            float[] noiseValues = ArrayPool<float>.Shared.Rent(profileCount);
-            try
+            for (int x = 0; x < sizeX; x++)
             {
-                TerrainGenerationUtils.FillSmoothValueNoise01(
-                    baseWorldX,
-                    baseWorldZ,
-                    sizeX,
-                    sizeZ,
-                    _seed,
-                    noiseValues.AsSpan(0, profileCount));
-                if (recordPerformance)
+                int rowOffset = x * sizeZ;
+                int previousXOffset = x == 0
+                    ? rowOffset
+                    : rowOffset - sizeZ;
+                int nextXOffset = x == sizeX - 1
+                    ? rowOffset
+                    : rowOffset + sizeZ;
+                for (int z = 0; z < sizeZ; z++)
                 {
-                    GenerationPerformanceRecorder.RecordSmoothValueNoise(
-                        GenerationPerformanceRecorder.GetElapsedTicks(phaseStart));
-                    phaseStart = Stopwatch.GetTimestamp();
-                }
+                    int profileIndex = rowOffset + z;
+                    int previousZ = z == 0 ? 0 : z - 1;
+                    int nextZ = z == sizeZ - 1 ? z : z + 1;
+                    int surface = (int)heights[profileIndex];
+                    float dx = heights[nextXOffset + z] -
+                        heights[previousXOffset + z];
+                    float dz = heights[rowOffset + nextZ] -
+                        heights[rowOffset + previousZ];
+                    float grad = MathF.Sqrt(dx * dx + dz * dz);
+                    float slope01 = MathF.Min(1f, grad / 6f);
 
-                // Build block columns and their exact uniform range summary.
-                for (int x = 0; x < sizeX; x++)
-                {
-                    for (int z = 0; z < sizeZ; z++)
+                    var (stoneStart, stoneEnd, soilStart, soilEnd, waterStart, waterEnd) =
+                        TerrainGenerationUtils.DeriveWorldStoneSoilSpansFromNoise(
+                            surface,
+                            biome,
+                            slope01,
+                            noiseValues[profileIndex]);
+
+                    blockColumns[profileIndex] = new BlockColumnProfile
                     {
-                        int surface = (int)hm[x, z];
+                        StoneStart = stoneStart,
+                        StoneEnd = stoneEnd,
+                        SoilStart = soilStart,
+                        SoilEnd = soilEnd,
+                        WaterStart = waterStart,
+                        WaterEnd = waterEnd
+                    };
 
-                        // Cheap slope at (x,z)
-                        int x0 = Math.Max(x - 1, 0), x1 = Math.Min(x + 1, sizeX - 1);
-                        int z0 = Math.Max(z - 1, 0), z1 = Math.Min(z + 1, sizeZ - 1);
-                        float dx = hm[x1, z] - hm[x0, z];
-                        float dz = hm[x, z1] - hm[x, z0];
-                        float grad = MathF.Sqrt(dx * dx + dz * dz);
-                        float slope01 = MathF.Min(1f, grad / 6f);
-                        int profileIndex = x * sizeZ + z;
+                    bool hasStone = stoneStart >= 0 && stoneEnd >= stoneStart;
+                    bool hasSoil = soilStart >= 0 && soilEnd >= soilStart;
+                    bool hasWater = waterStart >= 0 && waterEnd >= waterStart;
 
-                        var (stoneStart, stoneEnd, soilStart, soilEnd, waterStart, waterEnd) =
-                            TerrainGenerationUtils.DeriveWorldStoneSoilSpansFromNoise(
-                                surface,
-                                Biome,
-                                slope01,
-                                noiseValues[profileIndex]);
+                    if (hasStone)
+                    {
+                        ranges.HasMaterial = true;
+                        if (stoneStart < ranges.MinimumMaterialStart) ranges.MinimumMaterialStart = stoneStart;
+                        if (stoneEnd > ranges.MaximumMaterialEnd) ranges.MaximumMaterialEnd = stoneEnd;
+                        if (stoneStart < ranges.StoneStartMinimum) ranges.StoneStartMinimum = stoneStart;
+                        if (stoneStart > ranges.StoneStartMaximum) ranges.StoneStartMaximum = stoneStart;
+                        if (stoneEnd < ranges.StoneEndMinimum) ranges.StoneEndMinimum = stoneEnd;
+                        if (stoneEnd > ranges.StoneEndMaximum) ranges.StoneEndMaximum = stoneEnd;
+                    }
+                    else
+                    {
+                        ranges.AllColumnsHaveStone = false;
+                    }
 
-                        profile.BlockColumns[profileIndex] = new BlockColumnProfile
-                        {
-                            StoneStart = stoneStart,
-                            StoneEnd = stoneEnd,
-                            SoilStart = soilStart,
-                            SoilEnd = soilEnd,
-                            WaterStart = waterStart,
-                            WaterEnd = waterEnd
-                        };
+                    if (hasSoil)
+                    {
+                        ranges.HasMaterial = true;
+                        if (soilStart < ranges.MinimumMaterialStart) ranges.MinimumMaterialStart = soilStart;
+                        if (soilEnd > ranges.MaximumMaterialEnd) ranges.MaximumMaterialEnd = soilEnd;
+                        if (soilStart < ranges.SoilStartMinimum) ranges.SoilStartMinimum = soilStart;
+                        if (soilStart > ranges.SoilStartMaximum) ranges.SoilStartMaximum = soilStart;
+                        if (soilEnd < ranges.SoilEndMinimum) ranges.SoilEndMinimum = soilEnd;
+                        if (soilEnd > ranges.SoilEndMaximum) ranges.SoilEndMaximum = soilEnd;
+                    }
+                    else
+                    {
+                        ranges.AllColumnsHaveSoil = false;
+                    }
 
-                        bool hasStone = stoneStart >= 0 && stoneEnd >= stoneStart;
-                        bool hasSoil = soilStart >= 0 && soilEnd >= soilStart;
-                        bool hasWater = waterStart >= 0 && waterEnd >= waterStart;
-
-                        if (hasStone)
-                        {
-                            ranges.HasMaterial = true;
-                            if (stoneStart < ranges.MinimumMaterialStart) ranges.MinimumMaterialStart = stoneStart;
-                            if (stoneEnd > ranges.MaximumMaterialEnd) ranges.MaximumMaterialEnd = stoneEnd;
-                            if (stoneStart < ranges.StoneStartMinimum) ranges.StoneStartMinimum = stoneStart;
-                            if (stoneStart > ranges.StoneStartMaximum) ranges.StoneStartMaximum = stoneStart;
-                            if (stoneEnd < ranges.StoneEndMinimum) ranges.StoneEndMinimum = stoneEnd;
-                            if (stoneEnd > ranges.StoneEndMaximum) ranges.StoneEndMaximum = stoneEnd;
-                        }
-                        else
-                        {
-                            ranges.AllColumnsHaveStone = false;
-                        }
-
-                        if (hasSoil)
-                        {
-                            ranges.HasMaterial = true;
-                            if (soilStart < ranges.MinimumMaterialStart) ranges.MinimumMaterialStart = soilStart;
-                            if (soilEnd > ranges.MaximumMaterialEnd) ranges.MaximumMaterialEnd = soilEnd;
-                            if (soilStart < ranges.SoilStartMinimum) ranges.SoilStartMinimum = soilStart;
-                            if (soilStart > ranges.SoilStartMaximum) ranges.SoilStartMaximum = soilStart;
-                            if (soilEnd < ranges.SoilEndMinimum) ranges.SoilEndMinimum = soilEnd;
-                            if (soilEnd > ranges.SoilEndMaximum) ranges.SoilEndMaximum = soilEnd;
-                        }
-                        else
-                        {
-                            ranges.AllColumnsHaveSoil = false;
-                        }
-
-                        if (hasWater)
-                        {
-                            ranges.HasMaterial = true;
-                            if (waterStart < ranges.MinimumMaterialStart) ranges.MinimumMaterialStart = waterStart;
-                            if (waterEnd > ranges.MaximumMaterialEnd) ranges.MaximumMaterialEnd = waterEnd;
-                            if (waterStart < ranges.WaterStartMinimum) ranges.WaterStartMinimum = waterStart;
-                            if (waterStart > ranges.WaterStartMaximum) ranges.WaterStartMaximum = waterStart;
-                            if (waterEnd < ranges.WaterEndMinimum) ranges.WaterEndMinimum = waterEnd;
-                            if (waterEnd > ranges.WaterEndMaximum) ranges.WaterEndMaximum = waterEnd;
-                        }
-                        else
-                        {
-                            ranges.AllColumnsHaveWater = false;
-                        }
+                    if (hasWater)
+                    {
+                        ranges.HasMaterial = true;
+                        if (waterStart < ranges.MinimumMaterialStart) ranges.MinimumMaterialStart = waterStart;
+                        if (waterEnd > ranges.MaximumMaterialEnd) ranges.MaximumMaterialEnd = waterEnd;
+                        if (waterStart < ranges.WaterStartMinimum) ranges.WaterStartMinimum = waterStart;
+                        if (waterStart > ranges.WaterStartMaximum) ranges.WaterStartMaximum = waterStart;
+                        if (waterEnd < ranges.WaterEndMinimum) ranges.WaterEndMinimum = waterEnd;
+                        if (waterEnd > ranges.WaterEndMaximum) ranges.WaterEndMaximum = waterEnd;
+                    }
+                    else
+                    {
+                        ranges.AllColumnsHaveWater = false;
                     }
                 }
-                if (recordPerformance)
-                {
-                    GenerationPerformanceRecorder.RecordProfileDerivation(
-                        GenerationPerformanceRecorder.GetElapsedTicks(phaseStart));
-                }
-            }
-            finally
-            {
-                ArrayPool<float>.Shared.Return(noiseValues);
             }
 
-            profile.UniformRanges = ranges;
-            profile.BlockColumnsBuilt = true;
+            if (recordPerformance)
+            {
+                GenerationPerformanceRecorder.RecordProfileDerivation(
+                    GenerationPerformanceRecorder.GetElapsedTicks(phaseStart));
+            }
+            return ranges;
         }
 
-        // ------------------------------------------------------------
-        // Build / retrieve per-column block column span arrays
-        // ------------------------------------------------------------
-        private BlockColumnProfile[] GetOrBuildColumnSpanMap(int columnCx, int columnCz, int chunkSizeY, long regionLimit)
+        private BlockColumnProfile[] GetChunkBlockMap(
+            int columnCx,
+            int columnCz,
+            scoped in NativeWorkspace<float> generationWorkspace)
         {
-            // clear cache if parameters change
-            if (_spanCacheRegionLimit >= 0 && (_spanCacheRegionLimit != regionLimit || _spanCacheChunkHeight != chunkSizeY))
-            {
-                _columnLocalSpanCache.Clear();
-                _spanCacheRegionLimit = -1;
-            }
-            if (_spanCacheRegionLimit < 0)
-            {
-                _spanCacheRegionLimit = regionLimit;
-                _spanCacheChunkHeight = chunkSizeY;
-            }
-
-            return _columnLocalSpanCache.GetOrAdd((columnCx, columnCz), key => GetChunkBlockMap(key.cx, key.cz, chunkSizeY, regionLimit));
-        }
-
-        private BlockColumnProfile[] GetChunkBlockMap(int columnCx, int columnCz, int chunkSizeY, long regionLimit)
-        {
-            // Returns the exact per-block column world spans stored in the profile (reference to underlying array).
-            EnsureBlockColumnsBuilt(columnCx, columnCz);
+            EnsureBlockColumnsBuilt(
+                columnCx,
+                columnCz,
+                in generationWorkspace);
             var (lx, lz) = LocalIndices(columnCx, columnCz);
             ref readonly ChunkColumnProfile profile = ref _profiles[lx, lz];
             return profile.BlockColumns;
@@ -486,6 +525,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             int sizeX,
             int sizeY,
             int sizeZ,
+            scoped in NativeWorkspace<float> generationWorkspace,
             ChunkRegistrar registrar)
         {
             if (Math.Abs(cx - playerCx) > lodDist + 1 || Math.Abs(cz - playerCz) > lodDist + 1)
@@ -514,11 +554,10 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             int columnBaseX = cx * sizeX;
             int columnBaseZ = cz * sizeZ;
             long phaseStart = recordPerformance ? Stopwatch.GetTimestamp() : 0;
-            BlockColumnProfile[] spanMap = GetOrBuildColumnSpanMap(
+            BlockColumnProfile[] spanMap = GetChunkBlockMap(
                 cx,
                 cz,
-                sizeY,
-                regionLimit);
+                in generationWorkspace);
             if (recordPerformance)
                 spanMapTicks += GenerationPerformanceRecorder.GetElapsedTicks(phaseStart);
 
