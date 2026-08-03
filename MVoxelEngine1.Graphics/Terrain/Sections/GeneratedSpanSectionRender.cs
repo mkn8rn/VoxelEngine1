@@ -437,18 +437,13 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                         ref source.Columns[leftBase + z];
                     ref readonly BlockColumnProfile right =
                         ref source.Columns[rightBase + z];
-                    EmitContiguousColumnSide(
+                    EmitContiguousColumnPair(
                         source,
                         left,
                         right,
                         1,
                         x,
                         z,
-                        ref writer);
-                    EmitContiguousColumnSide(
-                        source,
-                        right,
-                        left,
                         0,
                         x + 1,
                         z,
@@ -465,18 +460,13 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                         ref source.Columns[columnBase + z];
                     ref readonly BlockColumnProfile positive =
                         ref source.Columns[columnBase + z + 1];
-                    EmitContiguousColumnSide(
+                    EmitContiguousColumnPair(
                         source,
                         negative,
                         positive,
                         5,
                         x,
                         z,
-                        ref writer);
-                    EmitContiguousColumnSide(
-                        source,
-                        positive,
-                        negative,
                         4,
                         x,
                         z + 1,
@@ -486,71 +476,140 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void EmitContiguousColumnSide(
+        private static void EmitContiguousColumnPair(
             GeneratedChunkSpanData source,
-            in BlockColumnProfile sourceColumn,
-            in BlockColumnProfile neighborColumn,
-            byte direction,
-            int x,
-            int z,
+            in BlockColumnProfile firstColumn,
+            in BlockColumnProfile secondColumn,
+            byte firstDirection,
+            int firstX,
+            int firstZ,
+            byte secondDirection,
+            int secondX,
+            int secondZ,
             ref GeneratedFaceRectangleWriter writer)
         {
             int chunkStart = source.ChunkBaseY;
             int chunkEnd = chunkStart + source.Height - 1;
-            if ((source.MaterialMask & 0b011) != 0 &&
-                TryGetGroundRange(sourceColumn, out int groundStart, out int groundEnd))
+            bool firstHasGround = TryGetGroundRange(
+                firstColumn,
+                out int firstGroundStart,
+                out int firstGroundEnd);
+            bool secondHasGround = TryGetGroundRange(
+                secondColumn,
+                out int secondGroundStart,
+                out int secondGroundEnd);
+
+            if ((source.MaterialMask & 0b011) != 0)
             {
-                groundStart = Math.Max(groundStart, chunkStart);
-                groundEnd = Math.Min(groundEnd, chunkEnd);
-                if (groundStart <= groundEnd)
+                if (firstHasGround)
                 {
-                    bool neighborHasGround = TryGetGroundRange(
-                        neighborColumn,
-                        out int neighborStart,
-                        out int neighborEnd);
-                    EmitGroundDifference(
+                    int firstStart = Math.Max(firstGroundStart, chunkStart);
+                    int firstEnd = Math.Min(firstGroundEnd, chunkEnd);
+                    if (firstStart <= firstEnd)
+                    {
+                        EmitGroundDifference(
+                            source,
+                            firstColumn,
+                            firstStart,
+                            firstEnd,
+                            secondHasGround,
+                            secondGroundStart,
+                            secondGroundEnd,
+                            firstDirection,
+                            firstX,
+                            firstZ,
+                            ref writer);
+                    }
+                }
+
+                if (secondHasGround)
+                {
+                    int secondStart = Math.Max(secondGroundStart, chunkStart);
+                    int secondEnd = Math.Min(secondGroundEnd, chunkEnd);
+                    if (secondStart <= secondEnd)
+                    {
+                        EmitGroundDifference(
+                            source,
+                            secondColumn,
+                            secondStart,
+                            secondEnd,
+                            firstHasGround,
+                            firstGroundStart,
+                            firstGroundEnd,
+                            secondDirection,
+                            secondX,
+                            secondZ,
+                            ref writer);
+                    }
+                }
+            }
+
+            if ((source.MaterialMask & 0b100) == 0)
+                return;
+
+            bool firstHasWater = firstColumn.WaterStart >= 0 &&
+                firstColumn.WaterEnd >= firstColumn.WaterStart;
+            bool secondHasWater = secondColumn.WaterStart >= 0 &&
+                secondColumn.WaterEnd >= secondColumn.WaterStart;
+            bool firstOccupied = firstHasGround || firstHasWater;
+            bool secondOccupied = secondHasGround || secondHasWater;
+            int firstOccupiedStart = firstHasGround
+                ? firstGroundStart
+                : firstColumn.WaterStart;
+            int firstOccupiedEnd = firstHasWater
+                ? firstColumn.WaterEnd
+                : firstGroundEnd;
+            int secondOccupiedStart = secondHasGround
+                ? secondGroundStart
+                : secondColumn.WaterStart;
+            int secondOccupiedEnd = secondHasWater
+                ? secondColumn.WaterEnd
+                : secondGroundEnd;
+
+            if (firstHasWater)
+            {
+                int firstStart = Math.Max(firstColumn.WaterStart, chunkStart);
+                int firstEnd = Math.Min(firstColumn.WaterEnd, chunkEnd);
+                if (firstStart <= firstEnd)
+                {
+                    EmitMaterialDifference(
+                        firstStart,
+                        firstEnd,
+                        secondOccupied,
+                        secondOccupiedStart,
+                        secondOccupiedEnd,
+                        2,
+                        false,
                         source,
-                        sourceColumn,
-                        groundStart,
-                        groundEnd,
-                        neighborHasGround,
-                        neighborStart,
-                        neighborEnd,
-                        direction,
-                        x,
-                        z,
+                        firstDirection,
+                        firstX,
+                        firstZ,
                         ref writer);
                 }
             }
 
-            if ((source.MaterialMask & 0b100) == 0 ||
-                sourceColumn.WaterStart < 0 ||
-                sourceColumn.WaterEnd < sourceColumn.WaterStart)
+            if (!secondHasWater)
+                return;
+            int secondWaterStart = Math.Max(
+                secondColumn.WaterStart,
+                chunkStart);
+            int secondWaterEnd = Math.Min(secondColumn.WaterEnd, chunkEnd);
+            if (secondWaterStart <= secondWaterEnd)
             {
-                return;
+                EmitMaterialDifference(
+                    secondWaterStart,
+                    secondWaterEnd,
+                    firstOccupied,
+                    firstOccupiedStart,
+                    firstOccupiedEnd,
+                    2,
+                    false,
+                    source,
+                    secondDirection,
+                    secondX,
+                    secondZ,
+                    ref writer);
             }
-
-            int waterStart = Math.Max(sourceColumn.WaterStart, chunkStart);
-            int waterEnd = Math.Min(sourceColumn.WaterEnd, chunkEnd);
-            if (waterStart > waterEnd)
-                return;
-            bool neighborOccupied = TryGetOccupiedRange(
-                neighborColumn,
-                out int occupiedStart,
-                out int occupiedEnd);
-            EmitMaterialDifference(
-                waterStart,
-                waterEnd,
-                neighborOccupied,
-                occupiedStart,
-                occupiedEnd,
-                2,
-                false,
-                source,
-                direction,
-                x,
-                z,
-                ref writer);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -572,23 +631,6 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
 
             start = hasStone ? column.StoneStart : column.SoilStart;
             end = hasSoil ? column.SoilEnd : column.StoneEnd;
-            return true;
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool TryGetOccupiedRange(
-            in BlockColumnProfile column,
-            out int start,
-            out int end)
-        {
-            bool hasGround = TryGetGroundRange(column, out start, out end);
-            bool hasWater = column.WaterStart >= 0 &&
-                column.WaterEnd >= column.WaterStart;
-            if (!hasWater)
-                return hasGround;
-            if (!hasGround)
-                start = column.WaterStart;
-            end = column.WaterEnd;
             return true;
         }
 
