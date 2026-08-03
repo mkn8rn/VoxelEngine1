@@ -23,7 +23,8 @@ namespace MVoxelEngine1.Infrastructure.Models.Generation
             ushort stoneBlockId,
             ushort soilBlockId,
             ushort waterBlockId,
-            byte materialMask = 0b111)
+            byte materialMask = 0b111,
+            bool orderedContiguousSpans = false)
         {
             ArgumentNullException.ThrowIfNull(columns);
             if (width <= 0 || height <= 0 || depth <= 0)
@@ -42,6 +43,7 @@ namespace MVoxelEngine1.Infrastructure.Models.Generation
             SoilBlockId = soilBlockId;
             WaterBlockId = waterBlockId;
             MaterialMask = materialMask;
+            OrderedContiguousSpans = orderedContiguousSpans;
         }
 
         public BlockColumnProfile[] Columns { get; }
@@ -61,6 +63,8 @@ namespace MVoxelEngine1.Infrastructure.Models.Generation
         public ushort WaterBlockId { get; }
 
         public byte MaterialMask { get; }
+
+        public bool OrderedContiguousSpans { get; }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public ushort GetBlockLocal(int x, int y, int z)

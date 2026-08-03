@@ -172,7 +172,8 @@ namespace MVoxelEngine1.Tests
                 chunkBaseY: 0,
                 stoneBlockId: (ushort)BaseBlockType.Stone,
                 soilBlockId: (ushort)BaseBlockType.Soil,
-                waterBlockId: (ushort)BaseBlockType.Water);
+                waterBlockId: (ushort)BaseBlockType.Water,
+                orderedContiguousSpans: true);
             ChunkPrerenderData data = CreatePrerenderData(source);
             ChunkRender.terrainTextureAtlas = atlas;
             using var pool = new PackedFaceNativePool();

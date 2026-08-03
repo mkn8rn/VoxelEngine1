@@ -36,6 +36,9 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                 source,
                 atlas,
                 stagingWorkspace);
+            bool directInteriorSides =
+                source.OrderedContiguousSpans &&
+                materials.SupportsContiguousTerrainFastPath;
             long preparationTicks = recordPerformance
                 ? MeshPerformanceRecorder.GetElapsedTicks(phaseStart)
                 : 0;
@@ -43,6 +46,13 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             phaseStart = recordPerformance ? Stopwatch.GetTimestamp() : 0;
             try
             {
+                if (directInteriorSides)
+                {
+                    EmitContiguousInteriorSideRectangles(
+                        source,
+                        ref writer);
+                }
+
                 for (int material = 0; material < 3; material++)
                 {
                     if ((source.MaterialMask & (1 << material)) == 0)
@@ -58,6 +68,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                         material,
                         blockId,
                         blockOpaque,
+                        !directInteriorSides,
                         bottomFaces,
                         topFaces,
                         ref writer);
@@ -133,6 +144,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             int material,
             ushort blockId,
             bool blockOpaque,
+            bool emitInteriorSides,
             int[] bottomFaces,
             int[] topFaces,
             ref GeneratedFaceRectangleWriter writer)
@@ -154,6 +166,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                         column,
                         blockId,
                         blockOpaque,
+                        emitInteriorSides,
                         intervalStart,
                         intervalEnd,
                         x,
@@ -196,6 +209,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             in BlockColumnProfile column,
             ushort blockId,
             bool blockOpaque,
+            bool emitInteriorSides,
             int intervalStart,
             int intervalEnd,
             int x,
@@ -299,7 +313,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     z * source.Height,
                     ref writer);
             }
-            else
+            else if (emitInteriorSides)
             {
                 EmitGeneratedColumnRange(
                     source,
@@ -330,7 +344,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     z * source.Height,
                     ref writer);
             }
-            else
+            else if (emitInteriorSides)
             {
                 EmitGeneratedColumnRange(
                     source,
@@ -361,7 +375,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     x * source.Height,
                     ref writer);
             }
-            else
+            else if (emitInteriorSides)
             {
                 EmitGeneratedColumnRange(
                     source,
@@ -392,7 +406,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     x * source.Height,
                     ref writer);
             }
-            else
+            else if (emitInteriorSides)
             {
                 EmitGeneratedColumnRange(
                     source,
@@ -406,6 +420,330 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     worldStart,
                     worldEnd,
                     ref writer);
+            }
+        }
+
+        private static void EmitContiguousInteriorSideRectangles(
+            GeneratedChunkSpanData source,
+            ref GeneratedFaceRectangleWriter writer)
+        {
+            for (int x = 0; x < source.Width - 1; x++)
+            {
+                int leftBase = x * source.Depth;
+                int rightBase = leftBase + source.Depth;
+                for (int z = 0; z < source.Depth; z++)
+                {
+                    ref readonly BlockColumnProfile left =
+                        ref source.Columns[leftBase + z];
+                    ref readonly BlockColumnProfile right =
+                        ref source.Columns[rightBase + z];
+                    EmitContiguousColumnSide(
+                        source,
+                        left,
+                        right,
+                        1,
+                        x,
+                        z,
+                        ref writer);
+                    EmitContiguousColumnSide(
+                        source,
+                        right,
+                        left,
+                        0,
+                        x + 1,
+                        z,
+                        ref writer);
+                }
+            }
+
+            for (int x = 0; x < source.Width; x++)
+            {
+                int columnBase = x * source.Depth;
+                for (int z = 0; z < source.Depth - 1; z++)
+                {
+                    ref readonly BlockColumnProfile negative =
+                        ref source.Columns[columnBase + z];
+                    ref readonly BlockColumnProfile positive =
+                        ref source.Columns[columnBase + z + 1];
+                    EmitContiguousColumnSide(
+                        source,
+                        negative,
+                        positive,
+                        5,
+                        x,
+                        z,
+                        ref writer);
+                    EmitContiguousColumnSide(
+                        source,
+                        positive,
+                        negative,
+                        4,
+                        x,
+                        z + 1,
+                        ref writer);
+                }
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void EmitContiguousColumnSide(
+            GeneratedChunkSpanData source,
+            in BlockColumnProfile sourceColumn,
+            in BlockColumnProfile neighborColumn,
+            byte direction,
+            int x,
+            int z,
+            ref GeneratedFaceRectangleWriter writer)
+        {
+            int chunkStart = source.ChunkBaseY;
+            int chunkEnd = chunkStart + source.Height - 1;
+            if ((source.MaterialMask & 0b011) != 0 &&
+                TryGetGroundRange(sourceColumn, out int groundStart, out int groundEnd))
+            {
+                groundStart = Math.Max(groundStart, chunkStart);
+                groundEnd = Math.Min(groundEnd, chunkEnd);
+                if (groundStart <= groundEnd)
+                {
+                    bool neighborHasGround = TryGetGroundRange(
+                        neighborColumn,
+                        out int neighborStart,
+                        out int neighborEnd);
+                    EmitGroundDifference(
+                        source,
+                        sourceColumn,
+                        groundStart,
+                        groundEnd,
+                        neighborHasGround,
+                        neighborStart,
+                        neighborEnd,
+                        direction,
+                        x,
+                        z,
+                        ref writer);
+                }
+            }
+
+            if ((source.MaterialMask & 0b100) == 0 ||
+                sourceColumn.WaterStart < 0 ||
+                sourceColumn.WaterEnd < sourceColumn.WaterStart)
+            {
+                return;
+            }
+
+            int waterStart = Math.Max(sourceColumn.WaterStart, chunkStart);
+            int waterEnd = Math.Min(sourceColumn.WaterEnd, chunkEnd);
+            if (waterStart > waterEnd)
+                return;
+            bool neighborOccupied = TryGetOccupiedRange(
+                neighborColumn,
+                out int occupiedStart,
+                out int occupiedEnd);
+            EmitMaterialDifference(
+                waterStart,
+                waterEnd,
+                neighborOccupied,
+                occupiedStart,
+                occupiedEnd,
+                2,
+                false,
+                source,
+                direction,
+                x,
+                z,
+                ref writer);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool TryGetGroundRange(
+            in BlockColumnProfile column,
+            out int start,
+            out int end)
+        {
+            bool hasStone = column.StoneStart >= 0 &&
+                column.StoneEnd >= column.StoneStart;
+            bool hasSoil = column.SoilStart >= 0 &&
+                column.SoilEnd >= column.SoilStart;
+            if (!hasStone && !hasSoil)
+            {
+                start = 0;
+                end = -1;
+                return false;
+            }
+
+            start = hasStone ? column.StoneStart : column.SoilStart;
+            end = hasSoil ? column.SoilEnd : column.StoneEnd;
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool TryGetOccupiedRange(
+            in BlockColumnProfile column,
+            out int start,
+            out int end)
+        {
+            bool hasGround = TryGetGroundRange(column, out start, out end);
+            bool hasWater = column.WaterStart >= 0 &&
+                column.WaterEnd >= column.WaterStart;
+            if (!hasWater)
+                return hasGround;
+            if (!hasGround)
+                start = column.WaterStart;
+            end = column.WaterEnd;
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void EmitGroundDifference(
+            GeneratedChunkSpanData source,
+            in BlockColumnProfile sourceColumn,
+            int sourceStart,
+            int sourceEnd,
+            bool neighborPresent,
+            int neighborStart,
+            int neighborEnd,
+            byte direction,
+            int x,
+            int z,
+            ref GeneratedFaceRectangleWriter writer)
+        {
+            if (!neighborPresent ||
+                neighborEnd < sourceStart ||
+                neighborStart > sourceEnd)
+            {
+                EmitGroundSegment(
+                    source,
+                    sourceColumn,
+                    sourceStart,
+                    sourceEnd,
+                    direction,
+                    x,
+                    z,
+                    ref writer);
+                return;
+            }
+
+            if (sourceStart < neighborStart)
+            {
+                EmitGroundSegment(
+                    source,
+                    sourceColumn,
+                    sourceStart,
+                    neighborStart - 1,
+                    direction,
+                    x,
+                    z,
+                    ref writer);
+            }
+            if (sourceEnd > neighborEnd)
+            {
+                EmitGroundSegment(
+                    source,
+                    sourceColumn,
+                    neighborEnd + 1,
+                    sourceEnd,
+                    direction,
+                    x,
+                    z,
+                    ref writer);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void EmitGroundSegment(
+            GeneratedChunkSpanData source,
+            in BlockColumnProfile column,
+            int segmentStart,
+            int segmentEnd,
+            byte direction,
+            int x,
+            int z,
+            ref GeneratedFaceRectangleWriter writer)
+        {
+            if ((source.MaterialMask & 0b001) != 0)
+            {
+                int start = Math.Max(segmentStart, column.StoneStart);
+                int end = Math.Min(segmentEnd, column.StoneEnd);
+                if (start <= end)
+                {
+                    writer.EmitMaterialYRange(
+                        0,
+                        true,
+                        direction,
+                        x,
+                        start - source.ChunkBaseY,
+                        end - source.ChunkBaseY,
+                        z);
+                }
+            }
+
+            if ((source.MaterialMask & 0b010) == 0)
+                return;
+            int soilStart = Math.Max(segmentStart, column.SoilStart);
+            int soilEnd = Math.Min(segmentEnd, column.SoilEnd);
+            if (soilStart <= soilEnd)
+            {
+                writer.EmitMaterialYRange(
+                    1,
+                    true,
+                    direction,
+                    x,
+                    soilStart - source.ChunkBaseY,
+                    soilEnd - source.ChunkBaseY,
+                    z);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void EmitMaterialDifference(
+            int sourceStart,
+            int sourceEnd,
+            bool neighborPresent,
+            int neighborStart,
+            int neighborEnd,
+            int material,
+            bool opaque,
+            GeneratedChunkSpanData source,
+            byte direction,
+            int x,
+            int z,
+            ref GeneratedFaceRectangleWriter writer)
+        {
+            if (!neighborPresent ||
+                neighborEnd < sourceStart ||
+                neighborStart > sourceEnd)
+            {
+                writer.EmitMaterialYRange(
+                    material,
+                    opaque,
+                    direction,
+                    x,
+                    sourceStart - source.ChunkBaseY,
+                    sourceEnd - source.ChunkBaseY,
+                    z);
+                return;
+            }
+
+            if (sourceStart < neighborStart)
+            {
+                writer.EmitMaterialYRange(
+                    material,
+                    opaque,
+                    direction,
+                    x,
+                    sourceStart - source.ChunkBaseY,
+                    neighborStart - source.ChunkBaseY - 1,
+                    z);
+            }
+            if (sourceEnd > neighborEnd)
+            {
+                writer.EmitMaterialYRange(
+                    material,
+                    opaque,
+                    direction,
+                    x,
+                    neighborEnd - source.ChunkBaseY + 1,
+                    sourceEnd - source.ChunkBaseY,
+                    z);
             }
         }
 
@@ -709,6 +1047,14 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
 
             public bool WaterOpaque { get; }
 
+            public bool SupportsContiguousTerrainFastPath =>
+                StoneBlockId != 0 &&
+                SoilBlockId != 0 &&
+                WaterBlockId != 0 &&
+                StoneOpaque &&
+                SoilOpaque &&
+                !WaterOpaque;
+
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public ushort GetBlockId(int material) => material switch
             {
@@ -780,6 +1126,46 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             public ReadOnlySpan<uint> TransparentWords =>
                 transparentWords.AsSpan(0, transparentWordCount);
 
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public void EmitMaterialYRange(
+                int material,
+                bool opaque,
+                byte direction,
+                int x,
+                int startY,
+                int endY,
+                int z)
+            {
+                uint position = (uint)x |
+                    ((uint)startY << 8) |
+                    ((uint)z << 16) |
+                    ((uint)direction << 24);
+                uint attributes =
+                    ((uint)(endY - startY) << 8) |
+                    faceTileAttributes[material * 6 + direction];
+                int faceCount = endY - startY + 1;
+                if (opaque)
+                {
+                    AppendMaterialRectangle(
+                        ref opaqueWords,
+                        ref opaqueWordCount,
+                        ref opaqueFaceCount,
+                        position,
+                        attributes,
+                        faceCount);
+                }
+                else
+                {
+                    AppendMaterialRectangle(
+                        ref transparentWords,
+                        ref transparentWordCount,
+                        ref transparentFaceCount,
+                        position,
+                        attributes,
+                        faceCount);
+                }
+            }
+
             public void SelectMaterial(int material, bool opaque)
             {
                 if ((uint)material >= 3)
@@ -849,6 +1235,30 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             {
                 CommitCurrentMaterial();
                 stagingWorkspace.Adopt(opaqueWords, transparentWords);
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            private static void AppendMaterialRectangle(
+                ref uint[] words,
+                ref int wordCount,
+                ref int totalFaceCount,
+                uint position,
+                uint attributes,
+                int faceCount)
+            {
+                int required = wordCount + 2;
+                if (required > words.Length)
+                {
+                    int nextLength = Math.Max(
+                        required,
+                        checked(words.Length * 2));
+                    Array.Resize(ref words, nextLength);
+                }
+
+                words[wordCount] = position;
+                words[wordCount + 1] = attributes;
+                wordCount = required;
+                totalFaceCount += faceCount;
             }
 
             private void CommitCurrentMaterial()

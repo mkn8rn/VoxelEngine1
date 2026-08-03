@@ -266,7 +266,8 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                 (ushort)BaseBlockType.Stone,
                 (ushort)BaseBlockType.Soil,
                 (ushort)BaseBlockType.Water,
-                generatedMaterialMask);
+                generatedMaterialMask,
+                orderedContiguousSpans: true);
             BuildAllBoundaryPlanesInitial();
             if (generationStart != 0)
                 GenerationPerformanceRecorder.RecordNonUniformGeneration(
