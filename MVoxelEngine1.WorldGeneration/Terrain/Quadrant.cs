@@ -3,7 +3,7 @@ using MVoxelEngine1.Infrastructure.Models.Generation.Biomes;
 using MVoxelEngine1.Infrastructure.Models.Generation;
 using MVoxelEngine1.Infrastructure.Diagnostics;
 using MVoxelEngine1.Infrastructure.Models.Terrain;
-using MVoxelEngine1.Tools.Noise;
+using Supprocom.OpenSimplexNoise;
 using OpenTK.Mathematics;
 using System;
 using System.Collections.Concurrent;

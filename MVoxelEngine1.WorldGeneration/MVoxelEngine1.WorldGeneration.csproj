@@ -8,8 +8,11 @@
   </PropertyGroup>
 
 	<ItemGroup>
+		<PackageReference Include="Supprocom.OpenSimplexNoise" Version="0.1.0" />
+	</ItemGroup>
+
+	<ItemGroup>
 		<ProjectReference Include="..\MVoxelEngine1.Graphics\MVoxelEngine1.Graphics.csproj" />
 		<ProjectReference Include="..\MVoxelEngine1.Infrastructure\MVoxelEngine1.Infrastructure.csproj" />
-		<ProjectReference Include="..\MVoxelEngine1.Tools\MVoxelEngine1.Tools.csproj" />
 	</ItemGroup>
 </Project>
