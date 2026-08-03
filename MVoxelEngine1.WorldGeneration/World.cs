@@ -160,6 +160,7 @@ namespace MVoxelEngine1.WorldGeneration
                 int finalMesh = (int)(FlagManager.flags.meshRenderWorkersPerCore.Value * proc);
 
                 // 1. Initial world generation workers
+                StartupPerformanceRecorder.BeginInitialGeneration();
                 StartGenerationWorkers(initialGen);
                 EnqueueInitialChunkPositions();
                 EnqueueInitialBufferChunkPositions();
@@ -257,7 +258,6 @@ namespace MVoxelEngine1.WorldGeneration
         private void WaitForInitialChunkGeneration()
         {
             Console.WriteLine("[World] Waiting for initial chunk + buffer generation...");
-            StartupPerformanceRecorder.BeginInitialGeneration();
 
             initialGenerationCompletion.WaitUntilComplete(
                 IsInitialGenerationComplete);
