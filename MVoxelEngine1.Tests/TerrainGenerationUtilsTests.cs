@@ -2,9 +2,9 @@ using System.Buffers;
 using System.Diagnostics;
 using System.Text.Json;
 using MVoxelEngine1.Infrastructure.Models.Generation.Biomes;
-using MVoxelEngine1.Tools.Noise;
 using MVoxelEngine1.WorldGeneration.Terrain;
 using Supprocom.NativeAllocationManagement;
+using Supprocom.OpenSimplexNoise;
 
 namespace MVoxelEngine1.Tests
 {

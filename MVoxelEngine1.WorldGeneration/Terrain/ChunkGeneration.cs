@@ -2,7 +2,6 @@
 using MVoxelEngine1.Infrastructure.Models.Terrain;
 using MVoxelEngine1.Infrastructure.Models.Generation;
 using MVoxelEngine1.Infrastructure.Managers;
-using MVoxelEngine1.Tools.Noise;
 using MVoxelEngine1.WorldGeneration.Utils;
 using MVoxelEngine1.Infrastructure.Models.Generation;
 using MVoxelEngine1.Infrastructure.Loaders;

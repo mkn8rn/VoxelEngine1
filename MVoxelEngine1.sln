@@ -12,12 +12,9 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MVoxelEngine1.Infrastructur
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MVoxelEngine1.Graphics", "MVoxelEngine1.Graphics\MVoxelEngine1.Graphics.csproj", "{B8FBAF69-FB52-4C3D-A149-2AED36543274}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MVoxelEngine1.Tools", "MVoxelEngine1.Tools\MVoxelEngine1.Tools.csproj", "{D17340C6-0D89-42EA-B8EA-8599BC87C26C}"
-EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MVoxelEngine1.WorldGeneration", "MVoxelEngine1.WorldGeneration\MVoxelEngine1.WorldGeneration.csproj", "{7D0E10CF-91BC-479D-A628-1C46ACE90B79}"
 	ProjectSection(ProjectDependencies) = postProject
 		{3BCEFBF2-4B39-47F1-B1FD-6E38D9A46C02} = {3BCEFBF2-4B39-47F1-B1FD-6E38D9A46C02}
-		{D17340C6-0D89-42EA-B8EA-8599BC87C26C} = {D17340C6-0D89-42EA-B8EA-8599BC87C26C}
 	EndProjectSection
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MVoxelEngine1.Tests", "MVoxelEngine1.Tests\MVoxelEngine1.Tests.csproj", "{B44F8CA4-1EAC-445C-BB46-D08FE70FBBFF}"
@@ -40,10 +37,6 @@ Global
 		{B8FBAF69-FB52-4C3D-A149-2AED36543274}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{B8FBAF69-FB52-4C3D-A149-2AED36543274}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{B8FBAF69-FB52-4C3D-A149-2AED36543274}.Release|Any CPU.Build.0 = Release|Any CPU
-		{D17340C6-0D89-42EA-B8EA-8599BC87C26C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{D17340C6-0D89-42EA-B8EA-8599BC87C26C}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{D17340C6-0D89-42EA-B8EA-8599BC87C26C}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{D17340C6-0D89-42EA-B8EA-8599BC87C26C}.Release|Any CPU.Build.0 = Release|Any CPU
 		{7D0E10CF-91BC-479D-A628-1C46ACE90B79}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{7D0E10CF-91BC-479D-A628-1C46ACE90B79}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{7D0E10CF-91BC-479D-A628-1C46ACE90B79}.Release|Any CPU.ActiveCfg = Release|Any CPU
