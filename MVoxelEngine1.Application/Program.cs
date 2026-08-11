@@ -80,7 +80,7 @@ namespace MVoxelEngine1.Application
                     openGlCallsAllowed: true);
             }
 
-            using (Window game = new Window())
+            using (Window game = Window.Create())
             {
                 game.Run();
             }

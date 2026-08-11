@@ -47,10 +47,14 @@ namespace MVoxelEngine1.Application
         int windowHeight;
         bool benchmarkWritten;
 
-        public Window() : base(GameWindowSettings.Default, NativeWindowSettings.Default)
+        public static Window Create()
         {
             StartupPerformanceRecorder.RecordWindowConstruction();
+            return new Window();
+        }
 
+        private Window() : base(GameWindowSettings.Default, NativeWindowSettings.Default)
+        {
             // Load the settings
             LoadEnvironmentDefaultSettings();
 
