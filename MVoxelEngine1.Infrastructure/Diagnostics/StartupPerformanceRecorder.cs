@@ -70,6 +70,61 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
         public required DateTimeOffset RecordedAtUtc { get; init; }
     }
 
+    public sealed record SimulatedGpuUploadBoundarySnapshot
+    {
+        public required long RenderDataId { get; init; }
+        public required int ChunkX { get; init; }
+        public required int ChunkY { get; init; }
+        public required int ChunkZ { get; init; }
+        public required int OpaqueFaceCount { get; init; }
+        public required int OpaqueRectangleCount { get; init; }
+        public required int OpaqueWordCount { get; init; }
+        public required int TransparentFaceCount { get; init; }
+        public required int TransparentRectangleCount { get; init; }
+        public required int TransparentWordCount { get; init; }
+    }
+
+    public sealed record HeadlessGtrtPerformanceSnapshot
+    {
+        public const double GtrtGoalMilliseconds = 1_000;
+        public const double MaximumGtrtMilliseconds = 2_000;
+        public const long MaximumWorkingSetBytes = 16L * 1024 * 1024 * 1024;
+
+        public required string Mode { get; init; }
+        public required bool WindowCreated { get; init; }
+        public required int WindowConstructionCount { get; init; }
+        public required bool OpenGlCallsAllowed { get; init; }
+        public required int ActualGpuUploadCount { get; init; }
+        public required string Game { get; init; }
+        public required int Seed { get; init; }
+        public required string GameInputSha256 { get; init; }
+        public required string BlockRegistrySha256 { get; init; }
+        public required StartupBenchmarkParameters Parameters { get; init; }
+        public required double TargetGenerationToRenderMilliseconds { get; init; }
+        public required double MaximumGenerationToRenderMilliseconds { get; init; }
+        public required long MaximumWorkingSetBytesLimit { get; init; }
+        public required double GameLoadMilliseconds { get; init; }
+        public required double SeedAcceptedMilliseconds { get; init; }
+        public required double InitialGenerationStartMilliseconds { get; init; }
+        public required long InitialGenerationMilliseconds { get; init; }
+        public required double InitialGenerationCompleteMilliseconds { get; init; }
+        public required double InitialChunkMeshBuildStartMilliseconds { get; init; }
+        public required long InitialChunkMeshBuildMilliseconds { get; init; }
+        public required double InitialChunkMeshBuildCompleteMilliseconds { get; init; }
+        public required double FirstChunkMeshBuildMilliseconds { get; init; }
+        public required double GenerationToRenderMilliseconds { get; init; }
+        public required double GenerationToRenderCompleteMilliseconds { get; init; }
+        public required SimulatedGpuUploadBoundarySnapshot SimulatedUploadBoundary { get; init; }
+        public required long WorkingSetBytes { get; init; }
+        public required long PeakWorkingSetBytes { get; init; }
+        public required long ManagedHeapBytes { get; init; }
+        public required long TotalAllocatedBytes { get; init; }
+        public required double ProcessorTimeMilliseconds { get; init; }
+        public required GenerationPerformanceSnapshot GenerationDiagnostics { get; init; }
+        public required MeshPerformanceSnapshot MeshDiagnostics { get; init; }
+        public required DateTimeOffset RecordedAtUtc { get; init; }
+    }
+
     public static class StartupPerformanceRecorder
     {
         private const long UnrecordedMilliseconds = -1;
@@ -93,6 +148,9 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
         private static long gpuStreamingStartTicks;
         private static long generationToRenderTicks;
         private static long generationToRenderCompleteTicks;
+        private static int windowConstructionCount;
+        private static int actualGpuUploadCount;
+        private static int openGlCallsAllowed;
 
         public static bool IsRunning => Volatile.Read(ref timer) is not null;
 
@@ -114,7 +172,23 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
             Volatile.Read(ref generationToRenderTicks) > 0 &&
             Volatile.Read(ref generationToRenderCompleteTicks) > 0;
 
-        public static void Begin(string gameName, int worldSeed)
+        public static bool IsHeadlessGtrtComplete =>
+            Volatile.Read(ref gameLoadTicks) > 0 &&
+            Volatile.Read(ref seedAcceptedTicks) > 0 &&
+            Volatile.Read(ref initialGenerationStartTicks) > 0 &&
+            Volatile.Read(ref initialGenerationMilliseconds) >= 0 &&
+            Volatile.Read(ref initialGenerationCompleteTicks) > 0 &&
+            Volatile.Read(ref initialChunkMeshBuildStartTicks) > 0 &&
+            Volatile.Read(ref initialChunkMeshBuildMilliseconds) >= 0 &&
+            Volatile.Read(ref initialChunkMeshBuildCompleteTicks) > 0 &&
+            Volatile.Read(ref buildTicks) > 0 &&
+            Volatile.Read(ref generationToRenderTicks) > 0 &&
+            Volatile.Read(ref generationToRenderCompleteTicks) > 0;
+
+        public static void Begin(
+            string gameName,
+            int worldSeed,
+            bool openGlCallsAllowed)
         {
             if (string.IsNullOrWhiteSpace(gameName))
                 throw new ArgumentException("Game name is null or empty.", nameof(gameName));
@@ -139,6 +213,10 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
                 gpuStreamingStartTicks = 0;
                 generationToRenderTicks = 0;
                 generationToRenderCompleteTicks = 0;
+                windowConstructionCount = 0;
+                actualGpuUploadCount = 0;
+                StartupPerformanceRecorder.openGlCallsAllowed =
+                    openGlCallsAllowed ? 1 : 0;
                 GenerationPerformanceRecorder.Reset();
                 MeshPerformanceRecorder.Reset();
                 timer = Stopwatch.StartNew();
@@ -198,7 +276,33 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
 
         public static void RecordCameraAppearance() => RecordElapsed(ref cameraAppearanceTicks);
 
-        public static void RecordGpuStreamingStart() => RecordElapsed(ref gpuStreamingStartTicks);
+        public static void RecordGpuStreamingStart()
+        {
+            if (!IsRunning)
+                return;
+
+            Interlocked.Increment(ref actualGpuUploadCount);
+            if (Volatile.Read(ref openGlCallsAllowed) == 0)
+            {
+                throw new InvalidOperationException(
+                    "Headless GTRT mode forbids real GPU uploads.");
+            }
+
+            RecordElapsed(ref gpuStreamingStartTicks);
+        }
+
+        public static void RecordWindowConstruction()
+        {
+            if (!IsRunning)
+                return;
+
+            Interlocked.Increment(ref windowConstructionCount);
+            if (Volatile.Read(ref openGlCallsAllowed) == 0)
+            {
+                throw new InvalidOperationException(
+                    "Headless GTRT mode forbids Window construction.");
+            }
+        }
 
         public static double? RecordGenerationToRender()
         {
@@ -280,23 +384,97 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
             };
         }
 
+        public static HeadlessGtrtPerformanceSnapshot CreateHeadlessGtrtSnapshot(
+            SimulatedGpuUploadBoundarySnapshot simulatedUploadBoundary)
+        {
+            ArgumentNullException.ThrowIfNull(simulatedUploadBoundary);
+            if (!IsHeadlessGtrtComplete)
+            {
+                throw new InvalidOperationException(
+                    "Headless GTRT metrics are incomplete.");
+            }
+
+            using Process process = Process.GetCurrentProcess();
+            process.Refresh();
+            long workingSetBytes = process.WorkingSet64;
+            long peakWorkingSetBytes = process.PeakWorkingSet64;
+            long managedHeapBytes = GC.GetTotalMemory(forceFullCollection: false);
+            long totalAllocatedBytes =
+                GC.GetTotalAllocatedBytes(precise: false);
+            double processorTimeMilliseconds =
+                process.TotalProcessorTime.TotalMilliseconds;
+
+            return new HeadlessGtrtPerformanceSnapshot
+            {
+                Mode = "headlessGtrt",
+                WindowCreated = Volatile.Read(ref windowConstructionCount) != 0,
+                WindowConstructionCount =
+                    Volatile.Read(ref windowConstructionCount),
+                OpenGlCallsAllowed =
+                    Volatile.Read(ref openGlCallsAllowed) != 0,
+                ActualGpuUploadCount = Volatile.Read(ref actualGpuUploadCount),
+                Game = game,
+                Seed = seed,
+                GameInputSha256 = RuntimeInputHasher.HashGameInputs(),
+                BlockRegistrySha256 = RuntimeInputHasher.HashBlockRegistry(),
+                Parameters = CaptureParameters(),
+                TargetGenerationToRenderMilliseconds =
+                    HeadlessGtrtPerformanceSnapshot.GtrtGoalMilliseconds,
+                MaximumGenerationToRenderMilliseconds =
+                    HeadlessGtrtPerformanceSnapshot.MaximumGtrtMilliseconds,
+                MaximumWorkingSetBytesLimit =
+                    HeadlessGtrtPerformanceSnapshot.MaximumWorkingSetBytes,
+                GameLoadMilliseconds =
+                    ToMilliseconds(Volatile.Read(ref gameLoadTicks)),
+                SeedAcceptedMilliseconds =
+                    ToMilliseconds(Volatile.Read(ref seedAcceptedTicks)),
+                InitialGenerationStartMilliseconds =
+                    ToMilliseconds(Volatile.Read(ref initialGenerationStartTicks)),
+                InitialGenerationMilliseconds =
+                    Volatile.Read(ref initialGenerationMilliseconds),
+                InitialGenerationCompleteMilliseconds =
+                    ToMilliseconds(
+                        Volatile.Read(ref initialGenerationCompleteTicks)),
+                InitialChunkMeshBuildStartMilliseconds =
+                    ToMilliseconds(
+                        Volatile.Read(ref initialChunkMeshBuildStartTicks)),
+                InitialChunkMeshBuildMilliseconds =
+                    Volatile.Read(ref initialChunkMeshBuildMilliseconds),
+                InitialChunkMeshBuildCompleteMilliseconds =
+                    ToMilliseconds(
+                        Volatile.Read(ref initialChunkMeshBuildCompleteTicks)),
+                FirstChunkMeshBuildMilliseconds =
+                    ToMilliseconds(Volatile.Read(ref buildTicks)),
+                GenerationToRenderMilliseconds =
+                    ToMilliseconds(Volatile.Read(ref generationToRenderTicks)),
+                GenerationToRenderCompleteMilliseconds =
+                    ToMilliseconds(
+                        Volatile.Read(ref generationToRenderCompleteTicks)),
+                SimulatedUploadBoundary = simulatedUploadBoundary,
+                WorkingSetBytes = workingSetBytes,
+                PeakWorkingSetBytes = peakWorkingSetBytes,
+                ManagedHeapBytes = managedHeapBytes,
+                TotalAllocatedBytes = totalAllocatedBytes,
+                ProcessorTimeMilliseconds = processorTimeMilliseconds,
+                GenerationDiagnostics =
+                    GenerationPerformanceRecorder.CreateSnapshot(),
+                MeshDiagnostics = MeshPerformanceRecorder.CreateSnapshot(),
+                RecordedAtUtc = DateTimeOffset.UtcNow
+            };
+        }
+
         public static void WriteSnapshot(string outputPath)
         {
-            if (string.IsNullOrWhiteSpace(outputPath))
-                throw new ArgumentException("Benchmark output path is null or empty.", nameof(outputPath));
+            WriteJson(outputPath, CreateSnapshot());
+        }
 
-            string fullPath = Path.GetFullPath(outputPath);
-            string? outputDirectory = Path.GetDirectoryName(fullPath);
-            if (string.IsNullOrWhiteSpace(outputDirectory))
-                throw new InvalidOperationException("Benchmark output directory is not available.");
-
-            Directory.CreateDirectory(outputDirectory);
-            string json = JsonSerializer.Serialize(CreateSnapshot(), new JsonSerializerOptions
-            {
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                WriteIndented = true
-            });
-            File.WriteAllText(fullPath, json);
+        public static void WriteHeadlessGtrtSnapshot(
+            string outputPath,
+            SimulatedGpuUploadBoundarySnapshot simulatedUploadBoundary)
+        {
+            WriteJson(
+                outputPath,
+                CreateHeadlessGtrtSnapshot(simulatedUploadBoundary));
         }
 
         private static void BeginPhase(
@@ -393,6 +571,55 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
                 ServerGarbageCollection = GCSettings.IsServerGC,
                 GarbageCollectionLatencyMode = GCSettings.LatencyMode.ToString()
             };
+        }
+
+        private static void WriteJson<T>(string outputPath, T snapshot)
+        {
+            if (string.IsNullOrWhiteSpace(outputPath))
+            {
+                throw new ArgumentException(
+                    "Benchmark output path is null or empty.",
+                    nameof(outputPath));
+            }
+
+            string fullPath = Path.GetFullPath(outputPath);
+            string? outputDirectory = Path.GetDirectoryName(fullPath);
+            if (string.IsNullOrWhiteSpace(outputDirectory))
+            {
+                throw new InvalidOperationException(
+                    "Benchmark output directory is not available.");
+            }
+
+            Directory.CreateDirectory(outputDirectory);
+            string temporaryPath = Path.Combine(
+                outputDirectory,
+                $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.incomplete");
+            try
+            {
+                using (var stream = new FileStream(
+                           temporaryPath,
+                           FileMode.CreateNew,
+                           FileAccess.Write,
+                           FileShare.None))
+                {
+                    JsonSerializer.Serialize(
+                        stream,
+                        snapshot,
+                        new JsonSerializerOptions
+                        {
+                            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                            WriteIndented = true
+                        });
+                    stream.Flush(flushToDisk: true);
+                }
+
+                File.Move(temporaryPath, fullPath, overwrite: true);
+            }
+            finally
+            {
+                if (File.Exists(temporaryPath))
+                    File.Delete(temporaryPath);
+            }
         }
 
         private static double ToMilliseconds(long ticks) => TimeSpan.FromTicks(ticks).TotalMilliseconds;

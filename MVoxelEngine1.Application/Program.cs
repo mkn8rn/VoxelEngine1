@@ -60,14 +60,24 @@ namespace MVoxelEngine1.Application
 
             if (!string.IsNullOrWhiteSpace(FlagManager.flags.benchmarkOutput))
             {
-                if (string.IsNullOrWhiteSpace(FlagManager.flags.game))
-                    throw new InvalidOperationException("Benchmark game is not set.");
-                if (!FlagManager.flags.seed.HasValue)
-                    throw new InvalidOperationException("Benchmark seed is not set.");
-                if (FlagManager.flags.renderStreamingIfAllowed is not false)
-                    throw new InvalidOperationException("Benchmark mode requires renderStreamingIfAllowed=false.");
+                ValidateBenchmarkFlags(headless: true);
+                StartupPerformanceRecorder.Begin(
+                    FlagManager.flags.game,
+                    FlagManager.flags.seed.Value,
+                    openGlCallsAllowed: false);
+                HeadlessGtrtBenchmarkRunner.Run(
+                    FlagManager.flags.benchmarkOutput);
+                return;
+            }
 
-                StartupPerformanceRecorder.Begin(FlagManager.flags.game, FlagManager.flags.seed.Value);
+            if (!string.IsNullOrWhiteSpace(
+                    FlagManager.flags.graphicsBenchmarkOutput))
+            {
+                ValidateBenchmarkFlags(headless: false);
+                StartupPerformanceRecorder.Begin(
+                    FlagManager.flags.game,
+                    FlagManager.flags.seed.Value,
+                    openGlCallsAllowed: true);
             }
 
             using (Window game = new Window())
@@ -88,6 +98,12 @@ namespace MVoxelEngine1.Application
         {
             if (!string.IsNullOrWhiteSpace(FlagManager.flags.benchmarkOutput))
                 throw new InvalidOperationException("Benchmark mode and simulated GPU upload mode cannot run together.");
+            if (!string.IsNullOrWhiteSpace(
+                    FlagManager.flags.graphicsBenchmarkOutput))
+            {
+                throw new InvalidOperationException(
+                    "Graphics benchmark mode and simulated GPU upload mode cannot run together.");
+            }
             if (string.IsNullOrWhiteSpace(FlagManager.flags.game))
                 throw new InvalidOperationException("The simulated GPU upload game is not set.");
             if (string.IsNullOrWhiteSpace(FlagManager.flags.worldName))
@@ -106,6 +122,12 @@ namespace MVoxelEngine1.Application
         {
             if (!string.IsNullOrWhiteSpace(FlagManager.flags.benchmarkOutput))
                 throw new InvalidOperationException("Benchmark mode and face manifest mode cannot run together.");
+            if (!string.IsNullOrWhiteSpace(
+                    FlagManager.flags.graphicsBenchmarkOutput))
+            {
+                throw new InvalidOperationException(
+                    "Graphics benchmark mode and face manifest mode cannot run together.");
+            }
             if (!string.IsNullOrWhiteSpace(FlagManager.flags.simulatedGpuUploadOutput))
                 throw new InvalidOperationException("Simulated GPU upload mode and face manifest mode cannot run together.");
             if (string.IsNullOrWhiteSpace(FlagManager.flags.game))
@@ -118,6 +140,42 @@ namespace MVoxelEngine1.Application
                 throw new InvalidOperationException("The face generation mode is not set.");
             if (FlagManager.flags.renderStreamingIfAllowed is not false)
                 throw new InvalidOperationException("Face manifest mode requires renderStreamingIfAllowed=false.");
+        }
+
+        private static void ValidateBenchmarkFlags(bool headless)
+        {
+            if (string.IsNullOrWhiteSpace(FlagManager.flags.game))
+                throw new InvalidOperationException("Benchmark game is not set.");
+            if (string.IsNullOrWhiteSpace(FlagManager.flags.worldName))
+                throw new InvalidOperationException("Benchmark world name is not set.");
+            if (!FlagManager.flags.seed.HasValue)
+                throw new InvalidOperationException("Benchmark seed is not set.");
+            if (FlagManager.flags.renderStreamingIfAllowed is not false)
+            {
+                throw new InvalidOperationException(
+                    "Benchmark mode requires renderStreamingIfAllowed=false.");
+            }
+            if (headless && !string.IsNullOrWhiteSpace(
+                    FlagManager.flags.graphicsBenchmarkOutput))
+            {
+                throw new InvalidOperationException(
+                    "Headless and graphics benchmark modes cannot run together.");
+            }
+            if (!headless && !string.IsNullOrWhiteSpace(
+                    FlagManager.flags.benchmarkOutput))
+            {
+                throw new InvalidOperationException(
+                    "Headless and graphics benchmark modes cannot run together.");
+            }
+            if (!headless &&
+                (FlagManager.flags.windowWidth is null ||
+                 FlagManager.flags.windowWidth <= 0 ||
+                 FlagManager.flags.windowHeight is null ||
+                 FlagManager.flags.windowHeight <= 0))
+            {
+                throw new InvalidOperationException(
+                    "Graphics benchmark window dimensions must be positive.");
+            }
         }
     }
 }

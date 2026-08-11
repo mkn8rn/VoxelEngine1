@@ -49,6 +49,8 @@ namespace MVoxelEngine1.Application
 
         public Window() : base(GameWindowSettings.Default, NativeWindowSettings.Default)
         {
+            StartupPerformanceRecorder.RecordWindowConstruction();
+
             // Load the settings
             LoadEnvironmentDefaultSettings();
 
@@ -90,7 +92,6 @@ namespace MVoxelEngine1.Application
             blockTextureAtlas.Bind();
 
             // Initialize the World rendering
-            StartupPerformanceRecorder.RecordSeedAccepted();
             world = new World() ?? throw new Exception("world is null");
 
             // Initialize the Player (and its Camera)
@@ -148,12 +149,16 @@ namespace MVoxelEngine1.Application
                 StartupPerformanceRecorder.RecordFirstRender(Stopwatch.GetElapsedTime(renderStart));
 
             if (!benchmarkWritten &&
-                !string.IsNullOrWhiteSpace(FlagManager.flags.benchmarkOutput) &&
+                !string.IsNullOrWhiteSpace(
+                    FlagManager.flags.graphicsBenchmarkOutput) &&
                 StartupPerformanceRecorder.IsComplete)
             {
-                StartupPerformanceRecorder.WriteSnapshot(FlagManager.flags.benchmarkOutput);
+                StartupPerformanceRecorder.WriteSnapshot(
+                    FlagManager.flags.graphicsBenchmarkOutput);
                 benchmarkWritten = true;
-                Console.WriteLine($"Benchmark metrics written to {Path.GetFullPath(FlagManager.flags.benchmarkOutput)}");
+                Console.WriteLine(
+                    $"Graphics benchmark metrics written to " +
+                    $"{Path.GetFullPath(FlagManager.flags.graphicsBenchmarkOutput)}");
                 Close();
             }
 

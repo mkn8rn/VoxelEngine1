@@ -25,6 +25,9 @@ namespace MVoxelEngine1.Infrastructure.Managers
                 worldName = PreferString(consoleFlags.worldName, envFlags.worldName),
                 seed = PreferValue(consoleFlags.seed, envFlags.seed),
                 benchmarkOutput = PreferString(consoleFlags.benchmarkOutput, envFlags.benchmarkOutput),
+                graphicsBenchmarkOutput = PreferString(
+                    consoleFlags.graphicsBenchmarkOutput,
+                    envFlags.graphicsBenchmarkOutput),
                 faceManifestOutput = PreferString(consoleFlags.faceManifestOutput, envFlags.faceManifestOutput),
                 simulatedGpuUploadOutput = PreferString(consoleFlags.simulatedGpuUploadOutput, envFlags.simulatedGpuUploadOutput),
                 simulatedInput = PreferString(consoleFlags.simulatedInput, envFlags.simulatedInput),
@@ -64,6 +67,12 @@ namespace MVoxelEngine1.Infrastructure.Managers
                 Console.WriteLine($"Set seed: {flags.seed.Value}");
             if (!string.IsNullOrEmpty(flags.benchmarkOutput))
                 Console.WriteLine($"Set benchmarkOutput: {flags.benchmarkOutput}");
+            if (!string.IsNullOrEmpty(flags.graphicsBenchmarkOutput))
+            {
+                Console.WriteLine(
+                    $"Set graphicsBenchmarkOutput: " +
+                    $"{flags.graphicsBenchmarkOutput}");
+            }
             if (!string.IsNullOrEmpty(flags.faceManifestOutput))
                 Console.WriteLine($"Set faceManifestOutput: {flags.faceManifestOutput}");
             if (!string.IsNullOrEmpty(flags.simulatedGpuUploadOutput))

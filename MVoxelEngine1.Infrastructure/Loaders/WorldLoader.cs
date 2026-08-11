@@ -1,4 +1,5 @@
 using MVoxelEngine1.Infrastructure.Managers;
+using MVoxelEngine1.Infrastructure.Diagnostics;
 
 namespace MVoxelEngine1.Infrastructure.Loaders
 {
@@ -20,6 +21,7 @@ namespace MVoxelEngine1.Infrastructure.Loaders
         {
             if (requestedSeed.HasValue)
             {
+                StartupPerformanceRecorder.RecordSeedAccepted();
                 string resolvedWorldName = string.IsNullOrWhiteSpace(requestedWorldName)
                     ? $"World{requestedSeed.Value}"
                     : requestedWorldName;
