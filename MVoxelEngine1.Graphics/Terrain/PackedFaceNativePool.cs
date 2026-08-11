@@ -17,22 +17,29 @@ namespace MVoxelEngine1.Graphics.Terrain
 
     internal sealed class PackedFaceStagingWorkspace : IDisposable
     {
-        private const int InitialOpaqueWordCapacity = 65_536;
+        private const int InitialOpaqueBatchWordCapacity = 65_536;
         private const int InitialTransparentWordCapacity = 2_048;
 
-        private uint[] opaqueWords = new uint[InitialOpaqueWordCapacity];
+        private uint[] opaqueBatchWords =
+            new uint[InitialOpaqueBatchWordCapacity];
         private uint[] transparentWords =
             new uint[InitialTransparentWordCapacity];
 
-        internal uint[] OpaqueBuffer
+        internal uint[] GetOpaqueBatchBuffer(int minimumWordCount)
         {
-            get
+            ArgumentOutOfRangeException.ThrowIfNegative(minimumWordCount);
+            ObjectDisposedException.ThrowIf(
+                opaqueBatchWords.Length == 0,
+                this);
+            if (opaqueBatchWords.Length < minimumWordCount)
             {
-                ObjectDisposedException.ThrowIf(
-                    opaqueWords.Length == 0,
-                    this);
-                return opaqueWords;
+                int nextLength = Math.Max(
+                    minimumWordCount,
+                    checked(opaqueBatchWords.Length * 2));
+                Array.Resize(ref opaqueBatchWords, nextLength);
             }
+
+            return opaqueBatchWords;
         }
 
         internal uint[] TransparentBuffer
@@ -46,18 +53,18 @@ namespace MVoxelEngine1.Graphics.Terrain
             }
         }
 
-        internal void Adopt(uint[] opaque, uint[] transparent)
+        internal void AdoptTransparent(uint[] transparent)
         {
-            ArgumentNullException.ThrowIfNull(opaque);
             ArgumentNullException.ThrowIfNull(transparent);
-            ObjectDisposedException.ThrowIf(opaqueWords.Length == 0, this);
-            opaqueWords = opaque;
+            ObjectDisposedException.ThrowIf(
+                opaqueBatchWords.Length == 0,
+                this);
             transparentWords = transparent;
         }
 
         public void Dispose()
         {
-            opaqueWords = Array.Empty<uint>();
+            opaqueBatchWords = Array.Empty<uint>();
             transparentWords = Array.Empty<uint>();
         }
     }

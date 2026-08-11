@@ -31,10 +31,6 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             int[] bottomFaces = ArrayPool<int>.Shared.Rent(horizontalCellCount);
             int[] topFaces = ArrayPool<int>.Shared.Rent(horizontalCellCount);
             var materials = new GeneratedMaterialRuntime(source);
-            var writer = new GeneratedFaceRectangleWriter(
-                source,
-                atlas,
-                stagingWorkspace);
             bool directInteriorSides =
                 source.OrderedContiguousSpans &&
                 materials.SupportsContiguousTerrainFastPath;
@@ -45,55 +41,28 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             phaseStart = recordPerformance ? Stopwatch.GetTimestamp() : 0;
             try
             {
-                if (directInteriorSides)
-                {
-                    EmitContiguousInteriorSideRectangles(
-                        source,
-                        ref writer);
-                }
-
-                for (int material = 0; material < 3; material++)
-                {
-                    if ((source.MaterialMask & (1 << material)) == 0)
-                        continue;
-                    Array.Fill(bottomFaces, -1, 0, horizontalCellCount);
-                    Array.Fill(topFaces, -1, 0, horizontalCellCount);
-                    ushort blockId = materials.GetBlockId(material);
-                    bool blockOpaque = materials.IsOpaque(material);
-                    writer.SelectMaterial(material, blockOpaque);
-                    GenerateGeneratedMaterial(
-                        source,
-                        materials,
-                        material,
-                        blockId,
-                        blockOpaque,
-                        !directInteriorSides,
-                        bottomFaces,
-                        topFaces,
-                        ref writer);
-                    EmitGeneratedHorizontalRectangles(
-                        2,
-                        bottomFaces,
-                        source.Width,
-                        source.Depth,
-                        ref writer);
-                    EmitGeneratedHorizontalRectangles(
-                        3,
-                        topFaces,
-                        source.Width,
-                        source.Depth,
-                        ref writer);
-                }
-
-                writer.CommitBuffers();
-                using NativeBuilder<uint> opaqueRectangles = new(
-                    preLease: writer.OpaqueWordCount);
+                var state = new GeneratedFaceRectangleState(
+                    source,
+                    atlas,
+                    stagingWorkspace);
+                using NativeBuilder<uint> opaqueRectangles = new();
+                opaqueRectangles.Borrow(
+                    (scoped ref NativeBuilderBorrow<uint> opaqueOutput) =>
+                    {
+                        GenerateGeneratedSpanRectangleWords(
+                            source,
+                            materials,
+                            directInteriorSides,
+                            bottomFaces,
+                            topFaces,
+                            state,
+                            ref opaqueOutput);
+                    });
+                state.CommitTransparentBuffer();
                 using NativeBuilder<uint> transparentRectangles = new(
-                    preLease: writer.TransparentWordCount);
-                if (writer.OpaqueWordCount != 0)
-                    opaqueRectangles.Append(writer.OpaqueWords);
-                if (writer.TransparentWordCount != 0)
-                    transparentRectangles.Append(writer.TransparentWords);
+                    preLease: state.TransparentWordCount);
+                if (state.TransparentWordCount != 0)
+                    transparentRectangles.Append(state.TransparentWords);
 
                 NativeTransfer<uint>? opaque = null;
                 NativeTransfer<uint>? transparent = null;
@@ -102,9 +71,9 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     opaque = opaqueRectangles.Complete();
                     transparent = transparentRectangles.Complete();
                     result = new FaceRectangleMeshData(
-                        writer.OpaqueFaceCount,
+                        state.OpaqueFaceCount,
                         NativeTransfer<uint>.Move(ref opaque),
-                        writer.TransparentFaceCount,
+                        state.TransparentFaceCount,
                         NativeTransfer<uint>.Move(ref transparent));
                 }
                 finally
@@ -137,43 +106,259 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             return result;
         }
 
-        private void GenerateGeneratedMaterial(
+        private void GenerateGeneratedSpanRectangleWords(
             GeneratedChunkSpanData source,
-            in GeneratedMaterialRuntime materials,
+            GeneratedMaterialRuntime materials,
+            bool directInteriorSides,
+            int[] bottomFaces,
+            int[] topFaces,
+            GeneratedFaceRectangleState state,
+            scoped ref NativeBuilderBorrow<uint> opaqueOutput)
+        {
+            int horizontalCellCount = checked(source.Width * source.Depth);
+            if (directInteriorSides)
+            {
+                for (int x = 0; x < source.Width - 1; x++)
+                {
+                    WriteContiguousInteriorXRow(
+                        source,
+                        x,
+                        state,
+                        ref opaqueOutput);
+                }
+
+                for (int x = 0; x < source.Width; x++)
+                {
+                    WriteContiguousInteriorZRow(
+                        source,
+                        x,
+                        state,
+                        ref opaqueOutput);
+                }
+            }
+
+            for (int material = 0; material < 3; material++)
+            {
+                if ((source.MaterialMask & (1 << material)) == 0)
+                    continue;
+                Array.Fill(bottomFaces, -1, 0, horizontalCellCount);
+                Array.Fill(topFaces, -1, 0, horizontalCellCount);
+                ushort blockId = materials.GetBlockId(material);
+                bool blockOpaque = materials.IsOpaque(material);
+                for (int x = 0; x < source.Width; x++)
+                {
+                    if (blockOpaque)
+                    {
+                        WriteGeneratedMaterialRow(
+                            source,
+                            materials,
+                            material,
+                            blockId,
+                            !directInteriorSides,
+                            x,
+                            bottomFaces,
+                            topFaces,
+                            state,
+                            ref opaqueOutput);
+                    }
+                    else
+                    {
+                        var writer = new GeneratedFaceRectangleWriter(state);
+                        int opaqueWordCount = 0;
+                        writer.SelectMaterial(material, opaque: false);
+                        GenerateGeneratedMaterialRow(
+                            source,
+                            materials,
+                            material,
+                            blockId,
+                            blockOpaque: false,
+                            !directInteriorSides,
+                            x,
+                            bottomFaces,
+                            topFaces,
+                            Span<uint>.Empty,
+                            ref opaqueWordCount,
+                            ref writer);
+                    }
+                }
+
+                WriteGeneratedHorizontalRectangles(
+                    source,
+                    material,
+                    blockOpaque,
+                    2,
+                    bottomFaces,
+                    state,
+                    ref opaqueOutput);
+                WriteGeneratedHorizontalRectangles(
+                    source,
+                    material,
+                    blockOpaque,
+                    3,
+                    topFaces,
+                    state,
+                    ref opaqueOutput);
+            }
+        }
+
+        private void GenerateGeneratedMaterialRow(
+            GeneratedChunkSpanData source,
+            GeneratedMaterialRuntime materials,
             int material,
             ushort blockId,
             bool blockOpaque,
             bool emitInteriorSides,
+            int x,
             int[] bottomFaces,
             int[] topFaces,
+            scoped Span<uint> opaqueWords,
+            ref int opaqueWordCount,
             ref GeneratedFaceRectangleWriter writer)
         {
-            for (int x = 0; x < source.Width; x++)
+            for (int z = 0; z < source.Depth; z++)
             {
-                for (int z = 0; z < source.Depth; z++)
-                {
-                    ref readonly BlockColumnProfile column =
-                        ref source.Columns[x * source.Depth + z];
-                    GetGeneratedMaterialInterval(
-                        column,
-                        material,
-                        out int intervalStart,
-                        out int intervalEnd);
-                    GenerateGeneratedIntervalRectangles(
-                        source,
-                        materials,
-                        column,
-                        blockId,
-                        blockOpaque,
-                        emitInteriorSides,
-                        intervalStart,
-                        intervalEnd,
-                        x,
-                        z,
-                        bottomFaces,
-                        topFaces,
-                        ref writer);
-                }
+                ref readonly BlockColumnProfile column =
+                    ref source.Columns[x * source.Depth + z];
+                GetGeneratedMaterialInterval(
+                    column,
+                    material,
+                    out int intervalStart,
+                    out int intervalEnd);
+                GenerateGeneratedIntervalRectangles(
+                    source,
+                    materials,
+                    column,
+                    blockId,
+                    blockOpaque,
+                    emitInteriorSides,
+                    intervalStart,
+                    intervalEnd,
+                    x,
+                    z,
+                    bottomFaces,
+                    topFaces,
+                    opaqueWords,
+                    ref opaqueWordCount,
+                    ref writer);
+            }
+        }
+
+        private void WriteGeneratedMaterialRow(
+            GeneratedChunkSpanData source,
+            GeneratedMaterialRuntime materials,
+            int material,
+            ushort blockId,
+            bool emitInteriorSides,
+            int x,
+            int[] bottomFaces,
+            int[] topFaces,
+            GeneratedFaceRectangleState state,
+            scoped ref NativeBuilderBorrow<uint> opaqueOutput)
+        {
+            if (!emitInteriorSides &&
+                x > 0 &&
+                x < source.Width - 1)
+            {
+                int maximumInteriorWordCount = checked(
+                    4 * ((source.Height + 1) / 2));
+                opaqueOutput.Write(
+                    maximumInteriorWordCount,
+                    batch =>
+                    {
+                        Span<uint> opaqueWords = batch.AsSpan();
+                        int opaqueWordCount = 0;
+                        var writer = new GeneratedFaceRectangleWriter(state);
+                        writer.SelectMaterial(material, opaque: true);
+                        GenerateGeneratedMaterialRow(
+                            source,
+                            materials,
+                            material,
+                            blockId,
+                            blockOpaque: true,
+                            emitInteriorSides: false,
+                            x,
+                            bottomFaces,
+                            topFaces,
+                            opaqueWords,
+                            ref opaqueWordCount,
+                            ref writer);
+                        batch.Commit(opaqueWordCount);
+                    });
+                return;
+            }
+
+            int maximumWordCount = checked(
+                source.Depth *
+                4 *
+                ((source.Height + 1) / 2) *
+                2);
+            uint[] opaqueWords = state.GetOpaqueBatchBuffer(maximumWordCount);
+            int opaqueWordCount = 0;
+            var stagedWriter = new GeneratedFaceRectangleWriter(state);
+            stagedWriter.SelectMaterial(material, opaque: true);
+            GenerateGeneratedMaterialRow(
+                source,
+                materials,
+                material,
+                blockId,
+                blockOpaque: true,
+                emitInteriorSides,
+                x,
+                bottomFaces,
+                topFaces,
+                opaqueWords,
+                ref opaqueWordCount,
+                ref stagedWriter);
+            if (opaqueWordCount != 0)
+            {
+                opaqueOutput.Append(
+                    opaqueWords.AsSpan(0, opaqueWordCount));
+            }
+        }
+
+        private static void WriteGeneratedHorizontalRectangles(
+            GeneratedChunkSpanData source,
+            int material,
+            bool opaque,
+            byte direction,
+            int[] faceHeights,
+            GeneratedFaceRectangleState state,
+            scoped ref NativeBuilderBorrow<uint> opaqueOutput)
+        {
+            if (!opaque)
+            {
+                var writer = new GeneratedFaceRectangleWriter(state);
+                int opaqueWordCount = 0;
+                writer.SelectMaterial(material, opaque: false);
+                EmitGeneratedHorizontalRectangles(
+                    direction,
+                    faceHeights,
+                    source.Width,
+                    source.Depth,
+                    Span<uint>.Empty,
+                    ref opaqueWordCount,
+                    ref writer);
+                return;
+            }
+
+            int maximumWordCount = checked(
+                source.Width * source.Depth * 2);
+            uint[] opaqueWords = state.GetOpaqueBatchBuffer(maximumWordCount);
+            int stagedWordCount = 0;
+            var stagedWriter = new GeneratedFaceRectangleWriter(state);
+            stagedWriter.SelectMaterial(material, opaque: true);
+            EmitGeneratedHorizontalRectangles(
+                direction,
+                faceHeights,
+                source.Width,
+                source.Depth,
+                opaqueWords,
+                ref stagedWordCount,
+                ref stagedWriter);
+            if (stagedWordCount != 0)
+            {
+                opaqueOutput.Append(
+                    opaqueWords.AsSpan(0, stagedWordCount));
             }
         }
 
@@ -215,6 +400,8 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             int z,
             int[] bottomFaces,
             int[] topFaces,
+            scoped Span<uint> opaqueWords,
+            ref int opaqueWordCount,
             ref GeneratedFaceRectangleWriter writer)
         {
             if (intervalStart < 0 || intervalEnd < intervalStart)
@@ -310,6 +497,8 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     data.NeighborPlaneNegX,
                     data.NeighborTransparentPlaneNegX,
                     z * source.Height,
+                    opaqueWords,
+                    ref opaqueWordCount,
                     ref writer);
             }
             else if (emitInteriorSides)
@@ -325,6 +514,8 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     z,
                     worldStart,
                     worldEnd,
+                    opaqueWords,
+                    ref opaqueWordCount,
                     ref writer);
             }
 
@@ -341,6 +532,8 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     data.NeighborPlanePosX,
                     data.NeighborTransparentPlanePosX,
                     z * source.Height,
+                    opaqueWords,
+                    ref opaqueWordCount,
                     ref writer);
             }
             else if (emitInteriorSides)
@@ -356,6 +549,8 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     z,
                     worldStart,
                     worldEnd,
+                    opaqueWords,
+                    ref opaqueWordCount,
                     ref writer);
             }
 
@@ -372,6 +567,8 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     data.NeighborPlaneNegZ,
                     data.NeighborTransparentPlaneNegZ,
                     x * source.Height,
+                    opaqueWords,
+                    ref opaqueWordCount,
                     ref writer);
             }
             else if (emitInteriorSides)
@@ -387,6 +584,8 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     z,
                     worldStart,
                     worldEnd,
+                    opaqueWords,
+                    ref opaqueWordCount,
                     ref writer);
             }
 
@@ -403,6 +602,8 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     data.NeighborPlanePosZ,
                     data.NeighborTransparentPlanePosZ,
                     x * source.Height,
+                    opaqueWords,
+                    ref opaqueWordCount,
                     ref writer);
             }
             else if (emitInteriorSides)
@@ -418,60 +619,92 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     z,
                     worldStart,
                     worldEnd,
+                    opaqueWords,
+                    ref opaqueWordCount,
                     ref writer);
             }
         }
 
-        private static void EmitContiguousInteriorSideRectangles(
+        private static void WriteContiguousInteriorXRow(
             GeneratedChunkSpanData source,
-            ref GeneratedFaceRectangleWriter writer)
+            int x,
+            GeneratedFaceRectangleState state,
+            scoped ref NativeBuilderBorrow<uint> opaqueOutput)
         {
-            for (int x = 0; x < source.Width - 1; x++)
-            {
-                int leftBase = x * source.Depth;
-                int rightBase = leftBase + source.Depth;
-                for (int z = 0; z < source.Depth; z++)
+            int maximumWordCount = checked(source.Depth * 12 * 2);
+            opaqueOutput.Write(
+                maximumWordCount,
+                batch =>
                 {
-                    ref readonly BlockColumnProfile left =
-                        ref source.Columns[leftBase + z];
-                    ref readonly BlockColumnProfile right =
-                        ref source.Columns[rightBase + z];
-                    EmitContiguousColumnPair(
-                        source,
-                        left,
-                        right,
-                        1,
-                        x,
-                        z,
-                        0,
-                        x + 1,
-                        z,
-                        ref writer);
-                }
-            }
+                    Span<uint> opaqueWords = batch.AsSpan();
+                    int opaqueWordCount = 0;
+                    var writer = new GeneratedFaceRectangleWriter(state);
+                    int leftBase = x * source.Depth;
+                    int rightBase = leftBase + source.Depth;
+                    for (int z = 0; z < source.Depth; z++)
+                    {
+                        ref readonly BlockColumnProfile left =
+                            ref source.Columns[leftBase + z];
+                        ref readonly BlockColumnProfile right =
+                            ref source.Columns[rightBase + z];
+                        EmitContiguousColumnPair(
+                            source,
+                            left,
+                            right,
+                            1,
+                            x,
+                            z,
+                            0,
+                            x + 1,
+                            z,
+                            opaqueWords,
+                            ref opaqueWordCount,
+                            ref writer);
+                    }
 
-            for (int x = 0; x < source.Width; x++)
-            {
-                int columnBase = x * source.Depth;
-                for (int z = 0; z < source.Depth - 1; z++)
+                    batch.Commit(opaqueWordCount);
+                });
+        }
+
+        private static void WriteContiguousInteriorZRow(
+            GeneratedChunkSpanData source,
+            int x,
+            GeneratedFaceRectangleState state,
+            scoped ref NativeBuilderBorrow<uint> opaqueOutput)
+        {
+            int maximumWordCount = checked(
+                (source.Depth - 1) * 12 * 2);
+            opaqueOutput.Write(
+                maximumWordCount,
+                batch =>
                 {
-                    ref readonly BlockColumnProfile negative =
-                        ref source.Columns[columnBase + z];
-                    ref readonly BlockColumnProfile positive =
-                        ref source.Columns[columnBase + z + 1];
-                    EmitContiguousColumnPair(
-                        source,
-                        negative,
-                        positive,
-                        5,
-                        x,
-                        z,
-                        4,
-                        x,
-                        z + 1,
-                        ref writer);
-                }
-            }
+                    Span<uint> opaqueWords = batch.AsSpan();
+                    int opaqueWordCount = 0;
+                    var writer = new GeneratedFaceRectangleWriter(state);
+                    int columnBase = x * source.Depth;
+                    for (int z = 0; z < source.Depth - 1; z++)
+                    {
+                        ref readonly BlockColumnProfile negative =
+                            ref source.Columns[columnBase + z];
+                        ref readonly BlockColumnProfile positive =
+                            ref source.Columns[columnBase + z + 1];
+                        EmitContiguousColumnPair(
+                            source,
+                            negative,
+                            positive,
+                            5,
+                            x,
+                            z,
+                            4,
+                            x,
+                            z + 1,
+                            opaqueWords,
+                            ref opaqueWordCount,
+                            ref writer);
+                    }
+
+                    batch.Commit(opaqueWordCount);
+                });
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -485,6 +718,8 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             byte secondDirection,
             int secondX,
             int secondZ,
+            scoped Span<uint> opaqueWords,
+            ref int opaqueWordCount,
             ref GeneratedFaceRectangleWriter writer)
         {
             int chunkStart = source.ChunkBaseY;
@@ -518,6 +753,8 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                                 firstDirection,
                                 firstX,
                                 firstZ,
+                                opaqueWords,
+                                ref opaqueWordCount,
                                 ref writer);
                         }
                     }
@@ -535,6 +772,8 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                                 secondDirection,
                                 secondX,
                                 secondZ,
+                                opaqueWords,
+                                ref opaqueWordCount,
                                 ref writer);
                         }
                     }
@@ -558,6 +797,8 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                                 firstDirection,
                                 firstX,
                                 firstZ,
+                                opaqueWords,
+                                ref opaqueWordCount,
                                 ref writer);
                         }
                     }
@@ -579,6 +820,8 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                                 secondDirection,
                                 secondX,
                                 secondZ,
+                                opaqueWords,
+                                ref opaqueWordCount,
                                 ref writer);
                         }
                     }
@@ -628,6 +871,8 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                         firstDirection,
                         firstX,
                         firstZ,
+                        opaqueWords,
+                        ref opaqueWordCount,
                         ref writer);
                 }
             }
@@ -655,6 +900,8 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     secondDirection,
                     secondX,
                     secondZ,
+                    opaqueWords,
+                    ref opaqueWordCount,
                     ref writer);
             }
         }
@@ -693,6 +940,8 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             byte direction,
             int x,
             int z,
+            scoped Span<uint> opaqueWords,
+            ref int opaqueWordCount,
             ref GeneratedFaceRectangleWriter writer)
         {
             if (!neighborPresent ||
@@ -707,6 +956,8 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     direction,
                     x,
                     z,
+                    opaqueWords,
+                    ref opaqueWordCount,
                     ref writer);
                 return;
             }
@@ -721,6 +972,8 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     direction,
                     x,
                     z,
+                    opaqueWords,
+                    ref opaqueWordCount,
                     ref writer);
             }
             if (sourceEnd > neighborEnd)
@@ -733,6 +986,8 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     direction,
                     x,
                     z,
+                    opaqueWords,
+                    ref opaqueWordCount,
                     ref writer);
             }
         }
@@ -746,6 +1001,8 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             byte direction,
             int x,
             int z,
+            scoped Span<uint> opaqueWords,
+            ref int opaqueWordCount,
             ref GeneratedFaceRectangleWriter writer)
         {
             if ((source.MaterialMask & 0b001) != 0)
@@ -761,7 +1018,9 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                         x,
                         start - source.ChunkBaseY,
                         end - source.ChunkBaseY,
-                        z);
+                        z,
+                        opaqueWords,
+                        ref opaqueWordCount);
                 }
             }
 
@@ -778,7 +1037,9 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     x,
                     soilStart - source.ChunkBaseY,
                     soilEnd - source.ChunkBaseY,
-                    z);
+                    z,
+                    opaqueWords,
+                    ref opaqueWordCount);
             }
         }
 
@@ -795,6 +1056,8 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             byte direction,
             int x,
             int z,
+            scoped Span<uint> opaqueWords,
+            ref int opaqueWordCount,
             ref GeneratedFaceRectangleWriter writer)
         {
             if (!neighborPresent ||
@@ -808,7 +1071,9 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     x,
                     sourceStart - source.ChunkBaseY,
                     sourceEnd - source.ChunkBaseY,
-                    z);
+                    z,
+                    opaqueWords,
+                    ref opaqueWordCount);
                 return;
             }
 
@@ -821,7 +1086,9 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     x,
                     sourceStart - source.ChunkBaseY,
                     neighborStart - source.ChunkBaseY - 1,
-                    z);
+                    z,
+                    opaqueWords,
+                    ref opaqueWordCount);
             }
             if (sourceEnd > neighborEnd)
             {
@@ -832,7 +1099,9 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     x,
                     neighborEnd - source.ChunkBaseY + 1,
                     sourceEnd - source.ChunkBaseY,
-                    z);
+                    z,
+                    opaqueWords,
+                    ref opaqueWordCount);
             }
         }
 
@@ -841,6 +1110,8 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             int[] faceHeights,
             int width,
             int depth,
+            scoped Span<uint> opaqueWords,
+            ref int opaqueWordCount,
             ref GeneratedFaceRectangleWriter writer)
         {
             for (int x = 0; x < width; x++)
@@ -893,7 +1164,9 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                         y,
                         anchorZ,
                         extentX,
-                        extentZ);
+                        extentZ,
+                        opaqueWords,
+                        ref opaqueWordCount);
                 }
             }
         }
@@ -909,6 +1182,8 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             int z,
             int worldStart,
             int worldEnd,
+            scoped Span<uint> opaqueWords,
+            ref int opaqueWordCount,
             ref GeneratedFaceRectangleWriter writer)
         {
             int current = worldStart;
@@ -933,7 +1208,9 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                         x,
                         current - source.ChunkBaseY,
                         runEnd - source.ChunkBaseY,
-                        z);
+                        z,
+                        opaqueWords,
+                        ref opaqueWordCount);
                 }
 
                 current = runEnd + 1;
@@ -951,6 +1228,8 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             ulong[] opaquePlane,
             ushort[] transparentPlane,
             int planeBaseIndex,
+            scoped Span<uint> opaqueWords,
+            ref int opaqueWordCount,
             ref GeneratedFaceRectangleWriter writer)
         {
             int visibleStart = -1;
@@ -978,7 +1257,9 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                         x,
                         visibleStart,
                         y - 1,
-                        z);
+                        z,
+                        opaqueWords,
+                        ref opaqueWordCount);
                     visibleStart = -1;
                 }
             }
@@ -990,7 +1271,9 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     x,
                     visibleStart,
                     localEnd,
-                    z);
+                    z,
+                    opaqueWords,
+                    ref opaqueWordCount);
             }
         }
 
@@ -1163,209 +1446,77 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             };
         }
 
-        private struct GeneratedFaceRectangleWriter
+        private sealed class GeneratedFaceRectangleState
         {
             private readonly uint[] faceTileAttributes;
             private readonly PackedFaceStagingWorkspace stagingWorkspace;
-            private uint[] opaqueWords;
             private uint[] transparentWords;
-            private uint[] currentWords;
-            private int opaqueWordCount;
             private int transparentWordCount;
-            private int currentWordCount;
             private int opaqueFaceCount;
             private int transparentFaceCount;
-            private int currentFaceCount;
-            private int currentTileOffset;
-            private bool currentOpaque;
-            private bool materialSelected;
 
-            public GeneratedFaceRectangleWriter(
+            public GeneratedFaceRectangleState(
                 GeneratedChunkSpanData source,
                 BlockTextureAtlas atlas,
                 PackedFaceStagingWorkspace stagingWorkspace)
             {
                 faceTileAttributes = BuildFaceTileAttributes(source, atlas);
                 this.stagingWorkspace = stagingWorkspace;
-                opaqueWords = stagingWorkspace.OpaqueBuffer;
                 transparentWords = stagingWorkspace.TransparentBuffer;
-                currentWords = Array.Empty<uint>();
-                opaqueWordCount = 0;
                 transparentWordCount = 0;
-                currentWordCount = 0;
                 opaqueFaceCount = 0;
                 transparentFaceCount = 0;
-                currentFaceCount = 0;
-                currentTileOffset = 0;
-                currentOpaque = false;
-                materialSelected = false;
             }
 
             public int OpaqueFaceCount => opaqueFaceCount;
 
             public int TransparentFaceCount => transparentFaceCount;
 
-            public int OpaqueWordCount => opaqueWordCount;
-
             public int TransparentWordCount => transparentWordCount;
-
-            public ReadOnlySpan<uint> OpaqueWords =>
-                opaqueWords.AsSpan(0, opaqueWordCount);
 
             public ReadOnlySpan<uint> TransparentWords =>
                 transparentWords.AsSpan(0, transparentWordCount);
 
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public void EmitMaterialYRange(
-                int material,
-                bool opaque,
-                byte direction,
-                int x,
-                int startY,
-                int endY,
-                int z)
-            {
-                uint position = (uint)x |
-                    ((uint)startY << 8) |
-                    ((uint)z << 16) |
-                    ((uint)direction << 24);
-                uint attributes =
-                    ((uint)(endY - startY) << 8) |
-                    faceTileAttributes[material * 6 + direction];
-                int faceCount = endY - startY + 1;
-                if (opaque)
-                {
-                    AppendMaterialRectangle(
-                        ref opaqueWords,
-                        ref opaqueWordCount,
-                        ref opaqueFaceCount,
-                        position,
-                        attributes,
-                        faceCount);
-                }
-                else
-                {
-                    AppendMaterialRectangle(
-                        ref transparentWords,
-                        ref transparentWordCount,
-                        ref transparentFaceCount,
-                        position,
-                        attributes,
-                        faceCount);
-                }
-            }
+            public uint[] GetOpaqueBatchBuffer(int minimumWordCount) =>
+                stagingWorkspace.GetOpaqueBatchBuffer(minimumWordCount);
 
-            public void SelectMaterial(int material, bool opaque)
+            public uint GetFaceTileAttribute(int material, byte direction) =>
+                faceTileAttributes[material * 6 + direction];
+
+            public uint GetFaceTileAttribute(int tileOffset) =>
+                faceTileAttributes[tileOffset];
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public void AddOpaqueFaces(int count)
             {
-                if ((uint)material >= 3)
-                    throw new ArgumentOutOfRangeException(nameof(material));
-                CommitCurrentMaterial();
-                currentTileOffset = material * 6;
-                currentOpaque = opaque;
-                currentWords = opaque ? opaqueWords : transparentWords;
-                currentWordCount = opaque
-                    ? opaqueWordCount
-                    : transparentWordCount;
-                currentFaceCount = opaque
-                    ? opaqueFaceCount
-                    : transparentFaceCount;
-                materialSelected = true;
+                opaqueFaceCount = checked(opaqueFaceCount + count);
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public void EmitRectangle(
-                byte direction,
-                int x,
-                int y,
-                int z,
-                int extentU,
-                int extentV)
-            {
-                uint position = (uint)x |
-                    ((uint)y << 8) |
-                    ((uint)z << 16) |
-                    ((uint)direction << 24);
-                uint attributes = (uint)(extentU - 1) |
-                    ((uint)(extentV - 1) << 8) |
-                    faceTileAttributes[currentTileOffset + direction];
-                currentFaceCount += extentU * extentV;
-                int required = currentWordCount + 2;
-                if (required > currentWords.Length)
-                {
-                    int nextLength = Math.Max(
-                        required,
-                        checked(currentWords.Length * 2));
-                    Array.Resize(ref currentWords, nextLength);
-                }
-
-                currentWords[currentWordCount] = position;
-                currentWords[currentWordCount + 1] = attributes;
-                currentWordCount = required;
-            }
-
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public void EmitYRange(
-                byte direction,
-                int x,
-                int startY,
-                int endY,
-                int z)
-            {
-                EmitRectangle(
-                    direction,
-                    x,
-                    startY,
-                    z,
-                    1,
-                    endY - startY + 1);
-            }
-
-            public void CommitBuffers()
-            {
-                CommitCurrentMaterial();
-                stagingWorkspace.Adopt(opaqueWords, transparentWords);
-            }
-
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            private static void AppendMaterialRectangle(
-                ref uint[] words,
-                ref int wordCount,
-                ref int totalFaceCount,
+            public void AppendTransparentRectangle(
                 uint position,
                 uint attributes,
                 int faceCount)
             {
-                int required = wordCount + 2;
-                if (required > words.Length)
+                int required = transparentWordCount + 2;
+                if (required > transparentWords.Length)
                 {
                     int nextLength = Math.Max(
                         required,
-                        checked(words.Length * 2));
-                    Array.Resize(ref words, nextLength);
+                        checked(transparentWords.Length * 2));
+                    Array.Resize(ref transparentWords, nextLength);
                 }
 
-                words[wordCount] = position;
-                words[wordCount + 1] = attributes;
-                wordCount = required;
-                totalFaceCount += faceCount;
+                transparentWords[transparentWordCount] = position;
+                transparentWords[transparentWordCount + 1] = attributes;
+                transparentWordCount = required;
+                transparentFaceCount = checked(
+                    transparentFaceCount + faceCount);
             }
 
-            private void CommitCurrentMaterial()
+            public void CommitTransparentBuffer()
             {
-                if (!materialSelected)
-                    return;
-                if (currentOpaque)
-                {
-                    opaqueWords = currentWords;
-                    opaqueWordCount = currentWordCount;
-                    opaqueFaceCount = currentFaceCount;
-                }
-                else
-                {
-                    transparentWords = currentWords;
-                    transparentWordCount = currentWordCount;
-                    transparentFaceCount = currentFaceCount;
-                }
+                stagingWorkspace.AdoptTransparent(transparentWords);
             }
 
             private static uint[] BuildFaceTileAttributes(
@@ -1395,6 +1546,146 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                 }
 
                 return result;
+            }
+        }
+
+        private struct GeneratedFaceRectangleWriter
+        {
+            private readonly GeneratedFaceRectangleState state;
+            private int currentTileOffset;
+            private bool currentOpaque;
+            private bool materialSelected;
+
+            public GeneratedFaceRectangleWriter(
+                GeneratedFaceRectangleState state)
+            {
+                this.state = state;
+                currentTileOffset = 0;
+                currentOpaque = false;
+                materialSelected = false;
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public void EmitMaterialYRange(
+                int material,
+                bool opaque,
+                byte direction,
+                int x,
+                int startY,
+                int endY,
+                int z,
+                scoped Span<uint> opaqueWords,
+                ref int opaqueWordCount)
+            {
+                uint position = (uint)x |
+                    ((uint)startY << 8) |
+                    ((uint)z << 16) |
+                    ((uint)direction << 24);
+                uint attributes =
+                    ((uint)(endY - startY) << 8) |
+                    state.GetFaceTileAttribute(material, direction);
+                AppendRectangle(
+                    opaque,
+                    position,
+                    attributes,
+                    endY - startY + 1,
+                    opaqueWords,
+                    ref opaqueWordCount);
+            }
+
+            public void SelectMaterial(int material, bool opaque)
+            {
+                if ((uint)material >= 3)
+                    throw new ArgumentOutOfRangeException(nameof(material));
+                currentTileOffset = material * 6;
+                currentOpaque = opaque;
+                materialSelected = true;
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public void EmitRectangle(
+                byte direction,
+                int x,
+                int y,
+                int z,
+                int extentU,
+                int extentV,
+                scoped Span<uint> opaqueWords,
+                ref int opaqueWordCount)
+            {
+                if (!materialSelected)
+                {
+                    throw new InvalidOperationException(
+                        "A material is not selected for the face rectangle.");
+                }
+
+                uint position = (uint)x |
+                    ((uint)y << 8) |
+                    ((uint)z << 16) |
+                    ((uint)direction << 24);
+                uint attributes = (uint)(extentU - 1) |
+                    ((uint)(extentV - 1) << 8) |
+                    state.GetFaceTileAttribute(
+                        currentTileOffset + direction);
+                AppendRectangle(
+                    currentOpaque,
+                    position,
+                    attributes,
+                    checked(extentU * extentV),
+                    opaqueWords,
+                    ref opaqueWordCount);
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public void EmitYRange(
+                byte direction,
+                int x,
+                int startY,
+                int endY,
+                int z,
+                scoped Span<uint> opaqueWords,
+                ref int opaqueWordCount)
+            {
+                EmitRectangle(
+                    direction,
+                    x,
+                    startY,
+                    z,
+                    1,
+                    endY - startY + 1,
+                    opaqueWords,
+                    ref opaqueWordCount);
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            private void AppendRectangle(
+                bool opaque,
+                uint position,
+                uint attributes,
+                int faceCount,
+                scoped Span<uint> opaqueWords,
+                ref int opaqueWordCount)
+            {
+                if (!opaque)
+                {
+                    state.AppendTransparentRectangle(
+                        position,
+                        attributes,
+                        faceCount);
+                    return;
+                }
+
+                int required = opaqueWordCount + 2;
+                if (required > opaqueWords.Length)
+                {
+                    throw new InvalidOperationException(
+                        "The bounded opaque face batch is too small.");
+                }
+
+                opaqueWords[opaqueWordCount] = position;
+                opaqueWords[opaqueWordCount + 1] = attributes;
+                opaqueWordCount = required;
+                state.AddOpaqueFaces(faceCount);
             }
         }
     }
