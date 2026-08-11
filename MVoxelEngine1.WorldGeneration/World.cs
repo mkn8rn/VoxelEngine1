@@ -446,11 +446,8 @@ namespace MVoxelEngine1.WorldGeneration
                 GameManager.settings.chunkMaxX *
                 GameManager.settings.chunkMaxZ);
             int workspaceLength = checked(profileCount * 2);
-            using NativePool<float> generationPool = new(
-                preLease: workspaceLength,
-                returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-            using NativeWorkspace<float> generationWorkspace =
-                generationPool.CreateWorkspace(workspaceLength);
+            using NativeWorkspace<float> generationWorkspace = new(
+                preLease: workspaceLength);
             RunChunkGenerationWorker(
                 token,
                 chunkSaveDirectory,

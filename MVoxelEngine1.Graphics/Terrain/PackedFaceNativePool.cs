@@ -1,21 +1,17 @@
-using Supprocom.NativeAllocationManagement;
 using MVoxelEngine1.Graphics.Terrain.Sections;
 
 namespace MVoxelEngine1.Graphics.Terrain
 {
     public sealed class PackedFaceNativePool : IDisposable
     {
-        private readonly NativePool<uint> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         private readonly PackedFaceStagingWorkspace stagingWorkspace = new();
 
         internal FaceRectangleMeshData Build(SectionRender renderer) =>
-            renderer.Build(pool, stagingWorkspace);
+            renderer.Build(stagingWorkspace);
 
         public void Dispose()
         {
             stagingWorkspace.Dispose();
-            pool.Dispose();
         }
     }
 

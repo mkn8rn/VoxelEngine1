@@ -243,25 +243,39 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             int baseWorldZ = unchecked(columnCz * sizeZ);
             bool recordPerformance = StartupPerformanceRecorder.IsRunning;
 
+            var state = new GenerationWorkspaceState(
+                profileCount,
+                baseWorldX,
+                baseWorldZ,
+                sizeX,
+                sizeZ,
+                _seed,
+                recordPerformance,
+                biome,
+                blockColumns);
             ColumnUniformRanges ranges = generationWorkspace.Process(
                 workspaceLength,
-                values => FillGenerationWorkspace(
-                    values,
-                    profileCount,
-                    baseWorldX,
-                    baseWorldZ,
-                    sizeX,
-                    sizeZ,
-                    _seed,
-                    recordPerformance),
-                values => BuildBlockColumns(
-                    values,
-                    profileCount,
-                    sizeX,
-                    sizeZ,
-                    biome,
-                    blockColumns,
-                    recordPerformance));
+                in state,
+                static (values, current) =>
+                {
+                    FillGenerationWorkspace(
+                        values,
+                        current.ProfileCount,
+                        current.BaseWorldX,
+                        current.BaseWorldZ,
+                        current.SizeX,
+                        current.SizeZ,
+                        current.Seed,
+                        current.RecordPerformance);
+                    return BuildBlockColumns(
+                        values,
+                        current.ProfileCount,
+                        current.SizeX,
+                        current.SizeZ,
+                        current.Biome,
+                        current.BlockColumns,
+                        current.RecordPerformance);
+                });
 
             profile.BlockColumns = blockColumns;
             profile.UniformRanges = ranges;
@@ -441,6 +455,17 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             }
             return ranges;
         }
+
+        private readonly record struct GenerationWorkspaceState(
+            int ProfileCount,
+            int BaseWorldX,
+            int BaseWorldZ,
+            int SizeX,
+            int SizeZ,
+            long Seed,
+            bool RecordPerformance,
+            Biome Biome,
+            BlockColumnProfile[] BlockColumns);
 
         private BlockColumnProfile[] GetChunkBlockMap(
             int columnCx,

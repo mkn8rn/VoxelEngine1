@@ -13,7 +13,6 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
     internal partial class SectionRender
     {
         private FaceRectangleMeshData BuildGeneratedSpanRectangles(
-            NativePool<uint> nativePool,
             PackedFaceStagingWorkspace stagingWorkspace)
         {
             GeneratedChunkSpanData source = data.GeneratedSpans ??
@@ -87,10 +86,10 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                 }
 
                 writer.CommitBuffers();
-                using NativeBuilder<uint> opaqueRectangles =
-                    nativePool.CreateBuilder(writer.OpaqueWordCount);
-                using NativeBuilder<uint> transparentRectangles =
-                    nativePool.CreateBuilder(writer.TransparentWordCount);
+                using NativeBuilder<uint> opaqueRectangles = new(
+                    preLease: writer.OpaqueWordCount);
+                using NativeBuilder<uint> transparentRectangles = new(
+                    preLease: writer.TransparentWordCount);
                 if (writer.OpaqueWordCount != 0)
                     opaqueRectangles.Append(writer.OpaqueWords);
                 if (writer.TransparentWordCount != 0)

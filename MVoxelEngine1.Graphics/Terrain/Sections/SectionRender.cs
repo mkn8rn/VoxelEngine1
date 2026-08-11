@@ -5,7 +5,6 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using MVoxelEngine1.Infrastructure.Loaders;
-using Supprocom.NativeAllocationManagement;
 
 namespace MVoxelEngine1.Graphics.Terrain.Sections
 {
@@ -35,14 +34,11 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
         public FaceRectangleMeshData Build() => packedFacePool.Build(this);
 
         internal FaceRectangleMeshData Build(
-            NativePool<uint> nativePool,
             PackedFaceStagingWorkspace stagingWorkspace)
         {
             if (data.GeneratedSpans is not null)
             {
-                return BuildGeneratedSpanRectangles(
-                    nativePool,
-                    stagingWorkspace);
+                return BuildGeneratedSpanRectangles(stagingWorkspace);
             }
 
             BuildLegacyFaces(

@@ -29,7 +29,7 @@ namespace MVoxelEngine1.Tests
                 "reusable-managed-array",
                 RunManagedWorker);
             HeightBatchEvidence nativeWarmup = RunHeightBatch(
-                "published-nam-workspace-0.1.2",
+                "published-nam-workspace-0.2.0",
                 RunNativeWorker);
             Assert.Equal(
                 managedWarmup.WorkerChecksums,
@@ -41,7 +41,7 @@ namespace MVoxelEngine1.Tests
                 bool nativeFirst = (sampleIndex & 1) != 0;
                 HeightBatchEvidence first = nativeFirst
                     ? RunHeightBatch(
-                        "published-nam-workspace-0.1.2",
+                        "published-nam-workspace-0.2.0",
                         RunNativeWorker)
                     : RunHeightBatch(
                         "reusable-managed-array",
@@ -51,7 +51,7 @@ namespace MVoxelEngine1.Tests
                         "reusable-managed-array",
                         RunManagedWorker)
                     : RunHeightBatch(
-                        "published-nam-workspace-0.1.2",
+                        "published-nam-workspace-0.2.0",
                         RunNativeWorker);
                 HeightBatchEvidence managed = nativeFirst ? second : first;
                 HeightBatchEvidence native = nativeFirst ? first : second;
@@ -173,11 +173,8 @@ namespace MVoxelEngine1.Tests
 
         private static ulong RunNativeWorker(int workerIndex)
         {
-            using NativePool<float> pool = new(
-                preLease: WorkspaceLength,
-                returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-            using NativeWorkspace<float> workspace =
-                pool.CreateWorkspace(WorkspaceLength);
+            using NativeWorkspace<float> workspace = new(
+                preLease: WorkspaceLength);
             return RunNativeWorkerCore(workerIndex, in workspace);
         }
 

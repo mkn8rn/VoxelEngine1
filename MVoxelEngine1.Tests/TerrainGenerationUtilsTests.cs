@@ -180,11 +180,8 @@ namespace MVoxelEngine1.Tests
                 }
             }
 
-            using NativePool<float> pool = new(
-                preLease: valueCount,
-                returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-            using NativeWorkspace<float> workspace =
-                pool.CreateWorkspace(valueCount);
+            using NativeWorkspace<float> workspace = new(
+                preLease: valueCount);
             _ = workspace.Process(
                 valueCount,
                 values => Quadrant.FillHeightMap(
