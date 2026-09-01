@@ -60,7 +60,7 @@ namespace MVoxelEngine1.Graphics.Terrain
         private readonly bool allOneBlock; private readonly ushort allOneBlockId;
         private readonly int prepassSolidCount; private readonly int prepassExposureEstimate;
         private bool fullyOccluded;
-        private ChunkRenderUploadData uploadData;
+        private ChunkRenderUploadData? uploadData;
 
         // Static quad data (positions & base UVs 0..1) reused for all faces.
         private static readonly byte[] QuadPositions = new byte[]
@@ -78,7 +78,10 @@ namespace MVoxelEngine1.Graphics.Terrain
 
         public static ReadOnlyMemory<ushort> QuadIndexUploadData => QuadIndices;
 
-        public ChunkRenderUploadData UploadData => uploadData;
+        public ChunkRenderUploadData UploadData =>
+            uploadData ??
+            throw new InvalidOperationException(
+                "This renderer uses a native upload packet.");
 
         public bool IsOpenGlUploaded => isBuilt;
 
@@ -122,6 +125,112 @@ namespace MVoxelEngine1.Graphics.Terrain
             {
                 meshData?.Dispose();
             }
+        }
+
+        private ChunkRender(
+            in NativeChunkRenderPacketDescriptor descriptor)
+        {
+            chunkWorldPosition = new Vector3(
+                descriptor.ChunkWorldX,
+                descriptor.ChunkWorldY,
+                descriptor.ChunkWorldZ);
+            opaqueFaceCount = descriptor.OpaqueFaceCount;
+            opaqueRectangleCount = descriptor.OpaqueRectangleCount;
+            transparentFaceCount = descriptor.TransparentFaceCount;
+            transparentRectangleCount =
+                descriptor.TransparentRectangleCount;
+            fullyOccluded = descriptor.IsEmpty;
+        }
+
+        public static ChunkRender? UploadNative(
+            in NativeChunkRenderPacketDescriptor descriptor,
+            ReadOnlySpan<uint> opaqueWords,
+            ReadOnlySpan<uint> transparentWords)
+        {
+            if (descriptor.OpaqueWordCount != opaqueWords.Length ||
+                descriptor.TransparentWordCount != transparentWords.Length)
+            {
+                throw new InvalidDataException(
+                    "The native packet word ranges do not match its descriptor.");
+            }
+            if (descriptor.IsEmpty)
+                return null;
+
+            var renderer = new ChunkRender(in descriptor);
+            try
+            {
+                renderer.BuildNative(opaqueWords, transparentWords);
+                return renderer;
+            }
+            catch
+            {
+                renderer.DeleteGL();
+                throw;
+            }
+        }
+
+        private void BuildNative(
+            ReadOnlySpan<uint> opaqueWords,
+            ReadOnlySpan<uint> transparentWords)
+        {
+            StartupPerformanceRecorder.RecordGpuStreamingStart();
+
+            quadIndexIBO = new IBO(QuadIndices, QuadIndices.Length);
+            quadIndexBuilt = true;
+            quadPosVBO = new VBO(QuadPositions, QuadPositions.Length);
+            quadPosBuilt = true;
+
+            if (opaqueRectangleCount > 0)
+            {
+                opaqueVAO = new VAO();
+                opaqueVAO.Bind();
+                quadPosVBO.Bind();
+                opaqueVAO.LinkToVAO(
+                    0,
+                    3,
+                    VertexAttribPointerType.UnsignedByte,
+                    false,
+                    quadPosVBO);
+                opaqueRectangleVBO = new VBO(opaqueWords);
+                opaqueVAO.LinkIntegerToVAO(
+                    2,
+                    PackedFaceRectangle.WordsPerRectangle,
+                    VertexAttribIntegerType.UnsignedInt,
+                    opaqueRectangleVBO);
+                opaqueVAO.SetDivisor(2, 1);
+                opaqueRectangleBuilt = true;
+                quadIndexIBO.Bind();
+                opaqueVAO.SetAttribEnabled(5, false);
+                opaqueVaoBuilt = true;
+            }
+
+            if (transparentRectangleCount > 0)
+            {
+                transparentVAO = new VAO();
+                transparentVAO.Bind();
+                quadPosVBO.Bind();
+                transparentVAO.LinkToVAO(
+                    0,
+                    3,
+                    VertexAttribPointerType.UnsignedByte,
+                    false,
+                    quadPosVBO);
+                transparentRectangleVBO = new VBO(
+                    transparentWords,
+                    RenderPass.Transparent);
+                transparentVAO.LinkIntegerToVAO(
+                    5,
+                    PackedFaceRectangle.WordsPerRectangle,
+                    VertexAttribIntegerType.UnsignedInt,
+                    transparentRectangleVBO);
+                transparentVAO.SetDivisor(5, 1);
+                transparentRectangleBuilt = true;
+                quadIndexIBO.Bind();
+                transparentVAO.SetAttribEnabled(2, false);
+                transparentVaoBuilt = true;
+            }
+
+            isBuilt = true;
         }
 
         private FaceRectangleMeshData GenerateFaces(
@@ -284,7 +393,10 @@ namespace MVoxelEngine1.Graphics.Terrain
                 quadPosVBO.Bind();
                 opaqueVAO.LinkToVAO(0, 3, VertexAttribPointerType.UnsignedByte, false, quadPosVBO);
 
-                opaqueRectangleVBO = uploadData.ReadOpaque(
+                ChunkRenderUploadData currentUploadData = uploadData ??
+                    throw new InvalidOperationException(
+                        "The native renderer must upload during its packet callback.");
+                opaqueRectangleVBO = currentUploadData.ReadOpaque(
                     static view => new VBO(view.AsSpan()),
                     static rectangles => new VBO(rectangles));
                 opaqueVAO.LinkIntegerToVAO(
@@ -315,7 +427,10 @@ namespace MVoxelEngine1.Graphics.Terrain
                 quadPosVBO.Bind();
                 transparentVAO.LinkToVAO(0, 3, VertexAttribPointerType.UnsignedByte, false, quadPosVBO);
 
-                transparentRectangleVBO = uploadData.ReadTransparent(
+                ChunkRenderUploadData currentUploadData = uploadData ??
+                    throw new InvalidOperationException(
+                        "The native renderer must upload during its packet callback.");
+                transparentRectangleVBO = currentUploadData.ReadTransparent(
                     static view => new VBO(
                         view.AsSpan(),
                         RenderPass.Transparent),
@@ -427,7 +542,7 @@ namespace MVoxelEngine1.Graphics.Terrain
             if (Interlocked.Exchange(ref deletionScheduled, 1) != 0)
                 return;
 
-            uploadData.Dispose();
+            Interlocked.Exchange(ref uploadData, null)?.Dispose();
             if (isBuilt)
                 pendingDeletion.Enqueue(this);
         }
@@ -436,8 +551,6 @@ namespace MVoxelEngine1.Graphics.Terrain
 
         private void DeleteGL()
         {
-            if (!isBuilt) return;
-
             if (opaqueVaoBuilt) { opaqueVAO.Delete(); opaqueVAO = null; opaqueVaoBuilt = false; }
             if (transparentVaoBuilt) { transparentVAO.Delete(); transparentVAO = null; transparentVaoBuilt = false; }
             if (quadPosBuilt) { quadPosVBO.Delete(); quadPosVBO = null; quadPosBuilt = false; }

@@ -1,5 +1,6 @@
 using MVoxelEngine1.Graphics.Terrain;
 using MVoxelEngine1.Graphics.Textures;
+using MVoxelEngine1.Infrastructure.Diagnostics;
 using MVoxelEngine1.Infrastructure.Managers;
 using MVoxelEngine1.Infrastructure.Models;
 using MVoxelEngine1.Infrastructure.Models.Generation;
@@ -52,18 +53,23 @@ public readonly struct NativePreUploadPacket
     public int TransparentWordCount { get; }
 }
 
-public sealed class NativeHeadlessGtrtPipeline : IDisposable
+public sealed class NativeGtrtPipeline : IDisposable
 {
     private readonly NativeGameSnapshot game;
     private readonly NativeGtrtSession session;
     private readonly NativeGtrtWorkerPool workers;
     private readonly NativeLeaseAction<byte> capturePacketAction;
+    private readonly NativeLeaseAction<byte> consumePacketsAction;
     private NativePreUploadPacket capturedPacket;
+    private NativeChunkRenderPacketAction? pendingPacketConsumer;
     private bool packetCaptured;
+    private int consumedPacketCount;
+    private int packetConsumptionState;
     private long coordinatorManagedAllocationBytes;
+    private double? generationToRenderMilliseconds;
     private int disposed;
 
-    private NativeHeadlessGtrtPipeline(
+    private NativeGtrtPipeline(
         NativeGameSnapshot game,
         NativeGtrtSession session,
         NativeGtrtWorkerPool workers)
@@ -72,9 +78,10 @@ public sealed class NativeHeadlessGtrtPipeline : IDisposable
         this.session = session;
         this.workers = workers;
         capturePacketAction = CaptureFirstPacket;
+        consumePacketsAction = ConsumePackets;
     }
 
-    public static NativeHeadlessGtrtPipeline Create(
+    public static NativeGtrtPipeline Create(
         BlockTextureAtlas textureAtlas)
     {
         ArgumentNullException.ThrowIfNull(textureAtlas);
@@ -116,7 +123,7 @@ public sealed class NativeHeadlessGtrtPipeline : IDisposable
             streamGeneration);
     }
 
-    internal static NativeHeadlessGtrtPipeline Create(
+    internal static NativeGtrtPipeline Create(
         BlockTextureAtlas textureAtlas,
         GameSettings settings,
         int generationWorkerCount,
@@ -146,7 +153,7 @@ public sealed class NativeHeadlessGtrtPipeline : IDisposable
                 generationWorkerCount,
                 meshWorkerCount,
                 streamGeneration);
-            return new NativeHeadlessGtrtPipeline(
+            return new NativeGtrtPipeline(
                 game,
                 session,
                 workers);
@@ -169,13 +176,16 @@ public sealed class NativeHeadlessGtrtPipeline : IDisposable
         long allocationStart = GC.GetAllocatedBytesForCurrentThread();
         workers.Run(seed);
         session.Access(capturePacketAction);
-        coordinatorManagedAllocationBytes =
-            GC.GetAllocatedBytesForCurrentThread() - allocationStart;
         if (!packetCaptured)
         {
             throw new InvalidOperationException(
                 "No native render packet reached the pre-upload boundary.");
         }
+
+        generationToRenderMilliseconds =
+            StartupPerformanceRecorder.RecordGenerationToRender();
+        coordinatorManagedAllocationBytes =
+            GC.GetAllocatedBytesForCurrentThread() - allocationStart;
 
         return capturedPacket;
     }
@@ -190,6 +200,44 @@ public sealed class NativeHeadlessGtrtPipeline : IDisposable
         workers.InitialGenerationMilliseconds;
 
     public long InitialMeshMilliseconds => workers.InitialMeshMilliseconds;
+
+    public double? GenerationToRenderMilliseconds =>
+        generationToRenderMilliseconds;
+
+    public int ConsumeReadyPackets(
+        NativeChunkRenderPacketAction packetConsumer)
+    {
+        ArgumentNullException.ThrowIfNull(packetConsumer);
+        ObjectDisposedException.ThrowIf(
+            Volatile.Read(ref disposed) != 0,
+            this);
+        if (!packetCaptured)
+        {
+            throw new InvalidOperationException(
+                "The native GTRT run is not complete.");
+        }
+        if (Interlocked.CompareExchange(
+                ref packetConsumptionState,
+                1,
+                0) != 0)
+        {
+            throw new InvalidOperationException(
+                "Native render packets can be consumed only once.");
+        }
+
+        pendingPacketConsumer = packetConsumer;
+        consumedPacketCount = 0;
+        try
+        {
+            session.Access(consumePacketsAction);
+            return consumedPacketCount;
+        }
+        finally
+        {
+            pendingPacketConsumer = null;
+            Volatile.Write(ref packetConsumptionState, 2);
+        }
+    }
 
     public void Dispose()
     {
@@ -256,6 +304,57 @@ public sealed class NativeHeadlessGtrtPipeline : IDisposable
                 record.TransparentWordCount);
             packetCaptured = true;
             return;
+        }
+    }
+
+    private void ConsumePackets(scoped NativeLeaseView<byte> owner)
+    {
+        NativeChunkRenderPacketAction consumer =
+            pendingPacketConsumer ??
+            throw new InvalidOperationException(
+                "The native packet consumer is not set.");
+        var view = new NativeGtrtSessionView(owner.AsSpan());
+        for (int chunkIndex = 0;
+             chunkIndex < view.Chunks.Length;
+             chunkIndex++)
+        {
+            NativeChunkRecord chunk = view.Chunks[chunkIndex];
+            if (chunk.State != NativeChunkState.PacketReady ||
+                !view.TryActivatePacket(
+                    chunkIndex,
+                    out NativePacketReadView packet))
+            {
+                continue;
+            }
+
+            try
+            {
+                NativeRenderPacketRecord record = packet.Record;
+                var descriptor = new NativeChunkRenderPacketDescriptor(
+                    record.RenderDataId,
+                    checked(chunk.ChunkX * view.ChunkSizeX),
+                    checked(chunk.ChunkY * view.ChunkSizeY),
+                    checked(chunk.ChunkZ * view.ChunkSizeZ),
+                    record.RegistryEpoch,
+                    record.PublicationEpoch,
+                    record.OpaqueFaceCount,
+                    record.OpaqueWordCount,
+                    record.TransparentFaceCount,
+                    record.TransparentWordCount);
+                consumer(
+                    in descriptor,
+                    packet.OpaqueWords,
+                    packet.TransparentWords);
+                consumedPacketCount++;
+            }
+            finally
+            {
+                if (!view.TryRetirePacket(chunkIndex))
+                {
+                    throw new InvalidOperationException(
+                        "The native render packet could not retire.");
+                }
+            }
         }
     }
 }

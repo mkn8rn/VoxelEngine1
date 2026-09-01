@@ -23,14 +23,14 @@ namespace MVoxelEngine1.Application.Simulation
                 FlagManager.flags.worldName,
                 FlagManager.flags.seed);
 
-            using NativeHeadlessGtrtPipeline pipeline =
-                NativeHeadlessGtrtPipeline.Create(textureAtlas);
+            using NativeGtrtPipeline pipeline =
+                NativeGtrtPipeline.Create(textureAtlas);
             NativePreUploadPacket nativePacket = pipeline.Run(loader.seed);
 
             double generationToRender =
-                StartupPerformanceRecorder.RecordGenerationToRender() ??
+                pipeline.GenerationToRenderMilliseconds ??
                 throw new InvalidOperationException(
-                    "The headless GTRT endpoint was already recorded.");
+                    "The headless GTRT endpoint was not recorded.");
             Console.WriteLine(FormattableString.Invariant(
                 $"Generation to Render time (GTRT): {generationToRender:R} ms."));
             Console.WriteLine(

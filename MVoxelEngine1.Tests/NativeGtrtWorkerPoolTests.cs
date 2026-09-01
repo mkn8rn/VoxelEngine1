@@ -1,4 +1,5 @@
 using MVoxelEngine1.Graphics.Textures;
+using MVoxelEngine1.Graphics.Terrain;
 using MVoxelEngine1.Infrastructure.Loaders;
 using MVoxelEngine1.Infrastructure.Managers;
 using MVoxelEngine1.Infrastructure.Models;
@@ -37,8 +38,8 @@ public sealed class NativeGtrtWorkerPoolTests
         var atlas = new BlockTextureAtlas(
             BlockTextureAtlasUploadMode.SimulatedGpuUpload);
         GameSettings settings = CreateSmallSettings();
-        using NativeHeadlessGtrtPipeline pipeline =
-            NativeHeadlessGtrtPipeline.Create(
+        using NativeGtrtPipeline pipeline =
+            NativeGtrtPipeline.Create(
                 atlas,
                 settings,
                 generationWorkerCount: 3,
@@ -58,6 +59,77 @@ public sealed class NativeGtrtWorkerPoolTests
             packet.TransparentWordCount);
         Assert.Equal(0, pipeline.MaximumWorkerManagedAllocationBytes);
         Assert.Equal(0, pipeline.CoordinatorManagedAllocationBytes);
+    }
+
+    [Fact]
+    public void ReadyPacketsUseBoundedNativeViewsAndRetireExactlyOnce()
+    {
+        LoadDefaultGame();
+        var atlas = new BlockTextureAtlas(
+            BlockTextureAtlasUploadMode.SimulatedGpuUpload);
+        GameSettings settings = CreateSmallSettings();
+        using NativeGtrtPipeline pipeline =
+            NativeGtrtPipeline.Create(
+                atlas,
+                settings,
+                generationWorkerCount: 3,
+                meshWorkerCount: 3);
+        NativePreUploadPacket firstPacket = pipeline.Run(123456);
+        int matchingPacketCount = 0;
+        long observedWordCount = 0;
+
+        int consumed = pipeline.ConsumeReadyPackets(
+            (in NativeChunkRenderPacketDescriptor descriptor,
+             ReadOnlySpan<uint> opaqueWords,
+             ReadOnlySpan<uint> transparentWords) =>
+            {
+                Assert.Equal(0, descriptor.ChunkWorldX % settings.chunkMaxX);
+                Assert.Equal(0, descriptor.ChunkWorldY % settings.chunkMaxY);
+                Assert.Equal(0, descriptor.ChunkWorldZ % settings.chunkMaxZ);
+                Assert.Equal(1, descriptor.RegistryEpoch);
+                Assert.Equal(1, descriptor.PublicationEpoch);
+                Assert.Equal(descriptor.OpaqueWordCount, opaqueWords.Length);
+                Assert.Equal(
+                    descriptor.TransparentWordCount,
+                    transparentWords.Length);
+                observedWordCount +=
+                    opaqueWords.Length + transparentWords.Length;
+                if (descriptor.RenderDataId == firstPacket.RenderDataId)
+                    matchingPacketCount++;
+            });
+
+        Assert.Equal(27, consumed);
+        Assert.Equal(1, matchingPacketCount);
+        Assert.True(observedWordCount > 0);
+        Assert.Throws<InvalidOperationException>(() =>
+            pipeline.ConsumeReadyPackets(
+                static (in NativeChunkRenderPacketDescriptor _,
+                        ReadOnlySpan<uint> _,
+                        ReadOnlySpan<uint> _) => { }));
+    }
+
+    [Fact]
+    public void ConsumerFailureRetiresTheActivePacketBeforeDisposal()
+    {
+        LoadDefaultGame();
+        var atlas = new BlockTextureAtlas(
+            BlockTextureAtlasUploadMode.SimulatedGpuUpload);
+        NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(
+            atlas,
+            CreateSmallSettings(),
+            generationWorkerCount: 2,
+            meshWorkerCount: 2);
+        pipeline.Run(123456);
+
+        Assert.Throws<PacketConsumerFailure>(() =>
+            pipeline.ConsumeReadyPackets(
+                static (in NativeChunkRenderPacketDescriptor _,
+                        ReadOnlySpan<uint> _,
+                        ReadOnlySpan<uint> _) =>
+                    throw new PacketConsumerFailure()));
+
+        pipeline.Dispose();
+        pipeline.Dispose();
     }
 
     [Theory]
@@ -261,4 +333,6 @@ public sealed class NativeGtrtWorkerPoolTests
         int TransparentFaceCount,
         uint[] OpaqueWords,
         uint[] TransparentWords);
+
+    private sealed class PacketConsumerFailure : Exception;
 }
