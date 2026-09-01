@@ -131,6 +131,17 @@ namespace MVoxelEngine1.WorldGeneration
             if (FlagManager.flags.meshRenderWorkersPerCoreInitial is null)
                 Console.WriteLine("Warning: meshRenderWorkersPerCoreInitial flag is not set or invalid. Defaulting to worldGenWorkersPerCore");
 
+            int configuredInitialGenerationWorkers = (int)(
+                (FlagManager.flags.worldGenWorkersPerCoreInitial ??
+                    FlagManager.flags.worldGenWorkersPerCore.Value) * proc);
+            int configuredFinalGenerationWorkers = (int)(
+                FlagManager.flags.worldGenWorkersPerCore.Value * proc);
+            int nativeGenerationWorkerCount = Math.Max(
+                1,
+                Math.Max(
+                    configuredInitialGenerationWorkers,
+                    configuredFinalGenerationWorkers));
+
             loader = new WorldLoader();
             loader.ChooseWorld(FlagManager.flags.worldName, FlagManager.flags.seed);
             ID = loader.ID;
@@ -144,7 +155,9 @@ namespace MVoxelEngine1.WorldGeneration
             meshBuildQueue = new BlockingCollection<(int cx, int cy, int cz)>(new ConcurrentQueue<(int, int, int)>());
             schedulingCts = new CancellationTokenSource();
             (nativeGameSnapshot, nativeGtrtSession) =
-                CreateNativeWorldState(textureAtlas);
+                CreateNativeWorldState(
+                    textureAtlas,
+                    nativeGenerationWorkerCount);
             Console.WriteLine("World resources initialized.");
 
             bool streamGeneration = FlagManager.flags.renderStreamingIfAllowed ?? throw new InvalidOperationException("Render streaming flag is not set.");
@@ -166,9 +179,9 @@ namespace MVoxelEngine1.WorldGeneration
                 if (!streamGeneration)
                 {
                     // --- Staged non-streaming load ---
-                    int initialGen = (int)((FlagManager.flags.worldGenWorkersPerCoreInitial ?? FlagManager.flags.worldGenWorkersPerCore!.Value) * proc);
+                    int initialGen = configuredInitialGenerationWorkers;
                     int initialMesh = (int)((FlagManager.flags.meshRenderWorkersPerCoreInitial ?? FlagManager.flags.meshRenderWorkersPerCore!.Value) * proc);
-                    int finalGen = (int)(FlagManager.flags.worldGenWorkersPerCore.Value * proc);
+                    int finalGen = configuredFinalGenerationWorkers;
                     int finalMesh = (int)(FlagManager.flags.meshRenderWorkersPerCore.Value * proc);
 
                     // 1. Initial world generation workers
@@ -194,7 +207,7 @@ namespace MVoxelEngine1.WorldGeneration
                 else
                 {
                     // Streaming mode: single steady-state startup with final counts.
-                    int finalGen = (int)(FlagManager.flags.worldGenWorkersPerCore.Value * proc);
+                    int finalGen = configuredFinalGenerationWorkers;
                     int finalMesh = (int)(FlagManager.flags.meshRenderWorkersPerCore.Value * proc);
                     StartGenerationWorkers(finalGen);
                     StartMeshBuildWorkers(finalMesh);
@@ -215,14 +228,17 @@ namespace MVoxelEngine1.WorldGeneration
         private static (
             NativeGameSnapshot Game,
             NativeGtrtSession Session) CreateNativeWorldState(
-                BlockTextureAtlas textureAtlas)
+                BlockTextureAtlas textureAtlas,
+                int generationWorkerCount)
         {
             NativeGameSnapshot game =
                 NativeGameSnapshot.Create(textureAtlas);
             try
             {
                 NativeGtrtSession session =
-                    NativeGtrtSession.Create(GameManager.settings);
+                    NativeGtrtSession.Create(
+                        GameManager.settings,
+                        generationWorkerCount);
                 return (game, session);
             }
             catch

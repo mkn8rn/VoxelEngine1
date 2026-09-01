@@ -9,9 +9,57 @@ using MVoxelEngine1.Infrastructure.Models.Terrain;
 
 namespace MVoxelEngine1.WorldGeneration.Terrain
 {
+    internal readonly struct TerrainMaterialSpanParameters
+    {
+        internal TerrainMaterialSpanParameters(
+            int stoneMinY,
+            int stoneMaxY,
+            int stoneMinDepth,
+            int stoneMaxDepth,
+            int soilMinY,
+            int soilMaxY,
+            int soilMinDepth,
+            int soilMaxDepth,
+            int waterLevel)
+        {
+            StoneMinY = stoneMinY;
+            StoneMaxY = stoneMaxY;
+            StoneMinDepth = stoneMinDepth;
+            StoneMaxDepth = stoneMaxDepth;
+            SoilMinY = soilMinY;
+            SoilMaxY = soilMaxY;
+            SoilMinDepth = soilMinDepth;
+            SoilMaxDepth = soilMaxDepth;
+            WaterLevel = waterLevel;
+        }
+
+        internal int StoneMinY { get; }
+        internal int StoneMaxY { get; }
+        internal int StoneMinDepth { get; }
+        internal int StoneMaxDepth { get; }
+        internal int SoilMinY { get; }
+        internal int SoilMaxY { get; }
+        internal int SoilMinDepth { get; }
+        internal int SoilMaxDepth { get; }
+        internal int WaterLevel { get; }
+
+        internal static TerrainMaterialSpanParameters FromBiome(
+            Biome biome) =>
+            new(
+                biome.stoneMinYLevel,
+                biome.stoneMaxYLevel,
+                biome.stoneMinDepth,
+                biome.stoneMaxDepth,
+                biome.soilMinYLevel,
+                biome.soilMaxYLevel,
+                biome.soilMinDepth,
+                biome.soilMaxDepth,
+                biome.waterLevel);
+    }
+
     internal static class TerrainGenerationUtils
     {
-        private readonly struct NoiseAxisSample
+        internal readonly struct NoiseAxisSample
         {
             internal NoiseAxisSample(int grid, float smooth)
             {
@@ -67,11 +115,27 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             float slope01,
             float noise01)
         {
+            TerrainMaterialSpanParameters parameters =
+                TerrainMaterialSpanParameters.FromBiome(biome);
+            return DeriveWorldStoneSoilSpansFromNoise(
+                surfaceY,
+                in parameters,
+                slope01,
+                noise01);
+        }
+
+        internal static (int stoneStart, int stoneEnd, int soilStart, int soilEnd, int waterStart, int waterEnd)
+        DeriveWorldStoneSoilSpansFromNoise(
+            int surfaceY,
+            scoped in TerrainMaterialSpanParameters parameters,
+            float slope01,
+            float noise01)
+        {
             // ---- Biome specs ----
-            int stoneMinY = biome.stoneMinYLevel; int stoneMaxY = biome.stoneMaxYLevel;
-            int soilMinY = biome.soilMinYLevel; int soilMaxY = biome.soilMaxYLevel;
-            int soilMinDepthSpec = biome.soilMinDepth; int soilMaxDepthSpec = biome.soilMaxDepth;
-            int stoneMinDepthSpec = biome.stoneMinDepth; int stoneMaxDepthSpec = biome.stoneMaxDepth;
+            int stoneMinY = parameters.StoneMinY; int stoneMaxY = parameters.StoneMaxY;
+            int soilMinY = parameters.SoilMinY; int soilMaxY = parameters.SoilMaxY;
+            int soilMinDepthSpec = parameters.SoilMinDepth; int soilMaxDepthSpec = parameters.SoilMaxDepth;
+            int stoneMinDepthSpec = parameters.StoneMinDepth; int stoneMaxDepthSpec = parameters.StoneMaxDepth;
 
             if (slope01 < 0f) slope01 = 0f; else if (slope01 > 1f) slope01 = 1f;
 
@@ -166,10 +230,10 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                     topSolidForWater = surfaceY;
                 }
 
-                if (biome.waterLevel > topSolidForWater)
+                if (parameters.WaterLevel > topSolidForWater)
                 {
                     waterStart = topSolidForWater + 1; // starts immediately above the actual top solid (or surface fallback)
-                    waterEnd = biome.waterLevel;       // inclusive
+                    waterEnd = parameters.WaterLevel;  // inclusive
                 }
             }
 
@@ -194,6 +258,70 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                     nameof(destination));
             }
 
+            NoiseAxisSample[] xBuffer =
+                ArrayPool<NoiseAxisSample>.Shared.Rent(sizeX);
+            NoiseAxisSample[]? zBuffer = null;
+            float[]? latticeBuffer = null;
+            try
+            {
+                zBuffer = ArrayPool<NoiseAxisSample>.Shared.Rent(sizeZ);
+                latticeBuffer = ArrayPool<float>.Shared.Rent(
+                    GetSmoothValueNoiseLatticeCapacity(sizeX, sizeZ));
+                FillSmoothValueNoise01(
+                    baseX,
+                    baseZ,
+                    sizeX,
+                    sizeZ,
+                    seed,
+                    destination,
+                    xBuffer.AsSpan(0, sizeX),
+                    zBuffer.AsSpan(0, sizeZ),
+                    latticeBuffer);
+            }
+            finally
+            {
+                if (latticeBuffer is not null)
+                    ArrayPool<float>.Shared.Return(latticeBuffer);
+                if (zBuffer is not null)
+                    ArrayPool<NoiseAxisSample>.Shared.Return(zBuffer);
+                ArrayPool<NoiseAxisSample>.Shared.Return(xBuffer);
+            }
+        }
+
+        internal static void FillSmoothValueNoise01(
+            int baseX,
+            int baseZ,
+            int sizeX,
+            int sizeZ,
+            long seed,
+            Span<float> destination,
+            Span<NoiseAxisSample> xScratch,
+            Span<NoiseAxisSample> zScratch,
+            Span<float> latticeScratch)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(sizeX);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(sizeZ);
+            int valueCount = checked(sizeX * sizeZ);
+            if (destination.Length < valueCount)
+            {
+                throw new ArgumentException(
+                    "The destination is smaller than the requested noise map.",
+                    nameof(destination));
+            }
+            if (xScratch.Length < sizeX)
+                throw new ArgumentException("The X scratch range is too small.", nameof(xScratch));
+            if (zScratch.Length < sizeZ)
+                throw new ArgumentException("The Z scratch range is too small.", nameof(zScratch));
+            int latticeCapacity = GetSmoothValueNoiseLatticeCapacity(
+                sizeX,
+                sizeZ);
+            if (latticeScratch.Length < latticeCapacity)
+            {
+                throw new ArgumentException(
+                    "The lattice scratch range is too small.",
+                    nameof(latticeScratch));
+            }
+
             int firstSizeX = GetFirstContiguousLength(baseX, sizeX);
             int firstSizeZ = GetFirstContiguousLength(baseZ, sizeZ);
             FillSmoothValueNoiseSegment(
@@ -204,7 +332,10 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                 seed,
                 destination,
                 destinationOffset: 0,
-                destinationRowStride: sizeZ);
+                destinationRowStride: sizeZ,
+                xScratch,
+                zScratch,
+                latticeScratch);
 
             int secondSizeZ = sizeZ - firstSizeZ;
             if (secondSizeZ > 0)
@@ -217,7 +348,10 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                     seed,
                     destination,
                     destinationOffset: firstSizeZ,
-                    destinationRowStride: sizeZ);
+                    destinationRowStride: sizeZ,
+                    xScratch,
+                    zScratch,
+                    latticeScratch);
             }
 
             int secondSizeX = sizeX - firstSizeX;
@@ -233,7 +367,10 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                 seed,
                 destination,
                 destinationOffset: secondXOffset,
-                destinationRowStride: sizeZ);
+                destinationRowStride: sizeZ,
+                xScratch,
+                zScratch,
+                latticeScratch);
 
             if (secondSizeZ > 0)
             {
@@ -245,8 +382,24 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                     seed,
                     destination,
                     destinationOffset: checked(secondXOffset + firstSizeZ),
-                    destinationRowStride: sizeZ);
+                    destinationRowStride: sizeZ,
+                    xScratch,
+                    zScratch,
+                    latticeScratch);
             }
+        }
+
+        internal static int GetSmoothValueNoiseLatticeCapacity(
+            int sizeX,
+            int sizeZ)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(sizeX);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(sizeZ);
+            int gridCapacityX = checked(
+                (sizeX - 1) / NoiseCellSize + 3);
+            int gridCapacityZ = checked(
+                (sizeZ - 1) / NoiseCellSize + 3);
+            return checked(gridCapacityX * gridCapacityZ);
         }
 
         private static void FillSmoothValueNoiseSegment(
@@ -257,97 +410,82 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             long seed,
             Span<float> destination,
             int destinationOffset,
-            int destinationRowStride)
+            int destinationRowStride,
+            Span<NoiseAxisSample> xScratch,
+            Span<NoiseAxisSample> zScratch,
+            Span<float> latticeScratch)
         {
-
-            NoiseAxisSample[] xBuffer =
-                ArrayPool<NoiseAxisSample>.Shared.Rent(sizeX);
-            NoiseAxisSample[]? zBuffer = null;
-            float[]? latticeBuffer = null;
-            try
+            Span<NoiseAxisSample> xSamples = xScratch.Slice(0, sizeX);
+            Span<NoiseAxisSample> zSamples = zScratch.Slice(0, sizeZ);
+            int minimumGridX = int.MaxValue;
+            int maximumGridX = int.MinValue;
+            for (int x = 0; x < sizeX; x++)
             {
-                zBuffer = ArrayPool<NoiseAxisSample>.Shared.Rent(sizeZ);
-                Span<NoiseAxisSample> xSamples = xBuffer.AsSpan(0, sizeX);
-                Span<NoiseAxisSample> zSamples = zBuffer.AsSpan(0, sizeZ);
-                int minimumGridX = int.MaxValue;
-                int maximumGridX = int.MinValue;
-                for (int x = 0; x < sizeX; x++)
-                {
-                    int worldX = unchecked(baseX + x);
-                    int gridX = FloorDiv(worldX, NoiseCellSize);
-                    float fraction =
-                        (worldX - gridX * NoiseCellSize) / (float)NoiseCellSize;
-                    xSamples[x] = new NoiseAxisSample(
-                        gridX,
-                        SmoothStep(fraction));
-                    if (gridX < minimumGridX) minimumGridX = gridX;
-                    if (gridX > maximumGridX) maximumGridX = gridX;
-                }
+                int worldX = unchecked(baseX + x);
+                int gridX = FloorDiv(worldX, NoiseCellSize);
+                float fraction =
+                    (worldX - gridX * NoiseCellSize) / (float)NoiseCellSize;
+                xSamples[x] = new NoiseAxisSample(
+                    gridX,
+                    SmoothStep(fraction));
+                if (gridX < minimumGridX) minimumGridX = gridX;
+                if (gridX > maximumGridX) maximumGridX = gridX;
+            }
 
-                int minimumGridZ = int.MaxValue;
-                int maximumGridZ = int.MinValue;
-                for (int z = 0; z < sizeZ; z++)
-                {
-                    int worldZ = unchecked(baseZ + z);
-                    int gridZ = FloorDiv(worldZ, NoiseCellSize);
-                    float fraction =
-                        (worldZ - gridZ * NoiseCellSize) / (float)NoiseCellSize;
-                    zSamples[z] = new NoiseAxisSample(
-                        gridZ,
-                        SmoothStep(fraction));
-                    if (gridZ < minimumGridZ) minimumGridZ = gridZ;
-                    if (gridZ > maximumGridZ) maximumGridZ = gridZ;
-                }
+            int minimumGridZ = int.MaxValue;
+            int maximumGridZ = int.MinValue;
+            for (int z = 0; z < sizeZ; z++)
+            {
+                int worldZ = unchecked(baseZ + z);
+                int gridZ = FloorDiv(worldZ, NoiseCellSize);
+                float fraction =
+                    (worldZ - gridZ * NoiseCellSize) / (float)NoiseCellSize;
+                zSamples[z] = new NoiseAxisSample(
+                    gridZ,
+                    SmoothStep(fraction));
+                if (gridZ < minimumGridZ) minimumGridZ = gridZ;
+                if (gridZ > maximumGridZ) maximumGridZ = gridZ;
+            }
 
-                int latticeSizeX = checked(maximumGridX - minimumGridX + 2);
-                int latticeSizeZ = checked(maximumGridZ - minimumGridZ + 2);
-                int latticeCount = checked(latticeSizeX * latticeSizeZ);
-                latticeBuffer = ArrayPool<float>.Shared.Rent(latticeCount);
-                Span<float> lattice = latticeBuffer.AsSpan(0, latticeCount);
-                for (int latticeX = 0; latticeX < latticeSizeX; latticeX++)
+            int latticeSizeX = checked(maximumGridX - minimumGridX + 2);
+            int latticeSizeZ = checked(maximumGridZ - minimumGridZ + 2);
+            int latticeCount = checked(latticeSizeX * latticeSizeZ);
+            Span<float> lattice = latticeScratch.Slice(0, latticeCount);
+            for (int latticeX = 0; latticeX < latticeSizeX; latticeX++)
+            {
+                int gridX = unchecked(minimumGridX + latticeX);
+                int rowOffset = latticeX * latticeSizeZ;
+                for (int latticeZ = 0; latticeZ < latticeSizeZ; latticeZ++)
                 {
-                    int gridX = unchecked(minimumGridX + latticeX);
-                    int rowOffset = latticeX * latticeSizeZ;
-                    for (int latticeZ = 0; latticeZ < latticeSizeZ; latticeZ++)
-                    {
-                        int gridZ = unchecked(minimumGridZ + latticeZ);
-                        lattice[rowOffset + latticeZ] =
-                            HashToUnitFloat(gridX, gridZ, seed);
-                    }
-                }
-
-                for (int x = 0; x < sizeX; x++)
-                {
-                    NoiseAxisSample xSample = xSamples[x];
-                    int latticeX = xSample.Grid - minimumGridX;
-                    int firstRow = latticeX * latticeSizeZ;
-                    int secondRow = firstRow + latticeSizeZ;
-                    int destinationRow = checked(
-                        destinationOffset + x * destinationRowStride);
-                    for (int z = 0; z < sizeZ; z++)
-                    {
-                        NoiseAxisSample zSample = zSamples[z];
-                        int latticeZ = zSample.Grid - minimumGridZ;
-                        float valueX0 = Lerp(
-                            lattice[firstRow + latticeZ],
-                            lattice[secondRow + latticeZ],
-                            xSample.Smooth);
-                        float valueX1 = Lerp(
-                            lattice[firstRow + latticeZ + 1],
-                            lattice[secondRow + latticeZ + 1],
-                            xSample.Smooth);
-                        destination[destinationRow + z] =
-                            Lerp(valueX0, valueX1, zSample.Smooth);
-                    }
+                    int gridZ = unchecked(minimumGridZ + latticeZ);
+                    lattice[rowOffset + latticeZ] =
+                        HashToUnitFloat(gridX, gridZ, seed);
                 }
             }
-            finally
+
+            for (int x = 0; x < sizeX; x++)
             {
-                if (latticeBuffer is not null)
-                    ArrayPool<float>.Shared.Return(latticeBuffer);
-                if (zBuffer is not null)
-                    ArrayPool<NoiseAxisSample>.Shared.Return(zBuffer);
-                ArrayPool<NoiseAxisSample>.Shared.Return(xBuffer);
+                NoiseAxisSample xSample = xSamples[x];
+                int latticeX = xSample.Grid - minimumGridX;
+                int firstRow = latticeX * latticeSizeZ;
+                int secondRow = firstRow + latticeSizeZ;
+                int destinationRow = checked(
+                    destinationOffset + x * destinationRowStride);
+                for (int z = 0; z < sizeZ; z++)
+                {
+                    NoiseAxisSample zSample = zSamples[z];
+                    int latticeZ = zSample.Grid - minimumGridZ;
+                    float valueX0 = Lerp(
+                        lattice[firstRow + latticeZ],
+                        lattice[secondRow + latticeZ],
+                        xSample.Smooth);
+                    float valueX1 = Lerp(
+                        lattice[firstRow + latticeZ + 1],
+                        lattice[secondRow + latticeZ + 1],
+                        xSample.Smooth);
+                    destination[destinationRow + z] =
+                        Lerp(valueX0, valueX1, zSample.Smooth);
+                }
             }
         }
 

@@ -185,8 +185,24 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             int baseZ,
             int sizeX,
             int sizeZ,
+            Span<float> destination) =>
+            FillHeightMap(
+                GetNoise(seed),
+                baseX,
+                baseZ,
+                sizeX,
+                sizeZ,
+                destination);
+
+        internal static void FillHeightMap(
+            OpenSimplexNoise noise,
+            int baseX,
+            int baseZ,
+            int sizeX,
+            int sizeZ,
             Span<float> destination)
         {
+            ArgumentNullException.ThrowIfNull(noise);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(sizeX);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(sizeZ);
             int valueCount = checked(sizeX * sizeZ);
@@ -196,8 +212,6 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                     "The destination is smaller than the height map.",
                     nameof(destination));
             }
-
-            OpenSimplexNoise noise = GetNoise(seed);
 
             const float scale = 0.001f;
             const float minHeight = 1f;

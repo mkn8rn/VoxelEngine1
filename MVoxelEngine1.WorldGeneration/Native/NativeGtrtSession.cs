@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using MVoxelEngine1.Infrastructure.Diagnostics;
 using MVoxelEngine1.Infrastructure.Models;
 using MVoxelEngine1.Infrastructure.Models.Generation;
+using MVoxelEngine1.WorldGeneration.Terrain;
 using Supprocom.NativeAllocationManagement;
 
 namespace MVoxelEngine1.WorldGeneration.Native;
@@ -57,7 +58,9 @@ internal enum NativeGtrtFailureCode : int
     InvalidMeshDependency = 3,
     MeshReadyQueueFull = 4,
     InvalidMeshClaim = 5,
-    InvalidMeshCompletion = 6
+    InvalidMeshCompletion = 6,
+    InvalidGenerationWorkspace = 7,
+    InvalidProfileGeneration = 8
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 8)]
@@ -86,6 +89,13 @@ internal struct NativeColumnRecord
     internal int BiomeIndex;
     internal int GenerationEpoch;
     internal NativeColumnState State;
+}
+
+[StructLayout(LayoutKind.Sequential, Pack = 4)]
+internal struct NativeGenerationWorkspaceRecord
+{
+    internal int State;
+    internal int Epoch;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 8)]
@@ -144,12 +154,15 @@ internal readonly struct NativeGtrtSessionLayout
         int chunkSizeX,
         int chunkSizeY,
         int chunkSizeZ,
-        int lod1Radius)
+        int lod1Radius,
+        int generationWorkerCount = 1)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(chunkSizeX);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(chunkSizeY);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(chunkSizeZ);
         ArgumentOutOfRangeException.ThrowIfNegative(lod1Radius);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
+            generationWorkerCount);
 
         ChunkSizeX = chunkSizeX;
         ChunkSizeY = chunkSizeY;
@@ -173,6 +186,13 @@ internal readonly struct NativeGtrtSessionLayout
             RequiredColumnCount * VerticalChunkCount);
         ProfilesPerColumn = checked(chunkSizeX * chunkSizeZ);
         ProfileCount = checked(ColumnCount * ProfilesPerColumn);
+        GenerationWorkerCount = generationWorkerCount;
+        GenerationFloatCountPerWorker = checked(
+            ProfilesPerColumn * 2);
+        GenerationLatticeCountPerWorker =
+            TerrainGenerationUtils.GetSmoothValueNoiseLatticeCapacity(
+                chunkSizeX,
+                chunkSizeZ);
 
         int cursor = Align(
             Unsafe.SizeOf<NativeGtrtSessionHeader>(),
@@ -183,6 +203,35 @@ internal readonly struct NativeGtrtSessionLayout
         cursor = AddRange<NativeColumnRecord>(cursor, ColumnCount, 8);
         ProfileOffset = cursor;
         cursor = AddRange<BlockColumnProfile>(cursor, ProfileCount, 8);
+        ColumnSummaryOffset = cursor;
+        cursor = AddRange<NativeColumnSummary>(cursor, ColumnCount, 8);
+        GenerationWorkspaceOffset = cursor;
+        cursor = AddRange<NativeGenerationWorkspaceRecord>(
+            cursor,
+            GenerationWorkerCount,
+            8);
+        GenerationFloatScratchOffset = cursor;
+        cursor = AddRange<float>(
+            cursor,
+            checked(GenerationWorkerCount *
+                GenerationFloatCountPerWorker),
+            8);
+        GenerationXScratchOffset = cursor;
+        cursor = AddRange<TerrainGenerationUtils.NoiseAxisSample>(
+            cursor,
+            checked(GenerationWorkerCount * ChunkSizeX),
+            8);
+        GenerationZScratchOffset = cursor;
+        cursor = AddRange<TerrainGenerationUtils.NoiseAxisSample>(
+            cursor,
+            checked(GenerationWorkerCount * ChunkSizeZ),
+            8);
+        GenerationLatticeScratchOffset = cursor;
+        cursor = AddRange<float>(
+            cursor,
+            checked(GenerationWorkerCount *
+                GenerationLatticeCountPerWorker),
+            8);
         ChunkOffset = cursor;
         cursor = AddRange<NativeChunkRecord>(cursor, ChunkCount, 8);
         GenerationJobOffset = cursor;
@@ -239,11 +288,29 @@ internal readonly struct NativeGtrtSessionLayout
 
     internal int ProfileCount { get; }
 
+    internal int GenerationWorkerCount { get; }
+
+    internal int GenerationFloatCountPerWorker { get; }
+
+    internal int GenerationLatticeCountPerWorker { get; }
+
     internal int StateOffset { get; }
 
     internal int ColumnOffset { get; }
 
     internal int ProfileOffset { get; }
+
+    internal int ColumnSummaryOffset { get; }
+
+    internal int GenerationWorkspaceOffset { get; }
+
+    internal int GenerationFloatScratchOffset { get; }
+
+    internal int GenerationXScratchOffset { get; }
+
+    internal int GenerationZScratchOffset { get; }
+
+    internal int GenerationLatticeScratchOffset { get; }
 
     internal int ChunkOffset { get; }
 
@@ -257,14 +324,17 @@ internal readonly struct NativeGtrtSessionLayout
 
     internal int TotalByteCount { get; }
 
-    internal static NativeGtrtSessionLayout Create(GameSettings settings)
+    internal static NativeGtrtSessionLayout Create(
+        GameSettings settings,
+        int generationWorkerCount = 1)
     {
         ArgumentNullException.ThrowIfNull(settings);
         return new NativeGtrtSessionLayout(
             settings.chunkMaxX,
             settings.chunkMaxY,
             settings.chunkMaxZ,
-            settings.lod1RenderDistance);
+            settings.lod1RenderDistance,
+            generationWorkerCount);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -310,7 +380,7 @@ internal readonly struct NativeGtrtSessionLayout
 internal readonly struct NativeGtrtSessionHeader
 {
     internal const uint ExpectedMagic = 0x54525447;
-    internal const int ExpectedVersion = 1;
+    internal const int ExpectedVersion = 2;
 
     internal NativeGtrtSessionHeader(NativeGtrtSessionLayout layout)
     {
@@ -337,9 +407,22 @@ internal readonly struct NativeGtrtSessionHeader
         RequiredChunkCount = layout.RequiredChunkCount;
         ProfilesPerColumn = layout.ProfilesPerColumn;
         ProfileCount = layout.ProfileCount;
+        GenerationWorkerCount = layout.GenerationWorkerCount;
+        GenerationFloatCountPerWorker =
+            layout.GenerationFloatCountPerWorker;
+        GenerationLatticeCountPerWorker =
+            layout.GenerationLatticeCountPerWorker;
         StateOffset = layout.StateOffset;
         ColumnOffset = layout.ColumnOffset;
         ProfileOffset = layout.ProfileOffset;
+        ColumnSummaryOffset = layout.ColumnSummaryOffset;
+        GenerationWorkspaceOffset = layout.GenerationWorkspaceOffset;
+        GenerationFloatScratchOffset =
+            layout.GenerationFloatScratchOffset;
+        GenerationXScratchOffset = layout.GenerationXScratchOffset;
+        GenerationZScratchOffset = layout.GenerationZScratchOffset;
+        GenerationLatticeScratchOffset =
+            layout.GenerationLatticeScratchOffset;
         ChunkOffset = layout.ChunkOffset;
         GenerationJobOffset = layout.GenerationJobOffset;
         MeshJobOffset = layout.MeshJobOffset;
@@ -370,9 +453,18 @@ internal readonly struct NativeGtrtSessionHeader
     internal int RequiredChunkCount { get; }
     internal int ProfilesPerColumn { get; }
     internal int ProfileCount { get; }
+    internal int GenerationWorkerCount { get; }
+    internal int GenerationFloatCountPerWorker { get; }
+    internal int GenerationLatticeCountPerWorker { get; }
     internal int StateOffset { get; }
     internal int ColumnOffset { get; }
     internal int ProfileOffset { get; }
+    internal int ColumnSummaryOffset { get; }
+    internal int GenerationWorkspaceOffset { get; }
+    internal int GenerationFloatScratchOffset { get; }
+    internal int GenerationXScratchOffset { get; }
+    internal int GenerationZScratchOffset { get; }
+    internal int GenerationLatticeScratchOffset { get; }
     internal int ChunkOffset { get; }
     internal int GenerationJobOffset { get; }
     internal int MeshJobOffset { get; }
@@ -550,11 +642,29 @@ internal ref struct NativeGtrtSessionInitializer
         offset += sizeof(int);
         WriteInt32(offset, layout.ProfileCount);
         offset += sizeof(int);
+        WriteInt32(offset, layout.GenerationWorkerCount);
+        offset += sizeof(int);
+        WriteInt32(offset, layout.GenerationFloatCountPerWorker);
+        offset += sizeof(int);
+        WriteInt32(offset, layout.GenerationLatticeCountPerWorker);
+        offset += sizeof(int);
         WriteInt32(offset, layout.StateOffset);
         offset += sizeof(int);
         WriteInt32(offset, layout.ColumnOffset);
         offset += sizeof(int);
         WriteInt32(offset, layout.ProfileOffset);
+        offset += sizeof(int);
+        WriteInt32(offset, layout.ColumnSummaryOffset);
+        offset += sizeof(int);
+        WriteInt32(offset, layout.GenerationWorkspaceOffset);
+        offset += sizeof(int);
+        WriteInt32(offset, layout.GenerationFloatScratchOffset);
+        offset += sizeof(int);
+        WriteInt32(offset, layout.GenerationXScratchOffset);
+        offset += sizeof(int);
+        WriteInt32(offset, layout.GenerationZScratchOffset);
+        offset += sizeof(int);
+        WriteInt32(offset, layout.GenerationLatticeScratchOffset);
         offset += sizeof(int);
         WriteInt32(offset, layout.ChunkOffset);
         offset += sizeof(int);
@@ -635,6 +745,26 @@ internal ref struct NativeGtrtSessionView
         ValidateRange<BlockColumnProfile>(
             header.ProfileOffset,
             header.ProfileCount);
+        ValidateRange<NativeColumnSummary>(
+            header.ColumnSummaryOffset,
+            header.ColumnCount);
+        ValidateRange<NativeGenerationWorkspaceRecord>(
+            header.GenerationWorkspaceOffset,
+            header.GenerationWorkerCount);
+        ValidateRange<float>(
+            header.GenerationFloatScratchOffset,
+            checked(header.GenerationWorkerCount *
+                header.GenerationFloatCountPerWorker));
+        ValidateRange<TerrainGenerationUtils.NoiseAxisSample>(
+            header.GenerationXScratchOffset,
+            checked(header.GenerationWorkerCount * header.ChunkSizeX));
+        ValidateRange<TerrainGenerationUtils.NoiseAxisSample>(
+            header.GenerationZScratchOffset,
+            checked(header.GenerationWorkerCount * header.ChunkSizeZ));
+        ValidateRange<float>(
+            header.GenerationLatticeScratchOffset,
+            checked(header.GenerationWorkerCount *
+                header.GenerationLatticeCountPerWorker));
         ValidateRange<NativeChunkRecord>(
             header.ChunkOffset,
             header.ChunkCount);
@@ -660,6 +790,16 @@ internal ref struct NativeGtrtSessionView
 
     internal Span<BlockColumnProfile> Profiles =>
         ReadRange<BlockColumnProfile>(header.ProfileOffset, header.ProfileCount);
+
+    internal Span<NativeColumnSummary> ColumnSummaries =>
+        ReadRange<NativeColumnSummary>(
+            header.ColumnSummaryOffset,
+            header.ColumnCount);
+
+    internal Span<NativeGenerationWorkspaceRecord> GenerationWorkspaces =>
+        ReadRange<NativeGenerationWorkspaceRecord>(
+            header.GenerationWorkspaceOffset,
+            header.GenerationWorkerCount);
 
     internal Span<NativeChunkRecord> Chunks =>
         ReadRange<NativeChunkRecord>(header.ChunkOffset, header.ChunkCount);
@@ -688,7 +828,100 @@ internal ref struct NativeGtrtSessionView
 
     internal int ProfileCount => header.ProfileCount;
 
+    internal int ProfilesPerColumn => header.ProfilesPerColumn;
+
+    internal int ChunkSizeX => header.ChunkSizeX;
+
+    internal int ChunkSizeZ => header.ChunkSizeZ;
+
+    internal int GenerationWorkerCount => header.GenerationWorkerCount;
+
     internal int RequiredChunkCount => header.RequiredChunkCount;
+
+    internal Span<BlockColumnProfile> GetColumnProfiles(int columnIndex) =>
+        Profiles.Slice(
+            checked(columnIndex * header.ProfilesPerColumn),
+            header.ProfilesPerColumn);
+
+    internal Span<float> GetGenerationFloatScratch(int workerIndex) =>
+        ReadRange<float>(
+            checked(header.GenerationFloatScratchOffset +
+                workerIndex * header.GenerationFloatCountPerWorker *
+                Unsafe.SizeOf<float>()),
+            header.GenerationFloatCountPerWorker);
+
+    internal Span<TerrainGenerationUtils.NoiseAxisSample>
+        GetGenerationXScratch(int workerIndex) =>
+        ReadRange<TerrainGenerationUtils.NoiseAxisSample>(
+            checked(header.GenerationXScratchOffset +
+                workerIndex * header.ChunkSizeX *
+                Unsafe.SizeOf<TerrainGenerationUtils.NoiseAxisSample>()),
+            header.ChunkSizeX);
+
+    internal Span<TerrainGenerationUtils.NoiseAxisSample>
+        GetGenerationZScratch(int workerIndex) =>
+        ReadRange<TerrainGenerationUtils.NoiseAxisSample>(
+            checked(header.GenerationZScratchOffset +
+                workerIndex * header.ChunkSizeZ *
+                Unsafe.SizeOf<TerrainGenerationUtils.NoiseAxisSample>()),
+            header.ChunkSizeZ);
+
+    internal Span<float> GetGenerationLatticeScratch(int workerIndex) =>
+        ReadRange<float>(
+            checked(header.GenerationLatticeScratchOffset +
+                workerIndex * header.GenerationLatticeCountPerWorker *
+                Unsafe.SizeOf<float>()),
+            header.GenerationLatticeCountPerWorker);
+
+    internal bool TryAcquireGenerationWorkspace(int workerIndex)
+    {
+        if ((uint)workerIndex >= (uint)header.GenerationWorkerCount)
+        {
+            Fail(NativeGtrtFailureCode.InvalidGenerationWorkspace);
+            return false;
+        }
+
+        Span<NativeGenerationWorkspaceRecord> workspaces =
+            GenerationWorkspaces;
+        ref NativeGenerationWorkspaceRecord workspace =
+            ref workspaces[workerIndex];
+        if (Interlocked.CompareExchange(
+                ref workspace.State,
+                1,
+                0) != 0)
+        {
+            Fail(NativeGtrtFailureCode.InvalidGenerationWorkspace);
+            return false;
+        }
+
+        workspace.Epoch = State.SessionEpoch;
+        return true;
+    }
+
+    internal void ReleaseGenerationWorkspace(int workerIndex)
+    {
+        if ((uint)workerIndex >= (uint)header.GenerationWorkerCount)
+        {
+            Fail(NativeGtrtFailureCode.InvalidGenerationWorkspace);
+            return;
+        }
+
+        Span<NativeGenerationWorkspaceRecord> workspaces =
+            GenerationWorkspaces;
+        ref NativeGenerationWorkspaceRecord workspace =
+            ref workspaces[workerIndex];
+        workspace.Epoch = 0;
+        if (Interlocked.CompareExchange(
+                ref workspace.State,
+                0,
+                1) != 1)
+        {
+            Fail(NativeGtrtFailureCode.InvalidGenerationWorkspace);
+        }
+    }
+
+    internal void Fail(NativeGtrtFailureCode failure) =>
+        RecordFailure(ref State, failure);
 
     internal int GetColumnIndex(int chunkX, int chunkZ)
     {
@@ -1234,8 +1467,12 @@ internal sealed class NativeGtrtSession : IDisposable
         }
     }
 
-    internal static NativeGtrtSession Create(GameSettings settings) =>
-        Create(NativeGtrtSessionLayout.Create(settings));
+    internal static NativeGtrtSession Create(
+        GameSettings settings,
+        int generationWorkerCount = 1) =>
+        Create(NativeGtrtSessionLayout.Create(
+            settings,
+            generationWorkerCount));
 
     internal static NativeGtrtSession Create(
         NativeGtrtSessionLayout layout)

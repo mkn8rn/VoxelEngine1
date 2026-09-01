@@ -1,4 +1,5 @@
 using MVoxelEngine1.WorldGeneration.Native;
+using MVoxelEngine1.WorldGeneration.Terrain;
 using Supprocom.NativeAllocationManagement;
 
 namespace MVoxelEngine1.Tests;
@@ -58,6 +59,24 @@ public sealed class NativeGtrtSessionTests
                     view.State.RemainingChunks);
                 Assert.Equal(layout.ColumnCount, view.Columns.Length);
                 Assert.Equal(layout.ProfileCount, view.Profiles.Length);
+                Assert.Equal(
+                    layout.ColumnCount,
+                    view.ColumnSummaries.Length);
+                Assert.Equal(
+                    layout.GenerationWorkerCount,
+                    view.GenerationWorkspaces.Length);
+                Assert.Equal(
+                    layout.GenerationFloatCountPerWorker,
+                    view.GetGenerationFloatScratch(0).Length);
+                Assert.Equal(
+                    layout.ChunkSizeX,
+                    view.GetGenerationXScratch(0).Length);
+                Assert.Equal(
+                    layout.ChunkSizeZ,
+                    view.GetGenerationZScratch(0).Length);
+                Assert.Equal(
+                    layout.GenerationLatticeCountPerWorker,
+                    view.GetGenerationLatticeScratch(0).Length);
                 Assert.Equal(layout.ChunkCount, view.Chunks.Length);
                 Assert.Equal(layout.ColumnCount, view.GenerationJobs.Length);
                 Assert.Equal(layout.ChunkCount, view.MeshJobs.Length);
@@ -141,6 +160,67 @@ public sealed class NativeGtrtSessionTests
         session.Dispose();
         Assert.Throws<ObjectDisposedException>(() =>
             session.Access(static _ => { }));
+    }
+
+    [Fact]
+    public void GenerationWorkersOwnDisjointScratchPartitions()
+    {
+        var layout = new NativeGtrtSessionLayout(
+            chunkSizeX: 4,
+            chunkSizeY: 8,
+            chunkSizeZ: 4,
+            lod1Radius: 1,
+            generationWorkerCount: 2);
+        using NativeGtrtSession session = NativeGtrtSession.Create(layout);
+        session.PublishSeed(123456);
+
+        session.Access(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            Assert.True(view.TryAcquireGenerationWorkspace(0));
+            Assert.True(view.TryAcquireGenerationWorkspace(1));
+
+            Span<float> firstValues =
+                view.GetGenerationFloatScratch(0);
+            Span<float> secondValues =
+                view.GetGenerationFloatScratch(1);
+            firstValues.Fill(11f);
+            secondValues.Fill(22f);
+
+            Span<TerrainGenerationUtils.NoiseAxisSample> firstX =
+                view.GetGenerationXScratch(0);
+            Span<TerrainGenerationUtils.NoiseAxisSample> secondX =
+                view.GetGenerationXScratch(1);
+            firstX.Fill(new TerrainGenerationUtils.NoiseAxisSample(31, 0.31f));
+            secondX.Fill(new TerrainGenerationUtils.NoiseAxisSample(32, 0.32f));
+
+            Span<TerrainGenerationUtils.NoiseAxisSample> firstZ =
+                view.GetGenerationZScratch(0);
+            Span<TerrainGenerationUtils.NoiseAxisSample> secondZ =
+                view.GetGenerationZScratch(1);
+            firstZ.Fill(new TerrainGenerationUtils.NoiseAxisSample(41, 0.41f));
+            secondZ.Fill(new TerrainGenerationUtils.NoiseAxisSample(42, 0.42f));
+
+            Span<float> firstLattice =
+                view.GetGenerationLatticeScratch(0);
+            Span<float> secondLattice =
+                view.GetGenerationLatticeScratch(1);
+            firstLattice.Fill(51f);
+            secondLattice.Fill(52f);
+
+            Assert.All(firstValues.ToArray(), value => Assert.Equal(11f, value));
+            Assert.All(secondValues.ToArray(), value => Assert.Equal(22f, value));
+            Assert.All(firstX.ToArray(), value => Assert.Equal(31, value.Grid));
+            Assert.All(secondX.ToArray(), value => Assert.Equal(32, value.Grid));
+            Assert.All(firstZ.ToArray(), value => Assert.Equal(41, value.Grid));
+            Assert.All(secondZ.ToArray(), value => Assert.Equal(42, value.Grid));
+            Assert.All(firstLattice.ToArray(), value => Assert.Equal(51f, value));
+            Assert.All(secondLattice.ToArray(), value => Assert.Equal(52f, value));
+
+            view.ReleaseGenerationWorkspace(0);
+            view.ReleaseGenerationWorkspace(1);
+            Assert.Equal(0, view.State.FailureCode);
+        });
     }
 
     [Fact]
