@@ -22,7 +22,7 @@ using System.Diagnostics;
 
 namespace MVoxelEngine1.Graphics.Terrain
 {
-    public partial class ChunkRender : IDisposable
+    public partial class ChunkRender : INativeChunkRenderer
     {
         private static readonly ConcurrentQueue<ChunkRender> pendingDeletion = new();
         private static long nextRenderDataId;
