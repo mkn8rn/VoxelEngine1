@@ -79,7 +79,8 @@ internal enum NativeGtrtFailureCode : int
     InvalidPacketRetirement = 15,
     InvalidPacketRecycle = 16,
     InvalidMeshCancellation = 17,
-    InvalidGenerationCancellation = 18
+    InvalidGenerationCancellation = 18,
+    InvalidSessionReset = 19
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 8)]
@@ -103,6 +104,9 @@ internal struct NativeGtrtSessionState
     internal int ClaimedGenerationCount;
     internal int DisposalState;
     internal int PacketConsumerCount;
+    internal int CenterChunkX;
+    internal int CenterChunkY;
+    internal int CenterChunkZ;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -517,7 +521,7 @@ internal readonly struct NativeGtrtSessionLayout
 internal readonly struct NativeGtrtSessionHeader
 {
     internal const uint ExpectedMagic = 0x54525447;
-    internal const int ExpectedVersion = 9;
+    internal const int ExpectedVersion = 10;
 
     internal NativeGtrtSessionHeader(NativeGtrtSessionLayout layout)
     {
@@ -1593,6 +1597,184 @@ internal ref struct NativeGtrtSessionView
         }
     }
 
+    internal bool TryPrepareRun(
+        long seed,
+        int centerChunkX,
+        int centerChunkY,
+        int centerChunkZ)
+    {
+        ref NativeGtrtSessionState state = ref State;
+        int publicationState = Volatile.Read(ref state.PublicationState);
+        if (publicationState == 0)
+        {
+            if (Interlocked.CompareExchange(
+                    ref state.PublicationState,
+                    -1,
+                    0) != 0)
+            {
+                return false;
+            }
+
+            state.Seed = seed;
+            NativeOpenSimplexNoiseState noise = NoiseState;
+            noise.Initialize(seed);
+            if (centerChunkX != 0 ||
+                centerChunkY != 0 ||
+                centerChunkZ != 0)
+            {
+                ResetRunRecords(
+                    centerChunkX,
+                    centerChunkY,
+                    centerChunkZ,
+                    epoch: 1);
+            }
+            else
+            {
+                state.SessionEpoch = 1;
+            }
+
+            Volatile.Write(ref state.PublicationState, 1);
+            return true;
+        }
+
+        if (publicationState != 1 ||
+            state.Seed != seed ||
+            Volatile.Read(ref state.ClaimedGenerationCount) != 0 ||
+            Volatile.Read(ref state.ClaimedMeshCount) != 0 ||
+            Volatile.Read(ref state.PacketConsumerCount) != 0 ||
+            Volatile.Read(ref state.ReadyPacketCount) != 0 ||
+            Volatile.Read(ref state.DisposalState) != 0 ||
+            !TryRecyclePacketStorage())
+        {
+            Fail(NativeGtrtFailureCode.InvalidSessionReset);
+            return false;
+        }
+
+        ResetRunRecords(
+            centerChunkX,
+            centerChunkY,
+            centerChunkZ,
+            checked(state.SessionEpoch + 1));
+        return true;
+    }
+
+    private void ResetRunRecords(
+        int centerChunkX,
+        int centerChunkY,
+        int centerChunkZ,
+        int epoch)
+    {
+        ref NativeGtrtSessionState state = ref State;
+        Span<NativeColumnRecord> columns = Columns;
+        Span<NativeChunkRecord> chunks = Chunks;
+        Span<NativeWorkItem> generationJobs = GenerationJobs;
+        Span<NativeWorkItem> meshJobs = MeshJobs;
+        Span<NativeReadySlot> readySlots = MeshReadySlots;
+
+        state.CenterChunkX = centerChunkX;
+        state.CenterChunkY = centerChunkY;
+        state.CenterChunkZ = centerChunkZ;
+
+        MemoryMarshal.AsBytes(Profiles).Fill(byte.MaxValue);
+        GenerationWorkspaces.Clear();
+        MeshWorkspaces.Clear();
+        Packets.Clear();
+
+        for (int relativeX = header.MinimumChunkX;
+             relativeX <= header.MaximumChunkX;
+             relativeX++)
+        {
+            int chunkX = checked(centerChunkX + relativeX);
+            for (int relativeZ = header.MinimumChunkZ;
+                 relativeZ <= header.MaximumChunkZ;
+                 relativeZ++)
+            {
+                int chunkZ = checked(centerChunkZ + relativeZ);
+                int columnIndex = GetColumnIndex(chunkX, chunkZ);
+                int profileOffset = checked(
+                    columnIndex * header.ProfilesPerColumn);
+                columns[columnIndex] = new NativeColumnRecord
+                {
+                    ChunkX = chunkX,
+                    ChunkZ = chunkZ,
+                    ProfileOffset = profileOffset,
+                    BiomeIndex = -1,
+                    State = NativeColumnState.Empty
+                };
+                generationJobs[columnIndex] = new NativeWorkItem
+                {
+                    RecordIndex = columnIndex,
+                    Epoch = epoch,
+                    Kind = NativeWorkKind.GenerateColumn,
+                    State = NativeWorkState.Scheduled
+                };
+
+                bool initialMeshRequired =
+                    relativeX >= -header.Lod1Radius &&
+                    relativeX <= header.Lod1Radius &&
+                    relativeZ >= -header.Lod1Radius &&
+                    relativeZ <= header.Lod1Radius;
+                for (int relativeY = header.MinimumChunkY;
+                     relativeY <= header.MaximumChunkY;
+                     relativeY++)
+                {
+                    int chunkY = checked(centerChunkY + relativeY);
+                    int chunkIndex = GetChunkIndex(
+                        chunkX,
+                        chunkY,
+                        chunkZ);
+                    chunks[chunkIndex] = new NativeChunkRecord
+                    {
+                        ChunkX = chunkX,
+                        ChunkY = chunkY,
+                        ChunkZ = chunkZ,
+                        ColumnIndex = columnIndex,
+                        ProfileOffset = profileOffset,
+                        PacketIndex = chunkIndex,
+                        Flags = initialMeshRequired
+                            ? (int)NativeChunkFlags.InitialMeshRequired
+                            : 0,
+                        RemainingDependencies = initialMeshRequired ? 5 : 0,
+                        State = NativeChunkState.Empty
+                    };
+                    meshJobs[chunkIndex] = new NativeWorkItem
+                    {
+                        RecordIndex = chunkIndex,
+                        Epoch = epoch,
+                        Kind = NativeWorkKind.BuildChunkMesh,
+                        State = initialMeshRequired
+                            ? NativeWorkState.Waiting
+                            : NativeWorkState.Canceled
+                    };
+                }
+            }
+        }
+
+        for (int index = 0; index < readySlots.Length; index++)
+        {
+            readySlots[index] = new NativeReadySlot
+            {
+                Sequence = index
+            };
+        }
+
+        state.SessionEpoch = epoch;
+        state.GenerationCursor = 0;
+        state.RemainingColumns = header.ColumnCount;
+        state.MeshCursor = 0;
+        state.RemainingChunks = header.RequiredChunkCount;
+        state.ReadyPacketCount = 0;
+        state.FailureCode = 0;
+        state.CancellationState = 0;
+        state.MeshEnqueuePosition = 0;
+        state.MeshDequeuePosition = 0;
+        state.PacketWordCursor = 0;
+        state.ClaimedMeshCount = 0;
+        state.PacketRecycleState = 0;
+        state.ClaimedGenerationCount = 0;
+        state.PacketConsumerCount = 0;
+    }
+
     internal bool TryPrepareForDisposal()
     {
         ref NativeGtrtSessionState state = ref State;
@@ -1690,8 +1872,10 @@ internal ref struct NativeGtrtSessionView
 
     internal int GetColumnIndex(int chunkX, int chunkZ)
     {
-        int localX = chunkX - header.MinimumChunkX;
-        int localZ = chunkZ - header.MinimumChunkZ;
+        int localX = chunkX - checked(
+            State.CenterChunkX + header.MinimumChunkX);
+        int localZ = chunkZ - checked(
+            State.CenterChunkZ + header.MinimumChunkZ);
         if ((uint)localX >= (uint)header.ColumnWidth ||
             (uint)localZ >= (uint)header.ColumnWidth)
         {
@@ -1704,7 +1888,8 @@ internal ref struct NativeGtrtSessionView
     internal int GetChunkIndex(int chunkX, int chunkY, int chunkZ)
     {
         int columnIndex = GetColumnIndex(chunkX, chunkZ);
-        int localY = chunkY - header.MinimumChunkY;
+        int localY = chunkY - checked(
+            State.CenterChunkY + header.MinimumChunkY);
         if (columnIndex < 0 ||
             (uint)localY >= (uint)header.VerticalChunkCount)
         {
@@ -2092,8 +2277,12 @@ internal ref struct NativeGtrtSessionView
         ref NativeGtrtSessionState state)
     {
         Span<NativeChunkRecord> chunks = Chunks;
-        for (int chunkY = header.MinimumChunkY;
-             chunkY <= header.MaximumChunkY;
+        int minimumChunkY = checked(
+            state.CenterChunkY + header.MinimumChunkY);
+        int maximumChunkY = checked(
+            state.CenterChunkY + header.MaximumChunkY);
+        for (int chunkY = minimumChunkY;
+             chunkY <= maximumChunkY;
              chunkY++)
         {
             int chunkIndex = GetChunkIndex(chunkX, chunkY, chunkZ);
@@ -2158,18 +2347,30 @@ internal ref struct NativeGtrtSessionView
         int epoch,
         ref NativeGtrtSessionState state)
     {
-        if (chunkX < -header.Lod1Radius ||
-            chunkX > header.Lod1Radius ||
-            chunkZ < -header.Lod1Radius ||
-            chunkZ > header.Lod1Radius)
+        int minimumChunkX = checked(
+            state.CenterChunkX - header.Lod1Radius);
+        int maximumChunkX = checked(
+            state.CenterChunkX + header.Lod1Radius);
+        int minimumChunkZ = checked(
+            state.CenterChunkZ - header.Lod1Radius);
+        int maximumChunkZ = checked(
+            state.CenterChunkZ + header.Lod1Radius);
+        if (chunkX < minimumChunkX ||
+            chunkX > maximumChunkX ||
+            chunkZ < minimumChunkZ ||
+            chunkZ > maximumChunkZ)
         {
             return true;
         }
 
         Span<NativeChunkRecord> chunks = Chunks;
         Span<NativeWorkItem> jobs = MeshJobs;
-        for (int chunkY = header.MinimumChunkY;
-             chunkY <= header.MaximumChunkY;
+        int minimumChunkY = checked(
+            state.CenterChunkY + header.MinimumChunkY);
+        int maximumChunkY = checked(
+            state.CenterChunkY + header.MaximumChunkY);
+        for (int chunkY = minimumChunkY;
+             chunkY <= maximumChunkY;
              chunkY++)
         {
             int chunkIndex = GetChunkIndex(chunkX, chunkY, chunkZ);
@@ -2415,12 +2616,17 @@ internal sealed class NativeGtrtSession : IDisposable
 {
     private static readonly NativeLeaseAction<byte> RequestCancellationAction =
         RequestCancellationCore;
-    private readonly NativeLeaseAction<byte> publishSeedAction;
+    private readonly NativeLeaseAction<byte> prepareRunAction;
     private readonly NativeLeaseAction<byte> initializeGameSnapshotAction;
     private readonly NativeLeaseAction<byte> prepareForDisposalAction;
     private NativeTransfer<byte>? storage;
     private long pendingSeed;
+    private int pendingCenterChunkX;
+    private int pendingCenterChunkY;
+    private int pendingCenterChunkZ;
     private byte[]? pendingGameSnapshot;
+    private bool runPrepared;
+    private int publishSeedCalled;
     private bool disposalPrepared;
 
     private NativeGtrtSession(NativeTransfer<byte>? source)
@@ -2428,7 +2634,7 @@ internal sealed class NativeGtrtSession : IDisposable
         try
         {
             storage = NativeTransfer<byte>.Move(ref source);
-            publishSeedAction = PublishSeedCore;
+            prepareRunAction = PrepareRunCore;
             initializeGameSnapshotAction = InitializeGameSnapshotCore;
             prepareForDisposalAction = PrepareForDisposalCore;
         }
@@ -2537,11 +2743,34 @@ internal sealed class NativeGtrtSession : IDisposable
 
     internal void PublishSeed(long seed)
     {
+        if (Interlocked.Exchange(ref publishSeedCalled, 1) != 0)
+        {
+            throw new InvalidOperationException(
+                "The native GTRT seed is already published.");
+        }
+        PrepareRun(seed, 0, 0, 0);
+    }
+
+    internal void PrepareRun(
+        long seed,
+        int centerChunkX,
+        int centerChunkY,
+        int centerChunkZ)
+    {
         pendingSeed = seed;
+        pendingCenterChunkX = centerChunkX;
+        pendingCenterChunkY = centerChunkY;
+        pendingCenterChunkZ = centerChunkZ;
+        runPrepared = false;
         if (storage is null)
             throw new ObjectDisposedException(nameof(NativeGtrtSession));
 
-        storage.Access(publishSeedAction);
+        storage.Access(prepareRunAction);
+        if (!runPrepared)
+        {
+            throw new InvalidOperationException(
+                "The native GTRT session could not prepare its run.");
+        }
     }
 
     private void InitializeGameSnapshot(byte[] gameSnapshot)
@@ -2600,25 +2829,17 @@ internal sealed class NativeGtrtSession : IDisposable
         }
     }
 
-    private void PublishSeedCore(scoped NativeLeaseView<byte> owner)
+    private void PrepareRunCore(scoped NativeLeaseView<byte> owner)
     {
         var view = new NativeGtrtSessionView(owner.AsSpan());
-        ref NativeGtrtSessionState state = ref view.State;
-        if (Interlocked.CompareExchange(
-                ref state.PublicationState,
-                -1,
-                0) != 0)
-        {
-            throw new InvalidOperationException(
-                "The native GTRT seed is already published.");
-        }
-
-        state.Seed = pendingSeed;
-        state.SessionEpoch = 1;
-        StartupPerformanceRecorder.RecordSeedAccepted();
-        NativeOpenSimplexNoiseState noise = view.NoiseState;
-        noise.Initialize(pendingSeed);
-        Volatile.Write(ref state.PublicationState, 1);
+        bool firstRun = view.State.PublicationState == 0;
+        runPrepared = view.TryPrepareRun(
+            pendingSeed,
+            pendingCenterChunkX,
+            pendingCenterChunkY,
+            pendingCenterChunkZ);
+        if (runPrepared && firstRun)
+            StartupPerformanceRecorder.RecordSeedAccepted();
     }
 
     private void InitializeGameSnapshotCore(

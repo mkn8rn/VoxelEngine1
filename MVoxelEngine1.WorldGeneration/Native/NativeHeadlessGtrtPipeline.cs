@@ -60,11 +60,15 @@ public sealed class NativeGtrtPipeline : IDisposable
     private readonly NativeGtrtWorkerPool workers;
     private readonly NativeLeaseAction<byte> capturePacketAction;
     private readonly NativeLeaseAction<byte> consumePacketsAction;
+    private readonly int requiredPacketCount;
     private NativePreUploadPacket capturedPacket;
     private NativeChunkRenderPacketAction? pendingPacketConsumer;
     private bool packetCaptured;
     private int consumedPacketCount;
     private int packetConsumptionState;
+    private int completedRunCount;
+    private bool packetConsumptionCompleted;
+    private long publishedSeed;
     private long coordinatorManagedAllocationBytes;
     private double? generationToRenderMilliseconds;
     private int disposed;
@@ -72,11 +76,13 @@ public sealed class NativeGtrtPipeline : IDisposable
     private NativeGtrtPipeline(
         NativeGameSnapshot game,
         NativeGtrtSession session,
-        NativeGtrtWorkerPool workers)
+        NativeGtrtWorkerPool workers,
+        int requiredPacketCount)
     {
         this.game = game;
         this.session = session;
         this.workers = workers;
+        this.requiredPacketCount = requiredPacketCount;
         capturePacketAction = CaptureFirstPacket;
         consumePacketsAction = ConsumePackets;
     }
@@ -137,6 +143,9 @@ public sealed class NativeGtrtPipeline : IDisposable
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
             meshWorkerCount);
 
+        int diameter = checked(settings.lod1RenderDistance * 2 + 1);
+        int requiredPacketCount = checked(
+            diameter * diameter * diameter);
         NativeGameSnapshot? game = null;
         NativeGtrtSession? session = null;
         NativeGtrtWorkerPool? workers = null;
@@ -156,7 +165,8 @@ public sealed class NativeGtrtPipeline : IDisposable
             return new NativeGtrtPipeline(
                 game,
                 session,
-                workers);
+                workers,
+                requiredPacketCount);
         }
         catch
         {
@@ -169,12 +179,94 @@ public sealed class NativeGtrtPipeline : IDisposable
 
     public NativePreUploadPacket Run(long seed)
     {
+        if (Interlocked.CompareExchange(
+                ref completedRunCount,
+                -1,
+                0) != 0)
+        {
+            throw new InvalidOperationException(
+                "The native GTRT seed is already published.");
+        }
+
+        publishedSeed = seed;
+        try
+        {
+            NativePreUploadPacket packet = RunCore(
+                seed,
+                centerChunkX: 0,
+                centerChunkY: 0,
+                centerChunkZ: 0,
+                recordInitialEndpoint: true);
+            Volatile.Write(ref completedRunCount, 1);
+            return packet;
+        }
+        catch
+        {
+            Volatile.Write(ref completedRunCount, int.MinValue);
+            throw;
+        }
+    }
+
+    public NativePreUploadPacket MoveToChunk(
+        int centerChunkX,
+        int centerChunkY,
+        int centerChunkZ)
+    {
+        ObjectDisposedException.ThrowIf(
+            Volatile.Read(ref disposed) != 0,
+            this);
+        int runCount = Volatile.Read(ref completedRunCount);
+        if (runCount <= 0 || !packetConsumptionCompleted)
+        {
+            throw new InvalidOperationException(
+                "All current native packets must retire before movement.");
+        }
+        if (Interlocked.CompareExchange(
+                ref completedRunCount,
+                -1,
+                runCount) != runCount)
+        {
+            throw new InvalidOperationException(
+                "The native GTRT pipeline is already moving.");
+        }
+
+        try
+        {
+            NativePreUploadPacket packet = RunCore(
+                publishedSeed,
+                centerChunkX,
+                centerChunkY,
+                centerChunkZ,
+                recordInitialEndpoint: false);
+            Volatile.Write(ref completedRunCount, checked(runCount + 1));
+            return packet;
+        }
+        catch
+        {
+            Volatile.Write(ref completedRunCount, int.MinValue);
+            throw;
+        }
+    }
+
+    private NativePreUploadPacket RunCore(
+        long seed,
+        int centerChunkX,
+        int centerChunkY,
+        int centerChunkZ,
+        bool recordInitialEndpoint)
+    {
         ObjectDisposedException.ThrowIf(
             Volatile.Read(ref disposed) != 0,
             this);
         packetCaptured = false;
+        packetConsumptionCompleted = false;
+        Volatile.Write(ref packetConsumptionState, 0);
         long allocationStart = GC.GetAllocatedBytesForCurrentThread();
-        workers.Run(seed);
+        workers.Run(
+            seed,
+            centerChunkX,
+            centerChunkY,
+            centerChunkZ);
         session.Access(capturePacketAction);
         if (!packetCaptured)
         {
@@ -182,10 +274,16 @@ public sealed class NativeGtrtPipeline : IDisposable
                 "No native render packet reached the pre-upload boundary.");
         }
 
-        generationToRenderMilliseconds =
-            StartupPerformanceRecorder.RecordGenerationToRender();
-        coordinatorManagedAllocationBytes =
+        if (recordInitialEndpoint)
+        {
+            generationToRenderMilliseconds =
+                StartupPerformanceRecorder.RecordGenerationToRender();
+        }
+        long allocated =
             GC.GetAllocatedBytesForCurrentThread() - allocationStart;
+        coordinatorManagedAllocationBytes = Math.Max(
+            coordinatorManagedAllocationBytes,
+            allocated);
 
         return capturedPacket;
     }
@@ -200,6 +298,8 @@ public sealed class NativeGtrtPipeline : IDisposable
         workers.InitialGenerationMilliseconds;
 
     public long InitialMeshMilliseconds => workers.InitialMeshMilliseconds;
+
+    public int RequiredPacketCount => requiredPacketCount;
 
     public double? GenerationToRenderMilliseconds =>
         generationToRenderMilliseconds;
@@ -230,6 +330,12 @@ public sealed class NativeGtrtPipeline : IDisposable
         try
         {
             session.Access(consumePacketsAction);
+            if (consumedPacketCount != requiredPacketCount)
+            {
+                throw new InvalidOperationException(
+                    "The native packet scan did not consume every packet.");
+            }
+            packetConsumptionCompleted = true;
             return consumedPacketCount;
         }
         finally

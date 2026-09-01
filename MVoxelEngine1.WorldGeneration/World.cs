@@ -23,7 +23,7 @@ using Supprocom.NativeAllocationManagement;
 
 namespace MVoxelEngine1.WorldGeneration
 {
-    public partial class World : IDisposable
+    public partial class World : IDisposable, IPlayerChunkPositionSink
     {
         public Guid ID { get; private set; }
         public Guid RegionID { get; private set; }

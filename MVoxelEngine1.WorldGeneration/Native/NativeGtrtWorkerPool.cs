@@ -14,13 +14,15 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
         TimeSpan.FromSeconds(30);
 
     private readonly NativeGtrtSession session;
-    private readonly ManualResetEvent startGate = new(false);
+    private readonly Semaphore startSignals = new(0, int.MaxValue);
     private readonly ManualResetEvent readyGate = new(false);
     private readonly ManualResetEvent generationCompletionGate = new(false);
     private readonly ManualResetEvent completionGate = new(false);
     private readonly NativeGtrtWorker[] workers;
     private readonly NativeLeaseAction<byte> validateCompletionAction;
     private readonly bool streamGeneration;
+    private readonly int generationWorkerCount;
+    private readonly int meshWorkerCount;
     private int readyWorkerCount;
     private int remainingGenerationWorkerCount;
     private int remainingMeshWorkerCount;
@@ -52,9 +54,8 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
         validateCompletionAction = ValidateCompletion;
         workers = new NativeGtrtWorker[
             checked(generationWorkerCount + meshWorkerCount)];
-        remainingWorkerCount = workers.Length;
-        remainingGenerationWorkerCount = generationWorkerCount;
-        remainingMeshWorkerCount = meshWorkerCount;
+        this.generationWorkerCount = generationWorkerCount;
+        this.meshWorkerCount = meshWorkerCount;
 
         int workerOffset = 0;
         for (int index = 0; index < generationWorkerCount; index++)
@@ -81,7 +82,7 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
         if (!readyGate.WaitOne(WorkerStartTimeout))
         {
             Volatile.Write(ref shutdownRequested, 1);
-            startGate.Set();
+            startSignals.Release(workers.Length);
             JoinWorkers();
             throw new TimeoutException(
                 "The native GTRT workers did not enter their start gate.");
@@ -105,18 +106,56 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
     internal long InitialMeshMilliseconds =>
         Volatile.Read(ref initialMeshMilliseconds);
 
-    internal void Run(long seed)
+    internal void Run(
+        long seed,
+        int centerChunkX = 0,
+        int centerChunkY = 0,
+        int centerChunkZ = 0)
     {
-        if (Interlocked.CompareExchange(ref runState, 1, 0) != 0)
+        int priorState;
+        while (true)
         {
-            throw new InvalidOperationException(
-                "The native GTRT worker pool can run only once.");
+            priorState = Volatile.Read(ref runState);
+            if ((priorState != 0 && priorState != 2) ||
+                Interlocked.CompareExchange(
+                    ref runState,
+                    1,
+                    priorState) != priorState)
+            {
+                if (priorState == 0 || priorState == 2)
+                    continue;
+                throw new InvalidOperationException(
+                    "The native GTRT worker pool is not idle.");
+            }
+            break;
         }
+
+        foreach (NativeGtrtWorker worker in workers)
+        {
+            if (worker.Fault is not null)
+            {
+                Volatile.Write(ref runState, 3);
+                throw new InvalidOperationException(
+                    "A native GTRT worker is not available.",
+                    worker.Fault);
+            }
+        }
+
+        generationCompletionGate.Reset();
+        completionGate.Reset();
+        Volatile.Write(ref startupPerformanceEnabled, 0);
+        remainingWorkerCount = workers.Length;
+        remainingGenerationWorkerCount = generationWorkerCount;
+        remainingMeshWorkerCount = meshWorkerCount;
 
         try
         {
-            session.PublishSeed(seed);
-            if (StartupPerformanceRecorder.IsRunning)
+            session.PrepareRun(
+                seed,
+                centerChunkX,
+                centerChunkY,
+                centerChunkZ);
+            if (priorState == 0 && StartupPerformanceRecorder.IsRunning)
             {
                 Volatile.Write(ref startupPerformanceEnabled, 1);
                 StartupPerformanceRecorder.BeginInitialGeneration();
@@ -128,11 +167,11 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
         {
             Volatile.Write(ref shutdownRequested, 1);
             Volatile.Write(ref runState, 3);
-            startGate.Set();
+            startSignals.Release(workers.Length);
             throw;
         }
 
-        startGate.Set();
+        startSignals.Release(workers.Length);
         if (!completionGate.WaitOne(WorkerCompletionTimeout))
         {
             session.RequestCancellation();
@@ -173,13 +212,13 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
         if (priorState == 1)
             session.RequestCancellation();
 
-        startGate.Set();
+        startSignals.Release(workers.Length);
         generationCompletionGate.Set();
         JoinWorkers();
         generationCompletionGate.Dispose();
         completionGate.Dispose();
         readyGate.Dispose();
-        startGate.Dispose();
+        startSignals.Dispose();
     }
 
     private bool ShutdownRequested =>
@@ -308,34 +347,43 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
 
         private void Run()
         {
-            try
+            owner.NotifyReady();
+            while (true)
             {
-                owner.NotifyReady();
-                owner.startGate.WaitOne();
+                owner.startSignals.WaitOne();
                 if (owner.ShutdownRequested)
                     return;
-                if (kind == NativeGtrtWorkerKind.Mesh &&
-                    !owner.streamGeneration)
+
+                try
                 {
-                    owner.generationCompletionGate.WaitOne();
-                    if (owner.ShutdownRequested)
-                        return;
+                    if (kind == NativeGtrtWorkerKind.Mesh &&
+                        !owner.streamGeneration)
+                    {
+                        owner.generationCompletionGate.WaitOne();
+                        if (owner.ShutdownRequested)
+                            return;
+                    }
+
+                    long allocationStart =
+                        GC.GetAllocatedBytesForCurrentThread();
+                    session.Access(workAction);
+                    long allocated =
+                        GC.GetAllocatedBytesForCurrentThread() -
+                        allocationStart;
+                    if (allocated > ManagedAllocationBytes)
+                        ManagedAllocationBytes = allocated;
+                }
+                catch (Exception exception)
+                {
+                    Fault = exception;
+                }
+                finally
+                {
+                    owner.NotifyCompleted(kind);
                 }
 
-                long allocationStart =
-                    GC.GetAllocatedBytesForCurrentThread();
-                session.Access(workAction);
-                ManagedAllocationBytes =
-                    GC.GetAllocatedBytesForCurrentThread() -
-                    allocationStart;
-            }
-            catch (Exception exception)
-            {
-                Fault = exception;
-            }
-            finally
-            {
-                owner.NotifyCompleted(kind);
+                if (Fault is not null)
+                    return;
             }
         }
 

@@ -132,6 +132,45 @@ public sealed class NativeGtrtWorkerPoolTests
         pipeline.Dispose();
     }
 
+    [Fact]
+    public void PersistentWorkersReuseNativeStorageAfterCameraMovement()
+    {
+        LoadDefaultGame();
+        var atlas = new BlockTextureAtlas(
+            BlockTextureAtlasUploadMode.SimulatedGpuUpload);
+        GameSettings settings = CreateSmallSettings();
+        using NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(
+            atlas,
+            settings,
+            generationWorkerCount: 3,
+            meshWorkerCount: 3,
+            streamGeneration: true);
+
+        NativePreUploadPacket initial = pipeline.Run(123456);
+        Assert.Throws<InvalidOperationException>(() =>
+            pipeline.MoveToChunk(2, -1, 3));
+        PacketBounds initialBounds = ConsumeBounds(pipeline);
+
+        NativePreUploadPacket moved = pipeline.MoveToChunk(2, -1, 3);
+        PacketBounds movedBounds = ConsumeBounds(pipeline);
+
+        Assert.Equal(-4, initialBounds.MinimumX);
+        Assert.Equal(4, initialBounds.MaximumX);
+        Assert.Equal(-8, initialBounds.MinimumY);
+        Assert.Equal(8, initialBounds.MaximumY);
+        Assert.Equal(-4, initialBounds.MinimumZ);
+        Assert.Equal(4, initialBounds.MaximumZ);
+        Assert.Equal(4, movedBounds.MinimumX);
+        Assert.Equal(12, movedBounds.MaximumX);
+        Assert.Equal(-16, movedBounds.MinimumY);
+        Assert.Equal(0, movedBounds.MaximumY);
+        Assert.Equal(8, movedBounds.MinimumZ);
+        Assert.Equal(16, movedBounds.MaximumZ);
+        Assert.NotEqual(initial.RenderDataId, moved.RenderDataId);
+        Assert.Equal(0, pipeline.MaximumWorkerManagedAllocationBytes);
+        Assert.Equal(0, pipeline.CoordinatorManagedAllocationBytes);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -239,6 +278,18 @@ public sealed class NativeGtrtWorkerPoolTests
         });
     }
 
+    private static PacketBounds ConsumeBounds(
+        NativeGtrtPipeline pipeline)
+    {
+        var bounds = new PacketBounds();
+        int count = pipeline.ConsumeReadyPackets(
+            (in NativeChunkRenderPacketDescriptor descriptor,
+             ReadOnlySpan<uint> _,
+             ReadOnlySpan<uint> _) => bounds.Include(in descriptor));
+        Assert.Equal(pipeline.RequiredPacketCount, count);
+        return bounds;
+    }
+
     private static Dictionary<int, PacketCopy> CopyPackets(
         NativeGtrtSession session)
     {
@@ -335,4 +386,25 @@ public sealed class NativeGtrtWorkerPoolTests
         uint[] TransparentWords);
 
     private sealed class PacketConsumerFailure : Exception;
+
+    private sealed class PacketBounds
+    {
+        internal int MinimumX { get; private set; } = int.MaxValue;
+        internal int MaximumX { get; private set; } = int.MinValue;
+        internal int MinimumY { get; private set; } = int.MaxValue;
+        internal int MaximumY { get; private set; } = int.MinValue;
+        internal int MinimumZ { get; private set; } = int.MaxValue;
+        internal int MaximumZ { get; private set; } = int.MinValue;
+
+        internal void Include(
+            in NativeChunkRenderPacketDescriptor descriptor)
+        {
+            MinimumX = Math.Min(MinimumX, descriptor.ChunkWorldX);
+            MaximumX = Math.Max(MaximumX, descriptor.ChunkWorldX);
+            MinimumY = Math.Min(MinimumY, descriptor.ChunkWorldY);
+            MaximumY = Math.Max(MaximumY, descriptor.ChunkWorldY);
+            MinimumZ = Math.Min(MinimumZ, descriptor.ChunkWorldZ);
+            MaximumZ = Math.Max(MaximumZ, descriptor.ChunkWorldZ);
+        }
+    }
 }
