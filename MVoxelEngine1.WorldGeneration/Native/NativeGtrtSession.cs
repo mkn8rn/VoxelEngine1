@@ -27,6 +27,19 @@ internal enum NativeChunkState : int
     Retired = 6
 }
 
+internal enum NativeChunkStorageKind : int
+{
+    GeneratedProfile = 0,
+    HybridSections = 1,
+    MaterializedSections = 2
+}
+
+internal enum NativeSectionStorageKind : int
+{
+    Uniform = 1,
+    Raw = 2
+}
+
 internal enum NativeWorkKind : int
 {
     None = 0,
@@ -80,7 +93,10 @@ internal enum NativeGtrtFailureCode : int
     InvalidPacketRecycle = 16,
     InvalidMeshCancellation = 17,
     InvalidGenerationCancellation = 18,
-    InvalidSessionReset = 19
+    InvalidSessionReset = 19,
+    InvalidMaterializedTerrain = 20,
+    MaterializedChunkStorageExhausted = 21,
+    MaterializedSectionStorageExhausted = 22
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 8)]
@@ -107,6 +123,8 @@ internal struct NativeGtrtSessionState
     internal int CenterChunkX;
     internal int CenterChunkY;
     internal int CenterChunkZ;
+    internal int MaterializedChunkCount;
+    internal int MaterializedSectionCount;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -149,6 +167,31 @@ internal struct NativeChunkRecord
     internal NativeChunkState State;
     internal int Flags;
     internal int RemainingDependencies;
+    internal NativeChunkStorageKind StorageKind;
+    internal int MaterializedChunkIndex;
+}
+
+[StructLayout(LayoutKind.Sequential, Pack = 8)]
+internal struct NativeMaterializedChunkRecord
+{
+    internal int ChunkX;
+    internal int ChunkY;
+    internal int ChunkZ;
+    internal NativeChunkStorageKind StorageKind;
+    internal int SectionMapOffset;
+    internal int State;
+    internal long Revision;
+}
+
+[StructLayout(LayoutKind.Sequential, Pack = 4)]
+internal struct NativeMaterializedSectionRecord
+{
+    internal int OwnerChunkIndex;
+    internal int SectionIndex;
+    internal int RawVoxelOffset;
+    internal int Revision;
+    internal ushort UniformBlockId;
+    internal NativeSectionStorageKind StorageKind;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -222,6 +265,8 @@ internal readonly ref struct NativePacketReadView
 internal readonly struct NativeGtrtSessionLayout
 {
     private const int DefaultPacketWordsPerRequiredChunk = 8_192;
+    internal const int DefaultMaterializedChunkCapacity = 64;
+    internal const int DefaultMaterializedSectionCapacity = 4_096;
 
     internal NativeGtrtSessionLayout(
         int chunkSizeX,
@@ -232,7 +277,9 @@ internal readonly struct NativeGtrtSessionLayout
         int generationWorkerCount = 1,
         int meshWorkerCount = 1,
         int packetWordCapacity = 0,
-        int gameSnapshotByteCount = 0)
+        int gameSnapshotByteCount = 0,
+        int materializedChunkCapacity = 0,
+        int materializedSectionCapacity = 0)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(chunkSizeX);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(chunkSizeY);
@@ -244,6 +291,14 @@ internal readonly struct NativeGtrtSessionLayout
             meshWorkerCount);
         ArgumentOutOfRangeException.ThrowIfNegative(packetWordCapacity);
         ArgumentOutOfRangeException.ThrowIfNegative(gameSnapshotByteCount);
+        ArgumentOutOfRangeException.ThrowIfNegative(materializedChunkCapacity);
+        ArgumentOutOfRangeException.ThrowIfNegative(materializedSectionCapacity);
+        if ((materializedChunkCapacity == 0) !=
+            (materializedSectionCapacity == 0))
+        {
+            throw new ArgumentException(
+                "Materialized chunk and section capacities must both be zero or positive.");
+        }
 
         ChunkSizeX = chunkSizeX;
         ChunkSizeY = chunkSizeY;
@@ -267,6 +322,23 @@ internal readonly struct NativeGtrtSessionLayout
             RequiredColumnCount * VerticalChunkCount);
         ProfilesPerColumn = checked(chunkSizeX * chunkSizeZ);
         ProfileCount = checked(ColumnCount * ProfilesPerColumn);
+        SectionCountX = checked(
+            (chunkSizeX + Section.SECTION_SIZE - 1) /
+            Section.SECTION_SIZE);
+        SectionCountY = checked(
+            (chunkSizeY + Section.SECTION_SIZE - 1) /
+            Section.SECTION_SIZE);
+        SectionCountZ = checked(
+            (chunkSizeZ + Section.SECTION_SIZE - 1) /
+            Section.SECTION_SIZE);
+        SectionsPerChunk = checked(
+            SectionCountX * SectionCountY * SectionCountZ);
+        MaterializedChunkCapacity = materializedChunkCapacity;
+        MaterializedSectionCapacity = materializedSectionCapacity;
+        MaterializedSectionMapCount = checked(
+            materializedChunkCapacity * SectionsPerChunk);
+        MaterializedRawVoxelCount = checked(
+            materializedSectionCapacity * Section.VOXELS_PER_SECTION);
         GenerationWorkerCount = generationWorkerCount;
         GenerationFloatCountPerWorker = checked(
             ProfilesPerColumn * 2);
@@ -340,6 +412,20 @@ internal readonly struct NativeGtrtSessionLayout
             8);
         ChunkOffset = cursor;
         cursor = AddRange<NativeChunkRecord>(cursor, ChunkCount, 8);
+        MaterializedChunkOffset = cursor;
+        cursor = AddRange<NativeMaterializedChunkRecord>(
+            cursor,
+            MaterializedChunkCapacity,
+            8);
+        MaterializedSectionMapOffset = cursor;
+        cursor = AddRange<int>(cursor, MaterializedSectionMapCount, 8);
+        MaterializedSectionOffset = cursor;
+        cursor = AddRange<NativeMaterializedSectionRecord>(
+            cursor,
+            MaterializedSectionCapacity,
+            8);
+        MaterializedRawVoxelOffset = cursor;
+        cursor = AddRange<ushort>(cursor, MaterializedRawVoxelCount, 8);
         GenerationJobOffset = cursor;
         cursor = AddRange<NativeWorkItem>(cursor, ColumnCount, 8);
         MeshJobOffset = cursor;
@@ -401,6 +487,22 @@ internal readonly struct NativeGtrtSessionLayout
 
     internal int ProfileCount { get; }
 
+    internal int SectionCountX { get; }
+
+    internal int SectionCountY { get; }
+
+    internal int SectionCountZ { get; }
+
+    internal int SectionsPerChunk { get; }
+
+    internal int MaterializedChunkCapacity { get; }
+
+    internal int MaterializedSectionCapacity { get; }
+
+    internal int MaterializedSectionMapCount { get; }
+
+    internal int MaterializedRawVoxelCount { get; }
+
     internal int GenerationWorkerCount { get; }
 
     internal int GenerationFloatCountPerWorker { get; }
@@ -445,6 +547,14 @@ internal readonly struct NativeGtrtSessionLayout
 
     internal int ChunkOffset { get; }
 
+    internal int MaterializedChunkOffset { get; }
+
+    internal int MaterializedSectionMapOffset { get; }
+
+    internal int MaterializedSectionOffset { get; }
+
+    internal int MaterializedRawVoxelOffset { get; }
+
     internal int GenerationJobOffset { get; }
 
     internal int MeshJobOffset { get; }
@@ -464,7 +574,9 @@ internal readonly struct NativeGtrtSessionLayout
         NativeTerrainMaterialSet materials,
         int generationWorkerCount = 1,
         int meshWorkerCount = 1,
-        int gameSnapshotByteCount = 0)
+        int gameSnapshotByteCount = 0,
+        int materializedChunkCapacity = 0,
+        int materializedSectionCapacity = 0)
     {
         ArgumentNullException.ThrowIfNull(settings);
         return new NativeGtrtSessionLayout(
@@ -475,7 +587,9 @@ internal readonly struct NativeGtrtSessionLayout
             materials,
             generationWorkerCount,
             meshWorkerCount,
-            gameSnapshotByteCount: gameSnapshotByteCount);
+            gameSnapshotByteCount: gameSnapshotByteCount,
+            materializedChunkCapacity: materializedChunkCapacity,
+            materializedSectionCapacity: materializedSectionCapacity);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -521,7 +635,7 @@ internal readonly struct NativeGtrtSessionLayout
 internal readonly struct NativeGtrtSessionHeader
 {
     internal const uint ExpectedMagic = 0x54525447;
-    internal const int ExpectedVersion = 10;
+    internal const int ExpectedVersion = 11;
 
     internal NativeGtrtSessionHeader(NativeGtrtSessionLayout layout)
     {
@@ -548,6 +662,14 @@ internal readonly struct NativeGtrtSessionHeader
         RequiredChunkCount = layout.RequiredChunkCount;
         ProfilesPerColumn = layout.ProfilesPerColumn;
         ProfileCount = layout.ProfileCount;
+        SectionCountX = layout.SectionCountX;
+        SectionCountY = layout.SectionCountY;
+        SectionCountZ = layout.SectionCountZ;
+        SectionsPerChunk = layout.SectionsPerChunk;
+        MaterializedChunkCapacity = layout.MaterializedChunkCapacity;
+        MaterializedSectionCapacity = layout.MaterializedSectionCapacity;
+        MaterializedSectionMapCount = layout.MaterializedSectionMapCount;
+        MaterializedRawVoxelCount = layout.MaterializedRawVoxelCount;
         GenerationWorkerCount = layout.GenerationWorkerCount;
         GenerationFloatCountPerWorker =
             layout.GenerationFloatCountPerWorker;
@@ -567,6 +689,10 @@ internal readonly struct NativeGtrtSessionHeader
         GenerationLatticeScratchOffset =
             layout.GenerationLatticeScratchOffset;
         ChunkOffset = layout.ChunkOffset;
+        MaterializedChunkOffset = layout.MaterializedChunkOffset;
+        MaterializedSectionMapOffset = layout.MaterializedSectionMapOffset;
+        MaterializedSectionOffset = layout.MaterializedSectionOffset;
+        MaterializedRawVoxelOffset = layout.MaterializedRawVoxelOffset;
         GenerationJobOffset = layout.GenerationJobOffset;
         MeshJobOffset = layout.MeshJobOffset;
         PacketOffset = layout.PacketOffset;
@@ -605,6 +731,14 @@ internal readonly struct NativeGtrtSessionHeader
     internal int RequiredChunkCount { get; }
     internal int ProfilesPerColumn { get; }
     internal int ProfileCount { get; }
+    internal int SectionCountX { get; }
+    internal int SectionCountY { get; }
+    internal int SectionCountZ { get; }
+    internal int SectionsPerChunk { get; }
+    internal int MaterializedChunkCapacity { get; }
+    internal int MaterializedSectionCapacity { get; }
+    internal int MaterializedSectionMapCount { get; }
+    internal int MaterializedRawVoxelCount { get; }
     internal int GenerationWorkerCount { get; }
     internal int GenerationFloatCountPerWorker { get; }
     internal int GenerationLatticeCountPerWorker { get; }
@@ -620,6 +754,10 @@ internal readonly struct NativeGtrtSessionHeader
     internal int GenerationZScratchOffset { get; }
     internal int GenerationLatticeScratchOffset { get; }
     internal int ChunkOffset { get; }
+    internal int MaterializedChunkOffset { get; }
+    internal int MaterializedSectionMapOffset { get; }
+    internal int MaterializedSectionOffset { get; }
+    internal int MaterializedRawVoxelOffset { get; }
     internal int GenerationJobOffset { get; }
     internal int MeshJobOffset { get; }
     internal int PacketOffset { get; }
@@ -647,21 +785,32 @@ internal ref struct NativeGtrtSessionInitializer
         scoped in NativeGtrtSessionLayout layout)
     {
         bytes.Clear();
-        WriteHeader(in layout);
-        WriteMaterials(layout.MaterialOffset, layout.Materials);
-        WriteInt32(
-            layout.StateOffset + 20,
-            layout.ColumnCount);
-        WriteInt32(
-            layout.StateOffset + 28,
-            layout.RequiredChunkCount);
+        var header = new NativeGtrtSessionHeader(layout);
+        MemoryMarshal.Write(bytes, in header);
+        NativeTerrainMaterialSet materials = layout.Materials;
+        MemoryMarshal.Write(bytes.Slice(layout.MaterialOffset), in materials);
+        var state = new NativeGtrtSessionState
+        {
+            RemainingColumns = layout.ColumnCount,
+            RemainingChunks = layout.RequiredChunkCount
+        };
+        MemoryMarshal.Write(bytes.Slice(layout.StateOffset), in state);
 
-        int profileByteCount = checked(
-            layout.ProfileCount * Unsafe.SizeOf<BlockColumnProfile>());
-        Span<byte> profileBytes = bytes.Slice(
+        bytes.Slice(
             layout.ProfileOffset,
-            profileByteCount);
-        profileBytes.Fill(byte.MaxValue);
+            checked(layout.ProfileCount *
+                Unsafe.SizeOf<BlockColumnProfile>())).Fill(byte.MaxValue);
+        int emptyMapEntry = -1;
+        for (int index = 0;
+             index < layout.MaterializedSectionMapCount;
+             index++)
+        {
+            MemoryMarshal.Write(
+                bytes.Slice(checked(
+                    layout.MaterializedSectionMapOffset +
+                    index * sizeof(int))),
+                in emptyMapEntry);
+        }
 
         int columnSize = Unsafe.SizeOf<NativeColumnRecord>();
         int chunkSize = Unsafe.SizeOf<NativeChunkRecord>();
@@ -677,24 +826,29 @@ internal ref struct NativeGtrtSessionInitializer
                 int columnIndex = layout.GetColumnIndex(chunkX, chunkZ);
                 int profileOffset = checked(
                     columnIndex * layout.ProfilesPerColumn);
-                int columnOffset = checked(
-                    layout.ColumnOffset + columnIndex * columnSize);
-                WriteInt32(columnOffset, chunkX);
-                WriteInt32(columnOffset + 4, chunkZ);
-                WriteInt32(columnOffset + 8, profileOffset);
-                WriteInt32(columnOffset + 12, -1);
-
-                int generationJobOffset = checked(
-                    layout.GenerationJobOffset +
-                    columnIndex * workItemSize);
-                WriteInt32(generationJobOffset, columnIndex);
-                WriteInt32(generationJobOffset + 4, 1);
-                WriteInt32(
-                    generationJobOffset + 8,
-                    (int)NativeWorkKind.GenerateColumn);
-                WriteInt32(
-                    generationJobOffset + 12,
-                    (int)NativeWorkState.Scheduled);
+                var column = new NativeColumnRecord
+                {
+                    ChunkX = chunkX,
+                    ChunkZ = chunkZ,
+                    ProfileOffset = profileOffset,
+                    BiomeIndex = -1
+                };
+                MemoryMarshal.Write(
+                    bytes.Slice(checked(
+                        layout.ColumnOffset + columnIndex * columnSize)),
+                    in column);
+                var generationJob = new NativeWorkItem
+                {
+                    RecordIndex = columnIndex,
+                    Epoch = 1,
+                    Kind = NativeWorkKind.GenerateColumn,
+                    State = NativeWorkState.Scheduled
+                };
+                MemoryMarshal.Write(
+                    bytes.Slice(checked(
+                        layout.GenerationJobOffset +
+                        columnIndex * workItemSize)),
+                    in generationJob);
 
                 bool initialMeshRequired =
                     chunkX >= -layout.Lod1Radius &&
@@ -710,36 +864,39 @@ internal ref struct NativeGtrtSessionInitializer
                         chunkX,
                         chunkY,
                         chunkZ);
-                    int chunkOffset = checked(
-                        layout.ChunkOffset + chunkIndex * chunkSize);
-                    WriteInt32(chunkOffset, chunkX);
-                    WriteInt32(chunkOffset + 4, chunkY);
-                    WriteInt32(chunkOffset + 8, chunkZ);
-                    WriteInt32(chunkOffset + 12, columnIndex);
-                    WriteInt32(chunkOffset + 16, profileOffset);
-                    WriteInt32(chunkOffset + 28, chunkIndex);
-                    if (initialMeshRequired)
+                    var chunk = new NativeChunkRecord
                     {
-                        WriteInt32(
-                            chunkOffset + 44,
-                            (int)NativeChunkFlags.InitialMeshRequired);
-                        WriteInt32(chunkOffset + 48, 5);
-                    }
-
-                    int meshJobOffset = checked(
-                        layout.MeshJobOffset +
-                        chunkIndex * workItemSize);
-                    WriteInt32(meshJobOffset, chunkIndex);
-                    WriteInt32(meshJobOffset + 4, 1);
-                    WriteInt32(
-                        meshJobOffset + 8,
-                        (int)NativeWorkKind.BuildChunkMesh);
-                    if (!initialMeshRequired)
+                        ChunkX = chunkX,
+                        ChunkY = chunkY,
+                        ChunkZ = chunkZ,
+                        ColumnIndex = columnIndex,
+                        ProfileOffset = profileOffset,
+                        PacketIndex = chunkIndex,
+                        Flags = initialMeshRequired
+                            ? (int)NativeChunkFlags.InitialMeshRequired
+                            : 0,
+                        RemainingDependencies = initialMeshRequired ? 5 : 0,
+                        StorageKind = NativeChunkStorageKind.GeneratedProfile,
+                        MaterializedChunkIndex = -1
+                    };
+                    MemoryMarshal.Write(
+                        bytes.Slice(checked(
+                            layout.ChunkOffset + chunkIndex * chunkSize)),
+                        in chunk);
+                    var meshJob = new NativeWorkItem
                     {
-                        WriteInt32(
-                            meshJobOffset + 12,
-                            (int)NativeWorkState.Canceled);
-                    }
+                        RecordIndex = chunkIndex,
+                        Epoch = 1,
+                        Kind = NativeWorkKind.BuildChunkMesh,
+                        State = initialMeshRequired
+                            ? NativeWorkState.Waiting
+                            : NativeWorkState.Canceled
+                    };
+                    MemoryMarshal.Write(
+                        bytes.Slice(checked(
+                            layout.MeshJobOffset +
+                            chunkIndex * workItemSize)),
+                        in meshJob);
                 }
             }
         }
@@ -749,194 +906,17 @@ internal ref struct NativeGtrtSessionInitializer
              index < layout.RequiredChunkCount;
              index++)
         {
-            WriteInt64(
-                checked(layout.MeshReadyOffset + index * readySlotSize),
-                index);
+            var readySlot = new NativeReadySlot
+            {
+                Sequence = index
+            };
+            MemoryMarshal.Write(
+                bytes.Slice(checked(
+                    layout.MeshReadyOffset + index * readySlotSize)),
+                in readySlot);
         }
     }
 
-    private void WriteHeader(
-        scoped in NativeGtrtSessionLayout layout)
-    {
-        int offset = 0;
-        WriteUInt32(offset, NativeGtrtSessionHeader.ExpectedMagic);
-        offset += sizeof(uint);
-        WriteInt32(offset, NativeGtrtSessionHeader.ExpectedVersion);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.TotalByteCount);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.ChunkSizeX);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.ChunkSizeY);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.ChunkSizeZ);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.Lod1Radius);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.ResidentRadius);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.MinimumChunkX);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.MaximumChunkX);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.MinimumChunkY);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.MaximumChunkY);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.MinimumChunkZ);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.MaximumChunkZ);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.ColumnWidth);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.VerticalChunkCount);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.ColumnCount);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.ChunkCount);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.RequiredColumnWidth);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.RequiredColumnCount);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.RequiredChunkCount);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.ProfilesPerColumn);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.ProfileCount);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.GenerationWorkerCount);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.GenerationFloatCountPerWorker);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.GenerationLatticeCountPerWorker);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.StateOffset);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.NoiseStateOffset);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.MaterialOffset);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.ColumnOffset);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.ProfileOffset);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.ColumnSummaryOffset);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.GenerationWorkspaceOffset);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.GenerationFloatScratchOffset);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.GenerationXScratchOffset);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.GenerationZScratchOffset);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.GenerationLatticeScratchOffset);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.ChunkOffset);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.GenerationJobOffset);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.MeshJobOffset);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.PacketOffset);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.MeshReadyOffset);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.MeshWorkerCount);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.MeshFaceScratchCountPerWorker);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.PacketWordCapacity);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.MeshWorkspaceOffset);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.MeshFaceScratchOffset);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.PacketWordOffset);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.GameSnapshotOffset);
-        offset += sizeof(int);
-        WriteInt32(offset, layout.GameSnapshotByteCount);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void WriteInt64(int offset, long value)
-    {
-        ulong bits = unchecked((ulong)value);
-        if (BitConverter.IsLittleEndian)
-        {
-            WriteUInt32(offset, (uint)bits);
-            WriteUInt32(offset + sizeof(uint), (uint)(bits >> 32));
-            return;
-        }
-
-        WriteUInt32(offset, (uint)(bits >> 32));
-        WriteUInt32(offset + sizeof(uint), (uint)bits);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void WriteInt32(int offset, int value) =>
-        WriteUInt32(offset, unchecked((uint)value));
-
-    private void WriteMaterials(
-        int offset,
-        NativeTerrainMaterialSet materials)
-    {
-        WriteBlockDescriptor(offset, materials.Stone);
-        offset += Unsafe.SizeOf<NativeBlockDescriptor>();
-        WriteBlockDescriptor(offset, materials.Soil);
-        offset += Unsafe.SizeOf<NativeBlockDescriptor>();
-        WriteBlockDescriptor(offset, materials.Water);
-    }
-
-    private void WriteBlockDescriptor(
-        int offset,
-        NativeBlockDescriptor descriptor)
-    {
-        WriteUInt16(offset, descriptor.Id);
-        WriteUInt16(offset + 2, descriptor.BaseType);
-        bytes[offset + 4] = descriptor.StateOfMatter;
-        bytes[offset + 5] = (byte)descriptor.Flags;
-        WriteUInt16(offset + 6, descriptor.LeftTile);
-        WriteUInt16(offset + 8, descriptor.RightTile);
-        WriteUInt16(offset + 10, descriptor.BottomTile);
-        WriteUInt16(offset + 12, descriptor.TopTile);
-        WriteUInt16(offset + 14, descriptor.BackTile);
-        WriteUInt16(offset + 16, descriptor.FrontTile);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void WriteUInt16(int offset, ushort value)
-    {
-        if (BitConverter.IsLittleEndian)
-        {
-            bytes[offset] = (byte)value;
-            bytes[offset + 1] = (byte)(value >> 8);
-            return;
-        }
-
-        bytes[offset] = (byte)(value >> 8);
-        bytes[offset + 1] = (byte)value;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void WriteUInt32(int offset, uint value)
-    {
-        if (BitConverter.IsLittleEndian)
-        {
-            bytes[offset] = (byte)value;
-            bytes[offset + 1] = (byte)(value >> 8);
-            bytes[offset + 2] = (byte)(value >> 16);
-            bytes[offset + 3] = (byte)(value >> 24);
-            return;
-        }
-
-        bytes[offset] = (byte)(value >> 24);
-        bytes[offset + 1] = (byte)(value >> 16);
-        bytes[offset + 2] = (byte)(value >> 8);
-        bytes[offset + 3] = (byte)value;
-    }
 }
 
 internal ref struct NativeGtrtSessionView
@@ -1003,6 +983,18 @@ internal ref struct NativeGtrtSessionView
         ValidateRange<NativeChunkRecord>(
             header.ChunkOffset,
             header.ChunkCount);
+        ValidateRange<NativeMaterializedChunkRecord>(
+            header.MaterializedChunkOffset,
+            header.MaterializedChunkCapacity);
+        ValidateRange<int>(
+            header.MaterializedSectionMapOffset,
+            header.MaterializedSectionMapCount);
+        ValidateRange<NativeMaterializedSectionRecord>(
+            header.MaterializedSectionOffset,
+            header.MaterializedSectionCapacity);
+        ValidateRange<ushort>(
+            header.MaterializedRawVoxelOffset,
+            header.MaterializedRawVoxelCount);
         ValidateRange<NativeWorkItem>(
             header.GenerationJobOffset,
             header.ColumnCount);
@@ -1053,6 +1045,26 @@ internal ref struct NativeGtrtSessionView
     internal Span<NativeChunkRecord> Chunks =>
         ReadRange<NativeChunkRecord>(header.ChunkOffset, header.ChunkCount);
 
+    internal Span<NativeMaterializedChunkRecord> MaterializedChunks =>
+        ReadRange<NativeMaterializedChunkRecord>(
+            header.MaterializedChunkOffset,
+            header.MaterializedChunkCapacity);
+
+    internal Span<int> MaterializedSectionMaps =>
+        ReadRange<int>(
+            header.MaterializedSectionMapOffset,
+            header.MaterializedSectionMapCount);
+
+    internal Span<NativeMaterializedSectionRecord> MaterializedSections =>
+        ReadRange<NativeMaterializedSectionRecord>(
+            header.MaterializedSectionOffset,
+            header.MaterializedSectionCapacity);
+
+    internal Span<ushort> MaterializedRawVoxels =>
+        ReadRange<ushort>(
+            header.MaterializedRawVoxelOffset,
+            header.MaterializedRawVoxelCount);
+
     internal Span<NativeWorkItem> GenerationJobs =>
         ReadRange<NativeWorkItem>(
             header.GenerationJobOffset,
@@ -1089,6 +1101,60 @@ internal ref struct NativeGtrtSessionView
     internal NativeGameSnapshotView GameSnapshot =>
         new(GameSnapshotBytes);
 
+    internal bool HasGameSnapshot => header.GameSnapshotByteCount != 0;
+
+    internal bool TryGetBlockDescriptor(
+        ushort blockId,
+        out NativeBlockDescriptor descriptor)
+    {
+        if (blockId == 0)
+        {
+            descriptor = default;
+            return true;
+        }
+
+        if (HasGameSnapshot)
+        {
+            ReadOnlySpan<NativeBlockDescriptor> blocks = GameSnapshot.Blocks;
+            if ((uint)blockId >= (uint)blocks.Length)
+            {
+                descriptor = default;
+                return false;
+            }
+
+            descriptor = blocks[blockId];
+            return descriptor.Id == blockId &&
+                (descriptor.Flags & NativeBlockFlags.Defined) != 0;
+        }
+
+        if (blockId == Materials.Stone.Id)
+            descriptor = Materials.Stone;
+        else if (blockId == Materials.Soil.Id)
+            descriptor = Materials.Soil;
+        else if (blockId == Materials.Water.Id)
+            descriptor = Materials.Water;
+        else
+        {
+            descriptor = default;
+            return false;
+        }
+
+        return true;
+    }
+
+    internal bool TryIsBlockOpaque(ushort blockId, out bool opaque)
+    {
+        if (!TryGetBlockDescriptor(blockId, out NativeBlockDescriptor block))
+        {
+            opaque = false;
+            return false;
+        }
+
+        opaque = blockId != 0 &&
+            (block.Flags & NativeBlockFlags.Opaque) != 0;
+        return true;
+    }
+
     internal int ColumnCount => header.ColumnCount;
 
     internal int ChunkCount => header.ChunkCount;
@@ -1110,6 +1176,20 @@ internal ref struct NativeGtrtSessionView
     internal int PacketWordCapacity => header.PacketWordCapacity;
 
     internal int RequiredChunkCount => header.RequiredChunkCount;
+
+    internal int SectionCountX => header.SectionCountX;
+
+    internal int SectionCountY => header.SectionCountY;
+
+    internal int SectionCountZ => header.SectionCountZ;
+
+    internal int SectionsPerChunk => header.SectionsPerChunk;
+
+    internal int MaterializedChunkCapacity =>
+        header.MaterializedChunkCapacity;
+
+    internal int MaterializedSectionCapacity =>
+        header.MaterializedSectionCapacity;
 
     internal Span<BlockColumnProfile> GetColumnProfiles(int columnIndex) =>
         Profiles.Slice(
@@ -1723,6 +1803,21 @@ internal ref struct NativeGtrtSessionView
                         chunkX,
                         chunkY,
                         chunkZ);
+                    int materializedChunkIndex =
+                        FindMaterializedChunkIndex(
+                            chunkX,
+                            chunkY,
+                            chunkZ);
+                    NativeChunkStorageKind storageKind =
+                        NativeChunkStorageKind.GeneratedProfile;
+                    long dirtyRevision = 0;
+                    if (materializedChunkIndex >= 0)
+                    {
+                        NativeMaterializedChunkRecord materialized =
+                            MaterializedChunks[materializedChunkIndex];
+                        storageKind = materialized.StorageKind;
+                        dirtyRevision = materialized.Revision;
+                    }
                     chunks[chunkIndex] = new NativeChunkRecord
                     {
                         ChunkX = chunkX,
@@ -1731,10 +1826,13 @@ internal ref struct NativeGtrtSessionView
                         ColumnIndex = columnIndex,
                         ProfileOffset = profileOffset,
                         PacketIndex = chunkIndex,
+                        DirtyRevision = dirtyRevision,
                         Flags = initialMeshRequired
                             ? (int)NativeChunkFlags.InitialMeshRequired
                             : 0,
                         RemainingDependencies = initialMeshRequired ? 5 : 0,
+                        StorageKind = storageKind,
+                        MaterializedChunkIndex = materializedChunkIndex,
                         State = NativeChunkState.Empty
                     };
                     meshJobs[chunkIndex] = new NativeWorkItem
@@ -1773,6 +1871,34 @@ internal ref struct NativeGtrtSessionView
         state.PacketRecycleState = 0;
         state.ClaimedGenerationCount = 0;
         state.PacketConsumerCount = 0;
+    }
+
+    internal int FindMaterializedChunkIndex(
+        int chunkX,
+        int chunkY,
+        int chunkZ)
+    {
+        int count = State.MaterializedChunkCount;
+        Span<NativeMaterializedChunkRecord> chunks = MaterializedChunks;
+        if ((uint)count > (uint)chunks.Length)
+        {
+            Fail(NativeGtrtFailureCode.InvalidMaterializedTerrain);
+            return -1;
+        }
+
+        for (int index = 0; index < count; index++)
+        {
+            ref NativeMaterializedChunkRecord chunk = ref chunks[index];
+            if (chunk.State == 1 &&
+                chunk.ChunkX == chunkX &&
+                chunk.ChunkY == chunkY &&
+                chunk.ChunkZ == chunkZ)
+            {
+                return index;
+            }
+        }
+
+        return -1;
     }
 
     internal bool TryPrepareForDisposal()
@@ -2659,7 +2785,11 @@ internal sealed class NativeGtrtSession : IDisposable
         GameSettings settings,
         NativeGameSnapshot game,
         int generationWorkerCount = 1,
-        int meshWorkerCount = 1)
+        int meshWorkerCount = 1,
+        int materializedChunkCapacity =
+            NativeGtrtSessionLayout.DefaultMaterializedChunkCapacity,
+        int materializedSectionCapacity =
+            NativeGtrtSessionLayout.DefaultMaterializedSectionCapacity)
     {
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(game);
@@ -2671,7 +2801,9 @@ internal sealed class NativeGtrtSession : IDisposable
                 gameView.GetGeneratedMaterials(),
                 generationWorkerCount,
                 meshWorkerCount,
-                gameSnapshot.Length));
+                gameSnapshot.Length,
+                materializedChunkCapacity,
+                materializedSectionCapacity));
         try
         {
             session.InitializeGameSnapshot(gameSnapshot);

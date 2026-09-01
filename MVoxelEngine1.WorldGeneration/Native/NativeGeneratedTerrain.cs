@@ -173,18 +173,84 @@ internal static class NativeGeneratedTerrain
         int localZ,
         out ushort blockId)
     {
-        if (!TryGetProfile(
-                ref session,
-                chunkIndex,
-                localX,
-                localZ,
-                out BlockColumnProfile profile))
+        if ((uint)chunkIndex >= (uint)session.ChunkCount)
         {
+            session.Fail(NativeGtrtFailureCode.InvalidTerrainQuery);
+            blockId = 0;
+            return false;
+        }
+
+        NativeChunkRecord source = session.Chunks[chunkIndex];
+        int chunkOffsetX = FloorDiv(localX, session.ChunkSizeX);
+        int chunkOffsetY = FloorDiv(localY, session.ChunkSizeY);
+        int chunkOffsetZ = FloorDiv(localZ, session.ChunkSizeZ);
+        int normalizedX = localX - chunkOffsetX * session.ChunkSizeX;
+        int normalizedY = localY - chunkOffsetY * session.ChunkSizeY;
+        int normalizedZ = localZ - chunkOffsetZ * session.ChunkSizeZ;
+        int targetChunkIndex = session.GetChunkIndex(
+            unchecked(source.ChunkX + chunkOffsetX),
+            unchecked(source.ChunkY + chunkOffsetY),
+            unchecked(source.ChunkZ + chunkOffsetZ));
+        if (targetChunkIndex < 0 ||
+            !NativeMaterializedTerrain.TryGetBlock(
+                ref session,
+                targetChunkIndex,
+                normalizedX,
+                normalizedY,
+                normalizedZ,
+                out blockId,
+                out bool handled))
+        {
+            session.Fail(NativeGtrtFailureCode.InvalidTerrainQuery);
+            blockId = 0;
+            return false;
+        }
+
+        return handled || TryGetGeneratedBlock(
+            ref session,
+            targetChunkIndex,
+            normalizedX,
+            normalizedY,
+            normalizedZ,
+            out blockId);
+    }
+
+    internal static bool TryGetGeneratedBlock(
+        scoped ref NativeGtrtSessionView session,
+        int chunkIndex,
+        int localX,
+        int localY,
+        int localZ,
+        out ushort blockId)
+    {
+        if ((uint)chunkIndex >= (uint)session.ChunkCount ||
+            (uint)localX >= (uint)session.ChunkSizeX ||
+            (uint)localY >= (uint)session.ChunkSizeY ||
+            (uint)localZ >= (uint)session.ChunkSizeZ)
+        {
+            session.Fail(NativeGtrtFailureCode.InvalidTerrainQuery);
             blockId = 0;
             return false;
         }
 
         NativeChunkRecord chunk = session.Chunks[chunkIndex];
+        ref NativeColumnRecord column = ref session.Columns[chunk.ColumnIndex];
+        ref int columnState = ref Unsafe.As<NativeColumnState, int>(
+            ref column.State);
+        if (Volatile.Read(ref columnState) !=
+                (int)NativeColumnState.Generated ||
+            column.GenerationEpoch != session.State.SessionEpoch)
+        {
+            session.Fail(NativeGtrtFailureCode.InvalidTerrainQuery);
+            blockId = 0;
+            return false;
+        }
+
+        int profileIndex = checked(
+            chunk.ProfileOffset +
+            localX * session.ChunkSizeZ +
+            localZ);
+        BlockColumnProfile profile = session.Profiles[profileIndex];
         int worldY = unchecked(chunk.ChunkY * session.ChunkSizeY + localY);
         blockId = session.Materials.GetBlockWorld(in profile, worldY);
         return true;
@@ -290,8 +356,8 @@ internal static class NativeGeneratedTerrain
                 neighborY,
                 neighborZ,
                 out ushort neighborId) ||
-            !session.Materials.TryIsOpaque(sourceId, out bool sourceOpaque) ||
-            !session.Materials.TryIsOpaque(neighborId, out bool neighborOpaque))
+            !session.TryIsBlockOpaque(sourceId, out bool sourceOpaque) ||
+            !session.TryIsBlockOpaque(neighborId, out bool neighborOpaque))
         {
             session.Fail(NativeGtrtFailureCode.InvalidTerrainQuery);
             visible = false;
