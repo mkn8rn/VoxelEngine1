@@ -88,7 +88,17 @@ public sealed class NativeGtrtPipeline : IDisposable
     }
 
     public static NativeGtrtPipeline Create(
-        BlockTextureAtlas textureAtlas)
+        BlockTextureAtlas textureAtlas) =>
+        CreateConfigured(textureAtlas, savePlan: null);
+
+    internal static NativeGtrtPipeline Create(
+        BlockTextureAtlas textureAtlas,
+        NativeWorldSaveImportPlan savePlan) =>
+        CreateConfigured(textureAtlas, savePlan);
+
+    private static NativeGtrtPipeline CreateConfigured(
+        BlockTextureAtlas textureAtlas,
+        NativeWorldSaveImportPlan? savePlan)
     {
         ArgumentNullException.ThrowIfNull(textureAtlas);
         FaceGenerationMode mode =
@@ -126,7 +136,8 @@ public sealed class NativeGtrtPipeline : IDisposable
             GameManager.settings,
             generationWorkerCount,
             meshWorkerCount,
-            streamGeneration);
+            streamGeneration,
+            savePlan);
     }
 
     internal static NativeGtrtPipeline Create(
@@ -134,7 +145,8 @@ public sealed class NativeGtrtPipeline : IDisposable
         GameSettings settings,
         int generationWorkerCount,
         int meshWorkerCount,
-        bool streamGeneration = false)
+        bool streamGeneration = false,
+        NativeWorldSaveImportPlan? savePlan = null)
     {
         ArgumentNullException.ThrowIfNull(textureAtlas);
         ArgumentNullException.ThrowIfNull(settings);
@@ -152,11 +164,26 @@ public sealed class NativeGtrtPipeline : IDisposable
         try
         {
             game = NativeGameSnapshot.Create(textureAtlas);
+            int materializedChunkCapacity = Math.Max(
+                NativeGtrtSessionLayout.DefaultMaterializedChunkCapacity,
+                savePlan?.ChunkCount ?? 0);
+            int materializedSectionCapacity = Math.Max(
+                NativeGtrtSessionLayout.DefaultMaterializedSectionCapacity,
+                savePlan?.SectionCount ?? 0);
+            int materializedRawSectionCapacity = Math.Max(
+                NativeGtrtSessionLayout.DefaultMaterializedSectionCapacity,
+                savePlan?.RawSectionCount ?? 0);
             session = NativeGtrtSession.Create(
                 settings,
                 game,
                 generationWorkerCount,
-                meshWorkerCount);
+                meshWorkerCount,
+                materializedChunkCapacity,
+                materializedSectionCapacity,
+                materializedRawSectionCapacity,
+                savePlan?.PaletteCount ?? 0,
+                savePlan?.PackedWordCount ?? 0);
+            savePlan?.Import(session);
             workers = new NativeGtrtWorkerPool(
                 session,
                 generationWorkerCount,

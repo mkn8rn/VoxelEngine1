@@ -263,7 +263,8 @@ internal static class NativeGeneratedMesh
     private static bool IsStorageKindValid(NativeChunkStorageKind kind) =>
         kind == NativeChunkStorageKind.GeneratedProfile ||
         kind == NativeChunkStorageKind.HybridSections ||
-        kind == NativeChunkStorageKind.MaterializedSections;
+        kind == NativeChunkStorageKind.MaterializedSections ||
+        kind == NativeChunkStorageKind.UniformSections;
 
     private static bool GenerateMaterial(
         scoped ref NativeGtrtSessionView session,

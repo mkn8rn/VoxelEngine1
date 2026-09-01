@@ -31,13 +31,15 @@ internal enum NativeChunkStorageKind : int
 {
     GeneratedProfile = 0,
     HybridSections = 1,
-    MaterializedSections = 2
+    MaterializedSections = 2,
+    UniformSections = 3
 }
 
 internal enum NativeSectionStorageKind : int
 {
     Uniform = 1,
-    Raw = 2
+    Raw = 2,
+    Packed = 3
 }
 
 internal enum NativeWorkKind : int
@@ -125,6 +127,9 @@ internal struct NativeGtrtSessionState
     internal int CenterChunkZ;
     internal int MaterializedChunkCount;
     internal int MaterializedSectionCount;
+    internal int MaterializedRawSectionCount;
+    internal int MaterializedPaletteCursor;
+    internal int MaterializedPackedWordCursor;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -181,6 +186,7 @@ internal struct NativeMaterializedChunkRecord
     internal int SectionMapOffset;
     internal int State;
     internal long Revision;
+    internal ushort UniformBlockId;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -189,8 +195,13 @@ internal struct NativeMaterializedSectionRecord
     internal int OwnerChunkIndex;
     internal int SectionIndex;
     internal int RawVoxelOffset;
+    internal int PaletteOffset;
+    internal int PackedWordOffset;
+    internal int PackedWordCount;
     internal int Revision;
     internal ushort UniformBlockId;
+    internal ushort PaletteCount;
+    internal byte BitsPerIndex;
     internal NativeSectionStorageKind StorageKind;
 }
 
@@ -279,7 +290,10 @@ internal readonly struct NativeGtrtSessionLayout
         int packetWordCapacity = 0,
         int gameSnapshotByteCount = 0,
         int materializedChunkCapacity = 0,
-        int materializedSectionCapacity = 0)
+        int materializedSectionCapacity = 0,
+        int materializedRawSectionCapacity = -1,
+        int materializedPaletteCapacity = 0,
+        int materializedPackedWordCapacity = 0)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(chunkSizeX);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(chunkSizeY);
@@ -293,11 +307,31 @@ internal readonly struct NativeGtrtSessionLayout
         ArgumentOutOfRangeException.ThrowIfNegative(gameSnapshotByteCount);
         ArgumentOutOfRangeException.ThrowIfNegative(materializedChunkCapacity);
         ArgumentOutOfRangeException.ThrowIfNegative(materializedSectionCapacity);
+        if (materializedRawSectionCapacity < -1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(materializedRawSectionCapacity));
+        }
+        ArgumentOutOfRangeException.ThrowIfNegative(
+            materializedPaletteCapacity);
+        ArgumentOutOfRangeException.ThrowIfNegative(
+            materializedPackedWordCapacity);
+        int resolvedRawSectionCapacity = materializedRawSectionCapacity < 0
+            ? materializedSectionCapacity
+            : materializedRawSectionCapacity;
         if ((materializedChunkCapacity == 0) !=
             (materializedSectionCapacity == 0))
         {
             throw new ArgumentException(
                 "Materialized chunk and section capacities must both be zero or positive.");
+        }
+        if (materializedSectionCapacity == 0 &&
+            (resolvedRawSectionCapacity != 0 ||
+             materializedPaletteCapacity != 0 ||
+             materializedPackedWordCapacity != 0))
+        {
+            throw new ArgumentException(
+                "Materialized payload capacities require section storage.");
         }
 
         ChunkSizeX = chunkSizeX;
@@ -335,10 +369,13 @@ internal readonly struct NativeGtrtSessionLayout
             SectionCountX * SectionCountY * SectionCountZ);
         MaterializedChunkCapacity = materializedChunkCapacity;
         MaterializedSectionCapacity = materializedSectionCapacity;
+        MaterializedRawSectionCapacity = resolvedRawSectionCapacity;
+        MaterializedPaletteCapacity = materializedPaletteCapacity;
+        MaterializedPackedWordCapacity = materializedPackedWordCapacity;
         MaterializedSectionMapCount = checked(
             materializedChunkCapacity * SectionsPerChunk);
         MaterializedRawVoxelCount = checked(
-            materializedSectionCapacity * Section.VOXELS_PER_SECTION);
+            resolvedRawSectionCapacity * Section.VOXELS_PER_SECTION);
         GenerationWorkerCount = generationWorkerCount;
         GenerationFloatCountPerWorker = checked(
             ProfilesPerColumn * 2);
@@ -432,6 +469,10 @@ internal readonly struct NativeGtrtSessionLayout
             8);
         MaterializedRawVoxelOffset = cursor;
         cursor = AddRange<ushort>(cursor, MaterializedRawVoxelCount, 8);
+        MaterializedPaletteOffset = cursor;
+        cursor = AddRange<ushort>(cursor, MaterializedPaletteCapacity, 8);
+        MaterializedPackedWordOffset = cursor;
+        cursor = AddRange<uint>(cursor, MaterializedPackedWordCapacity, 8);
         GenerationJobOffset = cursor;
         cursor = AddRange<NativeWorkItem>(cursor, ColumnCount, 8);
         MeshJobOffset = cursor;
@@ -505,6 +546,12 @@ internal readonly struct NativeGtrtSessionLayout
 
     internal int MaterializedSectionCapacity { get; }
 
+    internal int MaterializedRawSectionCapacity { get; }
+
+    internal int MaterializedPaletteCapacity { get; }
+
+    internal int MaterializedPackedWordCapacity { get; }
+
     internal int MaterializedSectionMapCount { get; }
 
     internal int MaterializedRawVoxelCount { get; }
@@ -561,6 +608,10 @@ internal readonly struct NativeGtrtSessionLayout
 
     internal int MaterializedRawVoxelOffset { get; }
 
+    internal int MaterializedPaletteOffset { get; }
+
+    internal int MaterializedPackedWordOffset { get; }
+
     internal int GenerationJobOffset { get; }
 
     internal int MeshJobOffset { get; }
@@ -582,7 +633,10 @@ internal readonly struct NativeGtrtSessionLayout
         int meshWorkerCount = 1,
         int gameSnapshotByteCount = 0,
         int materializedChunkCapacity = 0,
-        int materializedSectionCapacity = 0)
+        int materializedSectionCapacity = 0,
+        int materializedRawSectionCapacity = -1,
+        int materializedPaletteCapacity = 0,
+        int materializedPackedWordCapacity = 0)
     {
         ArgumentNullException.ThrowIfNull(settings);
         return new NativeGtrtSessionLayout(
@@ -595,7 +649,10 @@ internal readonly struct NativeGtrtSessionLayout
             meshWorkerCount,
             gameSnapshotByteCount: gameSnapshotByteCount,
             materializedChunkCapacity: materializedChunkCapacity,
-            materializedSectionCapacity: materializedSectionCapacity);
+            materializedSectionCapacity: materializedSectionCapacity,
+            materializedRawSectionCapacity: materializedRawSectionCapacity,
+            materializedPaletteCapacity: materializedPaletteCapacity,
+            materializedPackedWordCapacity: materializedPackedWordCapacity);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -641,7 +698,7 @@ internal readonly struct NativeGtrtSessionLayout
 internal readonly struct NativeGtrtSessionHeader
 {
     internal const uint ExpectedMagic = 0x54525447;
-    internal const int ExpectedVersion = 11;
+    internal const int ExpectedVersion = 12;
 
     internal NativeGtrtSessionHeader(NativeGtrtSessionLayout layout)
     {
@@ -674,6 +731,11 @@ internal readonly struct NativeGtrtSessionHeader
         SectionsPerChunk = layout.SectionsPerChunk;
         MaterializedChunkCapacity = layout.MaterializedChunkCapacity;
         MaterializedSectionCapacity = layout.MaterializedSectionCapacity;
+        MaterializedRawSectionCapacity =
+            layout.MaterializedRawSectionCapacity;
+        MaterializedPaletteCapacity = layout.MaterializedPaletteCapacity;
+        MaterializedPackedWordCapacity =
+            layout.MaterializedPackedWordCapacity;
         MaterializedSectionMapCount = layout.MaterializedSectionMapCount;
         MaterializedRawVoxelCount = layout.MaterializedRawVoxelCount;
         GenerationWorkerCount = layout.GenerationWorkerCount;
@@ -699,6 +761,8 @@ internal readonly struct NativeGtrtSessionHeader
         MaterializedSectionMapOffset = layout.MaterializedSectionMapOffset;
         MaterializedSectionOffset = layout.MaterializedSectionOffset;
         MaterializedRawVoxelOffset = layout.MaterializedRawVoxelOffset;
+        MaterializedPaletteOffset = layout.MaterializedPaletteOffset;
+        MaterializedPackedWordOffset = layout.MaterializedPackedWordOffset;
         GenerationJobOffset = layout.GenerationJobOffset;
         MeshJobOffset = layout.MeshJobOffset;
         PacketOffset = layout.PacketOffset;
@@ -743,6 +807,9 @@ internal readonly struct NativeGtrtSessionHeader
     internal int SectionsPerChunk { get; }
     internal int MaterializedChunkCapacity { get; }
     internal int MaterializedSectionCapacity { get; }
+    internal int MaterializedRawSectionCapacity { get; }
+    internal int MaterializedPaletteCapacity { get; }
+    internal int MaterializedPackedWordCapacity { get; }
     internal int MaterializedSectionMapCount { get; }
     internal int MaterializedRawVoxelCount { get; }
     internal int GenerationWorkerCount { get; }
@@ -764,6 +831,8 @@ internal readonly struct NativeGtrtSessionHeader
     internal int MaterializedSectionMapOffset { get; }
     internal int MaterializedSectionOffset { get; }
     internal int MaterializedRawVoxelOffset { get; }
+    internal int MaterializedPaletteOffset { get; }
+    internal int MaterializedPackedWordOffset { get; }
     internal int GenerationJobOffset { get; }
     internal int MeshJobOffset { get; }
     internal int PacketOffset { get; }
@@ -1001,6 +1070,12 @@ internal ref struct NativeGtrtSessionView
         ValidateRange<ushort>(
             header.MaterializedRawVoxelOffset,
             header.MaterializedRawVoxelCount);
+        ValidateRange<ushort>(
+            header.MaterializedPaletteOffset,
+            header.MaterializedPaletteCapacity);
+        ValidateRange<uint>(
+            header.MaterializedPackedWordOffset,
+            header.MaterializedPackedWordCapacity);
         ValidateRange<NativeWorkItem>(
             header.GenerationJobOffset,
             header.ColumnCount);
@@ -1070,6 +1145,16 @@ internal ref struct NativeGtrtSessionView
         ReadRange<ushort>(
             header.MaterializedRawVoxelOffset,
             header.MaterializedRawVoxelCount);
+
+    internal Span<ushort> MaterializedPalette =>
+        ReadRange<ushort>(
+            header.MaterializedPaletteOffset,
+            header.MaterializedPaletteCapacity);
+
+    internal Span<uint> MaterializedPackedWords =>
+        ReadRange<uint>(
+            header.MaterializedPackedWordOffset,
+            header.MaterializedPackedWordCapacity);
 
     internal Span<NativeWorkItem> GenerationJobs =>
         ReadRange<NativeWorkItem>(
@@ -1196,6 +1281,15 @@ internal ref struct NativeGtrtSessionView
 
     internal int MaterializedSectionCapacity =>
         header.MaterializedSectionCapacity;
+
+    internal int MaterializedRawSectionCapacity =>
+        header.MaterializedRawSectionCapacity;
+
+    internal int MaterializedPaletteCapacity =>
+        header.MaterializedPaletteCapacity;
+
+    internal int MaterializedPackedWordCapacity =>
+        header.MaterializedPackedWordCapacity;
 
     internal Span<BlockColumnProfile> GetColumnProfiles(int columnIndex) =>
         Profiles.Slice(
@@ -2810,7 +2904,11 @@ internal sealed class NativeGtrtSession : IDisposable
         int materializedChunkCapacity =
             NativeGtrtSessionLayout.DefaultMaterializedChunkCapacity,
         int materializedSectionCapacity =
-            NativeGtrtSessionLayout.DefaultMaterializedSectionCapacity)
+            NativeGtrtSessionLayout.DefaultMaterializedSectionCapacity,
+        int materializedRawSectionCapacity =
+            NativeGtrtSessionLayout.DefaultMaterializedSectionCapacity,
+        int materializedPaletteCapacity = 0,
+        int materializedPackedWordCapacity = 0)
     {
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(game);
@@ -2824,7 +2922,10 @@ internal sealed class NativeGtrtSession : IDisposable
                 meshWorkerCount,
                 gameSnapshot.Length,
                 materializedChunkCapacity,
-                materializedSectionCapacity));
+                materializedSectionCapacity,
+                materializedRawSectionCapacity,
+                materializedPaletteCapacity,
+                materializedPackedWordCapacity));
         try
         {
             session.InitializeGameSnapshot(gameSnapshot);

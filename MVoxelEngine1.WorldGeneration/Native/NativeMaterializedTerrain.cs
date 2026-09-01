@@ -127,6 +127,12 @@ internal static class NativeMaterializedTerrain
             {
                 handled = true;
             }
+            else if (materialized.StorageKind ==
+                     NativeChunkStorageKind.UniformSections)
+            {
+                blockId = materialized.UniformBlockId;
+                handled = true;
+            }
             return true;
         }
 
@@ -160,6 +166,21 @@ internal static class NativeMaterializedTerrain
                     return false;
                 }
                 blockId = session.MaterializedRawVoxels[voxelIndex];
+                handled = true;
+                return true;
+            case NativeSectionStorageKind.Packed:
+                int packedIndex = GetSectionLocalIndex(
+                    localX,
+                    localY,
+                    localZ);
+                if (!TryReadPackedBlock(
+                        ref session,
+                        in section,
+                        packedIndex,
+                        out blockId))
+                {
+                    return false;
+                }
                 handled = true;
                 return true;
             default:
@@ -250,8 +271,14 @@ internal static class NativeMaterializedTerrain
             return false;
         }
 
-        int rawVoxelOffset = checked(
-            sectionRecordIndex * Section.VOXELS_PER_SECTION);
+        bool allocateRaw = newSection ||
+            existingSection.StorageKind != NativeSectionStorageKind.Raw;
+        int rawVoxelOffset = allocateRaw
+            ? TryAllocateRawSection(ref session)
+            : existingSection.RawVoxelOffset;
+        if (rawVoxelOffset < 0)
+            return false;
+
         Span<ushort> raw = session.MaterializedRawVoxels.Slice(
             rawVoxelOffset,
             Section.VOXELS_PER_SECTION);
@@ -272,7 +299,15 @@ internal static class NativeMaterializedTerrain
             }
             else
             {
-                raw.Clear();
+                if (existingChunk.StorageKind ==
+                    NativeChunkStorageKind.UniformSections)
+                {
+                    raw.Fill(existingChunk.UniformBlockId);
+                }
+                else
+                {
+                    raw.Clear();
+                }
             }
         }
         else
@@ -282,8 +317,19 @@ internal static class NativeMaterializedTerrain
             {
                 raw.Fill(existingSection.UniformBlockId);
             }
+            else if (existingSection.StorageKind ==
+                     NativeSectionStorageKind.Packed)
+            {
+                if (!TryDecodePackedSection(
+                        ref session,
+                        in existingSection,
+                        raw))
+                {
+                    return false;
+                }
+            }
             else if (existingSection.StorageKind !=
-                NativeSectionStorageKind.Raw)
+                     NativeSectionStorageKind.Raw)
             {
                 session.Fail(NativeGtrtFailureCode.InvalidMaterializedTerrain);
                 return false;
@@ -317,6 +363,8 @@ internal static class NativeMaterializedTerrain
                     OwnerChunkIndex = materializedChunkIndex,
                     SectionIndex = sectionIndex,
                     RawVoxelOffset = rawVoxelOffset,
+                    PaletteOffset = -1,
+                    PackedWordOffset = -1,
                     Revision = 1,
                     StorageKind = NativeSectionStorageKind.Raw
                 };
@@ -328,6 +376,12 @@ internal static class NativeMaterializedTerrain
             ref NativeMaterializedSectionRecord section =
                 ref session.MaterializedSections[sectionRecordIndex];
             section.StorageKind = NativeSectionStorageKind.Raw;
+            section.RawVoxelOffset = rawVoxelOffset;
+            section.PaletteOffset = -1;
+            section.PackedWordOffset = -1;
+            section.PackedWordCount = 0;
+            section.PaletteCount = 0;
+            section.BitsPerIndex = 0;
             section.UniformBlockId = 0;
             section.Revision = checked(section.Revision + 1);
         }
@@ -514,8 +568,9 @@ internal static class NativeMaterializedTerrain
                 {
                     OwnerChunkIndex = materializedChunkIndex,
                     SectionIndex = sectionIndex,
-                    RawVoxelOffset = checked(
-                        sectionRecordIndex * Section.VOXELS_PER_SECTION),
+                    RawVoxelOffset = -1,
+                    PaletteOffset = -1,
+                    PackedWordOffset = -1,
                     Revision = 1,
                     UniformBlockId = blockId,
                     StorageKind = NativeSectionStorageKind.Uniform
@@ -526,6 +581,12 @@ internal static class NativeMaterializedTerrain
             ref NativeMaterializedSectionRecord section =
                 ref session.MaterializedSections[sectionRecordIndex];
             section.StorageKind = NativeSectionStorageKind.Uniform;
+            section.RawVoxelOffset = -1;
+            section.PaletteOffset = -1;
+            section.PackedWordOffset = -1;
+            section.PackedWordCount = 0;
+            section.PaletteCount = 0;
+            section.BitsPerIndex = 0;
             section.UniformBlockId = blockId;
             section.Revision = checked(section.Revision + 1);
         }
@@ -536,6 +597,254 @@ internal static class NativeMaterializedTerrain
             ref activeChunk,
             materializedChunkIndex,
             in materialized);
+        return true;
+    }
+
+    internal static bool TryImportChunk(
+        scoped ref NativeGtrtSessionView session,
+        int chunkX,
+        int chunkY,
+        int chunkZ,
+        bool isUniform,
+        ushort uniformBlockId,
+        out int materializedChunkIndex)
+    {
+        materializedChunkIndex = -1;
+        if (!CanImport(ref session) ||
+            (isUniform &&
+             !session.TryGetBlockDescriptor(uniformBlockId, out _)) ||
+            session.FindMaterializedChunkIndex(chunkX, chunkY, chunkZ) >= 0)
+        {
+            session.Fail(NativeGtrtFailureCode.InvalidMaterializedTerrain);
+            return false;
+        }
+
+        ref NativeGtrtSessionState state = ref session.State;
+        if (state.MaterializedChunkCount >=
+            session.MaterializedChunkCapacity)
+        {
+            session.Fail(
+                NativeGtrtFailureCode.MaterializedChunkStorageExhausted);
+            return false;
+        }
+
+        materializedChunkIndex = state.MaterializedChunkCount++;
+        int sectionMapOffset = checked(
+            materializedChunkIndex * session.SectionsPerChunk);
+        session.MaterializedChunks[materializedChunkIndex] =
+            new NativeMaterializedChunkRecord
+            {
+                ChunkX = chunkX,
+                ChunkY = chunkY,
+                ChunkZ = chunkZ,
+                StorageKind = isUniform
+                    ? NativeChunkStorageKind.UniformSections
+                    : NativeChunkStorageKind.MaterializedSections,
+                SectionMapOffset = sectionMapOffset,
+                State = ActiveRecord,
+                Revision = 1,
+                UniformBlockId = uniformBlockId
+            };
+
+        int chunkIndex = session.GetChunkIndex(chunkX, chunkY, chunkZ);
+        if (chunkIndex >= 0)
+        {
+            ref NativeChunkRecord activeChunk =
+                ref session.Chunks[chunkIndex];
+            NativeMaterializedChunkRecord materialized =
+                session.MaterializedChunks[materializedChunkIndex];
+            Attach(
+                ref activeChunk,
+                materializedChunkIndex,
+                in materialized);
+        }
+
+        return true;
+    }
+
+    internal static bool TryImportUniformSection(
+        scoped ref NativeGtrtSessionView session,
+        int materializedChunkIndex,
+        int sectionIndex,
+        ushort blockId)
+    {
+        if (!CanImportSection(
+                ref session,
+                materializedChunkIndex,
+                sectionIndex,
+                out int mapIndex,
+                out int sectionRecordIndex) ||
+            !session.TryGetBlockDescriptor(blockId, out _))
+        {
+            session.Fail(NativeGtrtFailureCode.InvalidMaterializedTerrain);
+            return false;
+        }
+
+        session.MaterializedSections[sectionRecordIndex] =
+            new NativeMaterializedSectionRecord
+            {
+                OwnerChunkIndex = materializedChunkIndex,
+                SectionIndex = sectionIndex,
+                RawVoxelOffset = -1,
+                PaletteOffset = -1,
+                PackedWordOffset = -1,
+                Revision = 1,
+                UniformBlockId = blockId,
+                StorageKind = NativeSectionStorageKind.Uniform
+            };
+        PublishImportedSection(
+            ref session,
+            materializedChunkIndex,
+            mapIndex,
+            sectionRecordIndex);
+        return true;
+    }
+
+    internal static bool TryImportRawSection(
+        scoped ref NativeGtrtSessionView session,
+        int materializedChunkIndex,
+        int sectionIndex,
+        scoped ReadOnlySpan<ushort> voxels)
+    {
+        if (voxels.Length != Section.VOXELS_PER_SECTION ||
+            !CanImportSection(
+                ref session,
+                materializedChunkIndex,
+                sectionIndex,
+                out int mapIndex,
+                out int sectionRecordIndex))
+        {
+            session.Fail(NativeGtrtFailureCode.InvalidMaterializedTerrain);
+            return false;
+        }
+        for (int index = 0; index < voxels.Length; index++)
+        {
+            if (!session.TryGetBlockDescriptor(voxels[index], out _))
+            {
+                session.Fail(
+                    NativeGtrtFailureCode.InvalidMaterializedTerrain);
+                return false;
+            }
+        }
+
+        int rawVoxelOffset = TryAllocateRawSection(ref session);
+        if (rawVoxelOffset < 0)
+            return false;
+
+        voxels.CopyTo(session.MaterializedRawVoxels.Slice(
+            rawVoxelOffset,
+            Section.VOXELS_PER_SECTION));
+        session.MaterializedSections[sectionRecordIndex] =
+            new NativeMaterializedSectionRecord
+            {
+                OwnerChunkIndex = materializedChunkIndex,
+                SectionIndex = sectionIndex,
+                RawVoxelOffset = rawVoxelOffset,
+                PaletteOffset = -1,
+                PackedWordOffset = -1,
+                Revision = 1,
+                StorageKind = NativeSectionStorageKind.Raw
+            };
+        PublishImportedSection(
+            ref session,
+            materializedChunkIndex,
+            mapIndex,
+            sectionRecordIndex);
+        return true;
+    }
+
+    internal static bool TryImportPackedSection(
+        scoped ref NativeGtrtSessionView session,
+        int materializedChunkIndex,
+        int sectionIndex,
+        byte bitsPerIndex,
+        scoped ReadOnlySpan<ushort> palette,
+        scoped ReadOnlySpan<uint> packedWords)
+    {
+        int minimumWordCount = bitsPerIndex is > 0 and <= 16
+            ? checked((Section.VOXELS_PER_SECTION * bitsPerIndex + 31) / 32)
+            : -1;
+        if (palette.IsEmpty ||
+            palette.Length > ushort.MaxValue ||
+            minimumWordCount < 0 ||
+            packedWords.Length < minimumWordCount ||
+            !CanImportSection(
+                ref session,
+                materializedChunkIndex,
+                sectionIndex,
+                out int mapIndex,
+                out int sectionRecordIndex))
+        {
+            session.Fail(NativeGtrtFailureCode.InvalidMaterializedTerrain);
+            return false;
+        }
+        for (int index = 0; index < palette.Length; index++)
+        {
+            if (!session.TryGetBlockDescriptor(palette[index], out _))
+            {
+                session.Fail(
+                    NativeGtrtFailureCode.InvalidMaterializedTerrain);
+                return false;
+            }
+        }
+        for (int voxelIndex = 0;
+             voxelIndex < Section.VOXELS_PER_SECTION;
+             voxelIndex++)
+        {
+            int paletteIndex = ReadPackedIndex(
+                packedWords,
+                bitsPerIndex,
+                voxelIndex);
+            if ((uint)paletteIndex >= (uint)palette.Length)
+            {
+                session.Fail(
+                    NativeGtrtFailureCode.InvalidMaterializedTerrain);
+                return false;
+            }
+        }
+
+        ref NativeGtrtSessionState state = ref session.State;
+        int paletteOffset = state.MaterializedPaletteCursor;
+        int wordOffset = state.MaterializedPackedWordCursor;
+        if (palette.Length >
+                session.MaterializedPaletteCapacity - paletteOffset ||
+            packedWords.Length >
+                session.MaterializedPackedWordCapacity - wordOffset)
+        {
+            session.Fail(
+                NativeGtrtFailureCode.MaterializedSectionStorageExhausted);
+            return false;
+        }
+
+        palette.CopyTo(session.MaterializedPalette.Slice(
+            paletteOffset,
+            palette.Length));
+        packedWords.CopyTo(session.MaterializedPackedWords.Slice(
+            wordOffset,
+            packedWords.Length));
+        state.MaterializedPaletteCursor = checked(
+            paletteOffset + palette.Length);
+        state.MaterializedPackedWordCursor = checked(
+            wordOffset + packedWords.Length);
+        session.MaterializedSections[sectionRecordIndex] =
+            new NativeMaterializedSectionRecord
+            {
+                OwnerChunkIndex = materializedChunkIndex,
+                SectionIndex = sectionIndex,
+                RawVoxelOffset = -1,
+                PaletteOffset = paletteOffset,
+                PackedWordOffset = wordOffset,
+                PackedWordCount = packedWords.Length,
+                Revision = 1,
+                PaletteCount = checked((ushort)palette.Length),
+                BitsPerIndex = bitsPerIndex,
+                StorageKind = NativeSectionStorageKind.Packed
+            };
+        PublishImportedSection(
+            ref session,
+            materializedChunkIndex,
+            mapIndex,
+            sectionRecordIndex);
         return true;
     }
 
@@ -602,6 +911,184 @@ internal static class NativeMaterializedTerrain
             Volatile.Read(ref state.DisposalState) == 0;
     }
 
+    private static bool CanImport(scoped ref NativeGtrtSessionView session)
+    {
+        ref NativeGtrtSessionState state = ref session.State;
+        return state.PublicationState == 0 &&
+            Volatile.Read(ref state.ClaimedGenerationCount) == 0 &&
+            Volatile.Read(ref state.ClaimedMeshCount) == 0 &&
+            Volatile.Read(ref state.PacketConsumerCount) == 0 &&
+            Volatile.Read(ref state.DisposalState) == 0;
+    }
+
+    private static bool CanImportSection(
+        scoped ref NativeGtrtSessionView session,
+        int materializedChunkIndex,
+        int sectionIndex,
+        out int mapIndex,
+        out int sectionRecordIndex)
+    {
+        mapIndex = -1;
+        sectionRecordIndex = -1;
+        if (!CanImport(ref session) ||
+            (uint)materializedChunkIndex >=
+                (uint)session.State.MaterializedChunkCount ||
+            (uint)sectionIndex >= (uint)session.SectionsPerChunk ||
+            session.State.MaterializedSectionCount >=
+                session.MaterializedSectionCapacity)
+        {
+            return false;
+        }
+
+        NativeMaterializedChunkRecord chunk =
+            session.MaterializedChunks[materializedChunkIndex];
+        if (chunk.State != ActiveRecord ||
+            chunk.SectionMapOffset !=
+                materializedChunkIndex * session.SectionsPerChunk)
+        {
+            return false;
+        }
+
+        mapIndex = checked(chunk.SectionMapOffset + sectionIndex);
+        if (session.MaterializedSectionMaps[mapIndex] >= 0)
+            return false;
+
+        sectionRecordIndex = session.State.MaterializedSectionCount;
+        return true;
+    }
+
+    private static void PublishImportedSection(
+        scoped ref NativeGtrtSessionView session,
+        int materializedChunkIndex,
+        int mapIndex,
+        int sectionRecordIndex)
+    {
+        session.MaterializedSectionMaps[mapIndex] = sectionRecordIndex;
+        session.State.MaterializedSectionCount++;
+        ref NativeMaterializedChunkRecord chunk =
+            ref session.MaterializedChunks[materializedChunkIndex];
+        chunk.Revision = checked(chunk.Revision + 1);
+
+        int activeChunkIndex = session.GetChunkIndex(
+            chunk.ChunkX,
+            chunk.ChunkY,
+            chunk.ChunkZ);
+        if (activeChunkIndex >= 0)
+        {
+            Attach(
+                ref session.Chunks[activeChunkIndex],
+                materializedChunkIndex,
+                in chunk);
+        }
+    }
+
+    private static int TryAllocateRawSection(
+        scoped ref NativeGtrtSessionView session)
+    {
+        ref NativeGtrtSessionState state = ref session.State;
+        if (state.MaterializedRawSectionCount >=
+            session.MaterializedRawSectionCapacity)
+        {
+            session.Fail(
+                NativeGtrtFailureCode.MaterializedSectionStorageExhausted);
+            return -1;
+        }
+
+        int rawSectionIndex = state.MaterializedRawSectionCount++;
+        return checked(rawSectionIndex * Section.VOXELS_PER_SECTION);
+    }
+
+    private static bool TryDecodePackedSection(
+        scoped ref NativeGtrtSessionView session,
+        scoped in NativeMaterializedSectionRecord section,
+        Span<ushort> destination)
+    {
+        if (destination.Length != Section.VOXELS_PER_SECTION)
+        {
+            session.Fail(NativeGtrtFailureCode.InvalidMaterializedTerrain);
+            return false;
+        }
+
+        for (int index = 0; index < destination.Length; index++)
+        {
+            if (!TryReadPackedBlock(
+                    ref session,
+                    in section,
+                    index,
+                    out destination[index]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int ReadPackedIndex(
+        scoped ReadOnlySpan<uint> words,
+        int bitsPerIndex,
+        int voxelIndex)
+    {
+        long bitPosition = (long)voxelIndex * bitsPerIndex;
+        int wordIndex = (int)(bitPosition >> 5);
+        int bitOffset = (int)(bitPosition & 31);
+        uint value = words[wordIndex] >> bitOffset;
+        int remaining = 32 - bitOffset;
+        if (remaining < bitsPerIndex)
+            value |= words[wordIndex + 1] << remaining;
+
+        uint mask = (1u << bitsPerIndex) - 1u;
+        return (int)(value & mask);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool TryReadPackedBlock(
+        scoped ref NativeGtrtSessionView session,
+        scoped in NativeMaterializedSectionRecord section,
+        int voxelIndex,
+        out ushort blockId)
+    {
+        blockId = 0;
+        int bitsPerIndex = section.BitsPerIndex;
+        long bitPosition = (long)voxelIndex * bitsPerIndex;
+        int wordIndex = checked((int)(bitPosition >> 5));
+        int bitOffset = (int)(bitPosition & 31);
+        if ((uint)wordIndex >= (uint)section.PackedWordCount)
+        {
+            session.Fail(NativeGtrtFailureCode.InvalidMaterializedTerrain);
+            return false;
+        }
+
+        ReadOnlySpan<uint> words = session.MaterializedPackedWords.Slice(
+            section.PackedWordOffset,
+            section.PackedWordCount);
+        uint value = words[wordIndex] >> bitOffset;
+        int remaining = 32 - bitOffset;
+        if (remaining < bitsPerIndex)
+        {
+            if ((uint)(wordIndex + 1) >= (uint)words.Length)
+            {
+                session.Fail(
+                    NativeGtrtFailureCode.InvalidMaterializedTerrain);
+                return false;
+            }
+            value |= words[wordIndex + 1] << remaining;
+        }
+
+        uint mask = (1u << bitsPerIndex) - 1u;
+        int paletteIndex = (int)(value & mask);
+        if ((uint)paletteIndex >= (uint)section.PaletteCount)
+        {
+            session.Fail(NativeGtrtFailureCode.InvalidMaterializedTerrain);
+            return false;
+        }
+
+        blockId = session.MaterializedPalette[
+            section.PaletteOffset + paletteIndex];
+        return true;
+    }
+
     private static bool TryGetChunkRecord(
         scoped ref NativeGtrtSessionView session,
         int materializedChunkIndex,
@@ -652,9 +1139,40 @@ internal static class NativeMaterializedTerrain
 
         section = session.MaterializedSections[sectionRecordIndex];
         if (section.OwnerChunkIndex != materializedChunkIndex ||
-            section.SectionIndex != sectionIndex ||
-            section.RawVoxelOffset !=
-                sectionRecordIndex * Section.VOXELS_PER_SECTION)
+            section.SectionIndex != sectionIndex)
+        {
+            session.Fail(NativeGtrtFailureCode.InvalidMaterializedTerrain);
+            return false;
+        }
+
+        bool validStorage = section.StorageKind switch
+        {
+            NativeSectionStorageKind.Uniform =>
+                section.RawVoxelOffset == -1 &&
+                section.PaletteOffset == -1 &&
+                section.PackedWordOffset == -1,
+            NativeSectionStorageKind.Raw =>
+                section.RawVoxelOffset >= 0 &&
+                section.RawVoxelOffset % Section.VOXELS_PER_SECTION == 0 &&
+                section.RawVoxelOffset <=
+                    session.MaterializedRawVoxels.Length -
+                    Section.VOXELS_PER_SECTION,
+            NativeSectionStorageKind.Packed =>
+                section.RawVoxelOffset == -1 &&
+                section.BitsPerIndex is > 0 and <= 16 &&
+                section.PaletteCount > 0 &&
+                section.PaletteOffset >= 0 &&
+                section.PaletteOffset <=
+                    session.MaterializedPalette.Length -
+                    section.PaletteCount &&
+                section.PackedWordCount > 0 &&
+                section.PackedWordOffset >= 0 &&
+                section.PackedWordOffset <=
+                    session.MaterializedPackedWords.Length -
+                    section.PackedWordCount,
+            _ => false
+        };
+        if (!validStorage)
         {
             session.Fail(NativeGtrtFailureCode.InvalidMaterializedTerrain);
             return false;

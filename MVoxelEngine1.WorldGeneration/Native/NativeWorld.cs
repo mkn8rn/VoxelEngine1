@@ -69,8 +69,16 @@ internal sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
             FlagManager.flags.worldName,
             FlagManager.flags.seed);
 
+        string quadsDirectory = Path.Combine(
+            loader.currentWorldSaveDirectory,
+            loader.RegionID.ToString(),
+            "quads");
+        NativeWorldSaveImportPlan savePlan =
+            NativeWorldSaveImportPlan.Create(
+                quadsDirectory,
+                GameManager.settings);
         NativeGtrtPipeline pipeline =
-            NativeGtrtPipeline.Create(textureAtlas);
+            NativeGtrtPipeline.Create(textureAtlas, savePlan);
         return CreateOwned(
             pipeline,
             loader.seed,
