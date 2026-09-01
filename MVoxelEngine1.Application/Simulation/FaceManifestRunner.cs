@@ -40,7 +40,7 @@ namespace MVoxelEngine1.Application.Simulation
 
             try
             {
-                using var world = new World();
+                using var world = new World(textureAtlas);
                 var player = new Player(world);
                 if (steps.Count != 0)
                 {

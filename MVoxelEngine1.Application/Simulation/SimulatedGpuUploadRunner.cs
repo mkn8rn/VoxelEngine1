@@ -23,7 +23,7 @@ namespace MVoxelEngine1.Application.Simulation
             var textureAtlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
             ChunkRender.terrainTextureAtlas = textureAtlas;
 
-            using var world = new World();
+            using var world = new World(textureAtlas);
             Console.WriteLine("Initializing player.");
             var player = new Player(world);
             world.PlayerChunkPosition = (0, 0, 0);

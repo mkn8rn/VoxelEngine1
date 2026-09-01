@@ -16,6 +16,8 @@ using MVoxelEngine1.Infrastructure.Models.Terrain;
 using MVoxelEngine1.Infrastructure.Models.Generation;
 using MVoxelEngine1.Infrastructure.Models;
 using MVoxelEngine1.Infrastructure.Diagnostics;
+using MVoxelEngine1.Graphics.Textures;
+using MVoxelEngine1.WorldGeneration.Native;
 using OpenTK.Graphics.OpenGL4;
 using Supprocom.NativeAllocationManagement;
 
@@ -45,6 +47,8 @@ namespace MVoxelEngine1.WorldGeneration
         private CancellationTokenSource meshBuildCts;           // drives current mesh build worker set
 
         private readonly FaceGenerationMode faceGenerationMode;
+        private readonly NativeGameSnapshot nativeGameSnapshot;
+        private readonly NativeGtrtSession nativeGtrtSession;
         private readonly ThreadLocal<PackedFaceNativePool> packedFacePools =
             new(
                 static () => new PackedFaceNativePool(),
@@ -110,8 +114,9 @@ namespace MVoxelEngine1.WorldGeneration
         // Track quads currently being generated. Value holds queue/state instead of a simple byte now.
         private readonly ConcurrentDictionary<(int bx,int bz), BatchGenerationState> generatingBatches = new();
 
-        public World()
+        public World(BlockTextureAtlas textureAtlas)
         {
+            ArgumentNullException.ThrowIfNull(textureAtlas);
             Console.WriteLine("World manager initializing.");
 
             float proc = Environment.ProcessorCount;
@@ -138,6 +143,8 @@ namespace MVoxelEngine1.WorldGeneration
             bufferChunkPositionQueue = new BlockingCollection<Vector3>(new ConcurrentQueue<Vector3>());
             meshBuildQueue = new BlockingCollection<(int cx, int cy, int cz)>(new ConcurrentQueue<(int, int, int)>());
             schedulingCts = new CancellationTokenSource();
+            (nativeGameSnapshot, nativeGtrtSession) =
+                CreateNativeWorldState(textureAtlas);
             Console.WriteLine("World resources initialized.");
 
             bool streamGeneration = FlagManager.flags.renderStreamingIfAllowed ?? throw new InvalidOperationException("Render streaming flag is not set.");
@@ -149,48 +156,79 @@ namespace MVoxelEngine1.WorldGeneration
             // Establish initial buffer radius BEFORE starting scheduling worker so it does not schedule full runtime buffer prematurely
             currentBufferRadius = GameManager.settings.chunkGenerationBufferInitial; // start with initial pregen horizon
 
-            // Always start scheduling first
-            InitializeScheduling();
-
-            if (!streamGeneration)
+            try
             {
-                // --- Staged non-streaming load ---
-                int initialGen = (int)((FlagManager.flags.worldGenWorkersPerCoreInitial ?? FlagManager.flags.worldGenWorkersPerCore!.Value) * proc);
-                int initialMesh = (int)((FlagManager.flags.meshRenderWorkersPerCoreInitial ?? FlagManager.flags.meshRenderWorkersPerCore!.Value) * proc);
-                int finalGen = (int)(FlagManager.flags.worldGenWorkersPerCore.Value * proc);
-                int finalMesh = (int)(FlagManager.flags.meshRenderWorkersPerCore.Value * proc);
+                nativeGtrtSession.PublishSeed(loader.seed);
 
-                // 1. Initial world generation workers
-                StartupPerformanceRecorder.BeginInitialGeneration();
-                StartGenerationWorkers(initialGen);
-                EnqueueInitialChunkPositions();
-                EnqueueInitialBufferChunkPositions();
-                initialSchedulingPass.WaitUntilCompleted();
-                WaitForInitialChunkGeneration();
-                StopGenerationWorkers();
+                // Always start scheduling first
+                InitializeScheduling();
 
-                // 2. Build initial LoD1 render data after generation completes.
-                BuildInitialChunkRenders(initialMesh);
-                initialGenerationMeshWork.CompleteDeferral();
+                if (!streamGeneration)
+                {
+                    // --- Staged non-streaming load ---
+                    int initialGen = (int)((FlagManager.flags.worldGenWorkersPerCoreInitial ?? FlagManager.flags.worldGenWorkersPerCore!.Value) * proc);
+                    int initialMesh = (int)((FlagManager.flags.meshRenderWorkersPerCoreInitial ?? FlagManager.flags.meshRenderWorkersPerCore!.Value) * proc);
+                    int finalGen = (int)(FlagManager.flags.worldGenWorkersPerCore.Value * proc);
+                    int finalMesh = (int)(FlagManager.flags.meshRenderWorkersPerCore.Value * proc);
 
-                // 3. Start steady-state workers (may be same counts; restart for clarity per spec)
-                StartGenerationWorkers(finalGen);
-                StartMeshBuildWorkers(finalMesh);
-                // Promote buffer radius to runtime value and schedule remainder
-                currentBufferRadius = GameManager.settings.chunkGenerationBufferRuntime;
-                EnqueueRuntimeBufferChunkPositions();
+                    // 1. Initial world generation workers
+                    StartupPerformanceRecorder.BeginInitialGeneration();
+                    StartGenerationWorkers(initialGen);
+                    EnqueueInitialChunkPositions();
+                    EnqueueInitialBufferChunkPositions();
+                    initialSchedulingPass.WaitUntilCompleted();
+                    WaitForInitialChunkGeneration();
+                    StopGenerationWorkers();
+
+                    // 2. Build initial LoD1 render data after generation completes.
+                    BuildInitialChunkRenders(initialMesh);
+                    initialGenerationMeshWork.CompleteDeferral();
+
+                    // 3. Start steady-state workers (may be same counts; restart for clarity per spec)
+                    StartGenerationWorkers(finalGen);
+                    StartMeshBuildWorkers(finalMesh);
+                    // Promote buffer radius to runtime value and schedule remainder
+                    currentBufferRadius = GameManager.settings.chunkGenerationBufferRuntime;
+                    EnqueueRuntimeBufferChunkPositions();
+                }
+                else
+                {
+                    // Streaming mode: single steady-state startup with final counts.
+                    int finalGen = (int)(FlagManager.flags.worldGenWorkersPerCore.Value * proc);
+                    int finalMesh = (int)(FlagManager.flags.meshRenderWorkersPerCore.Value * proc);
+                    StartGenerationWorkers(finalGen);
+                    StartMeshBuildWorkers(finalMesh);
+                    EnqueueInitialChunkPositions();
+                    // In streaming we immediately switch to runtime buffer horizon
+                    currentBufferRadius = GameManager.settings.chunkGenerationBufferRuntime;
+                    EnqueueRuntimeBufferChunkPositions();
+                }
             }
-            else
+            catch
             {
-                // Streaming mode: single steady-state startup with final counts.
-                int finalGen = (int)(FlagManager.flags.worldGenWorkersPerCore.Value * proc);
-                int finalMesh = (int)(FlagManager.flags.meshRenderWorkersPerCore.Value * proc);
-                StartGenerationWorkers(finalGen);
-                StartMeshBuildWorkers(finalMesh);
-                EnqueueInitialChunkPositions();
-                // In streaming we immediately switch to runtime buffer horizon
-                currentBufferRadius = GameManager.settings.chunkGenerationBufferRuntime;
-                EnqueueRuntimeBufferChunkPositions();
+                nativeGtrtSession.Dispose();
+                nativeGameSnapshot.Dispose();
+                throw;
+            }
+        }
+
+        private static (
+            NativeGameSnapshot Game,
+            NativeGtrtSession Session) CreateNativeWorldState(
+                BlockTextureAtlas textureAtlas)
+        {
+            NativeGameSnapshot game =
+                NativeGameSnapshot.Create(textureAtlas);
+            try
+            {
+                NativeGtrtSession session =
+                    NativeGtrtSession.Create(GameManager.settings);
+                return (game, session);
+            }
+            catch
+            {
+                game.Dispose();
+                throw;
             }
         }
 
@@ -1146,6 +1184,8 @@ namespace MVoxelEngine1.WorldGeneration
             foreach (PackedFaceNativePool pool in packedFacePools.Values)
                 pool.Dispose();
             packedFacePools.Dispose();
+            nativeGtrtSession.Dispose();
+            nativeGameSnapshot.Dispose();
         }
 
         // Manual save entry point
