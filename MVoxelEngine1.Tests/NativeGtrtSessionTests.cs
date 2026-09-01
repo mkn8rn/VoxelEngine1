@@ -83,7 +83,19 @@ public sealed class NativeGtrtSessionTests
                 Assert.Equal(layout.ChunkCount, view.Chunks.Length);
                 Assert.Equal(layout.ColumnCount, view.GenerationJobs.Length);
                 Assert.Equal(layout.ChunkCount, view.MeshJobs.Length);
+                Assert.Equal(
+                    layout.MeshWorkerCount,
+                    view.MeshWorkspaces.Length);
+                Assert.Equal(
+                    layout.ProfilesPerColumn,
+                    view.GetMeshBottomFaceScratch(0).Length);
+                Assert.Equal(
+                    layout.ProfilesPerColumn,
+                    view.GetMeshTopFaceScratch(0).Length);
                 Assert.Equal(layout.ChunkCount, view.Packets.Length);
+                Assert.Equal(
+                    layout.PacketWordCapacity,
+                    view.PacketWords.Length);
                 Assert.Equal(
                     layout.RequiredChunkCount,
                     view.MeshReadySlots.Length);
@@ -228,6 +240,102 @@ public sealed class NativeGtrtSessionTests
     }
 
     [Fact]
+    public void MeshWorkersOwnDisjointScratchAndExactPacketRanges()
+    {
+        var layout = new NativeGtrtSessionLayout(
+            chunkSizeX: 4,
+            chunkSizeY: 8,
+            chunkSizeZ: 4,
+            lod1Radius: 1,
+            materials: NativeTerrainMaterialSet.CreateConventional(),
+            generationWorkerCount: 1,
+            meshWorkerCount: 2,
+            packetWordCapacity: 64);
+        using NativeGtrtSession session = NativeGtrtSession.Create(layout);
+        session.PublishSeed(123456);
+
+        session.Access(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            Assert.True(view.TryAcquireMeshWorkspace(0));
+            Assert.True(view.TryAcquireMeshWorkspace(1));
+            view.GetMeshBottomFaceScratch(0).Fill(11);
+            view.GetMeshTopFaceScratch(0).Fill(12);
+            view.GetMeshBottomFaceScratch(1).Fill(21);
+            view.GetMeshTopFaceScratch(1).Fill(22);
+            Assert.All(
+                view.GetMeshBottomFaceScratch(0).ToArray(),
+                value => Assert.Equal(11, value));
+            Assert.All(
+                view.GetMeshTopFaceScratch(0).ToArray(),
+                value => Assert.Equal(12, value));
+            Assert.All(
+                view.GetMeshBottomFaceScratch(1).ToArray(),
+                value => Assert.Equal(21, value));
+            Assert.All(
+                view.GetMeshTopFaceScratch(1).ToArray(),
+                value => Assert.Equal(22, value));
+            view.ReleaseMeshWorkspace(0);
+            view.ReleaseMeshWorkspace(1);
+
+            while (view.TryClaimGeneration(out NativeWorkItem generation))
+                Assert.True(view.TryCompleteGeneration(in generation));
+
+            Assert.True(view.TryClaimMesh(out NativeWorkItem first));
+            Assert.True(view.TryBeginPacket(
+                in first,
+                opaqueWordCount: 4,
+                opaqueFaceCount: 2,
+                transparentWordCount: 2,
+                transparentFaceCount: 1,
+                out NativePacketWriteView firstPacket));
+            firstPacket.OpaqueWords.Fill(101);
+            firstPacket.TransparentWords.Fill(102);
+            Assert.True(view.TryCompleteMesh(in first));
+
+            Assert.True(view.TryClaimMesh(out NativeWorkItem second));
+            Assert.True(view.TryBeginPacket(
+                in second,
+                opaqueWordCount: 2,
+                opaqueFaceCount: 1,
+                transparentWordCount: 4,
+                transparentFaceCount: 2,
+                out NativePacketWriteView secondPacket));
+            secondPacket.OpaqueWords.Fill(201);
+            secondPacket.TransparentWords.Fill(202);
+            Assert.True(view.TryCompleteMesh(in second));
+
+            Assert.True(view.TryReadPacket(
+                first.RecordIndex,
+                out NativePacketReadView firstRead));
+            Assert.Equal(
+                first.Epoch,
+                view.Chunks[first.RecordIndex].MeshEpoch);
+            Assert.Equal(0, firstRead.Record.OpaqueWordOffset);
+            Assert.Equal(4, firstRead.Record.TransparentWordOffset);
+            Assert.True(firstRead.OpaqueWords.SequenceEqual(
+                stackalloc uint[] { 101, 101, 101, 101 }));
+            Assert.True(firstRead.TransparentWords.SequenceEqual(
+                stackalloc uint[] { 102, 102 }));
+
+            Assert.True(view.TryReadPacket(
+                second.RecordIndex,
+                out NativePacketReadView secondRead));
+            Assert.Equal(
+                second.Epoch,
+                view.Chunks[second.RecordIndex].MeshEpoch);
+            Assert.Equal(6, secondRead.Record.OpaqueWordOffset);
+            Assert.Equal(8, secondRead.Record.TransparentWordOffset);
+            Assert.True(secondRead.OpaqueWords.SequenceEqual(
+                stackalloc uint[] { 201, 201 }));
+            Assert.True(secondRead.TransparentWords.SequenceEqual(
+                stackalloc uint[] { 202, 202, 202, 202 }));
+            Assert.Equal(12, view.State.PacketWordCursor);
+            Assert.Equal(0, view.State.FailureCode);
+        });
+    }
+
+    [Fact]
     public void SeedPublicationInitializesNativeNoiseWithoutManagedAllocation()
     {
         var layout = new NativeGtrtSessionLayout(
@@ -298,6 +406,13 @@ public sealed class NativeGtrtSessionTests
                 {
                     Interlocked.Increment(
                         ref meshVisits[work.RecordIndex]);
+                    Assert.True(view.TryBeginPacket(
+                        in work,
+                        opaqueWordCount: 0,
+                        opaqueFaceCount: 0,
+                        transparentWordCount: 0,
+                        transparentFaceCount: 0,
+                        out _));
                     Assert.True(view.TryCompleteMesh(in work));
                 }
             }));
@@ -420,7 +535,16 @@ public sealed class NativeGtrtSessionTests
             view.TryCompleteGeneration(in generation);
 
         while (view.TryClaimMesh(out NativeWorkItem mesh))
+        {
+            view.TryBeginPacket(
+                in mesh,
+                opaqueWordCount: 0,
+                opaqueFaceCount: 0,
+                transparentWordCount: 0,
+                transparentFaceCount: 0,
+                out _);
             view.TryCompleteMesh(in mesh);
+        }
     }
 
     private static void RunWorkers(

@@ -7,6 +7,7 @@ using MVoxelEngine1.Infrastructure.Models;
 using MVoxelEngine1.Infrastructure.Models.Generation;
 using MVoxelEngine1.Infrastructure.Models.Terrain;
 using MVoxelEngine1.WorldGeneration.Terrain;
+using MVoxelEngine1.WorldGeneration.Native;
 using OpenTK.Mathematics;
 using System.Runtime.CompilerServices;
 
@@ -199,6 +200,104 @@ namespace MVoxelEngine1.Tests
             Assert.True(
                 optimized.UploadData.TransparentRectangleCount <
                 optimized.UploadData.TransparentFaceCount);
+        }
+
+        [Fact]
+        public void NativeGeneratedPacketMatchesManagedRectangleWords()
+        {
+            AssertNativeGeneratedPacketMatchesManagedRectangleWords(
+                CreateColumns());
+        }
+
+        [Fact]
+        public void NativeGeneratedPacketMatchesManagedVaryingRectangleWords()
+        {
+            AssertNativeGeneratedPacketMatchesManagedRectangleWords(
+                CreateVaryingColumns());
+        }
+
+        private static void AssertNativeGeneratedPacketMatchesManagedRectangleWords(
+            BlockColumnProfile[] columns)
+        {
+            BlockTextureAtlas atlas = LoadDefaultRuntimeData();
+            var source = new GeneratedChunkSpanData(
+                columns,
+                width: 16,
+                height: 16,
+                depth: 16,
+                chunkBaseY: 0,
+                stoneBlockId: (ushort)BaseBlockType.Stone,
+                soilBlockId: (ushort)BaseBlockType.Soil,
+                waterBlockId: (ushort)BaseBlockType.Water,
+                orderedContiguousSpans: true);
+            ChunkRender.terrainTextureAtlas = atlas;
+            using var pool = new PackedFaceNativePool();
+            using var managed = new ChunkRender(
+                CreatePrerenderData(source),
+                FaceGenerationMode.Optimized,
+                null,
+                null,
+                pool);
+            uint[] expectedOpaque = GetOpaqueWords(managed.UploadData);
+            uint[] expectedTransparent =
+                GetTransparentWords(managed.UploadData);
+
+            using NativeGameSnapshot snapshot =
+                NativeGameSnapshot.Create(atlas);
+            var layout = new NativeGtrtSessionLayout(
+                chunkSizeX: source.Width,
+                chunkSizeY: source.Height,
+                chunkSizeZ: source.Depth,
+                lod1Radius: 0,
+                materials: snapshot.GetGeneratedMaterials(),
+                generationWorkerCount: 1,
+                meshWorkerCount: 1,
+                packetWordCapacity: 1_000_000);
+            using NativeGtrtSession session = NativeGtrtSession.Create(layout);
+            session.PublishSeed(123456);
+
+            session.Access(owner =>
+            {
+                var view = new NativeGtrtSessionView(owner.AsSpan());
+                while (view.TryClaimGeneration(
+                    out NativeWorkItem generation))
+                {
+                    ref NativeColumnRecord column =
+                        ref view.Columns[generation.RecordIndex];
+                    if (column.ChunkX == 0 && column.ChunkZ == 0)
+                    {
+                        source.Columns.AsSpan().CopyTo(
+                            view.GetColumnProfiles(
+                                generation.RecordIndex));
+                    }
+
+                    column.GenerationEpoch = generation.Epoch;
+                    Assert.True(view.TryCompleteGeneration(in generation));
+                }
+
+                Assert.True(view.TryClaimMesh(out NativeWorkItem mesh));
+                bool built = NativeGeneratedMesh.TryBuild(
+                    ref view,
+                    in mesh,
+                    workerIndex: 0);
+                Assert.True(
+                    built,
+                    $"Native failure code: {view.State.FailureCode}.");
+                Assert.True(view.TryReadPacket(
+                    mesh.RecordIndex,
+                    out NativePacketReadView packet));
+                Assert.Equal(
+                    managed.UploadData.OpaqueFaceCount,
+                    packet.Record.OpaqueFaceCount);
+                Assert.Equal(
+                    managed.UploadData.TransparentFaceCount,
+                    packet.Record.TransparentFaceCount);
+                Assert.True(packet.OpaqueWords.SequenceEqual(
+                    expectedOpaque));
+                Assert.True(packet.TransparentWords.SequenceEqual(
+                    expectedTransparent));
+                Assert.Equal(0, view.State.FailureCode);
+            });
         }
 
         [Fact]
@@ -735,6 +834,31 @@ namespace MVoxelEngine1.Tests
             return columns;
         }
 
+        private static BlockColumnProfile[] CreateVaryingColumns()
+        {
+            var columns = new BlockColumnProfile[16 * 16];
+            for (int x = 0; x < 16; x++)
+            {
+                for (int z = 0; z < 16; z++)
+                {
+                    int surface = 4 + (x * 5 + z * 3) % 9;
+                    int soilStart = surface - 1;
+                    bool hasWater = surface < 9;
+                    columns[x * 16 + z] = new BlockColumnProfile
+                    {
+                        StoneStart = 0,
+                        StoneEnd = soilStart - 1,
+                        SoilStart = soilStart,
+                        SoilEnd = surface,
+                        WaterStart = hasWater ? surface + 1 : -1,
+                        WaterEnd = hasWater ? 9 : -1
+                    };
+                }
+            }
+
+            return columns;
+        }
+
         private static ushort[] ReadAllBlocks(Chunk chunk, int size)
         {
             var result = new ushort[size * size * size];
@@ -832,6 +956,17 @@ namespace MVoxelEngine1.Tests
             result.Sort(StringComparer.Ordinal);
             return result.ToArray();
         }
+
+        private static uint[] GetOpaqueWords(ChunkRenderUploadData data) =>
+            data.ReadOpaque(
+                static view => view.AsSpan().ToArray(),
+                static rectangles => rectangles.ToArray());
+
+        private static uint[] GetTransparentWords(
+            ChunkRenderUploadData data) =>
+            data.ReadTransparent(
+                static view => view.AsSpan().ToArray(),
+                static rectangles => rectangles.ToArray());
 
         private static void AddFaceRecords(
             List<string> destination,

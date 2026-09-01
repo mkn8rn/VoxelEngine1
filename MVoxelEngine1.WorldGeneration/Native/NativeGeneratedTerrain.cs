@@ -173,10 +173,34 @@ internal static class NativeGeneratedTerrain
         int localZ,
         out ushort blockId)
     {
+        if (!TryGetProfile(
+                ref session,
+                chunkIndex,
+                localX,
+                localZ,
+                out BlockColumnProfile profile))
+        {
+            blockId = 0;
+            return false;
+        }
+
+        NativeChunkRecord chunk = session.Chunks[chunkIndex];
+        int worldY = unchecked(chunk.ChunkY * session.ChunkSizeY + localY);
+        blockId = session.Materials.GetBlockWorld(in profile, worldY);
+        return true;
+    }
+
+    internal static bool TryGetProfile(
+        scoped ref NativeGtrtSessionView session,
+        int chunkIndex,
+        int localX,
+        int localZ,
+        out BlockColumnProfile profile)
+    {
         if ((uint)chunkIndex >= (uint)session.ChunkCount)
         {
             session.Fail(NativeGtrtFailureCode.InvalidTerrainQuery);
-            blockId = 0;
+            profile = default;
             return false;
         }
 
@@ -191,7 +215,7 @@ internal static class NativeGeneratedTerrain
         if (columnIndex < 0)
         {
             session.Fail(NativeGtrtFailureCode.InvalidTerrainQuery);
-            blockId = 0;
+            profile = default;
             return false;
         }
 
@@ -203,7 +227,7 @@ internal static class NativeGeneratedTerrain
             column.GenerationEpoch != session.State.SessionEpoch)
         {
             session.Fail(NativeGtrtFailureCode.InvalidTerrainQuery);
-            blockId = 0;
+            profile = default;
             return false;
         }
 
@@ -211,10 +235,7 @@ internal static class NativeGeneratedTerrain
             column.ProfileOffset +
             normalizedX * session.ChunkSizeZ +
             normalizedZ);
-        int worldY = unchecked(chunk.ChunkY * session.ChunkSizeY + localY);
-        ref readonly BlockColumnProfile profile =
-            ref session.Profiles[profileIndex];
-        blockId = session.Materials.GetBlockWorld(in profile, worldY);
+        profile = session.Profiles[profileIndex];
         return true;
     }
 

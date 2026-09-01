@@ -43,6 +43,15 @@ internal enum NativeWorkState : int
     Canceled = 4
 }
 
+internal enum NativeRenderPacketState : int
+{
+    Empty = 0,
+    Writing = 1,
+    Ready = 2,
+    Active = 3,
+    Retired = 4
+}
+
 [Flags]
 internal enum NativeChunkFlags : int
 {
@@ -61,7 +70,11 @@ internal enum NativeGtrtFailureCode : int
     InvalidMeshCompletion = 6,
     InvalidGenerationWorkspace = 7,
     InvalidProfileGeneration = 8,
-    InvalidTerrainQuery = 9
+    InvalidTerrainQuery = 9,
+    InvalidMeshWorkspace = 10,
+    PacketStorageExhausted = 11,
+    InvalidPacketPublication = 12,
+    InvalidGeneratedMesh = 13
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 8)]
@@ -79,6 +92,7 @@ internal struct NativeGtrtSessionState
     internal int CancellationState;
     internal long MeshEnqueuePosition;
     internal long MeshDequeuePosition;
+    internal int PacketWordCursor;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -94,6 +108,13 @@ internal struct NativeColumnRecord
 
 [StructLayout(LayoutKind.Sequential, Pack = 4)]
 internal struct NativeGenerationWorkspaceRecord
+{
+    internal int State;
+    internal int Epoch;
+}
+
+[StructLayout(LayoutKind.Sequential, Pack = 4)]
+internal struct NativeMeshWorkspaceRecord
 {
     internal int State;
     internal int Epoch;
@@ -146,18 +167,57 @@ internal struct NativeRenderPacketRecord
     internal int TransparentWordCount;
     internal int TransparentFaceCount;
     internal int PublicationEpoch;
+    internal NativeRenderPacketState State;
+}
+
+internal readonly ref struct NativePacketWriteView
+{
+    internal NativePacketWriteView(
+        Span<uint> opaqueWords,
+        Span<uint> transparentWords)
+    {
+        OpaqueWords = opaqueWords;
+        TransparentWords = transparentWords;
+    }
+
+    internal Span<uint> OpaqueWords { get; }
+
+    internal Span<uint> TransparentWords { get; }
+}
+
+internal readonly ref struct NativePacketReadView
+{
+    internal NativePacketReadView(
+        NativeRenderPacketRecord record,
+        ReadOnlySpan<uint> opaqueWords,
+        ReadOnlySpan<uint> transparentWords)
+    {
+        Record = record;
+        OpaqueWords = opaqueWords;
+        TransparentWords = transparentWords;
+    }
+
+    internal NativeRenderPacketRecord Record { get; }
+
+    internal ReadOnlySpan<uint> OpaqueWords { get; }
+
+    internal ReadOnlySpan<uint> TransparentWords { get; }
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 4)]
 internal readonly struct NativeGtrtSessionLayout
 {
+    private const int DefaultPacketWordsPerRequiredChunk = 8_192;
+
     internal NativeGtrtSessionLayout(
         int chunkSizeX,
         int chunkSizeY,
         int chunkSizeZ,
         int lod1Radius,
         NativeTerrainMaterialSet materials,
-        int generationWorkerCount = 1)
+        int generationWorkerCount = 1,
+        int meshWorkerCount = 1,
+        int packetWordCapacity = 0)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(chunkSizeX);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(chunkSizeY);
@@ -165,6 +225,9 @@ internal readonly struct NativeGtrtSessionLayout
         ArgumentOutOfRangeException.ThrowIfNegative(lod1Radius);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
             generationWorkerCount);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
+            meshWorkerCount);
+        ArgumentOutOfRangeException.ThrowIfNegative(packetWordCapacity);
 
         ChunkSizeX = chunkSizeX;
         ChunkSizeY = chunkSizeY;
@@ -195,6 +258,12 @@ internal readonly struct NativeGtrtSessionLayout
             TerrainGenerationUtils.GetSmoothValueNoiseLatticeCapacity(
                 chunkSizeX,
                 chunkSizeZ);
+        MeshWorkerCount = meshWorkerCount;
+        MeshFaceScratchCountPerWorker = checked(ProfilesPerColumn * 2);
+        PacketWordCapacity = packetWordCapacity == 0
+            ? checked(RequiredChunkCount *
+                DefaultPacketWordsPerRequiredChunk)
+            : packetWordCapacity;
         Materials = materials;
 
         int cursor = Align(
@@ -242,6 +311,16 @@ internal readonly struct NativeGtrtSessionLayout
             checked(GenerationWorkerCount *
                 GenerationLatticeCountPerWorker),
             8);
+        MeshWorkspaceOffset = cursor;
+        cursor = AddRange<NativeMeshWorkspaceRecord>(
+            cursor,
+            MeshWorkerCount,
+            8);
+        MeshFaceScratchOffset = cursor;
+        cursor = AddRange<int>(
+            cursor,
+            checked(MeshWorkerCount * MeshFaceScratchCountPerWorker),
+            8);
         ChunkOffset = cursor;
         cursor = AddRange<NativeChunkRecord>(cursor, ChunkCount, 8);
         GenerationJobOffset = cursor;
@@ -250,6 +329,8 @@ internal readonly struct NativeGtrtSessionLayout
         cursor = AddRange<NativeWorkItem>(cursor, ChunkCount, 8);
         PacketOffset = cursor;
         cursor = AddRange<NativeRenderPacketRecord>(cursor, ChunkCount, 8);
+        PacketWordOffset = cursor;
+        cursor = AddRange<uint>(cursor, PacketWordCapacity, 8);
         MeshReadyOffset = cursor;
         cursor = AddRange<NativeReadySlot>(
             cursor,
@@ -304,6 +385,12 @@ internal readonly struct NativeGtrtSessionLayout
 
     internal int GenerationLatticeCountPerWorker { get; }
 
+    internal int MeshWorkerCount { get; }
+
+    internal int MeshFaceScratchCountPerWorker { get; }
+
+    internal int PacketWordCapacity { get; }
+
     internal NativeTerrainMaterialSet Materials { get; }
 
     internal int StateOffset { get; }
@@ -328,6 +415,10 @@ internal readonly struct NativeGtrtSessionLayout
 
     internal int GenerationLatticeScratchOffset { get; }
 
+    internal int MeshWorkspaceOffset { get; }
+
+    internal int MeshFaceScratchOffset { get; }
+
     internal int ChunkOffset { get; }
 
     internal int GenerationJobOffset { get; }
@@ -336,6 +427,8 @@ internal readonly struct NativeGtrtSessionLayout
 
     internal int PacketOffset { get; }
 
+    internal int PacketWordOffset { get; }
+
     internal int MeshReadyOffset { get; }
 
     internal int TotalByteCount { get; }
@@ -343,7 +436,8 @@ internal readonly struct NativeGtrtSessionLayout
     internal static NativeGtrtSessionLayout Create(
         GameSettings settings,
         NativeTerrainMaterialSet materials,
-        int generationWorkerCount = 1)
+        int generationWorkerCount = 1,
+        int meshWorkerCount = 1)
     {
         ArgumentNullException.ThrowIfNull(settings);
         return new NativeGtrtSessionLayout(
@@ -352,7 +446,8 @@ internal readonly struct NativeGtrtSessionLayout
             settings.chunkMaxZ,
             settings.lod1RenderDistance,
             materials,
-            generationWorkerCount);
+            generationWorkerCount,
+            meshWorkerCount);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -398,7 +493,7 @@ internal readonly struct NativeGtrtSessionLayout
 internal readonly struct NativeGtrtSessionHeader
 {
     internal const uint ExpectedMagic = 0x54525447;
-    internal const int ExpectedVersion = 4;
+    internal const int ExpectedVersion = 5;
 
     internal NativeGtrtSessionHeader(NativeGtrtSessionLayout layout)
     {
@@ -448,6 +543,13 @@ internal readonly struct NativeGtrtSessionHeader
         MeshJobOffset = layout.MeshJobOffset;
         PacketOffset = layout.PacketOffset;
         MeshReadyOffset = layout.MeshReadyOffset;
+        MeshWorkerCount = layout.MeshWorkerCount;
+        MeshFaceScratchCountPerWorker =
+            layout.MeshFaceScratchCountPerWorker;
+        PacketWordCapacity = layout.PacketWordCapacity;
+        MeshWorkspaceOffset = layout.MeshWorkspaceOffset;
+        MeshFaceScratchOffset = layout.MeshFaceScratchOffset;
+        PacketWordOffset = layout.PacketWordOffset;
     }
 
     internal uint Magic { get; }
@@ -492,6 +594,12 @@ internal readonly struct NativeGtrtSessionHeader
     internal int MeshJobOffset { get; }
     internal int PacketOffset { get; }
     internal int MeshReadyOffset { get; }
+    internal int MeshWorkerCount { get; }
+    internal int MeshFaceScratchCountPerWorker { get; }
+    internal int PacketWordCapacity { get; }
+    internal int MeshWorkspaceOffset { get; }
+    internal int MeshFaceScratchOffset { get; }
+    internal int PacketWordOffset { get; }
 }
 
 internal ref struct NativeGtrtSessionInitializer
@@ -702,6 +810,18 @@ internal ref struct NativeGtrtSessionInitializer
         WriteInt32(offset, layout.PacketOffset);
         offset += sizeof(int);
         WriteInt32(offset, layout.MeshReadyOffset);
+        offset += sizeof(int);
+        WriteInt32(offset, layout.MeshWorkerCount);
+        offset += sizeof(int);
+        WriteInt32(offset, layout.MeshFaceScratchCountPerWorker);
+        offset += sizeof(int);
+        WriteInt32(offset, layout.PacketWordCapacity);
+        offset += sizeof(int);
+        WriteInt32(offset, layout.MeshWorkspaceOffset);
+        offset += sizeof(int);
+        WriteInt32(offset, layout.MeshFaceScratchOffset);
+        offset += sizeof(int);
+        WriteInt32(offset, layout.PacketWordOffset);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -837,6 +957,13 @@ internal ref struct NativeGtrtSessionView
             header.GenerationLatticeScratchOffset,
             checked(header.GenerationWorkerCount *
                 header.GenerationLatticeCountPerWorker));
+        ValidateRange<NativeMeshWorkspaceRecord>(
+            header.MeshWorkspaceOffset,
+            header.MeshWorkerCount);
+        ValidateRange<int>(
+            header.MeshFaceScratchOffset,
+            checked(header.MeshWorkerCount *
+                header.MeshFaceScratchCountPerWorker));
         ValidateRange<NativeChunkRecord>(
             header.ChunkOffset,
             header.ChunkCount);
@@ -849,6 +976,9 @@ internal ref struct NativeGtrtSessionView
         ValidateRange<NativeRenderPacketRecord>(
             header.PacketOffset,
             header.ChunkCount);
+        ValidateRange<uint>(
+            header.PacketWordOffset,
+            header.PacketWordCapacity);
         ValidateRange<NativeReadySlot>(
             header.MeshReadyOffset,
             header.RequiredChunkCount);
@@ -892,10 +1022,20 @@ internal ref struct NativeGtrtSessionView
     internal Span<NativeWorkItem> MeshJobs =>
         ReadRange<NativeWorkItem>(header.MeshJobOffset, header.ChunkCount);
 
+    internal Span<NativeMeshWorkspaceRecord> MeshWorkspaces =>
+        ReadRange<NativeMeshWorkspaceRecord>(
+            header.MeshWorkspaceOffset,
+            header.MeshWorkerCount);
+
     internal Span<NativeRenderPacketRecord> Packets =>
         ReadRange<NativeRenderPacketRecord>(
             header.PacketOffset,
             header.ChunkCount);
+
+    internal Span<uint> PacketWords =>
+        ReadRange<uint>(
+            header.PacketWordOffset,
+            header.PacketWordCapacity);
 
     internal Span<NativeReadySlot> MeshReadySlots =>
         ReadRange<NativeReadySlot>(
@@ -917,6 +1057,10 @@ internal ref struct NativeGtrtSessionView
     internal int ChunkSizeZ => header.ChunkSizeZ;
 
     internal int GenerationWorkerCount => header.GenerationWorkerCount;
+
+    internal int MeshWorkerCount => header.MeshWorkerCount;
+
+    internal int PacketWordCapacity => header.PacketWordCapacity;
 
     internal int RequiredChunkCount => header.RequiredChunkCount;
 
@@ -954,6 +1098,18 @@ internal ref struct NativeGtrtSessionView
                 workerIndex * header.GenerationLatticeCountPerWorker *
                 Unsafe.SizeOf<float>()),
             header.GenerationLatticeCountPerWorker);
+
+    internal Span<int> GetMeshBottomFaceScratch(int workerIndex) =>
+        ReadRange<int>(
+            GetMeshScratchOffset(workerIndex),
+            header.ChunkSizeX * header.ChunkSizeZ);
+
+    internal Span<int> GetMeshTopFaceScratch(int workerIndex) =>
+        ReadRange<int>(
+            checked(GetMeshScratchOffset(workerIndex) +
+                header.ChunkSizeX * header.ChunkSizeZ *
+                Unsafe.SizeOf<int>()),
+            header.ChunkSizeX * header.ChunkSizeZ);
 
     internal bool TryAcquireGenerationWorkspace(int workerIndex)
     {
@@ -1000,6 +1156,147 @@ internal ref struct NativeGtrtSessionView
         {
             Fail(NativeGtrtFailureCode.InvalidGenerationWorkspace);
         }
+    }
+
+    internal bool TryAcquireMeshWorkspace(int workerIndex)
+    {
+        if ((uint)workerIndex >= (uint)header.MeshWorkerCount)
+        {
+            Fail(NativeGtrtFailureCode.InvalidMeshWorkspace);
+            return false;
+        }
+
+        Span<NativeMeshWorkspaceRecord> workspaces = MeshWorkspaces;
+        ref NativeMeshWorkspaceRecord workspace = ref workspaces[workerIndex];
+        if (Interlocked.CompareExchange(ref workspace.State, 1, 0) != 0)
+        {
+            Fail(NativeGtrtFailureCode.InvalidMeshWorkspace);
+            return false;
+        }
+
+        workspace.Epoch = State.SessionEpoch;
+        return true;
+    }
+
+    internal void ReleaseMeshWorkspace(int workerIndex)
+    {
+        if ((uint)workerIndex >= (uint)header.MeshWorkerCount)
+        {
+            Fail(NativeGtrtFailureCode.InvalidMeshWorkspace);
+            return;
+        }
+
+        Span<NativeMeshWorkspaceRecord> workspaces = MeshWorkspaces;
+        ref NativeMeshWorkspaceRecord workspace = ref workspaces[workerIndex];
+        workspace.Epoch = 0;
+        if (Interlocked.CompareExchange(ref workspace.State, 0, 1) != 1)
+            Fail(NativeGtrtFailureCode.InvalidMeshWorkspace);
+    }
+
+    internal bool TryBeginPacket(
+        scoped in NativeWorkItem claimedWork,
+        int opaqueWordCount,
+        int opaqueFaceCount,
+        int transparentWordCount,
+        int transparentFaceCount,
+        out NativePacketWriteView packet)
+    {
+        packet = default;
+        if (claimedWork.Kind != NativeWorkKind.BuildChunkMesh ||
+            claimedWork.Epoch != State.SessionEpoch ||
+            (uint)claimedWork.RecordIndex >= (uint)Chunks.Length ||
+            opaqueWordCount < 0 ||
+            transparentWordCount < 0 ||
+            (opaqueWordCount & 1) != 0 ||
+            (transparentWordCount & 1) != 0 ||
+            opaqueFaceCount < opaqueWordCount / 2 ||
+            transparentFaceCount < transparentWordCount / 2)
+        {
+            Fail(NativeGtrtFailureCode.InvalidPacketPublication);
+            return false;
+        }
+
+        int chunkIndex = claimedWork.RecordIndex;
+        ref NativeWorkItem job = ref MeshJobs[chunkIndex];
+        ref NativeChunkRecord chunk = ref Chunks[chunkIndex];
+        if (ReadState(ref job.State) != NativeWorkState.Claimed ||
+            ReadState(ref chunk.State) != NativeChunkState.MeshReady)
+        {
+            Fail(NativeGtrtFailureCode.InvalidPacketPublication);
+            return false;
+        }
+
+        ref NativeRenderPacketRecord record = ref Packets[chunk.PacketIndex];
+        if (!TryTransition(
+                ref record.State,
+                NativeRenderPacketState.Empty,
+                NativeRenderPacketState.Writing))
+        {
+            Fail(NativeGtrtFailureCode.InvalidPacketPublication);
+            return false;
+        }
+
+        int totalWordCount = checked(
+            opaqueWordCount + transparentWordCount);
+        if (!TryReservePacketWords(totalWordCount, out int wordOffset))
+        {
+            Fail(NativeGtrtFailureCode.PacketStorageExhausted);
+            return false;
+        }
+
+        record.RenderDataId = ((long)claimedWork.Epoch << 32) |
+            (uint)chunkIndex;
+        record.ChunkIndex = chunkIndex;
+        record.RegistryEpoch = claimedWork.Epoch;
+        record.OpaqueWordOffset = wordOffset;
+        record.OpaqueWordCount = opaqueWordCount;
+        record.OpaqueFaceCount = opaqueFaceCount;
+        record.TransparentWordOffset = checked(
+            wordOffset + opaqueWordCount);
+        record.TransparentWordCount = transparentWordCount;
+        record.TransparentFaceCount = transparentFaceCount;
+        record.PublicationEpoch = 0;
+
+        Span<uint> words = PacketWords;
+        packet = new NativePacketWriteView(
+            words.Slice(record.OpaqueWordOffset, opaqueWordCount),
+            words.Slice(
+                record.TransparentWordOffset,
+                transparentWordCount));
+        return true;
+    }
+
+    internal bool TryReadPacket(
+        int chunkIndex,
+        out NativePacketReadView packet)
+    {
+        packet = default;
+        if ((uint)chunkIndex >= (uint)Chunks.Length)
+        {
+            Fail(NativeGtrtFailureCode.InvalidPacketPublication);
+            return false;
+        }
+
+        NativeChunkRecord chunk = Chunks[chunkIndex];
+        ref NativeRenderPacketRecord source = ref Packets[chunk.PacketIndex];
+        if (ReadState(ref chunk.State) != NativeChunkState.PacketReady ||
+            ReadState(ref source.State) != NativeRenderPacketState.Ready ||
+            source.PublicationEpoch != State.SessionEpoch ||
+            source.ChunkIndex != chunkIndex)
+        {
+            Fail(NativeGtrtFailureCode.InvalidPacketPublication);
+            return false;
+        }
+
+        NativeRenderPacketRecord record = source;
+        Span<uint> words = PacketWords;
+        packet = new NativePacketReadView(
+            record,
+            words.Slice(record.OpaqueWordOffset, record.OpaqueWordCount),
+            words.Slice(
+                record.TransparentWordOffset,
+                record.TransparentWordCount));
+        return true;
     }
 
     internal void Fail(NativeGtrtFailureCode failure) =>
@@ -1226,6 +1523,23 @@ internal ref struct NativeGtrtSessionView
 
         Span<NativeWorkItem> jobs = MeshJobs;
         ref NativeWorkItem job = ref jobs[claimedWork.RecordIndex];
+        Span<NativeChunkRecord> chunks = Chunks;
+        ref NativeChunkRecord chunk =
+            ref chunks[claimedWork.RecordIndex];
+        ref NativeRenderPacketRecord packet =
+            ref Packets[chunk.PacketIndex];
+        if (ReadState(ref packet.State) !=
+                NativeRenderPacketState.Writing ||
+            packet.ChunkIndex != claimedWork.RecordIndex ||
+            packet.RegistryEpoch != claimedWork.Epoch ||
+            packet.PublicationEpoch != 0)
+        {
+            RecordFailure(
+                ref state,
+                NativeGtrtFailureCode.InvalidMeshCompletion);
+            return false;
+        }
+
         if (!TryTransition(
                 ref job.State,
                 NativeWorkState.Claimed,
@@ -1237,9 +1551,12 @@ internal ref struct NativeGtrtSessionView
             return false;
         }
 
-        Span<NativeChunkRecord> chunks = Chunks;
-        ref NativeChunkRecord chunk =
-            ref chunks[claimedWork.RecordIndex];
+        packet.PublicationEpoch = claimedWork.Epoch;
+        ref int packetState = ref Unsafe.As<NativeRenderPacketState, int>(
+            ref packet.State);
+        Volatile.Write(ref packetState, (int)NativeRenderPacketState.Ready);
+
+        chunk.MeshEpoch = claimedWork.Epoch;
         if (!TryTransition(
                 ref chunk.State,
                 NativeChunkState.MeshReady,
@@ -1280,6 +1597,7 @@ internal ref struct NativeGtrtSessionView
         {
             int chunkIndex = GetChunkIndex(chunkX, chunkY, chunkZ);
             ref NativeChunkRecord chunk = ref chunks[chunkIndex];
+            chunk.GenerationEpoch = state.SessionEpoch;
             if (!TryTransition(
                     ref chunk.State,
                     NativeChunkState.Empty,
@@ -1475,6 +1793,46 @@ internal ref struct NativeGtrtSessionView
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private int GetMeshScratchOffset(int workerIndex)
+    {
+        if ((uint)workerIndex >= (uint)header.MeshWorkerCount)
+        {
+            Fail(NativeGtrtFailureCode.InvalidMeshWorkspace);
+            return header.MeshFaceScratchOffset;
+        }
+
+        return checked(header.MeshFaceScratchOffset +
+            workerIndex * header.MeshFaceScratchCountPerWorker *
+            Unsafe.SizeOf<int>());
+    }
+
+    private bool TryReservePacketWords(
+        int wordCount,
+        out int wordOffset)
+    {
+        ref int cursor = ref State.PacketWordCursor;
+        while (true)
+        {
+            int observed = Volatile.Read(ref cursor);
+            if (wordCount > header.PacketWordCapacity - observed)
+            {
+                wordOffset = 0;
+                return false;
+            }
+
+            int next = observed + wordCount;
+            if (Interlocked.CompareExchange(
+                    ref cursor,
+                    next,
+                    observed) == observed)
+            {
+                wordOffset = observed;
+                return true;
+            }
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool TryTransition<TState>(
         ref TState state,
         TState expected,
@@ -1552,11 +1910,13 @@ internal sealed class NativeGtrtSession : IDisposable
     internal static NativeGtrtSession Create(
         GameSettings settings,
         NativeTerrainMaterialSet materials,
-        int generationWorkerCount = 1) =>
+        int generationWorkerCount = 1,
+        int meshWorkerCount = 1) =>
         Create(NativeGtrtSessionLayout.Create(
             settings,
             materials,
-            generationWorkerCount));
+            generationWorkerCount,
+            meshWorkerCount));
 
     internal static NativeGtrtSession Create(
         NativeGtrtSessionLayout layout)
