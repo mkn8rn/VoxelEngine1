@@ -36,6 +36,7 @@ public sealed class NativeColumnProfileGeneratorTests
             chunkSizeY: 16,
             size,
             lod1Radius: 0,
+            materials: NativeTerrainMaterialSet.CreateConventional(),
             generationWorkerCount: 2);
         using NativeGtrtSession session = NativeGtrtSession.Create(layout);
         session.PublishSeed(seed);
@@ -88,6 +89,7 @@ public sealed class NativeColumnProfileGeneratorTests
             chunkSizeY: 8,
             chunkSizeZ: 4,
             lod1Radius: 0,
+            materials: NativeTerrainMaterialSet.CreateConventional(),
             generationWorkerCount: 1);
         using NativeGtrtSession session = NativeGtrtSession.Create(layout);
         session.PublishSeed(123456);
@@ -117,6 +119,7 @@ public sealed class NativeColumnProfileGeneratorTests
             chunkSizeY: 16,
             chunkSizeZ: 16,
             lod1Radius: 0,
+            materials: NativeTerrainMaterialSet.CreateConventional(),
             generationWorkerCount: 1);
 
         using (NativeGtrtSession warmup = NativeGtrtSession.Create(layout))

@@ -60,7 +60,8 @@ internal enum NativeGtrtFailureCode : int
     InvalidMeshClaim = 5,
     InvalidMeshCompletion = 6,
     InvalidGenerationWorkspace = 7,
-    InvalidProfileGeneration = 8
+    InvalidProfileGeneration = 8,
+    InvalidTerrainQuery = 9
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 8)]
@@ -155,6 +156,7 @@ internal readonly struct NativeGtrtSessionLayout
         int chunkSizeY,
         int chunkSizeZ,
         int lod1Radius,
+        NativeTerrainMaterialSet materials,
         int generationWorkerCount = 1)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(chunkSizeX);
@@ -193,6 +195,7 @@ internal readonly struct NativeGtrtSessionLayout
             TerrainGenerationUtils.GetSmoothValueNoiseLatticeCapacity(
                 chunkSizeX,
                 chunkSizeZ);
+        Materials = materials;
 
         int cursor = Align(
             Unsafe.SizeOf<NativeGtrtSessionHeader>(),
@@ -204,6 +207,8 @@ internal readonly struct NativeGtrtSessionLayout
             cursor,
             NativeOpenSimplexNoiseState.StateByteCount,
             8);
+        MaterialOffset = cursor;
+        cursor = AddRange<NativeTerrainMaterialSet>(cursor, 1, 8);
         ColumnOffset = cursor;
         cursor = AddRange<NativeColumnRecord>(cursor, ColumnCount, 8);
         ProfileOffset = cursor;
@@ -299,9 +304,13 @@ internal readonly struct NativeGtrtSessionLayout
 
     internal int GenerationLatticeCountPerWorker { get; }
 
+    internal NativeTerrainMaterialSet Materials { get; }
+
     internal int StateOffset { get; }
 
     internal int NoiseStateOffset { get; }
+
+    internal int MaterialOffset { get; }
 
     internal int ColumnOffset { get; }
 
@@ -333,6 +342,7 @@ internal readonly struct NativeGtrtSessionLayout
 
     internal static NativeGtrtSessionLayout Create(
         GameSettings settings,
+        NativeTerrainMaterialSet materials,
         int generationWorkerCount = 1)
     {
         ArgumentNullException.ThrowIfNull(settings);
@@ -341,6 +351,7 @@ internal readonly struct NativeGtrtSessionLayout
             settings.chunkMaxY,
             settings.chunkMaxZ,
             settings.lod1RenderDistance,
+            materials,
             generationWorkerCount);
     }
 
@@ -387,7 +398,7 @@ internal readonly struct NativeGtrtSessionLayout
 internal readonly struct NativeGtrtSessionHeader
 {
     internal const uint ExpectedMagic = 0x54525447;
-    internal const int ExpectedVersion = 3;
+    internal const int ExpectedVersion = 4;
 
     internal NativeGtrtSessionHeader(NativeGtrtSessionLayout layout)
     {
@@ -421,6 +432,7 @@ internal readonly struct NativeGtrtSessionHeader
             layout.GenerationLatticeCountPerWorker;
         StateOffset = layout.StateOffset;
         NoiseStateOffset = layout.NoiseStateOffset;
+        MaterialOffset = layout.MaterialOffset;
         ColumnOffset = layout.ColumnOffset;
         ProfileOffset = layout.ProfileOffset;
         ColumnSummaryOffset = layout.ColumnSummaryOffset;
@@ -466,6 +478,7 @@ internal readonly struct NativeGtrtSessionHeader
     internal int GenerationLatticeCountPerWorker { get; }
     internal int StateOffset { get; }
     internal int NoiseStateOffset { get; }
+    internal int MaterialOffset { get; }
     internal int ColumnOffset { get; }
     internal int ProfileOffset { get; }
     internal int ColumnSummaryOffset { get; }
@@ -495,6 +508,7 @@ internal ref struct NativeGtrtSessionInitializer
     {
         bytes.Clear();
         WriteHeader(in layout);
+        WriteMaterials(layout.MaterialOffset, layout.Materials);
         WriteInt32(
             layout.StateOffset + 20,
             layout.ColumnCount);
@@ -661,6 +675,8 @@ internal ref struct NativeGtrtSessionInitializer
         offset += sizeof(int);
         WriteInt32(offset, layout.NoiseStateOffset);
         offset += sizeof(int);
+        WriteInt32(offset, layout.MaterialOffset);
+        offset += sizeof(int);
         WriteInt32(offset, layout.ColumnOffset);
         offset += sizeof(int);
         WriteInt32(offset, layout.ProfileOffset);
@@ -706,6 +722,47 @@ internal ref struct NativeGtrtSessionInitializer
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void WriteInt32(int offset, int value) =>
         WriteUInt32(offset, unchecked((uint)value));
+
+    private void WriteMaterials(
+        int offset,
+        NativeTerrainMaterialSet materials)
+    {
+        WriteBlockDescriptor(offset, materials.Stone);
+        offset += Unsafe.SizeOf<NativeBlockDescriptor>();
+        WriteBlockDescriptor(offset, materials.Soil);
+        offset += Unsafe.SizeOf<NativeBlockDescriptor>();
+        WriteBlockDescriptor(offset, materials.Water);
+    }
+
+    private void WriteBlockDescriptor(
+        int offset,
+        NativeBlockDescriptor descriptor)
+    {
+        WriteUInt16(offset, descriptor.Id);
+        WriteUInt16(offset + 2, descriptor.BaseType);
+        bytes[offset + 4] = descriptor.StateOfMatter;
+        bytes[offset + 5] = (byte)descriptor.Flags;
+        WriteUInt16(offset + 6, descriptor.LeftTile);
+        WriteUInt16(offset + 8, descriptor.RightTile);
+        WriteUInt16(offset + 10, descriptor.BottomTile);
+        WriteUInt16(offset + 12, descriptor.TopTile);
+        WriteUInt16(offset + 14, descriptor.BackTile);
+        WriteUInt16(offset + 16, descriptor.FrontTile);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void WriteUInt16(int offset, ushort value)
+    {
+        if (BitConverter.IsLittleEndian)
+        {
+            bytes[offset] = (byte)value;
+            bytes[offset + 1] = (byte)(value >> 8);
+            return;
+        }
+
+        bytes[offset] = (byte)(value >> 8);
+        bytes[offset + 1] = (byte)value;
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void WriteUInt32(int offset, uint value)
@@ -753,6 +810,7 @@ internal ref struct NativeGtrtSessionView
         ValidateRange<byte>(
             header.NoiseStateOffset,
             NativeOpenSimplexNoiseState.StateByteCount);
+        ValidateRange<NativeTerrainMaterialSet>(header.MaterialOffset, 1);
         ValidateRange<NativeColumnRecord>(
             header.ColumnOffset,
             header.ColumnCount);
@@ -804,6 +862,9 @@ internal ref struct NativeGtrtSessionView
             header.NoiseStateOffset,
             NativeOpenSimplexNoiseState.StateByteCount));
 
+    internal ref readonly NativeTerrainMaterialSet Materials =>
+        ref ReadRange<NativeTerrainMaterialSet>(header.MaterialOffset, 1)[0];
+
     internal Span<NativeColumnRecord> Columns =>
         ReadRange<NativeColumnRecord>(header.ColumnOffset, header.ColumnCount);
 
@@ -850,6 +911,8 @@ internal ref struct NativeGtrtSessionView
     internal int ProfilesPerColumn => header.ProfilesPerColumn;
 
     internal int ChunkSizeX => header.ChunkSizeX;
+
+    internal int ChunkSizeY => header.ChunkSizeY;
 
     internal int ChunkSizeZ => header.ChunkSizeZ;
 
@@ -1488,9 +1551,11 @@ internal sealed class NativeGtrtSession : IDisposable
 
     internal static NativeGtrtSession Create(
         GameSettings settings,
+        NativeTerrainMaterialSet materials,
         int generationWorkerCount = 1) =>
         Create(NativeGtrtSessionLayout.Create(
             settings,
+            materials,
             generationWorkerCount));
 
     internal static NativeGtrtSession Create(

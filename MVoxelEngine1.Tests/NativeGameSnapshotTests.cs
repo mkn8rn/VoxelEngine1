@@ -71,6 +71,18 @@ public sealed class NativeGameSnapshotTests
                 }
             }
 
+            NativeTerrainMaterialSet materials =
+                native.GetGeneratedMaterials();
+            AssertDescriptorEqual(
+                native.Blocks[(byte)BaseBlockType.Stone],
+                materials.Stone);
+            AssertDescriptorEqual(
+                native.Blocks[(byte)BaseBlockType.Soil],
+                materials.Soil);
+            AssertDescriptorEqual(
+                native.Blocks[(byte)BaseBlockType.Water],
+                materials.Water);
+
             KeyValuePair<string, Biome>[] orderedBiomes = BiomeManager.Biomes
                 .OrderBy(static pair => pair.Key, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
@@ -99,6 +111,18 @@ public sealed class NativeGameSnapshotTests
                 native.Biomes[
                     native.SelectBiomeIndex(123456, -160, 320)].Id);
         });
+    }
+
+    private static void AssertDescriptorEqual(
+        NativeBlockDescriptor expected,
+        NativeBlockDescriptor actual)
+    {
+        Assert.Equal(expected.Id, actual.Id);
+        Assert.Equal(expected.BaseType, actual.BaseType);
+        Assert.Equal(expected.StateOfMatter, actual.StateOfMatter);
+        Assert.Equal(expected.Flags, actual.Flags);
+        for (byte direction = 0; direction < 6; direction++)
+            Assert.Equal(expected.GetTile(direction), actual.GetTile(direction));
     }
 
     private static void LoadDefaultGame()

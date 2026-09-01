@@ -255,6 +255,9 @@ internal readonly ref struct NativeGameSnapshotView
     internal ReadOnlySpan<ushort> SpecificBlockIds =>
         ReadRange<ushort>(header.SpecificIdOffset, header.SpecificIdCount);
 
+    internal NativeTerrainMaterialSet GetGeneratedMaterials() =>
+        NativeTerrainMaterialSet.Create(Blocks);
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal int SelectBiomeIndex(long seed, int chunkX, int chunkZ)
     {
@@ -293,6 +296,10 @@ internal readonly ref struct NativeGameSnapshotView
 
 internal sealed class NativeGameSnapshot : IDisposable
 {
+    private static readonly
+        NativeLeaseFunc<byte, NativeTerrainMaterialSet>
+        GeneratedMaterialsReader = ReadGeneratedMaterials;
+
     private NativeTransfer<byte>? storage;
 
     private NativeGameSnapshot(NativeTransfer<byte>? source)
@@ -375,6 +382,14 @@ internal sealed class NativeGameSnapshot : IDisposable
         storage.Access(action);
     }
 
+    internal NativeTerrainMaterialSet GetGeneratedMaterials()
+    {
+        if (storage is null)
+            throw new ObjectDisposedException(nameof(NativeGameSnapshot));
+
+        return storage.Read(GeneratedMaterialsReader);
+    }
+
     public void Dispose()
     {
         if (storage is null)
@@ -382,6 +397,13 @@ internal sealed class NativeGameSnapshot : IDisposable
 
         storage.Dispose();
         storage = null;
+    }
+
+    private static NativeTerrainMaterialSet ReadGeneratedMaterials(
+        scoped NativeLeaseView<byte> owner)
+    {
+        var view = new NativeGameSnapshotView(owner.AsSpan());
+        return view.GetGeneratedMaterials();
     }
 
     private static NativeBlockDescriptor[] BuildBlocks(BlockTextureAtlas atlas)

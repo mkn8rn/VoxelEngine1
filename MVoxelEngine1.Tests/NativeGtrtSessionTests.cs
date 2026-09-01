@@ -17,7 +17,8 @@ public sealed class NativeGtrtSessionTests
             chunkSizeX: 4,
             chunkSizeY: 8,
             chunkSizeZ: 4,
-            lod1Radius: 1);
+            lod1Radius: 1,
+            materials: NativeTerrainMaterialSet.CreateConventional());
 
         Assert.Equal(2, layout.ResidentRadius);
         Assert.Equal(5, layout.ColumnWidth);
@@ -43,7 +44,8 @@ public sealed class NativeGtrtSessionTests
             chunkSizeX: 4,
             chunkSizeY: 8,
             chunkSizeZ: 4,
-            lod1Radius: 1);
+            lod1Radius: 1,
+            materials: NativeTerrainMaterialSet.CreateConventional());
         var session = NativeGtrtSession.Create(layout);
         try
         {
@@ -171,6 +173,7 @@ public sealed class NativeGtrtSessionTests
             chunkSizeY: 8,
             chunkSizeZ: 4,
             lod1Radius: 1,
+            materials: NativeTerrainMaterialSet.CreateConventional(),
             generationWorkerCount: 2);
         using NativeGtrtSession session = NativeGtrtSession.Create(layout);
         session.PublishSeed(123456);
@@ -231,7 +234,8 @@ public sealed class NativeGtrtSessionTests
             chunkSizeX: 4,
             chunkSizeY: 8,
             chunkSizeZ: 4,
-            lod1Radius: 1);
+            lod1Radius: 1,
+            materials: NativeTerrainMaterialSet.CreateConventional());
         using (NativeGtrtSession warmup = NativeGtrtSession.Create(layout))
             warmup.PublishSeed(123456);
 
@@ -265,7 +269,8 @@ public sealed class NativeGtrtSessionTests
             chunkSizeX: 4,
             chunkSizeY: 8,
             chunkSizeZ: 4,
-            lod1Radius: 1);
+            lod1Radius: 1,
+            materials: NativeTerrainMaterialSet.CreateConventional());
         using var session = NativeGtrtSession.Create(layout);
         session.PublishSeed(123456);
 
@@ -336,7 +341,8 @@ public sealed class NativeGtrtSessionTests
             chunkSizeX: 4,
             chunkSizeY: 8,
             chunkSizeZ: 4,
-            lod1Radius: 1);
+            lod1Radius: 1,
+            materials: NativeTerrainMaterialSet.CreateConventional());
         using var session = NativeGtrtSession.Create(layout);
         session.PublishSeed(123456);
 
@@ -358,7 +364,8 @@ public sealed class NativeGtrtSessionTests
             chunkSizeX: 4,
             chunkSizeY: 8,
             chunkSizeZ: 4,
-            lod1Radius: 1);
+            lod1Radius: 1,
+            materials: NativeTerrainMaterialSet.CreateConventional());
         using var session = NativeGtrtSession.Create(layout);
         session.PublishSeed(123456);
 
@@ -381,7 +388,8 @@ public sealed class NativeGtrtSessionTests
             chunkSizeX: 4,
             chunkSizeY: 8,
             chunkSizeZ: 4,
-            lod1Radius: 1);
+            lod1Radius: 1,
+            materials: NativeTerrainMaterialSet.CreateConventional());
         using (var warmup = NativeGtrtSession.Create(layout))
         {
             warmup.PublishSeed(123456);
