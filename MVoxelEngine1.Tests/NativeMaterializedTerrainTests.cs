@@ -212,6 +212,51 @@ public sealed class NativeMaterializedTerrainTests
     }
 
     [Fact]
+    public void InactiveVerticalOverrideParticipatesInBoundaryQuery()
+    {
+        LoadDefaultGame();
+        var atlas = new BlockTextureAtlas(
+            BlockTextureAtlasUploadMode.SimulatedGpuUpload);
+        using NativeGameSnapshot game = NativeGameSnapshot.Create(atlas);
+        using NativeGtrtSession session = CreateSession(
+            game,
+            chunkSize: 16,
+            materializedChunkCapacity: 2,
+            materializedSectionCapacity: 2);
+        session.PublishSeed(123456);
+        session.Access(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            PrepareTerrain(ref view);
+            int upper = view.GetChunkIndex(0, 1, 0);
+            Assert.True(NativeMaterializedTerrain.TrySetBlock(
+                ref view,
+                upper,
+                2,
+                0,
+                3,
+                CustomTransparentBlockId));
+        });
+
+        session.PrepareRun(123456, 0, -1, 0);
+        session.Access(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            PrepareTerrain(ref view);
+            Assert.Equal(-1, view.GetChunkIndex(0, 1, 0));
+            int source = view.GetChunkIndex(0, 0, 0);
+            AssertBlock(
+                ref view,
+                source,
+                2,
+                16,
+                3,
+                CustomTransparentBlockId);
+            Assert.Equal(0, view.State.FailureCode);
+        });
+    }
+
+    [Fact]
     public void MaterializedSectionCapacityFailsBeforePartialPublication()
     {
         LoadDefaultGame();

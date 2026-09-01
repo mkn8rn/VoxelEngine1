@@ -33,17 +33,17 @@ internal static class NativeGeneratedMesh
             if (session.CancellationRequested)
                 return false;
 
-            Span<int> bottomFaces =
-                session.GetMeshBottomFaceScratch(workerIndex);
-            Span<int> topFaces =
-                session.GetMeshTopFaceScratch(workerIndex);
+            Span<int> negativeFaces =
+                session.GetMeshNegativeFaceScratch(workerIndex);
+            Span<int> positiveFaces =
+                session.GetMeshPositiveFaceScratch(workerIndex);
             var counter = new NativeGeneratedFaceWriter(
                 session.Materials);
             if (!Emit(
                     ref session,
                     claimedWork.RecordIndex,
-                    bottomFaces,
-                    topFaces,
+                    negativeFaces,
+                    positiveFaces,
                     ref counter) ||
                 !counter.Valid)
             {
@@ -72,8 +72,8 @@ internal static class NativeGeneratedMesh
             if (!Emit(
                     ref session,
                     claimedWork.RecordIndex,
-                    bottomFaces,
-                    topFaces,
+                    negativeFaces,
+                    positiveFaces,
                     ref writer) ||
                 !writer.Valid ||
                 writer.OpaqueWordCount != counter.OpaqueWordCount ||
@@ -104,13 +104,38 @@ internal static class NativeGeneratedMesh
     private static bool Emit(
         scoped ref NativeGtrtSessionView session,
         int chunkIndex,
-        Span<int> bottomFaces,
-        Span<int> topFaces,
+        Span<int> negativeFaces,
+        Span<int> positiveFaces,
         scoped ref NativeGeneratedFaceWriter writer)
     {
+        if (!TryRequiresVoxelMesh(
+                ref session,
+                chunkIndex,
+                out bool requiresVoxelMesh))
+        {
+            return false;
+        }
+        if (requiresVoxelMesh)
+        {
+            return NativeVoxelMesh.TryEmit(
+                ref session,
+                chunkIndex,
+                negativeFaces,
+                positiveFaces,
+                ref writer);
+        }
+
         NativeChunkRecord chunk = session.Chunks[chunkIndex];
         ReadOnlySpan<BlockColumnProfile> columns =
             session.GetColumnProfiles(chunk.ColumnIndex);
+        int horizontalFaceCount = checked(
+            session.ChunkSizeX * session.ChunkSizeZ);
+        Span<int> bottomFaces = negativeFaces.Slice(
+            0,
+            horizontalFaceCount);
+        Span<int> topFaces = positiveFaces.Slice(
+            0,
+            horizontalFaceCount);
         bool directInteriorSides = SupportsContiguousFastPath(
             session.Materials);
 
@@ -163,6 +188,82 @@ internal static class NativeGeneratedMesh
 
         return writer.Valid;
     }
+
+    private static bool TryRequiresVoxelMesh(
+        scoped ref NativeGtrtSessionView session,
+        int chunkIndex,
+        out bool required)
+    {
+        NativeChunkRecord chunk = session.Chunks[chunkIndex];
+        if (!IsStorageKindValid(chunk.StorageKind))
+        {
+            session.Fail(NativeGtrtFailureCode.InvalidGeneratedMesh);
+            required = false;
+            return false;
+        }
+
+        required = chunk.StorageKind !=
+            NativeChunkStorageKind.GeneratedProfile;
+        if (required)
+            return true;
+
+        for (byte direction = 0; direction < 6; direction++)
+        {
+            int neighborX = chunk.ChunkX;
+            int neighborY = chunk.ChunkY;
+            int neighborZ = chunk.ChunkZ;
+            switch (direction)
+            {
+                case 0: neighborX--; break;
+                case 1: neighborX++; break;
+                case 2: neighborY--; break;
+                case 3: neighborY++; break;
+                case 4: neighborZ--; break;
+                case 5: neighborZ++; break;
+            }
+
+            int neighborIndex = session.GetChunkIndex(
+                neighborX,
+                neighborY,
+                neighborZ);
+            if (neighborIndex < 0)
+            {
+                int materializedNeighbor =
+                    session.FindMaterializedChunkIndex(
+                        neighborX,
+                        neighborY,
+                        neighborZ);
+                if (materializedNeighbor >= 0)
+                {
+                    required = true;
+                    return true;
+                }
+                if (session.State.FailureCode != 0)
+                    return false;
+                continue;
+            }
+            NativeChunkStorageKind neighborKind =
+                session.Chunks[neighborIndex].StorageKind;
+            if (!IsStorageKindValid(neighborKind))
+            {
+                session.Fail(NativeGtrtFailureCode.InvalidGeneratedMesh);
+                return false;
+            }
+            if (neighborKind != NativeChunkStorageKind.GeneratedProfile)
+            {
+                required = true;
+                return true;
+            }
+        }
+
+        return true;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool IsStorageKindValid(NativeChunkStorageKind kind) =>
+        kind == NativeChunkStorageKind.GeneratedProfile ||
+        kind == NativeChunkStorageKind.HybridSections ||
+        kind == NativeChunkStorageKind.MaterializedSections;
 
     private static bool GenerateMaterial(
         scoped ref NativeGtrtSessionView session,
@@ -1136,6 +1237,25 @@ internal ref struct NativeGeneratedFaceWriter
             extentV: endY - startY + 1);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void EmitBlockRectangle(
+        scoped in NativeBlockDescriptor descriptor,
+        byte direction,
+        int x,
+        int y,
+        int z,
+        int extentU,
+        int extentV) =>
+        EmitDescriptor(
+            in descriptor,
+            (descriptor.Flags & NativeBlockFlags.Opaque) != 0,
+            direction,
+            x,
+            y,
+            z,
+            extentU,
+            extentV);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void Emit(
         int material,
         bool opaque,
@@ -1146,14 +1266,7 @@ internal ref struct NativeGeneratedFaceWriter
         int extentU,
         int extentV)
     {
-        if (!Valid ||
-            (uint)material >= 3 ||
-            direction >= 6 ||
-            (uint)x > byte.MaxValue ||
-            (uint)y > byte.MaxValue ||
-            (uint)z > byte.MaxValue ||
-            (uint)(extentU - 1) > byte.MaxValue ||
-            (uint)(extentV - 1) > byte.MaxValue)
+        if ((uint)material >= 3)
         {
             Valid = false;
             return;
@@ -1166,6 +1279,42 @@ internal ref struct NativeGeneratedFaceWriter
             2 => materials.Water,
             _ => default
         };
+        EmitDescriptor(
+            in descriptor,
+            opaque,
+            direction,
+            x,
+            y,
+            z,
+            extentU,
+            extentV);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void EmitDescriptor(
+        scoped in NativeBlockDescriptor descriptor,
+        bool opaque,
+        byte direction,
+        int x,
+        int y,
+        int z,
+        int extentU,
+        int extentV)
+    {
+        if (!Valid ||
+            descriptor.Id == 0 ||
+            (descriptor.Flags & NativeBlockFlags.Defined) == 0 ||
+            direction >= 6 ||
+            (uint)x > byte.MaxValue ||
+            (uint)y > byte.MaxValue ||
+            (uint)z > byte.MaxValue ||
+            (uint)(extentU - 1) > byte.MaxValue ||
+            (uint)(extentV - 1) > byte.MaxValue)
+        {
+            Valid = false;
+            return;
+        }
+
         uint position = (uint)x |
             ((uint)y << 8) |
             ((uint)z << 16) |

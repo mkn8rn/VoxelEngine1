@@ -32,12 +32,81 @@ internal static class NativeMaterializedTerrain
         if (chunk.MaterializedChunkIndex < 0)
             return true;
 
+        return TryGetBlockCore(
+            ref session,
+            chunk.MaterializedChunkIndex,
+            chunk.ChunkX,
+            chunk.ChunkY,
+            chunk.ChunkZ,
+            localX,
+            localY,
+            localZ,
+            out blockId,
+            out handled);
+    }
+
+    internal static bool TryGetBlockAtWorldChunk(
+        scoped ref NativeGtrtSessionView session,
+        int chunkX,
+        int chunkY,
+        int chunkZ,
+        int localX,
+        int localY,
+        int localZ,
+        out ushort blockId,
+        out bool handled)
+    {
+        blockId = 0;
+        handled = false;
+        if ((uint)localX >= (uint)session.ChunkSizeX ||
+            (uint)localY >= (uint)session.ChunkSizeY ||
+            (uint)localZ >= (uint)session.ChunkSizeZ)
+        {
+            session.Fail(NativeGtrtFailureCode.InvalidMaterializedTerrain);
+            return false;
+        }
+
+        int materializedChunkIndex = session.FindMaterializedChunkIndex(
+            chunkX,
+            chunkY,
+            chunkZ);
+        if (materializedChunkIndex < 0)
+            return session.State.FailureCode == 0;
+
+        return TryGetBlockCore(
+            ref session,
+            materializedChunkIndex,
+            chunkX,
+            chunkY,
+            chunkZ,
+            localX,
+            localY,
+            localZ,
+            out blockId,
+            out handled);
+    }
+
+    private static bool TryGetBlockCore(
+        scoped ref NativeGtrtSessionView session,
+        int materializedChunkIndex,
+        int chunkX,
+        int chunkY,
+        int chunkZ,
+        int localX,
+        int localY,
+        int localZ,
+        out ushort blockId,
+        out bool handled)
+    {
+        blockId = 0;
+        handled = false;
+
         if (!TryGetChunkRecord(
                 ref session,
-                chunk.MaterializedChunkIndex,
-                chunk.ChunkX,
-                chunk.ChunkY,
-                chunk.ChunkZ,
+                materializedChunkIndex,
+                chunkX,
+                chunkY,
+                chunkZ,
                 out NativeMaterializedChunkRecord materialized))
         {
             return false;
@@ -63,7 +132,7 @@ internal static class NativeMaterializedTerrain
 
         if (!TryGetSectionRecord(
                 ref session,
-                chunk.MaterializedChunkIndex,
+                materializedChunkIndex,
                 sectionIndex,
                 sectionRecordIndex,
                 out NativeMaterializedSectionRecord section))

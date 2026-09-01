@@ -187,28 +187,45 @@ internal static class NativeGeneratedTerrain
         int normalizedX = localX - chunkOffsetX * session.ChunkSizeX;
         int normalizedY = localY - chunkOffsetY * session.ChunkSizeY;
         int normalizedZ = localZ - chunkOffsetZ * session.ChunkSizeZ;
+        int targetChunkX = unchecked(source.ChunkX + chunkOffsetX);
+        int targetChunkY = unchecked(source.ChunkY + chunkOffsetY);
+        int targetChunkZ = unchecked(source.ChunkZ + chunkOffsetZ);
         int targetChunkIndex = session.GetChunkIndex(
-            unchecked(source.ChunkX + chunkOffsetX),
-            unchecked(source.ChunkY + chunkOffsetY),
-            unchecked(source.ChunkZ + chunkOffsetZ));
-        if (targetChunkIndex < 0 ||
-            !NativeMaterializedTerrain.TryGetBlock(
+            targetChunkX,
+            targetChunkY,
+            targetChunkZ);
+        bool handled;
+        bool materializedRead = targetChunkIndex >= 0
+            ? NativeMaterializedTerrain.TryGetBlock(
                 ref session,
                 targetChunkIndex,
                 normalizedX,
                 normalizedY,
                 normalizedZ,
                 out blockId,
-                out bool handled))
+                out handled)
+            : NativeMaterializedTerrain.TryGetBlockAtWorldChunk(
+                ref session,
+                targetChunkX,
+                targetChunkY,
+                targetChunkZ,
+                normalizedX,
+                normalizedY,
+                normalizedZ,
+                out blockId,
+                out handled);
+        if (!materializedRead)
         {
             session.Fail(NativeGtrtFailureCode.InvalidTerrainQuery);
             blockId = 0;
             return false;
         }
 
-        return handled || TryGetGeneratedBlock(
+        return handled || TryGetGeneratedBlockAtWorldChunk(
             ref session,
-            targetChunkIndex,
+            targetChunkX,
+            targetChunkY,
+            targetChunkZ,
             normalizedX,
             normalizedY,
             normalizedZ,
@@ -234,7 +251,36 @@ internal static class NativeGeneratedTerrain
         }
 
         NativeChunkRecord chunk = session.Chunks[chunkIndex];
-        ref NativeColumnRecord column = ref session.Columns[chunk.ColumnIndex];
+        return TryGetGeneratedBlockAtWorldChunk(
+            ref session,
+            chunk.ChunkX,
+            chunk.ChunkY,
+            chunk.ChunkZ,
+            localX,
+            localY,
+            localZ,
+            out blockId);
+    }
+
+    private static bool TryGetGeneratedBlockAtWorldChunk(
+        scoped ref NativeGtrtSessionView session,
+        int chunkX,
+        int chunkY,
+        int chunkZ,
+        int localX,
+        int localY,
+        int localZ,
+        out ushort blockId)
+    {
+        int columnIndex = session.GetColumnIndex(chunkX, chunkZ);
+        if (columnIndex < 0)
+        {
+            session.Fail(NativeGtrtFailureCode.InvalidTerrainQuery);
+            blockId = 0;
+            return false;
+        }
+
+        ref NativeColumnRecord column = ref session.Columns[columnIndex];
         ref int columnState = ref Unsafe.As<NativeColumnState, int>(
             ref column.State);
         if (Volatile.Read(ref columnState) !=
@@ -247,11 +293,11 @@ internal static class NativeGeneratedTerrain
         }
 
         int profileIndex = checked(
-            chunk.ProfileOffset +
+            column.ProfileOffset +
             localX * session.ChunkSizeZ +
             localZ);
         BlockColumnProfile profile = session.Profiles[profileIndex];
-        int worldY = unchecked(chunk.ChunkY * session.ChunkSizeY + localY);
+        int worldY = unchecked(chunkY * session.ChunkSizeY + localY);
         blockId = session.Materials.GetBlockWorld(in profile, worldY);
         return true;
     }

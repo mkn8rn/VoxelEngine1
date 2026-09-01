@@ -347,7 +347,13 @@ internal readonly struct NativeGtrtSessionLayout
                 chunkSizeX,
                 chunkSizeZ);
         MeshWorkerCount = meshWorkerCount;
-        MeshFaceScratchCountPerWorker = checked(ProfilesPerColumn * 2);
+        int maximumFacePlaneCount = Math.Max(
+            ProfilesPerColumn,
+            Math.Max(
+                checked(chunkSizeX * chunkSizeY),
+                checked(chunkSizeY * chunkSizeZ)));
+        MeshFaceScratchCountPerWorker = checked(
+            maximumFacePlaneCount * 2);
         PacketWordCapacity = packetWordCapacity == 0
             ? checked(RequiredChunkCount *
                 DefaultPacketWordsPerRequiredChunk)
@@ -1234,9 +1240,20 @@ internal ref struct NativeGtrtSessionView
     internal Span<int> GetMeshTopFaceScratch(int workerIndex) =>
         ReadRange<int>(
             checked(GetMeshScratchOffset(workerIndex) +
-                header.ChunkSizeX * header.ChunkSizeZ *
+                GetMeshFacePlaneCount() *
                 Unsafe.SizeOf<int>()),
             header.ChunkSizeX * header.ChunkSizeZ);
+
+    internal Span<int> GetMeshNegativeFaceScratch(int workerIndex) =>
+        ReadRange<int>(
+            GetMeshScratchOffset(workerIndex),
+            GetMeshFacePlaneCount());
+
+    internal Span<int> GetMeshPositiveFaceScratch(int workerIndex) =>
+        ReadRange<int>(
+            checked(GetMeshScratchOffset(workerIndex) +
+                GetMeshFacePlaneCount() * Unsafe.SizeOf<int>()),
+            GetMeshFacePlaneCount());
 
     internal bool TryAcquireGenerationWorkspace(int workerIndex)
     {
@@ -2633,6 +2650,10 @@ internal ref struct NativeGtrtSessionView
             workerIndex * header.MeshFaceScratchCountPerWorker *
             Unsafe.SizeOf<int>());
     }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private int GetMeshFacePlaneCount() =>
+        header.MeshFaceScratchCountPerWorker / 2;
 
     private bool TryEnterPacketConsumer()
     {
