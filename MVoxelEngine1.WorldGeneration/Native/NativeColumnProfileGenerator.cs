@@ -142,23 +142,35 @@ internal static class NativeColumnProfileGenerator
             biomeIndex < 0)
         {
             session.Fail(NativeGtrtFailureCode.InvalidProfileGeneration);
+            session.TryAbandonGeneration(in work);
             return false;
         }
 
         if (!session.TryAcquireGenerationWorkspace(workerIndex))
+        {
+            session.TryAbandonGeneration(in work);
             return false;
+        }
 
+        bool keepClaim = false;
         try
         {
-            return GenerateCore(
+            if (session.CancellationRequested)
+                return false;
+
+            bool generated = GenerateCore(
                 ref session,
                 workerIndex,
                 in work,
                 biomeIndex,
                 in biome);
+            keepClaim = generated && !session.CancellationRequested;
+            return keepClaim;
         }
         finally
         {
+            if (!keepClaim)
+                session.TryAbandonGeneration(in work);
             session.ReleaseGenerationWorkspace(workerIndex);
         }
     }

@@ -50,7 +50,10 @@ public sealed class NativeColumnProfileGeneratorTests
             while (view.TryClaimGeneration(out NativeWorkItem claimed))
             {
                 if (claimed.RecordIndex != targetIndex)
+                {
+                    Assert.True(view.TryAbandonGeneration(in claimed));
                     continue;
+                }
 
                 target = claimed;
                 found = true;
@@ -78,6 +81,8 @@ public sealed class NativeColumnProfileGeneratorTests
             AssertSummaryEqual(
                 expectedSummary,
                 view.ColumnSummaries[targetIndex]);
+            Assert.True(view.TryAbandonGeneration(in target));
+            Assert.Equal(0, view.State.ClaimedGenerationCount);
         });
     }
 
@@ -407,14 +412,18 @@ public sealed class NativeColumnProfileGeneratorTests
         private void Execute(scoped NativeLeaseView<byte> owner)
         {
             var session = new NativeGtrtSessionView(owner.AsSpan());
-            Result =
-                session.TryClaimGeneration(out NativeWorkItem work) &&
-                NativeColumnProfileGenerator.TryGenerate(
+            Result = session.TryClaimGeneration(out NativeWorkItem work);
+            if (!Result)
+                return;
+
+            Result = NativeColumnProfileGenerator.TryGenerate(
                     ref session,
                     workerIndex: 0,
                     in work,
                     biomeIndex: 0,
                     in biome);
+            if (Result)
+                Result = session.TryAbandonGeneration(in work);
         }
     }
 }

@@ -55,6 +55,41 @@ public sealed class NativeGeneratedMeshTests
         Assert.Equal(0, allocated);
     }
 
+    [Fact]
+    public void CanceledMeshBuildAbandonsItsNativePacketAuthority()
+    {
+        var harness = new NativeGeneratedMeshHarness();
+        using NativeGtrtSession session = CreateSession();
+        session.PublishSeed(123456);
+        session.Access(harness.PrepareAction);
+        session.Access(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            view.RequestCancellation();
+        });
+
+        session.Access(harness.BuildAction);
+
+        Assert.False(harness.Succeeded);
+        session.Access(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            int chunkIndex = harness.ClaimedMesh.RecordIndex;
+            Assert.Equal(
+                NativeWorkState.Canceled,
+                view.MeshJobs[chunkIndex].State);
+            Assert.Equal(
+                NativeChunkState.Retired,
+                view.Chunks[chunkIndex].State);
+            Assert.Equal(
+                NativeRenderPacketState.Empty,
+                view.Packets[chunkIndex].State);
+            Assert.Equal(0, view.State.ClaimedMeshCount);
+            Assert.True(view.TryRecyclePacketStorage());
+            Assert.Equal(0, view.State.FailureCode);
+        });
+    }
+
     private static NativeGtrtSession CreateSession()
     {
         var layout = new NativeGtrtSessionLayout(

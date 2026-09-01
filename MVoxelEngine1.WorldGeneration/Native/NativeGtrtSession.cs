@@ -74,7 +74,12 @@ internal enum NativeGtrtFailureCode : int
     InvalidMeshWorkspace = 10,
     PacketStorageExhausted = 11,
     InvalidPacketPublication = 12,
-    InvalidGeneratedMesh = 13
+    InvalidGeneratedMesh = 13,
+    InvalidPacketActivation = 14,
+    InvalidPacketRetirement = 15,
+    InvalidPacketRecycle = 16,
+    InvalidMeshCancellation = 17,
+    InvalidGenerationCancellation = 18
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 8)]
@@ -93,6 +98,11 @@ internal struct NativeGtrtSessionState
     internal long MeshEnqueuePosition;
     internal long MeshDequeuePosition;
     internal int PacketWordCursor;
+    internal int ClaimedMeshCount;
+    internal int PacketRecycleState;
+    internal int ClaimedGenerationCount;
+    internal int DisposalState;
+    internal int PacketConsumerCount;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -493,7 +503,7 @@ internal readonly struct NativeGtrtSessionLayout
 internal readonly struct NativeGtrtSessionHeader
 {
     internal const uint ExpectedMagic = 0x54525447;
-    internal const int ExpectedVersion = 5;
+    internal const int ExpectedVersion = 8;
 
     internal NativeGtrtSessionHeader(NativeGtrtSessionLayout layout)
     {
@@ -1207,6 +1217,7 @@ internal ref struct NativeGtrtSessionView
             (uint)claimedWork.RecordIndex >= (uint)Chunks.Length ||
             opaqueWordCount < 0 ||
             transparentWordCount < 0 ||
+            opaqueWordCount > int.MaxValue - transparentWordCount ||
             (opaqueWordCount & 1) != 0 ||
             (transparentWordCount & 1) != 0 ||
             opaqueFaceCount < opaqueWordCount / 2 ||
@@ -1215,6 +1226,10 @@ internal ref struct NativeGtrtSessionView
             Fail(NativeGtrtFailureCode.InvalidPacketPublication);
             return false;
         }
+
+        if (Volatile.Read(ref State.DisposalState) != 0 ||
+            Volatile.Read(ref State.PacketRecycleState) != 0)
+            return false;
 
         int chunkIndex = claimedWork.RecordIndex;
         ref NativeWorkItem job = ref MeshJobs[chunkIndex];
@@ -1236,18 +1251,23 @@ internal ref struct NativeGtrtSessionView
             return false;
         }
 
+        record.ChunkIndex = chunkIndex;
+        record.RegistryEpoch = claimedWork.Epoch;
+        record.PublicationEpoch = 0;
         int totalWordCount = checked(
             opaqueWordCount + transparentWordCount);
         if (!TryReservePacketWords(totalWordCount, out int wordOffset))
         {
+            TryTransition(
+                ref record.State,
+                NativeRenderPacketState.Writing,
+                NativeRenderPacketState.Retired);
             Fail(NativeGtrtFailureCode.PacketStorageExhausted);
             return false;
         }
 
         record.RenderDataId = ((long)claimedWork.Epoch << 32) |
             (uint)chunkIndex;
-        record.ChunkIndex = chunkIndex;
-        record.RegistryEpoch = claimedWork.Epoch;
         record.OpaqueWordOffset = wordOffset;
         record.OpaqueWordCount = opaqueWordCount;
         record.OpaqueFaceCount = opaqueFaceCount;
@@ -1255,8 +1275,6 @@ internal ref struct NativeGtrtSessionView
             wordOffset + opaqueWordCount);
         record.TransparentWordCount = transparentWordCount;
         record.TransparentFaceCount = transparentFaceCount;
-        record.PublicationEpoch = 0;
-
         Span<uint> words = PacketWords;
         packet = new NativePacketWriteView(
             words.Slice(record.OpaqueWordOffset, opaqueWordCount),
@@ -1264,6 +1282,341 @@ internal ref struct NativeGtrtSessionView
                 record.TransparentWordOffset,
                 transparentWordCount));
         return true;
+    }
+
+    internal bool TryActivatePacket(
+        int chunkIndex,
+        out NativePacketReadView packet)
+    {
+        packet = default;
+        if (!TryEnterPacketConsumer())
+            return false;
+
+        try
+        {
+            return TryActivatePacketCore(chunkIndex, out packet);
+        }
+        finally
+        {
+            ExitPacketConsumer();
+        }
+    }
+
+    private bool TryActivatePacketCore(
+        int chunkIndex,
+        out NativePacketReadView packet)
+    {
+        packet = default;
+        if ((uint)chunkIndex >= (uint)Chunks.Length)
+        {
+            Fail(NativeGtrtFailureCode.InvalidPacketActivation);
+            return false;
+        }
+
+        ref NativeChunkRecord chunk = ref Chunks[chunkIndex];
+        ref NativeRenderPacketRecord source =
+            ref Packets[chunk.PacketIndex];
+        if (ReadState(ref chunk.State) != NativeChunkState.PacketReady ||
+            source.PublicationEpoch != State.SessionEpoch ||
+            source.ChunkIndex != chunkIndex ||
+            !TryTransition(
+                ref source.State,
+                NativeRenderPacketState.Ready,
+                NativeRenderPacketState.Active))
+        {
+            return false;
+        }
+
+        if (!TryTransition(
+                ref chunk.State,
+                NativeChunkState.PacketReady,
+                NativeChunkState.Active))
+        {
+            TryTransition(
+                ref source.State,
+                NativeRenderPacketState.Active,
+                NativeRenderPacketState.Retired);
+            Fail(NativeGtrtFailureCode.InvalidPacketActivation);
+            return false;
+        }
+
+        int ready = Interlocked.Decrement(ref State.ReadyPacketCount);
+        if (ready < 0)
+        {
+            Fail(NativeGtrtFailureCode.InvalidPacketActivation);
+            return false;
+        }
+
+        NativeRenderPacketRecord record = source;
+        Span<uint> words = PacketWords;
+        packet = new NativePacketReadView(
+            record,
+            words.Slice(record.OpaqueWordOffset, record.OpaqueWordCount),
+            words.Slice(
+                record.TransparentWordOffset,
+                record.TransparentWordCount));
+        return true;
+    }
+
+    internal bool TryRetirePacket(int chunkIndex)
+    {
+        if (!TryEnterPacketConsumer())
+            return false;
+
+        try
+        {
+            return TryRetirePacketCore(chunkIndex);
+        }
+        finally
+        {
+            ExitPacketConsumer();
+        }
+    }
+
+    private bool TryRetirePacketCore(int chunkIndex)
+    {
+        if ((uint)chunkIndex >= (uint)Chunks.Length)
+        {
+            Fail(NativeGtrtFailureCode.InvalidPacketRetirement);
+            return false;
+        }
+
+        ref NativeChunkRecord chunk = ref Chunks[chunkIndex];
+        ref NativeRenderPacketRecord packet =
+            ref Packets[chunk.PacketIndex];
+        NativeRenderPacketState packetState = ReadState(ref packet.State);
+        NativeChunkState expectedChunkState;
+        switch (packetState)
+        {
+            case NativeRenderPacketState.Ready:
+                expectedChunkState = NativeChunkState.PacketReady;
+                break;
+            case NativeRenderPacketState.Active:
+                expectedChunkState = NativeChunkState.Active;
+                break;
+            default:
+                return false;
+        }
+
+        if (packet.PublicationEpoch != State.SessionEpoch ||
+            packet.ChunkIndex != chunkIndex ||
+            ReadState(ref chunk.State) != expectedChunkState ||
+            !TryTransition(
+                ref packet.State,
+                packetState,
+                NativeRenderPacketState.Retired))
+        {
+            return false;
+        }
+
+        if (!TryTransition(
+                ref chunk.State,
+                expectedChunkState,
+                NativeChunkState.Retired))
+        {
+            Fail(NativeGtrtFailureCode.InvalidPacketRetirement);
+            return false;
+        }
+
+        if (packetState == NativeRenderPacketState.Ready)
+        {
+            int ready = Interlocked.Decrement(ref State.ReadyPacketCount);
+            if (ready < 0)
+            {
+                Fail(NativeGtrtFailureCode.InvalidPacketRetirement);
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    internal bool TryAbandonMesh(
+        scoped in NativeWorkItem claimedWork)
+    {
+        if (claimedWork.Kind != NativeWorkKind.BuildChunkMesh ||
+            claimedWork.Epoch != State.SessionEpoch ||
+            (uint)claimedWork.RecordIndex >= (uint)MeshJobs.Length)
+        {
+            Fail(NativeGtrtFailureCode.InvalidMeshCancellation);
+            return false;
+        }
+
+        int chunkIndex = claimedWork.RecordIndex;
+        ref NativeWorkItem job = ref MeshJobs[chunkIndex];
+        ref NativeChunkRecord chunk = ref Chunks[chunkIndex];
+        ref NativeRenderPacketRecord packet =
+            ref Packets[chunk.PacketIndex];
+        if (ReadState(ref job.State) != NativeWorkState.Claimed ||
+            ReadState(ref chunk.State) != NativeChunkState.MeshReady)
+        {
+            return false;
+        }
+
+        NativeRenderPacketState packetState = ReadState(ref packet.State);
+        if (packetState == NativeRenderPacketState.Writing)
+        {
+            if (!TryTransition(
+                    ref packet.State,
+                    NativeRenderPacketState.Writing,
+                    NativeRenderPacketState.Retired))
+            {
+                Fail(NativeGtrtFailureCode.InvalidMeshCancellation);
+                return false;
+            }
+        }
+        else if (packetState != NativeRenderPacketState.Empty &&
+                 packetState != NativeRenderPacketState.Retired)
+        {
+            return false;
+        }
+
+        if (!TryTransition(
+                ref chunk.State,
+                NativeChunkState.MeshReady,
+                NativeChunkState.Retired) ||
+            !TryTransition(
+                ref job.State,
+                NativeWorkState.Claimed,
+                NativeWorkState.Canceled))
+        {
+            Fail(NativeGtrtFailureCode.InvalidMeshCancellation);
+            return false;
+        }
+
+        int claimed = Interlocked.Decrement(ref State.ClaimedMeshCount);
+        if (claimed < 0)
+        {
+            Fail(NativeGtrtFailureCode.InvalidMeshCancellation);
+            return false;
+        }
+
+        return true;
+    }
+
+    internal bool TryRecyclePacketStorage()
+    {
+        ref NativeGtrtSessionState state = ref State;
+        if (Interlocked.CompareExchange(
+                ref state.PacketRecycleState,
+                1,
+                0) != 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            if (Volatile.Read(ref state.ClaimedMeshCount) != 0 ||
+                Volatile.Read(ref state.PacketConsumerCount) != 0 ||
+                Volatile.Read(ref state.ReadyPacketCount) != 0)
+            {
+                return false;
+            }
+
+            Span<NativeMeshWorkspaceRecord> workspaces = MeshWorkspaces;
+            for (int index = 0; index < workspaces.Length; index++)
+            {
+                if (Volatile.Read(ref workspaces[index].State) != 0)
+                    return false;
+            }
+
+            Span<NativeRenderPacketRecord> packets = Packets;
+            Span<NativeChunkRecord> chunks = Chunks;
+            for (int index = 0; index < packets.Length; index++)
+            {
+                ref NativeRenderPacketRecord packet = ref packets[index];
+                NativeRenderPacketState packetState =
+                    ReadState(ref packet.State);
+                if (packetState == NativeRenderPacketState.Empty)
+                    continue;
+                if (packetState != NativeRenderPacketState.Retired)
+                    return false;
+                if ((uint)packet.ChunkIndex >= (uint)chunks.Length ||
+                    chunks[packet.ChunkIndex].PacketIndex != index ||
+                    ReadState(ref chunks[packet.ChunkIndex].State) !=
+                        NativeChunkState.Retired)
+                {
+                    Fail(NativeGtrtFailureCode.InvalidPacketRecycle);
+                    return false;
+                }
+            }
+
+            for (int index = 0; index < packets.Length; index++)
+            {
+                if (ReadState(ref packets[index].State) ==
+                    NativeRenderPacketState.Retired)
+                {
+                    packets[index] = default;
+                }
+            }
+
+            Volatile.Write(ref state.PacketWordCursor, 0);
+            return true;
+        }
+        finally
+        {
+            Volatile.Write(ref state.PacketRecycleState, 0);
+        }
+    }
+
+    internal bool TryPrepareForDisposal()
+    {
+        ref NativeGtrtSessionState state = ref State;
+        int disposalState = Volatile.Read(ref state.DisposalState);
+        if (disposalState == 0)
+        {
+            disposalState = Interlocked.CompareExchange(
+                ref state.DisposalState,
+                1,
+                0);
+        }
+        if (disposalState != 0 && disposalState != 1)
+            return false;
+
+        RequestCancellation();
+        if (Volatile.Read(ref state.ClaimedGenerationCount) != 0 ||
+            Volatile.Read(ref state.ClaimedMeshCount) != 0)
+            return false;
+
+        Span<NativeGenerationWorkspaceRecord> generationWorkspaces =
+            GenerationWorkspaces;
+        for (int index = 0; index < generationWorkspaces.Length; index++)
+        {
+            if (Volatile.Read(ref generationWorkspaces[index].State) != 0)
+                return false;
+        }
+
+        Span<NativeMeshWorkspaceRecord> meshWorkspaces = MeshWorkspaces;
+        for (int index = 0; index < meshWorkspaces.Length; index++)
+        {
+            if (Volatile.Read(ref meshWorkspaces[index].State) != 0)
+                return false;
+        }
+
+        Span<NativeRenderPacketRecord> packets = Packets;
+        for (int index = 0; index < packets.Length; index++)
+        {
+            NativeRenderPacketState packetState =
+                ReadState(ref packets[index].State);
+            if (packetState == NativeRenderPacketState.Empty ||
+                packetState == NativeRenderPacketState.Retired)
+            {
+                continue;
+            }
+            if (packetState == NativeRenderPacketState.Writing ||
+                packetState == NativeRenderPacketState.Active)
+                return false;
+            if (packetState != NativeRenderPacketState.Ready)
+            {
+                Fail(NativeGtrtFailureCode.InvalidPacketRecycle);
+                return false;
+            }
+            if (!TryRetirePacket(packets[index].ChunkIndex))
+                return false;
+        }
+
+        return TryRecyclePacketStorage();
     }
 
     internal bool TryReadPacket(
@@ -1333,10 +1686,27 @@ internal ref struct NativeGtrtSessionView
         Span<NativeWorkItem> jobs = GenerationJobs;
         Span<NativeColumnRecord> columns = Columns;
         ref NativeGtrtSessionState state = ref State;
+        if (Volatile.Read(ref state.CancellationState) != 0 ||
+            Volatile.Read(ref state.DisposalState) != 0)
+        {
+            work = default;
+            return false;
+        }
+
+        Interlocked.Increment(ref state.ClaimedGenerationCount);
+        if (Volatile.Read(ref state.CancellationState) != 0 ||
+            Volatile.Read(ref state.DisposalState) != 0)
+        {
+            Interlocked.Decrement(ref state.ClaimedGenerationCount);
+            work = default;
+            return false;
+        }
+
         while (true)
         {
             if (Volatile.Read(ref state.CancellationState) != 0)
             {
+                Interlocked.Decrement(ref state.ClaimedGenerationCount);
                 work = default;
                 return false;
             }
@@ -1345,6 +1715,7 @@ internal ref struct NativeGtrtSessionView
                 ref state.GenerationCursor) - 1;
             if ((uint)index >= (uint)jobs.Length)
             {
+                Interlocked.Decrement(ref state.ClaimedGenerationCount);
                 work = default;
                 return false;
             }
@@ -1367,6 +1738,7 @@ internal ref struct NativeGtrtSessionView
                 RecordFailure(
                     ref state,
                     NativeGtrtFailureCode.InvalidGenerationClaim);
+                Interlocked.Decrement(ref state.ClaimedGenerationCount);
                 work = default;
                 return false;
             }
@@ -1414,6 +1786,7 @@ internal ref struct NativeGtrtSessionView
             RecordFailure(
                 ref state,
                 NativeGtrtFailureCode.InvalidGenerationCompletion);
+            Interlocked.Decrement(ref state.ClaimedGenerationCount);
             return false;
         }
 
@@ -1422,6 +1795,7 @@ internal ref struct NativeGtrtSessionView
                 column.ChunkZ,
                 ref state))
         {
+            Interlocked.Decrement(ref state.ClaimedGenerationCount);
             return false;
         }
 
@@ -1432,21 +1806,90 @@ internal ref struct NativeGtrtSessionView
             RecordFailure(
                 ref state,
                 NativeGtrtFailureCode.InvalidGenerationCompletion);
+            Interlocked.Decrement(ref state.ClaimedGenerationCount);
             return false;
         }
 
-        return ReleaseMeshDependencies(
+        bool released = ReleaseMeshDependencies(
             column.ChunkX,
             column.ChunkZ,
             claimedWork.Epoch,
             ref state);
+        int claimed = Interlocked.Decrement(
+            ref state.ClaimedGenerationCount);
+        if (claimed < 0)
+        {
+            RecordFailure(
+                ref state,
+                NativeGtrtFailureCode.InvalidGenerationCompletion);
+            return false;
+        }
+
+        return released;
+    }
+
+    internal bool TryAbandonGeneration(
+        scoped in NativeWorkItem claimedWork)
+    {
+        if (claimedWork.Kind != NativeWorkKind.GenerateColumn ||
+            claimedWork.Epoch != State.SessionEpoch ||
+            (uint)claimedWork.RecordIndex >= (uint)GenerationJobs.Length)
+        {
+            Fail(NativeGtrtFailureCode.InvalidGenerationCancellation);
+            return false;
+        }
+
+        ref NativeWorkItem job =
+            ref GenerationJobs[claimedWork.RecordIndex];
+        ref NativeColumnRecord column =
+            ref Columns[claimedWork.RecordIndex];
+        if (ReadState(ref job.State) != NativeWorkState.Claimed ||
+            ReadState(ref column.State) != NativeColumnState.Reserved)
+        {
+            return false;
+        }
+
+        if (!TryTransition(
+                ref column.State,
+                NativeColumnState.Reserved,
+                NativeColumnState.Retired) ||
+            !TryTransition(
+                ref job.State,
+                NativeWorkState.Claimed,
+                NativeWorkState.Canceled))
+        {
+            Fail(NativeGtrtFailureCode.InvalidGenerationCancellation);
+            return false;
+        }
+
+        int claimed = Interlocked.Decrement(
+            ref State.ClaimedGenerationCount);
+        if (claimed < 0)
+        {
+            Fail(NativeGtrtFailureCode.InvalidGenerationCancellation);
+            return false;
+        }
+
+        return true;
     }
 
     internal bool TryClaimMesh(out NativeWorkItem work)
     {
         ref NativeGtrtSessionState state = ref State;
-        if (Volatile.Read(ref state.CancellationState) != 0)
+        if (Volatile.Read(ref state.CancellationState) != 0 ||
+            Volatile.Read(ref state.DisposalState) != 0 ||
+            Volatile.Read(ref state.PacketRecycleState) != 0)
         {
+            work = default;
+            return false;
+        }
+
+        Interlocked.Increment(ref state.ClaimedMeshCount);
+        if (Volatile.Read(ref state.CancellationState) != 0 ||
+            Volatile.Read(ref state.DisposalState) != 0 ||
+            Volatile.Read(ref state.PacketRecycleState) != 0)
+        {
+            Interlocked.Decrement(ref state.ClaimedMeshCount);
             work = default;
             return false;
         }
@@ -1461,6 +1904,7 @@ internal ref struct NativeGtrtSessionView
                 RecordFailure(
                     ref state,
                     NativeGtrtFailureCode.InvalidMeshClaim);
+                Interlocked.Decrement(ref state.ClaimedMeshCount);
                 work = default;
                 return false;
             }
@@ -1481,6 +1925,7 @@ internal ref struct NativeGtrtSessionView
                 RecordFailure(
                     ref state,
                     NativeGtrtFailureCode.InvalidMeshClaim);
+                Interlocked.Decrement(ref state.ClaimedMeshCount);
                 work = default;
                 return false;
             }
@@ -1495,6 +1940,7 @@ internal ref struct NativeGtrtSessionView
                 RecordFailure(
                     ref state,
                     NativeGtrtFailureCode.InvalidMeshClaim);
+                Interlocked.Decrement(ref state.ClaimedMeshCount);
                 work = default;
                 return false;
             }
@@ -1503,6 +1949,7 @@ internal ref struct NativeGtrtSessionView
             return true;
         }
 
+        Interlocked.Decrement(ref state.ClaimedMeshCount);
         work = default;
         return false;
     }
@@ -1540,22 +1987,7 @@ internal ref struct NativeGtrtSessionView
             return false;
         }
 
-        if (!TryTransition(
-                ref job.State,
-                NativeWorkState.Claimed,
-                NativeWorkState.Completed))
-        {
-            RecordFailure(
-                ref state,
-                NativeGtrtFailureCode.InvalidMeshCompletion);
-            return false;
-        }
-
         packet.PublicationEpoch = claimedWork.Epoch;
-        ref int packetState = ref Unsafe.As<NativeRenderPacketState, int>(
-            ref packet.State);
-        Volatile.Write(ref packetState, (int)NativeRenderPacketState.Ready);
-
         chunk.MeshEpoch = claimedWork.Epoch;
         if (!TryTransition(
                 ref chunk.State,
@@ -1569,6 +2001,39 @@ internal ref struct NativeGtrtSessionView
         }
 
         Interlocked.Increment(ref state.ReadyPacketCount);
+        if (!TryTransition(
+                ref job.State,
+                NativeWorkState.Claimed,
+                NativeWorkState.Completed))
+        {
+            Interlocked.Decrement(ref state.ReadyPacketCount);
+            TryTransition(
+                ref chunk.State,
+                NativeChunkState.PacketReady,
+                NativeChunkState.Retired);
+            TryTransition(
+                ref packet.State,
+                NativeRenderPacketState.Writing,
+                NativeRenderPacketState.Retired);
+            Interlocked.Decrement(ref state.ClaimedMeshCount);
+            RecordFailure(
+                ref state,
+                NativeGtrtFailureCode.InvalidMeshCompletion);
+            return false;
+        }
+
+        ref int packetState = ref Unsafe.As<NativeRenderPacketState, int>(
+            ref packet.State);
+        Volatile.Write(ref packetState, (int)NativeRenderPacketState.Ready);
+        int claimed = Interlocked.Decrement(ref state.ClaimedMeshCount);
+        if (claimed < 0)
+        {
+            RecordFailure(
+                ref state,
+                NativeGtrtFailureCode.InvalidMeshCompletion);
+            return false;
+        }
+
         int remaining = Interlocked.Decrement(
             ref state.RemainingChunks);
         if (remaining < 0)
@@ -1584,6 +2049,9 @@ internal ref struct NativeGtrtSessionView
 
     internal void RequestCancellation() =>
         Interlocked.Exchange(ref State.CancellationState, 1);
+
+    internal bool CancellationRequested =>
+        Volatile.Read(ref State.CancellationState) != 0;
 
     private bool PublishGeneratedChunks(
         int chunkX,
@@ -1806,6 +2274,28 @@ internal ref struct NativeGtrtSessionView
             Unsafe.SizeOf<int>());
     }
 
+    private bool TryEnterPacketConsumer()
+    {
+        ref NativeGtrtSessionState state = ref State;
+        if (Volatile.Read(ref state.PacketRecycleState) != 0)
+            return false;
+
+        Interlocked.Increment(ref state.PacketConsumerCount);
+        if (Volatile.Read(ref state.PacketRecycleState) == 0)
+            return true;
+
+        Interlocked.Decrement(ref state.PacketConsumerCount);
+        return false;
+    }
+
+    private void ExitPacketConsumer()
+    {
+        int consumers = Interlocked.Decrement(
+            ref State.PacketConsumerCount);
+        if (consumers < 0)
+            Fail(NativeGtrtFailureCode.InvalidPacketRecycle);
+    }
+
     private bool TryReservePacketWords(
         int wordCount,
         out int wordOffset)
@@ -1891,8 +2381,10 @@ internal ref struct NativeGtrtSessionView
 internal sealed class NativeGtrtSession : IDisposable
 {
     private readonly NativeLeaseAction<byte> publishSeedAction;
+    private readonly NativeLeaseAction<byte> prepareForDisposalAction;
     private NativeTransfer<byte>? storage;
     private long pendingSeed;
+    private bool disposalPrepared;
 
     private NativeGtrtSession(NativeTransfer<byte>? source)
     {
@@ -1900,6 +2392,7 @@ internal sealed class NativeGtrtSession : IDisposable
         {
             storage = NativeTransfer<byte>.Move(ref source);
             publishSeedAction = PublishSeedCore;
+            prepareForDisposalAction = PrepareForDisposalCore;
         }
         finally
         {
@@ -1972,8 +2465,22 @@ internal sealed class NativeGtrtSession : IDisposable
         if (storage is null)
             return;
 
-        storage.Dispose();
-        storage = null;
+        disposalPrepared = false;
+        storage.Access(prepareForDisposalAction);
+        if (!disposalPrepared)
+        {
+            throw new InvalidOperationException(
+                "The native GTRT session still has active mesh work.");
+        }
+
+        try
+        {
+            storage.Dispose();
+        }
+        finally
+        {
+            storage = null;
+        }
     }
 
     private void PublishSeedCore(scoped NativeLeaseView<byte> owner)
@@ -1995,5 +2502,12 @@ internal sealed class NativeGtrtSession : IDisposable
         NativeOpenSimplexNoiseState noise = view.NoiseState;
         noise.Initialize(pendingSeed);
         Volatile.Write(ref state.PublicationState, 1);
+    }
+
+    private void PrepareForDisposalCore(
+        scoped NativeLeaseView<byte> owner)
+    {
+        var view = new NativeGtrtSessionView(owner.AsSpan());
+        disposalPrepared = view.TryPrepareForDisposal();
     }
 }

@@ -9,6 +9,8 @@ public sealed class NativeGtrtSessionTests
 {
     private static readonly NativeLeaseAction<byte> ExecuteSchedulerAction =
         ExecuteScheduler;
+    private static readonly NativeLeaseAction<byte> ExecutePacketLifecycleAction =
+        ExecutePacketLifecycle;
 
     [Fact]
     public void DenseLayoutMapsEveryResidentCoordinateExactlyOnce()
@@ -336,6 +338,375 @@ public sealed class NativeGtrtSessionTests
     }
 
     [Fact]
+    public void PacketStorageRecyclesOnlyAfterExclusiveRetirement()
+    {
+        var layout = new NativeGtrtSessionLayout(
+            chunkSizeX: 4,
+            chunkSizeY: 8,
+            chunkSizeZ: 4,
+            lod1Radius: 1,
+            materials: NativeTerrainMaterialSet.CreateConventional(),
+            packetWordCapacity: 64);
+        using NativeGtrtSession session = NativeGtrtSession.Create(layout);
+        session.PublishSeed(123456);
+
+        session.Access(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            CompleteGeneration(ref view);
+
+            Assert.True(view.TryClaimMesh(out NativeWorkItem first));
+            Assert.True(view.TryBeginPacket(
+                in first,
+                opaqueWordCount: 4,
+                opaqueFaceCount: 2,
+                transparentWordCount: 2,
+                transparentFaceCount: 1,
+                out NativePacketWriteView firstWrite));
+            firstWrite.OpaqueWords.Fill(101);
+            firstWrite.TransparentWords.Fill(102);
+            Assert.True(view.TryCompleteMesh(in first));
+            Assert.Equal(1, view.State.ReadyPacketCount);
+
+            Assert.True(view.TryActivatePacket(
+                first.RecordIndex,
+                out NativePacketReadView firstRead));
+            Assert.True(firstRead.OpaqueWords.SequenceEqual(
+                stackalloc uint[] { 101, 101, 101, 101 }));
+            Assert.True(firstRead.TransparentWords.SequenceEqual(
+                stackalloc uint[] { 102, 102 }));
+            Assert.False(view.TryActivatePacket(first.RecordIndex, out _));
+            Assert.False(view.TryRecyclePacketStorage());
+            Assert.Equal(6, view.State.PacketWordCursor);
+
+            Assert.True(view.TryRetirePacket(first.RecordIndex));
+            Assert.False(view.TryRetirePacket(first.RecordIndex));
+            Assert.Equal(0, view.State.ReadyPacketCount);
+            Assert.True(view.TryRecyclePacketStorage());
+            Assert.Equal(0, view.State.PacketWordCursor);
+            Assert.Equal(
+                NativeRenderPacketState.Empty,
+                view.Packets[first.RecordIndex].State);
+
+            Assert.True(view.TryClaimMesh(out NativeWorkItem second));
+            Assert.True(view.TryBeginPacket(
+                in second,
+                opaqueWordCount: 2,
+                opaqueFaceCount: 1,
+                transparentWordCount: 0,
+                transparentFaceCount: 0,
+                out _));
+            Assert.Equal(
+                0,
+                view.Packets[second.RecordIndex].OpaqueWordOffset);
+            Assert.True(view.TryAbandonMesh(in second));
+            Assert.True(view.TryRecyclePacketStorage());
+            Assert.Equal(0, view.State.PacketWordCursor);
+            Assert.Equal(0, view.State.ClaimedMeshCount);
+            Assert.Equal(0, view.State.PacketConsumerCount);
+            Assert.Equal(0, view.State.FailureCode);
+        });
+    }
+
+    [Fact]
+    public void ReadyPacketCanRetireBeforeUpload()
+    {
+        var layout = new NativeGtrtSessionLayout(
+            chunkSizeX: 4,
+            chunkSizeY: 8,
+            chunkSizeZ: 4,
+            lod1Radius: 1,
+            materials: NativeTerrainMaterialSet.CreateConventional(),
+            packetWordCapacity: 64);
+        using NativeGtrtSession session = NativeGtrtSession.Create(layout);
+        session.PublishSeed(123456);
+
+        session.Access(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            CompleteGeneration(ref view);
+            Assert.True(view.TryClaimMesh(out NativeWorkItem work));
+            Assert.True(view.TryBeginPacket(
+                in work,
+                opaqueWordCount: 2,
+                opaqueFaceCount: 1,
+                transparentWordCount: 0,
+                transparentFaceCount: 0,
+                out _));
+            Assert.True(view.TryCompleteMesh(in work));
+
+            Assert.True(view.TryRetirePacket(work.RecordIndex));
+            Assert.Equal(
+                NativeChunkState.Retired,
+                view.Chunks[work.RecordIndex].State);
+            Assert.Equal(
+                NativeRenderPacketState.Retired,
+                view.Packets[work.RecordIndex].State);
+            Assert.Equal(0, view.State.ReadyPacketCount);
+            Assert.True(view.TryRecyclePacketStorage());
+            Assert.Equal(0, view.State.FailureCode);
+        });
+    }
+
+    [Fact]
+    public void CancellationAbandonsUnpublishedPacketAndReclaimsStorage()
+    {
+        var layout = new NativeGtrtSessionLayout(
+            chunkSizeX: 4,
+            chunkSizeY: 8,
+            chunkSizeZ: 4,
+            lod1Radius: 1,
+            materials: NativeTerrainMaterialSet.CreateConventional(),
+            packetWordCapacity: 64);
+        using NativeGtrtSession session = NativeGtrtSession.Create(layout);
+        session.PublishSeed(123456);
+
+        session.Access(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            CompleteGeneration(ref view);
+            Assert.True(view.TryClaimMesh(out NativeWorkItem work));
+            Assert.True(view.TryBeginPacket(
+                in work,
+                opaqueWordCount: 4,
+                opaqueFaceCount: 2,
+                transparentWordCount: 0,
+                transparentFaceCount: 0,
+                out NativePacketWriteView packet));
+            packet.OpaqueWords.Fill(211);
+
+            view.RequestCancellation();
+            Assert.True(view.TryAbandonMesh(in work));
+            Assert.Equal(
+                NativeWorkState.Canceled,
+                view.MeshJobs[work.RecordIndex].State);
+            Assert.Equal(
+                NativeChunkState.Retired,
+                view.Chunks[work.RecordIndex].State);
+            Assert.Equal(
+                NativeRenderPacketState.Retired,
+                view.Packets[work.RecordIndex].State);
+            Assert.Equal(0, view.State.ClaimedMeshCount);
+            Assert.True(view.TryRecyclePacketStorage());
+            Assert.Equal(0, view.State.PacketWordCursor);
+            Assert.False(view.TryClaimMesh(out _));
+            Assert.Equal(0, view.State.FailureCode);
+        });
+    }
+
+    [Fact]
+    public void ExhaustedPacketReservationRetiresBeforeCleanup()
+    {
+        var layout = new NativeGtrtSessionLayout(
+            chunkSizeX: 4,
+            chunkSizeY: 8,
+            chunkSizeZ: 4,
+            lod1Radius: 1,
+            materials: NativeTerrainMaterialSet.CreateConventional(),
+            packetWordCapacity: 2);
+        using NativeGtrtSession session = NativeGtrtSession.Create(layout);
+        session.PublishSeed(123456);
+
+        session.Access(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            CompleteGeneration(ref view);
+            Assert.True(view.TryClaimMesh(out NativeWorkItem work));
+            Assert.False(view.TryBeginPacket(
+                in work,
+                opaqueWordCount: 4,
+                opaqueFaceCount: 2,
+                transparentWordCount: 0,
+                transparentFaceCount: 0,
+                out _));
+            Assert.Equal(
+                NativeRenderPacketState.Retired,
+                view.Packets[work.RecordIndex].State);
+            Assert.Equal(0, view.State.PacketWordCursor);
+            Assert.True(view.TryAbandonMesh(in work));
+            Assert.True(view.TryRecyclePacketStorage());
+            Assert.Equal(
+                (int)NativeGtrtFailureCode.PacketStorageExhausted,
+                view.State.FailureCode);
+        });
+    }
+
+    [Fact]
+    public void PacketLifecycleKernelAllocatesNoManagedBytesAfterWarmup()
+    {
+        var layout = new NativeGtrtSessionLayout(
+            chunkSizeX: 4,
+            chunkSizeY: 8,
+            chunkSizeZ: 4,
+            lod1Radius: 1,
+            materials: NativeTerrainMaterialSet.CreateConventional(),
+            packetWordCapacity: 64);
+        using (NativeGtrtSession warmup = NativeGtrtSession.Create(layout))
+        {
+            warmup.PublishSeed(123456);
+            warmup.Access(ExecutePacketLifecycleAction);
+        }
+
+        using NativeGtrtSession measured = NativeGtrtSession.Create(layout);
+        measured.PublishSeed(123456);
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        measured.Access(ExecutePacketLifecycleAction);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Equal(0, allocated);
+        measured.Access(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            Assert.Equal(0, view.State.FailureCode);
+            Assert.Equal(0, view.State.PacketWordCursor);
+            Assert.Equal(0, view.State.ClaimedMeshCount);
+            Assert.Equal(0, view.State.PacketConsumerCount);
+        });
+    }
+
+    [Fact]
+    public void DisposalRetiresReadyPacketsAfterActiveReaderReleases()
+    {
+        var layout = new NativeGtrtSessionLayout(
+            chunkSizeX: 4,
+            chunkSizeY: 8,
+            chunkSizeZ: 4,
+            lod1Radius: 1,
+            materials: NativeTerrainMaterialSet.CreateConventional(),
+            packetWordCapacity: 64);
+        NativeGtrtSession session = NativeGtrtSession.Create(layout);
+        session.PublishSeed(123456);
+        NativeWorkItem active = default;
+
+        session.Access(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            CompleteGeneration(ref view);
+
+            Assert.True(view.TryClaimMesh(out active));
+            Assert.True(view.TryBeginPacket(
+                in active,
+                opaqueWordCount: 2,
+                opaqueFaceCount: 1,
+                transparentWordCount: 0,
+                transparentFaceCount: 0,
+                out _));
+            Assert.True(view.TryCompleteMesh(in active));
+            Assert.True(view.TryActivatePacket(active.RecordIndex, out _));
+
+            Assert.True(view.TryClaimMesh(out NativeWorkItem ready));
+            Assert.True(view.TryBeginPacket(
+                in ready,
+                opaqueWordCount: 2,
+                opaqueFaceCount: 1,
+                transparentWordCount: 0,
+                transparentFaceCount: 0,
+                out _));
+            Assert.True(view.TryCompleteMesh(in ready));
+            Assert.Equal(1, view.State.ReadyPacketCount);
+        });
+
+        Assert.Throws<InvalidOperationException>(() => session.Dispose());
+        session.Access(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            Assert.True(view.CancellationRequested);
+            Assert.True(view.TryRetirePacket(active.RecordIndex));
+        });
+        session.Dispose();
+        session.Dispose();
+        Assert.Throws<ObjectDisposedException>(() =>
+            session.Access(static _ => { }));
+    }
+
+    [Fact]
+    public void DisposalRejectsWriterUntilClaimedWorkIsAbandoned()
+    {
+        var layout = new NativeGtrtSessionLayout(
+            chunkSizeX: 4,
+            chunkSizeY: 8,
+            chunkSizeZ: 4,
+            lod1Radius: 1,
+            materials: NativeTerrainMaterialSet.CreateConventional(),
+            packetWordCapacity: 64);
+        NativeGtrtSession session = NativeGtrtSession.Create(layout);
+        session.PublishSeed(123456);
+        NativeWorkItem claimed = default;
+
+        try
+        {
+            session.Access(owner =>
+            {
+                var view = new NativeGtrtSessionView(owner.AsSpan());
+                CompleteGeneration(ref view);
+                Assert.True(view.TryClaimMesh(out claimed));
+                Assert.True(view.TryBeginPacket(
+                    in claimed,
+                    opaqueWordCount: 2,
+                    opaqueFaceCount: 1,
+                    transparentWordCount: 0,
+                    transparentFaceCount: 0,
+                    out _));
+            });
+
+            Assert.Throws<InvalidOperationException>(() => session.Dispose());
+            session.Access(owner =>
+            {
+                var view = new NativeGtrtSessionView(owner.AsSpan());
+                Assert.True(view.CancellationRequested);
+                Assert.True(view.TryAbandonMesh(in claimed));
+                Assert.Equal(0, view.State.ClaimedMeshCount);
+            });
+            session.Dispose();
+            Assert.Throws<ObjectDisposedException>(() =>
+                session.Access(static _ => { }));
+        }
+        finally
+        {
+            session.Dispose();
+        }
+    }
+
+    [Fact]
+    public void DisposalRejectsClaimedGenerationUntilWorkerRetires()
+    {
+        var layout = new NativeGtrtSessionLayout(
+            chunkSizeX: 4,
+            chunkSizeY: 8,
+            chunkSizeZ: 4,
+            lod1Radius: 1,
+            materials: NativeTerrainMaterialSet.CreateConventional());
+        NativeGtrtSession session = NativeGtrtSession.Create(layout);
+        session.PublishSeed(123456);
+        NativeWorkItem claimed = default;
+
+        try
+        {
+            session.Access(owner =>
+            {
+                var view = new NativeGtrtSessionView(owner.AsSpan());
+                Assert.True(view.TryClaimGeneration(out claimed));
+            });
+
+            Assert.Throws<InvalidOperationException>(() => session.Dispose());
+            session.Access(owner =>
+            {
+                var view = new NativeGtrtSessionView(owner.AsSpan());
+                Assert.True(view.CancellationRequested);
+                Assert.True(view.TryAbandonGeneration(in claimed));
+                Assert.Equal(0, view.State.ClaimedGenerationCount);
+            });
+            session.Dispose();
+            Assert.Throws<ObjectDisposedException>(() =>
+                session.Access(static _ => { }));
+        }
+        finally
+        {
+            session.Dispose();
+        }
+    }
+
+    [Fact]
     public void SeedPublicationInitializesNativeNoiseWithoutManagedAllocation()
     {
         var layout = new NativeGtrtSessionLayout(
@@ -473,6 +844,35 @@ public sealed class NativeGtrtSessionTests
     }
 
     [Fact]
+    public void CancellationAbandonsClaimedGenerationWork()
+    {
+        var layout = new NativeGtrtSessionLayout(
+            chunkSizeX: 4,
+            chunkSizeY: 8,
+            chunkSizeZ: 4,
+            lod1Radius: 1,
+            materials: NativeTerrainMaterialSet.CreateConventional());
+        using NativeGtrtSession session = NativeGtrtSession.Create(layout);
+        session.PublishSeed(123456);
+
+        session.Access(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            Assert.True(view.TryClaimGeneration(out NativeWorkItem work));
+            view.RequestCancellation();
+            Assert.True(view.TryAbandonGeneration(in work));
+            Assert.Equal(
+                NativeWorkState.Canceled,
+                view.GenerationJobs[work.RecordIndex].State);
+            Assert.Equal(
+                NativeColumnState.Retired,
+                view.Columns[work.RecordIndex].State);
+            Assert.Equal(0, view.State.ClaimedGenerationCount);
+            Assert.Equal(0, view.State.FailureCode);
+        });
+    }
+
+    [Fact]
     public void StaleGenerationCompletionPublishesNativeFailure()
     {
         var layout = new NativeGtrtSessionLayout(
@@ -488,11 +888,14 @@ public sealed class NativeGtrtSessionTests
         {
             var view = new NativeGtrtSessionView(owner.AsSpan());
             Assert.True(view.TryClaimGeneration(out NativeWorkItem work));
-            work.Epoch++;
-            Assert.False(view.TryCompleteGeneration(in work));
+            NativeWorkItem stale = work;
+            stale.Epoch++;
+            Assert.False(view.TryCompleteGeneration(in stale));
             Assert.Equal(
                 (int)NativeGtrtFailureCode.InvalidGenerationCompletion,
                 view.State.FailureCode);
+            Assert.True(view.TryAbandonGeneration(in work));
+            Assert.Equal(0, view.State.ClaimedGenerationCount);
         });
     }
 
@@ -545,6 +948,42 @@ public sealed class NativeGtrtSessionTests
                 out _);
             view.TryCompleteMesh(in mesh);
         }
+    }
+
+    private static void ExecutePacketLifecycle(
+        scoped NativeLeaseView<byte> owner)
+    {
+        var view = new NativeGtrtSessionView(owner.AsSpan());
+        CompleteGeneration(ref view);
+        if (!view.TryClaimMesh(out NativeWorkItem work) ||
+            !view.TryBeginPacket(
+                in work,
+                opaqueWordCount: 2,
+                opaqueFaceCount: 1,
+                transparentWordCount: 0,
+                transparentFaceCount: 0,
+                out NativePacketWriteView packet))
+        {
+            return;
+        }
+
+        packet.OpaqueWords[0] = 1;
+        packet.OpaqueWords[1] = 2;
+        if (!view.TryCompleteMesh(in work) ||
+            !view.TryActivatePacket(work.RecordIndex, out _) ||
+            !view.TryRetirePacket(work.RecordIndex))
+        {
+            return;
+        }
+
+        view.TryRecyclePacketStorage();
+    }
+
+    private static void CompleteGeneration(
+        scoped ref NativeGtrtSessionView view)
+    {
+        while (view.TryClaimGeneration(out NativeWorkItem work))
+            view.TryCompleteGeneration(in work);
     }
 
     private static void RunWorkers(

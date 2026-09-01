@@ -17,14 +17,22 @@ internal static class NativeGeneratedMesh
             (uint)claimedWork.RecordIndex >= (uint)session.ChunkCount)
         {
             session.Fail(NativeGtrtFailureCode.InvalidGeneratedMesh);
+            session.TryAbandonMesh(in claimedWork);
             return false;
         }
 
         if (!session.TryAcquireMeshWorkspace(workerIndex))
+        {
+            session.TryAbandonMesh(in claimedWork);
             return false;
+        }
 
+        bool completed = false;
         try
         {
+            if (session.CancellationRequested)
+                return false;
+
             Span<int> bottomFaces =
                 session.GetMeshBottomFaceScratch(workerIndex);
             Span<int> topFaces =
@@ -42,6 +50,9 @@ internal static class NativeGeneratedMesh
                 session.Fail(NativeGtrtFailureCode.InvalidGeneratedMesh);
                 return false;
             }
+
+            if (session.CancellationRequested)
+                return false;
 
             if (!session.TryBeginPacket(
                     in claimedWork,
@@ -76,10 +87,16 @@ internal static class NativeGeneratedMesh
                 return false;
             }
 
-            return session.TryCompleteMesh(in claimedWork);
+            if (session.CancellationRequested)
+                return false;
+
+            completed = session.TryCompleteMesh(in claimedWork);
+            return completed;
         }
         finally
         {
+            if (!completed)
+                session.TryAbandonMesh(in claimedWork);
             session.ReleaseMeshWorkspace(workerIndex);
         }
     }
