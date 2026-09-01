@@ -130,8 +130,8 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
         private const long UnrecordedMilliseconds = -1;
         private static readonly object Sync = new();
         private static Stopwatch? timer;
-        private static Stopwatch? initialGenerationTimer;
-        private static Stopwatch? initialChunkMeshBuildTimer;
+        private static long initialGenerationStartTimestamp;
+        private static long initialChunkMeshBuildStartTimestamp;
         private static string game = string.Empty;
         private static int seed;
         private static long gameLoadTicks;
@@ -200,8 +200,8 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
                 gameLoadTicks = 0;
                 seedAcceptedTicks = 0;
                 initialGenerationStartTicks = 0;
-                initialGenerationTimer = null;
-                initialChunkMeshBuildTimer = null;
+                initialGenerationStartTimestamp = 0;
+                initialChunkMeshBuildStartTimestamp = 0;
                 initialGenerationMilliseconds = UnrecordedMilliseconds;
                 initialGenerationCompleteTicks = 0;
                 initialChunkMeshBuildStartTicks = 0;
@@ -244,28 +244,28 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
 
         public static void BeginInitialGeneration() =>
             BeginPhase(
-                ref initialGenerationTimer,
+                ref initialGenerationStartTimestamp,
                 ref initialGenerationMilliseconds,
                 ref initialGenerationStartTicks,
                 "initial generation");
 
         public static long CompleteInitialGeneration() =>
             CompletePhase(
-                ref initialGenerationTimer,
+                ref initialGenerationStartTimestamp,
                 ref initialGenerationMilliseconds,
                 ref initialGenerationCompleteTicks,
                 "initial generation");
 
         public static void BeginInitialChunkMeshBuild() =>
             BeginPhase(
-                ref initialChunkMeshBuildTimer,
+                ref initialChunkMeshBuildStartTimestamp,
                 ref initialChunkMeshBuildMilliseconds,
                 ref initialChunkMeshBuildStartTicks,
                 "initial chunk mesh build");
 
         public static long CompleteInitialChunkMeshBuild() =>
             CompletePhase(
-                ref initialChunkMeshBuildTimer,
+                ref initialChunkMeshBuildStartTimestamp,
                 ref initialChunkMeshBuildMilliseconds,
                 ref initialChunkMeshBuildCompleteTicks,
                 "initial chunk mesh build");
@@ -478,36 +478,40 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
         }
 
         private static void BeginPhase(
-            ref Stopwatch? phaseTimer,
+            ref long phaseStartTimestamp,
             ref long destination,
             ref long startTicks,
             string phaseName)
         {
             lock (Sync)
             {
-                if (phaseTimer is not null)
+                if (phaseStartTimestamp != 0)
                     throw new InvalidOperationException($"The {phaseName} timer is already running.");
 
                 destination = UnrecordedMilliseconds;
                 RecordElapsed(ref startTicks);
-                phaseTimer = Stopwatch.StartNew();
+                Volatile.Write(
+                    ref phaseStartTimestamp,
+                    Stopwatch.GetTimestamp());
             }
         }
 
         private static long CompletePhase(
-            ref Stopwatch? phaseTimer,
+            ref long phaseStartTimestamp,
             ref long destination,
             ref long completeTicks,
             string phaseName)
         {
             lock (Sync)
             {
-                if (phaseTimer is null)
+                long startTimestamp = Interlocked.Exchange(
+                    ref phaseStartTimestamp,
+                    0);
+                if (startTimestamp == 0)
                     throw new InvalidOperationException($"The {phaseName} timer is not running.");
 
-                phaseTimer.Stop();
-                long elapsedMilliseconds = phaseTimer.ElapsedMilliseconds;
-                phaseTimer = null;
+                long elapsedMilliseconds = (long)Stopwatch.GetElapsedTime(
+                    startTimestamp).TotalMilliseconds;
                 Volatile.Write(ref destination, elapsedMilliseconds);
                 RecordElapsed(ref completeTicks);
                 return elapsedMilliseconds;

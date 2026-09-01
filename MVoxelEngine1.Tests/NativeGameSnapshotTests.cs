@@ -13,7 +13,7 @@ namespace MVoxelEngine1.Tests;
 public sealed class NativeGameSnapshotTests
 {
     private const string NamRepositoryCommit =
-        "b4c62b7dc7500a06412d44935978d978f97cf642";
+        "865f665d16ecb3d6cca1ff1bca64054372de12eb";
 
     [Fact]
     public void PublishedNamPackageIdentityIsLoaded()
@@ -24,9 +24,9 @@ public sealed class NativeGameSnapshotTests
             assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>();
 
         Assert.Equal("Supprocom.NativeAllocationManagement", name.Name);
-        Assert.Equal(new Version(0, 2, 1, 0), name.Version);
+        Assert.Equal(new Version(0, 2, 2, 0), name.Version);
         Assert.Equal(
-            $"0.2.1+{NamRepositoryCommit}",
+            $"0.2.2+{NamRepositoryCommit}",
             information?.InformationalVersion);
     }
 

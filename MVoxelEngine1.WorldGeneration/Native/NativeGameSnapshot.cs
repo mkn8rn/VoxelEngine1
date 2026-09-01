@@ -299,6 +299,8 @@ internal sealed class NativeGameSnapshot : IDisposable
     private static readonly
         NativeLeaseFunc<byte, NativeTerrainMaterialSet>
         GeneratedMaterialsReader = ReadGeneratedMaterials;
+    private static readonly NativeLeaseFunc<byte, byte[]> SnapshotCopyReader =
+        CopySnapshot;
 
     private NativeTransfer<byte>? storage;
 
@@ -390,6 +392,14 @@ internal sealed class NativeGameSnapshot : IDisposable
         return storage.Read(GeneratedMaterialsReader);
     }
 
+    internal byte[] CopyBytes()
+    {
+        if (storage is null)
+            throw new ObjectDisposedException(nameof(NativeGameSnapshot));
+
+        return storage.Read(SnapshotCopyReader);
+    }
+
     public void Dispose()
     {
         if (storage is null)
@@ -405,6 +415,10 @@ internal sealed class NativeGameSnapshot : IDisposable
         var view = new NativeGameSnapshotView(owner.AsSpan());
         return view.GetGeneratedMaterials();
     }
+
+    private static byte[] CopySnapshot(
+        scoped NativeLeaseView<byte> owner) =>
+        owner.AsSpan().ToArray();
 
     private static NativeBlockDescriptor[] BuildBlocks(BlockTextureAtlas atlas)
     {

@@ -247,12 +247,10 @@ namespace MVoxelEngine1.WorldGeneration
                 NativeGameSnapshot.Create(textureAtlas);
             try
             {
-                NativeTerrainMaterialSet materials =
-                    game.GetGeneratedMaterials();
                 NativeGtrtSession session =
                     NativeGtrtSession.Create(
                         GameManager.settings,
-                        materials,
+                        game,
                         generationWorkerCount,
                         meshWorkerCount);
                 return (game, session);

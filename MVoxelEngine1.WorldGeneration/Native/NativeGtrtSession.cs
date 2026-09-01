@@ -227,7 +227,8 @@ internal readonly struct NativeGtrtSessionLayout
         NativeTerrainMaterialSet materials,
         int generationWorkerCount = 1,
         int meshWorkerCount = 1,
-        int packetWordCapacity = 0)
+        int packetWordCapacity = 0,
+        int gameSnapshotByteCount = 0)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(chunkSizeX);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(chunkSizeY);
@@ -238,6 +239,7 @@ internal readonly struct NativeGtrtSessionLayout
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
             meshWorkerCount);
         ArgumentOutOfRangeException.ThrowIfNegative(packetWordCapacity);
+        ArgumentOutOfRangeException.ThrowIfNegative(gameSnapshotByteCount);
 
         ChunkSizeX = chunkSizeX;
         ChunkSizeY = chunkSizeY;
@@ -275,6 +277,7 @@ internal readonly struct NativeGtrtSessionLayout
                 DefaultPacketWordsPerRequiredChunk)
             : packetWordCapacity;
         Materials = materials;
+        GameSnapshotByteCount = gameSnapshotByteCount;
 
         int cursor = Align(
             Unsafe.SizeOf<NativeGtrtSessionHeader>(),
@@ -346,6 +349,11 @@ internal readonly struct NativeGtrtSessionLayout
             cursor,
             RequiredChunkCount,
             8);
+        GameSnapshotOffset = cursor;
+        cursor = AddRange<byte>(
+            cursor,
+            GameSnapshotByteCount,
+            8);
         TotalByteCount = cursor;
     }
 
@@ -403,6 +411,8 @@ internal readonly struct NativeGtrtSessionLayout
 
     internal NativeTerrainMaterialSet Materials { get; }
 
+    internal int GameSnapshotByteCount { get; }
+
     internal int StateOffset { get; }
 
     internal int NoiseStateOffset { get; }
@@ -441,13 +451,16 @@ internal readonly struct NativeGtrtSessionLayout
 
     internal int MeshReadyOffset { get; }
 
+    internal int GameSnapshotOffset { get; }
+
     internal int TotalByteCount { get; }
 
     internal static NativeGtrtSessionLayout Create(
         GameSettings settings,
         NativeTerrainMaterialSet materials,
         int generationWorkerCount = 1,
-        int meshWorkerCount = 1)
+        int meshWorkerCount = 1,
+        int gameSnapshotByteCount = 0)
     {
         ArgumentNullException.ThrowIfNull(settings);
         return new NativeGtrtSessionLayout(
@@ -457,7 +470,8 @@ internal readonly struct NativeGtrtSessionLayout
             settings.lod1RenderDistance,
             materials,
             generationWorkerCount,
-            meshWorkerCount);
+            meshWorkerCount,
+            gameSnapshotByteCount: gameSnapshotByteCount);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -503,7 +517,7 @@ internal readonly struct NativeGtrtSessionLayout
 internal readonly struct NativeGtrtSessionHeader
 {
     internal const uint ExpectedMagic = 0x54525447;
-    internal const int ExpectedVersion = 8;
+    internal const int ExpectedVersion = 9;
 
     internal NativeGtrtSessionHeader(NativeGtrtSessionLayout layout)
     {
@@ -560,6 +574,8 @@ internal readonly struct NativeGtrtSessionHeader
         MeshWorkspaceOffset = layout.MeshWorkspaceOffset;
         MeshFaceScratchOffset = layout.MeshFaceScratchOffset;
         PacketWordOffset = layout.PacketWordOffset;
+        GameSnapshotOffset = layout.GameSnapshotOffset;
+        GameSnapshotByteCount = layout.GameSnapshotByteCount;
     }
 
     internal uint Magic { get; }
@@ -610,6 +626,8 @@ internal readonly struct NativeGtrtSessionHeader
     internal int MeshWorkspaceOffset { get; }
     internal int MeshFaceScratchOffset { get; }
     internal int PacketWordOffset { get; }
+    internal int GameSnapshotOffset { get; }
+    internal int GameSnapshotByteCount { get; }
 }
 
 internal ref struct NativeGtrtSessionInitializer
@@ -832,6 +850,10 @@ internal ref struct NativeGtrtSessionInitializer
         WriteInt32(offset, layout.MeshFaceScratchOffset);
         offset += sizeof(int);
         WriteInt32(offset, layout.PacketWordOffset);
+        offset += sizeof(int);
+        WriteInt32(offset, layout.GameSnapshotOffset);
+        offset += sizeof(int);
+        WriteInt32(offset, layout.GameSnapshotByteCount);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -992,6 +1014,9 @@ internal ref struct NativeGtrtSessionView
         ValidateRange<NativeReadySlot>(
             header.MeshReadyOffset,
             header.RequiredChunkCount);
+        ValidateRange<byte>(
+            header.GameSnapshotOffset,
+            header.GameSnapshotByteCount);
     }
 
     internal ref NativeGtrtSessionState State =>
@@ -1051,6 +1076,14 @@ internal ref struct NativeGtrtSessionView
         ReadRange<NativeReadySlot>(
             header.MeshReadyOffset,
             header.RequiredChunkCount);
+
+    internal Span<byte> GameSnapshotBytes =>
+        ReadRange<byte>(
+            header.GameSnapshotOffset,
+            header.GameSnapshotByteCount);
+
+    internal NativeGameSnapshotView GameSnapshot =>
+        new(GameSnapshotBytes);
 
     internal int ColumnCount => header.ColumnCount;
 
@@ -2380,10 +2413,14 @@ internal ref struct NativeGtrtSessionView
 
 internal sealed class NativeGtrtSession : IDisposable
 {
+    private static readonly NativeLeaseAction<byte> RequestCancellationAction =
+        RequestCancellationCore;
     private readonly NativeLeaseAction<byte> publishSeedAction;
+    private readonly NativeLeaseAction<byte> initializeGameSnapshotAction;
     private readonly NativeLeaseAction<byte> prepareForDisposalAction;
     private NativeTransfer<byte>? storage;
     private long pendingSeed;
+    private byte[]? pendingGameSnapshot;
     private bool disposalPrepared;
 
     private NativeGtrtSession(NativeTransfer<byte>? source)
@@ -2392,6 +2429,7 @@ internal sealed class NativeGtrtSession : IDisposable
         {
             storage = NativeTransfer<byte>.Move(ref source);
             publishSeedAction = PublishSeedCore;
+            initializeGameSnapshotAction = InitializeGameSnapshotCore;
             prepareForDisposalAction = PrepareForDisposalCore;
         }
         finally
@@ -2410,6 +2448,61 @@ internal sealed class NativeGtrtSession : IDisposable
             materials,
             generationWorkerCount,
             meshWorkerCount));
+
+    internal static NativeGtrtSession Create(
+        GameSettings settings,
+        NativeGameSnapshot game,
+        int generationWorkerCount = 1,
+        int meshWorkerCount = 1)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        ArgumentNullException.ThrowIfNull(game);
+        byte[] gameSnapshot = game.CopyBytes();
+        var gameView = new NativeGameSnapshotView(gameSnapshot);
+        NativeGtrtSession session = Create(
+            NativeGtrtSessionLayout.Create(
+                settings,
+                gameView.GetGeneratedMaterials(),
+                generationWorkerCount,
+                meshWorkerCount,
+                gameSnapshot.Length));
+        try
+        {
+            session.InitializeGameSnapshot(gameSnapshot);
+            return session;
+        }
+        catch
+        {
+            session.Dispose();
+            throw;
+        }
+    }
+
+    internal static NativeGtrtSession Create(
+        NativeGtrtSessionLayout layout,
+        NativeGameSnapshot game)
+    {
+        ArgumentNullException.ThrowIfNull(game);
+        byte[] gameSnapshot = game.CopyBytes();
+        if (layout.GameSnapshotByteCount != gameSnapshot.Length)
+        {
+            throw new ArgumentException(
+                "The native game snapshot capacity does not match the source.",
+                nameof(layout));
+        }
+
+        NativeGtrtSession session = Create(layout);
+        try
+        {
+            session.InitializeGameSnapshot(gameSnapshot);
+            return session;
+        }
+        catch
+        {
+            session.Dispose();
+            throw;
+        }
+    }
 
     internal static NativeGtrtSession Create(
         NativeGtrtSessionLayout layout)
@@ -2451,6 +2544,22 @@ internal sealed class NativeGtrtSession : IDisposable
         storage.Access(publishSeedAction);
     }
 
+    private void InitializeGameSnapshot(byte[] gameSnapshot)
+    {
+        pendingGameSnapshot = gameSnapshot;
+        try
+        {
+            if (storage is null)
+                throw new ObjectDisposedException(nameof(NativeGtrtSession));
+
+            storage.Access(initializeGameSnapshotAction);
+        }
+        finally
+        {
+            pendingGameSnapshot = null;
+        }
+    }
+
     internal void Access(NativeLeaseAction<byte> action)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -2458,6 +2567,14 @@ internal sealed class NativeGtrtSession : IDisposable
             throw new ObjectDisposedException(nameof(NativeGtrtSession));
 
         storage.Access(action);
+    }
+
+    internal void RequestCancellation()
+    {
+        if (storage is null)
+            return;
+
+        storage.Access(RequestCancellationAction);
     }
 
     public void Dispose()
@@ -2502,6 +2619,29 @@ internal sealed class NativeGtrtSession : IDisposable
         NativeOpenSimplexNoiseState noise = view.NoiseState;
         noise.Initialize(pendingSeed);
         Volatile.Write(ref state.PublicationState, 1);
+    }
+
+    private void InitializeGameSnapshotCore(
+        scoped NativeLeaseView<byte> owner)
+    {
+        var view = new NativeGtrtSessionView(owner.AsSpan());
+        if (view.State.PublicationState != 0 ||
+            pendingGameSnapshot is null ||
+            pendingGameSnapshot.Length != view.GameSnapshotBytes.Length)
+        {
+            throw new InvalidOperationException(
+                "The native game snapshot cannot be initialized.");
+        }
+
+        pendingGameSnapshot.CopyTo(view.GameSnapshotBytes);
+        _ = view.GameSnapshot;
+    }
+
+    private static void RequestCancellationCore(
+        scoped NativeLeaseView<byte> owner)
+    {
+        var view = new NativeGtrtSessionView(owner.AsSpan());
+        view.RequestCancellation();
     }
 
     private void PrepareForDisposalCore(
