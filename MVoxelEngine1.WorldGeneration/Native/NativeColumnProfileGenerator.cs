@@ -2,7 +2,6 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using MVoxelEngine1.Infrastructure.Models.Generation;
 using MVoxelEngine1.WorldGeneration.Terrain;
-using Supprocom.OpenSimplexNoise;
 
 namespace MVoxelEngine1.WorldGeneration.Native;
 
@@ -134,11 +133,9 @@ internal static class NativeColumnProfileGenerator
         int workerIndex,
         scoped in NativeWorkItem work,
         int biomeIndex,
-        scoped in NativeBiomeDescriptor biome,
-        OpenSimplexNoise? noise)
+        scoped in NativeBiomeDescriptor biome)
     {
-        if (noise is null ||
-            work.Kind != NativeWorkKind.GenerateColumn ||
+        if (work.Kind != NativeWorkKind.GenerateColumn ||
             work.State != NativeWorkState.Claimed ||
             work.Epoch != session.State.SessionEpoch ||
             (uint)work.RecordIndex >= (uint)session.ColumnCount ||
@@ -158,8 +155,7 @@ internal static class NativeColumnProfileGenerator
                 workerIndex,
                 in work,
                 biomeIndex,
-                in biome,
-                noise);
+                in biome);
         }
         finally
         {
@@ -172,8 +168,7 @@ internal static class NativeColumnProfileGenerator
         int workerIndex,
         scoped in NativeWorkItem work,
         int biomeIndex,
-        scoped in NativeBiomeDescriptor biome,
-        OpenSimplexNoise noise)
+        scoped in NativeBiomeDescriptor biome)
     {
         int profileCount = session.ProfilesPerColumn;
         int sizeX = session.ChunkSizeX;
@@ -188,8 +183,10 @@ internal static class NativeColumnProfileGenerator
 
         int baseWorldX = unchecked(column.ChunkX * sizeX);
         int baseWorldZ = unchecked(column.ChunkZ * sizeZ);
+        NativeOpenSimplexNoiseState noise = session.NoiseState;
         Quadrant.FillHeightMap(
-            noise,
+            noise.Permutation,
+            noise.Permutation2D,
             baseWorldX,
             baseWorldZ,
             sizeX,

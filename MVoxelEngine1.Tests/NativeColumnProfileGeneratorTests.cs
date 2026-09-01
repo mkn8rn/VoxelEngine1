@@ -62,8 +62,7 @@ public sealed class NativeColumnProfileGeneratorTests
                 workerIndex: 1,
                 in target,
                 biomeIndex: 0,
-                in nativeBiome,
-                noise));
+                in nativeBiome));
             Assert.Equal(0, view.State.FailureCode);
             Assert.Equal(0, view.GenerationWorkspaces[1].State);
             Assert.Equal(0, view.Columns[targetIndex].BiomeIndex);
@@ -112,9 +111,7 @@ public sealed class NativeColumnProfileGeneratorTests
         const long seed = 123456;
         Biome biome = CreateBiome();
         NativeBiomeDescriptor nativeBiome = new(biome, 0, 0);
-        var harness = new ProfileGenerationHarness(
-            nativeBiome,
-            new OpenSimplexNoise(seed));
+        var harness = new ProfileGenerationHarness(nativeBiome);
         var layout = new NativeGtrtSessionLayout(
             chunkSizeX: 16,
             chunkSizeY: 16,
@@ -393,14 +390,10 @@ public sealed class NativeColumnProfileGeneratorTests
     private sealed class ProfileGenerationHarness
     {
         private readonly NativeBiomeDescriptor biome;
-        private readonly OpenSimplexNoise noise;
 
-        internal ProfileGenerationHarness(
-            NativeBiomeDescriptor biome,
-            OpenSimplexNoise noise)
+        internal ProfileGenerationHarness(NativeBiomeDescriptor biome)
         {
             this.biome = biome;
-            this.noise = noise;
             Action = Execute;
         }
 
@@ -418,8 +411,7 @@ public sealed class NativeColumnProfileGeneratorTests
                     workerIndex: 0,
                     in work,
                     biomeIndex: 0,
-                    in biome,
-                    noise);
+                    in biome);
         }
     }
 }

@@ -199,6 +199,11 @@ internal readonly struct NativeGtrtSessionLayout
             8);
         StateOffset = cursor;
         cursor = AddRange<NativeGtrtSessionState>(cursor, 1, 8);
+        NoiseStateOffset = cursor;
+        cursor = AddRange<byte>(
+            cursor,
+            NativeOpenSimplexNoiseState.StateByteCount,
+            8);
         ColumnOffset = cursor;
         cursor = AddRange<NativeColumnRecord>(cursor, ColumnCount, 8);
         ProfileOffset = cursor;
@@ -296,6 +301,8 @@ internal readonly struct NativeGtrtSessionLayout
 
     internal int StateOffset { get; }
 
+    internal int NoiseStateOffset { get; }
+
     internal int ColumnOffset { get; }
 
     internal int ProfileOffset { get; }
@@ -380,7 +387,7 @@ internal readonly struct NativeGtrtSessionLayout
 internal readonly struct NativeGtrtSessionHeader
 {
     internal const uint ExpectedMagic = 0x54525447;
-    internal const int ExpectedVersion = 2;
+    internal const int ExpectedVersion = 3;
 
     internal NativeGtrtSessionHeader(NativeGtrtSessionLayout layout)
     {
@@ -413,6 +420,7 @@ internal readonly struct NativeGtrtSessionHeader
         GenerationLatticeCountPerWorker =
             layout.GenerationLatticeCountPerWorker;
         StateOffset = layout.StateOffset;
+        NoiseStateOffset = layout.NoiseStateOffset;
         ColumnOffset = layout.ColumnOffset;
         ProfileOffset = layout.ProfileOffset;
         ColumnSummaryOffset = layout.ColumnSummaryOffset;
@@ -457,6 +465,7 @@ internal readonly struct NativeGtrtSessionHeader
     internal int GenerationFloatCountPerWorker { get; }
     internal int GenerationLatticeCountPerWorker { get; }
     internal int StateOffset { get; }
+    internal int NoiseStateOffset { get; }
     internal int ColumnOffset { get; }
     internal int ProfileOffset { get; }
     internal int ColumnSummaryOffset { get; }
@@ -650,6 +659,8 @@ internal ref struct NativeGtrtSessionInitializer
         offset += sizeof(int);
         WriteInt32(offset, layout.StateOffset);
         offset += sizeof(int);
+        WriteInt32(offset, layout.NoiseStateOffset);
+        offset += sizeof(int);
         WriteInt32(offset, layout.ColumnOffset);
         offset += sizeof(int);
         WriteInt32(offset, layout.ProfileOffset);
@@ -739,6 +750,9 @@ internal ref struct NativeGtrtSessionView
 
         this.bytes = bytes;
         ValidateRange<NativeGtrtSessionState>(header.StateOffset, 1);
+        ValidateRange<byte>(
+            header.NoiseStateOffset,
+            NativeOpenSimplexNoiseState.StateByteCount);
         ValidateRange<NativeColumnRecord>(
             header.ColumnOffset,
             header.ColumnCount);
@@ -784,6 +798,11 @@ internal ref struct NativeGtrtSessionView
 
     internal ref NativeGtrtSessionState State =>
         ref ReadRange<NativeGtrtSessionState>(header.StateOffset, 1)[0];
+
+    internal NativeOpenSimplexNoiseState NoiseState =>
+        new(ReadRange<byte>(
+            header.NoiseStateOffset,
+            NativeOpenSimplexNoiseState.StateByteCount));
 
     internal Span<NativeColumnRecord> Columns =>
         ReadRange<NativeColumnRecord>(header.ColumnOffset, header.ColumnCount);
@@ -1548,6 +1567,8 @@ internal sealed class NativeGtrtSession : IDisposable
         state.Seed = pendingSeed;
         state.SessionEpoch = 1;
         StartupPerformanceRecorder.RecordSeedAccepted();
+        NativeOpenSimplexNoiseState noise = view.NoiseState;
+        noise.Initialize(pendingSeed);
         Volatile.Write(ref state.PublicationState, 1);
     }
 }

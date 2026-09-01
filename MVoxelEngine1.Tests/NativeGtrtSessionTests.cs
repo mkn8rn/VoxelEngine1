@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using MVoxelEngine1.WorldGeneration.Native;
 using MVoxelEngine1.WorldGeneration.Terrain;
 using Supprocom.NativeAllocationManagement;
@@ -220,6 +221,40 @@ public sealed class NativeGtrtSessionTests
             view.ReleaseGenerationWorkspace(0);
             view.ReleaseGenerationWorkspace(1);
             Assert.Equal(0, view.State.FailureCode);
+        });
+    }
+
+    [Fact]
+    public void SeedPublicationInitializesNativeNoiseWithoutManagedAllocation()
+    {
+        var layout = new NativeGtrtSessionLayout(
+            chunkSizeX: 4,
+            chunkSizeY: 8,
+            chunkSizeZ: 4,
+            lod1Radius: 1);
+        using (NativeGtrtSession warmup = NativeGtrtSession.Create(layout))
+            warmup.PublishSeed(123456);
+
+        using NativeGtrtSession session = NativeGtrtSession.Create(layout);
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        session.PublishSeed(123456);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Equal(0, allocated);
+        session.Access(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            NativeOpenSimplexNoiseState noise = view.NoiseState;
+            Span<byte> digest = stackalloc byte[SHA256.HashSizeInBytes];
+            SHA256.HashData(noise.EvaluationTables, digest);
+
+            Assert.Equal(
+                "AE99990D9640F33AF465A7DE4CE9B205748A4F860DB591538AD2A51A191D7C34",
+                Convert.ToHexString(digest));
+            Assert.Equal(
+                0x3FCA7AC069022666UL,
+                BitConverter.DoubleToUInt64Bits(
+                    noise.Evaluate2D(-0.125, -17.5)));
         });
     }
 
