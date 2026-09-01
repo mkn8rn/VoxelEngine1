@@ -126,6 +126,53 @@ public sealed class NativeWorldSaveImportTests
             Assert.Equal(3, view.State.MaterializedRawSectionCount);
             Assert.Equal(0, view.State.FailureCode);
         });
+
+        var exporter = new NativeWorldSaveExporter(session);
+        Assert.Equal(1, exporter.SaveDirtyChunks(workspace.QuadsDirectory));
+        Assert.Equal(0, exporter.SaveDirtyChunks(workspace.QuadsDirectory));
+
+        NativeWorldSaveImportPlan reloadedPlan =
+            NativeWorldSaveImportPlan.Create(
+                workspace.QuadsDirectory,
+                settings);
+        using NativeGameSnapshot reloadedGame = CreateGameSnapshot();
+        using NativeGtrtSession reloadedSession = CreateSession(
+            settings,
+            reloadedGame,
+            reloadedPlan);
+        reloadedPlan.Import(reloadedSession);
+        reloadedSession.PublishSeed(123456);
+        reloadedSession.Access(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            int chunkIndex = view.GetChunkIndex(0, 0, 0);
+            AssertSavedBlock(ref view, chunkIndex, 1, 1, 17, SoilId);
+            AssertSavedBlock(
+                ref view,
+                chunkIndex,
+                3,
+                20,
+                5,
+                CustomTransparentBlockId);
+            AssertSavedBlock(
+                ref view,
+                chunkIndex,
+                2,
+                19,
+                20,
+                CustomTransparentBlockId);
+            AssertSavedBlock(
+                ref view,
+                chunkIndex,
+                22,
+                7,
+                8,
+                CustomTransparentBlockId);
+            AssertSavedBlock(ref view, chunkIndex, 17, 1, 17, 0);
+            AssertSavedBlock(ref view, chunkIndex, 23, 24, 9, WaterId);
+            AssertSavedBlock(ref view, chunkIndex, 20, 20, 20, WaterId);
+            Assert.Equal(0, view.State.FailureCode);
+        });
     }
 
     [Fact]
@@ -185,6 +232,75 @@ public sealed class NativeWorldSaveImportTests
             Assert.Equal(1, view.State.MaterializedRawSectionCount);
             Assert.Equal(0, view.State.FailureCode);
         });
+    }
+
+    [Fact]
+    public void EditedUniformChunkSurvivesNativeSaveAndReload()
+    {
+        LoadDefaultGame();
+        GameSettings settings = CreateSettings(chunkSize: 16, lod1Radius: 0);
+        using var workspace = new SaveWorkspace();
+        WriteQuads(
+            workspace.QuadsDirectory,
+            [new ChunkFixture(
+                0,
+                0,
+                0,
+                [SectionFixture.Uniform(SoilId)])],
+            sectionCountX: 1,
+            sectionCountY: 1,
+            sectionCountZ: 1);
+        NativeWorldSaveImportPlan firstPlan =
+            NativeWorldSaveImportPlan.Create(
+                workspace.QuadsDirectory,
+                settings);
+        var firstAtlas = new BlockTextureAtlas(
+            BlockTextureAtlasUploadMode.SimulatedGpuUpload);
+        using (NativeWorld firstWorld = NativeWorld.CreateForTesting(
+                   NativeGtrtPipeline.Create(
+                       firstAtlas,
+                       settings,
+                       generationWorkerCount: 1,
+                       meshWorkerCount: 1,
+                       savePlan: firstPlan),
+                   seed: 123456,
+                   NullRenderer,
+                   workspace.QuadsDirectory))
+        {
+            Assert.Equal(SoilId, firstWorld.GetBlock(1, 1, 1));
+            Assert.True(firstWorld.SetBlock(
+                1,
+                1,
+                1,
+                CustomTransparentBlockId));
+            Assert.Equal(1, firstWorld.Save());
+            uint flags = ReadFirstChunkFlags(workspace.QuadsDirectory);
+            Assert.Equal(0u, flags & (1u << 3));
+            Assert.Equal(0, firstWorld.Save());
+        }
+
+        NativeWorldSaveImportPlan secondPlan =
+            NativeWorldSaveImportPlan.Create(
+                workspace.QuadsDirectory,
+                settings);
+        var secondAtlas = new BlockTextureAtlas(
+            BlockTextureAtlasUploadMode.SimulatedGpuUpload);
+        using NativeWorld secondWorld = NativeWorld.CreateForTesting(
+            NativeGtrtPipeline.Create(
+                secondAtlas,
+                settings,
+                generationWorkerCount: 1,
+                meshWorkerCount: 1,
+                savePlan: secondPlan),
+            seed: 123456,
+            NullRenderer,
+            workspace.QuadsDirectory);
+
+        Assert.Equal(
+            CustomTransparentBlockId,
+            secondWorld.GetBlock(1, 1, 1));
+        Assert.Equal(SoilId, secondWorld.GetBlock(2, 1, 1));
+        Assert.Equal(0, secondWorld.Save());
     }
 
     [Fact]
@@ -419,6 +535,18 @@ public sealed class NativeWorldSaveImportTests
         return NativeGameSnapshot.Create(atlas);
     }
 
+    private static INativeChunkRenderer? NullRenderer(
+        in NativeChunkRenderPacketDescriptor descriptor,
+        ReadOnlySpan<uint> opaqueWords,
+        ReadOnlySpan<uint> transparentWords)
+    {
+        Assert.Equal(descriptor.OpaqueWordCount, opaqueWords.Length);
+        Assert.Equal(
+            descriptor.TransparentWordCount,
+            transparentWords.Length);
+        return null;
+    }
+
     private static NativeGtrtSession CreateSession(
         GameSettings settings,
         NativeGameSnapshot game,
@@ -468,6 +596,43 @@ public sealed class NativeWorldSaveImportTests
 
     private static int LinearIndex(int x, int y, int z) =>
         ((z * Section.SECTION_SIZE) + x) * Section.SECTION_SIZE + y;
+
+    private static uint ReadFirstChunkFlags(string quadsDirectory)
+    {
+        string path = Directory.GetFiles(
+            quadsDirectory,
+            "quad*x*.bin").Single();
+        byte[] quad = File.ReadAllBytes(path);
+        const int quadHeaderSize = 20;
+        const int recordHeaderSize = 16;
+        int payloadLength = BinaryPrimitives.ReadInt32LittleEndian(
+            quad.AsSpan(quadHeaderSize + 12, sizeof(int)));
+        ReadOnlySpan<byte> payload = quad.AsSpan(
+            quadHeaderSize + recordHeaderSize,
+            payloadLength);
+        int sectionCount = BinaryPrimitives.ReadInt32LittleEndian(
+            payload[32..]);
+        int footerOffset = checked(36 + sectionCount * sizeof(uint));
+        for (int index = 0; index < sectionCount; index++)
+        {
+            int tableOffset = checked(36 + index * sizeof(uint));
+            int sectionOffset = checked((int)
+                BinaryPrimitives.ReadUInt32LittleEndian(
+                    payload[tableOffset..]));
+            if (sectionOffset == 0)
+                continue;
+            ushort sectionLength =
+                BinaryPrimitives.ReadUInt16LittleEndian(
+                    payload[(sectionOffset + 1)..]);
+            footerOffset = Math.Max(
+                footerOffset,
+                checked(sectionOffset + 3 + sectionLength));
+        }
+
+        Assert.True(payload.Slice(footerOffset, 3).SequenceEqual("CMD"u8));
+        return BinaryPrimitives.ReadUInt32LittleEndian(
+            payload[(footerOffset + 11)..]);
+    }
 
     private static ushort SoilId => (byte)BaseBlockType.Soil;
 

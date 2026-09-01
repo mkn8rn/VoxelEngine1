@@ -165,6 +165,39 @@ public sealed class NativeGeneratedMeshTests
     }
 
     [Fact]
+    public void CompleteMaterializedEditMeshMatchesNaiveFaces()
+    {
+        LoadDefaultGame();
+        var atlas = new BlockTextureAtlas(
+            BlockTextureAtlasUploadMode.SimulatedGpuUpload);
+        using NativeGameSnapshot game = NativeGameSnapshot.Create(atlas);
+        var harness = new NativeMaterializedMeshHarness(
+            NativeMaterializedMeshMode.CompleteEdit,
+            neighborBlockId: 0);
+        using NativeGtrtSession session = CreateMaterializedSession(game);
+        session.PublishSeed(123456);
+        session.Access(harness.PrepareAction);
+        session.Access(harness.BuildAction);
+
+        Assert.True(harness.Succeeded);
+        session.Access(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            Assert.True(view.TryReadPacket(
+                harness.ClaimedMesh.RecordIndex,
+                out NativePacketReadView packet));
+            Assert.Equal(
+                NativeChunkStorageKind.MaterializedSections,
+                view.Chunks[harness.ClaimedMesh.RecordIndex].StorageKind);
+            AssertPacketMatchesNaiveFaces(
+                ref view,
+                harness.ClaimedMesh.RecordIndex,
+                in packet);
+            Assert.Equal(0, view.State.FailureCode);
+        });
+    }
+
+    [Fact]
     public void GeneratedChunkMeshObservesMaterializedNeighbor()
     {
         LoadDefaultGame();
@@ -452,6 +485,7 @@ public sealed class NativeGeneratedMeshTests
     {
         FullBorder,
         HybridEdit,
+        CompleteEdit,
         GeneratedBesideMaterializedAir
     }
 
@@ -552,6 +586,19 @@ public sealed class NativeGeneratedMeshTests
                     5,
                     3,
                     CustomTransparentBlockId);
+            }
+            else if (mode == NativeMaterializedMeshMode.CompleteEdit)
+            {
+                Succeeded = NativeMaterializedTerrain.TrySetBlock(
+                    ref view,
+                    center,
+                    2,
+                    5,
+                    3,
+                    CustomTransparentBlockId) &&
+                    NativeMaterializedTerrain.TryMaterializeCompleteChunk(
+                        ref view,
+                        center);
             }
             else
             {

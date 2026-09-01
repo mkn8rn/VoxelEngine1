@@ -186,6 +186,7 @@ internal struct NativeMaterializedChunkRecord
     internal int SectionMapOffset;
     internal int State;
     internal long Revision;
+    internal long PersistedRevision;
     internal ushort UniformBlockId;
 }
 
@@ -698,7 +699,7 @@ internal readonly struct NativeGtrtSessionLayout
 internal readonly struct NativeGtrtSessionHeader
 {
     internal const uint ExpectedMagic = 0x54525447;
-    internal const int ExpectedVersion = 12;
+    internal const int ExpectedVersion = 13;
 
     internal NativeGtrtSessionHeader(NativeGtrtSessionLayout layout)
     {

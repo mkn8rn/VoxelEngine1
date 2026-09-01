@@ -109,7 +109,7 @@ public sealed class NativeGtrtWorkerPoolTests
     }
 
     [Fact]
-    public void ConsumerFailureRetiresTheActivePacketBeforeDisposal()
+    public void ConsumerFailureRetiresAllPacketsAndAllowsNextRun()
     {
         LoadDefaultGame();
         var atlas = new BlockTextureAtlas(
@@ -127,6 +127,13 @@ public sealed class NativeGtrtWorkerPoolTests
                         ReadOnlySpan<uint> _,
                         ReadOnlySpan<uint> _) =>
                     throw new PacketConsumerFailure()));
+
+        _ = pipeline.MoveToChunk(1, 0, 0);
+        int consumed = pipeline.ConsumeReadyPackets(
+            static (in NativeChunkRenderPacketDescriptor _,
+                    ReadOnlySpan<uint> _,
+                    ReadOnlySpan<uint> _) => { });
+        Assert.Equal(27, consumed);
 
         pipeline.Dispose();
         pipeline.Dispose();

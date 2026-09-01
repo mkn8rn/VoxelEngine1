@@ -372,6 +372,9 @@ internal sealed class NativeWorldSaveImportPlan
         }
         if (shape.IsUniform)
         {
+            ref NativeMaterializedChunkRecord materialized =
+                ref session.MaterializedChunks[materializedChunkIndex];
+            materialized.PersistedRevision = materialized.Revision;
             pendingImportSucceeded = true;
             return;
         }
@@ -418,6 +421,9 @@ internal sealed class NativeWorldSaveImportPlan
                 return;
         }
 
+        ref NativeMaterializedChunkRecord importedChunk =
+            ref session.MaterializedChunks[materializedChunkIndex];
+        importedChunk.PersistedRevision = importedChunk.Revision;
         pendingImportSucceeded = true;
     }
 
