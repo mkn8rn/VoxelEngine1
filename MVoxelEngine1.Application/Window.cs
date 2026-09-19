@@ -15,10 +15,10 @@ using MVoxelEngine1.Infrastructure.Managers;
 using MVoxelEngine1.Graphics;
 using MVoxelEngine1.Graphics.Terrain;
 using MVoxelEngine1.Infrastructure.Loaders;
-using MVoxelEngine1.WorldGeneration;
 using MVoxelEngine1.Graphics.Textures;
 using MVoxelEngine1.Infrastructure.Diagnostics;
 using System.Diagnostics;
+using MVoxelEngine1.WorldGeneration.Native;
 
 namespace MVoxelEngine1.Application
 {
@@ -32,7 +32,7 @@ namespace MVoxelEngine1.Application
     public class Window : GameWindow
     {
         // render pipeline
-        World world = null!;
+        NativeWorld world = null!;
         BlockTextureAtlas blockTextureAtlas = null!;
         ShaderProgram shaderProgram = null!;
 
@@ -96,7 +96,7 @@ namespace MVoxelEngine1.Application
             blockTextureAtlas.Bind();
 
             // Initialize the World rendering
-            world = new World(blockTextureAtlas) ?? throw new Exception("world is null");
+            world = NativeWorld.CreateOpenGl(blockTextureAtlas);
 
             // Initialize the Player (and its Camera)
             Console.WriteLine("Initializing player.");

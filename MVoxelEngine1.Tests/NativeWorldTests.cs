@@ -14,6 +14,25 @@ namespace MVoxelEngine1.Tests;
 public sealed class NativeWorldTests
 {
     [Fact]
+    public void WindowUsesThePublicNativeWorldRoute()
+    {
+        Assert.True(typeof(NativeWorld).IsPublic);
+        Assert.NotNull(typeof(NativeWorld).GetMethod(
+            nameof(NativeWorld.CreateOpenGl),
+            System.Reflection.BindingFlags.Public |
+            System.Reflection.BindingFlags.Static));
+
+        string windowPath = Path.Combine(
+            TestPaths.RepositoryRoot,
+            "MVoxelEngine1.Application",
+            "Window.cs");
+        string source = File.ReadAllText(windowPath);
+        Assert.Contains("NativeWorld world", source);
+        Assert.Contains("NativeWorld.CreateOpenGl", source);
+        Assert.DoesNotContain("new World(", source);
+    }
+
+    [Fact]
     public void InitialPacketsReplaceExactlyOnceAfterCameraMovement()
     {
         LoadDefaultGame();

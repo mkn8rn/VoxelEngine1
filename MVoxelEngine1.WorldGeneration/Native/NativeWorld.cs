@@ -14,7 +14,7 @@ internal delegate INativeChunkRenderer? NativeChunkRendererFactory(
     ReadOnlySpan<uint> opaqueWords,
     ReadOnlySpan<uint> transparentWords);
 
-internal sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
+public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
 {
     private static readonly NativeChunkRendererFactory OpenGlRendererFactory =
         CreateOpenGlRenderer;
@@ -63,7 +63,7 @@ internal sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
         }
     }
 
-    internal static NativeWorld CreateOpenGl(BlockTextureAtlas textureAtlas)
+    public static NativeWorld CreateOpenGl(BlockTextureAtlas textureAtlas)
     {
         ArgumentNullException.ThrowIfNull(textureAtlas);
 
@@ -129,13 +129,13 @@ internal sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
 
     internal int RendererSlotCount => currentRenderers.Length;
 
-    internal ushort GetBlock(int worldX, int worldY, int worldZ)
+    public ushort GetBlock(int worldX, int worldY, int worldZ)
     {
         ValidateOwner();
         return pipeline.GetBlock(worldX, worldY, worldZ);
     }
 
-    internal bool SetBlock(
+    public bool SetBlock(
         int worldX,
         int worldY,
         int worldZ,
@@ -180,7 +180,7 @@ internal sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
         }
     }
 
-    internal int Save()
+    public int Save()
     {
         ValidateOwner();
         if (quadsDirectory is null)
