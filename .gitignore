@@ -11,6 +11,9 @@
 # Internal Codex reports
 /docs/internal
 
+# Obsolete source archive
+/MVGE.zip
+
 # ASP.NET Core development server files
 *.db        # SQLite or EF Core local DBs 
 
