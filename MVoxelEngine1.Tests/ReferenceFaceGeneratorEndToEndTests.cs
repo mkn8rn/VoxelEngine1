@@ -17,7 +17,9 @@ namespace MVoxelEngine1.Tests
                 lod1RenderDistance: 1);
             SimulatedGpuUploadTestSupport.SetWaterLevel(
                 workspace.GameDataRoot,
-                waterLevel: 551);
+                // Intersect solid terrain in the same chunk as the real water
+                // surface; loaded-grid edges must not create false water caps.
+                waterLevel: 531);
             string resultsDirectory = Path.Combine(
                 TestPaths.ResultsRoot,
                 "reference-face-streaming");
@@ -41,12 +43,13 @@ namespace MVoxelEngine1.Tests
 
             Assert.Equal(0, result.ExitCode);
             Assert.False(result.WindowObserved);
-            Assert.Contains("Face generation mode: Reference.", result.StandardOutput);
+            Assert.Contains("Reference face validation enabled.", result.StandardOutput);
             Assert.True(File.Exists(outputPath));
 
             using JsonDocument document = JsonDocument.Parse(File.ReadAllText(outputPath));
             JsonElement root = document.RootElement;
-            Assert.Equal("Reference", root.GetProperty("faceGenerationMode").GetString());
+            Assert.Equal("Optimized", root.GetProperty("faceGenerationMode").GetString());
+            Assert.Equal("Reference", root.GetProperty("validationMode").GetString());
 
             JsonElement[] uploads = root.GetProperty("events")
                 .EnumerateArray()
@@ -56,7 +59,7 @@ namespace MVoxelEngine1.Tests
             Assert.All(
                 uploads,
                 upload => Assert.Equal(
-                    "Reference",
+                    "Optimized",
                     upload.GetProperty("faceGenerationMode").GetString()));
 
             Assert.Contains(

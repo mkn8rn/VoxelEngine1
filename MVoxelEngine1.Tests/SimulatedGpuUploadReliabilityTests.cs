@@ -104,7 +104,8 @@ namespace MVoxelEngine1.Tests
                 workspace,
                 outputPath,
                 "TransparentWaterWorld",
-                "Space:9,W+S:15",
+                // Radius zero must place the camera in the water surface chunk.
+                "Space:9.25,W+S:15",
                 frameRate: 1);
 
             SimulatedGpuProcessResult result = await SimulatedGpuUploadTestSupport.RunAsync(
@@ -144,6 +145,11 @@ namespace MVoxelEngine1.Tests
                 Assert.Equal(expectedCount, faces.Length);
                 transparentUploadCounts[renderDataId] = expectedCount;
                 Assert.All(faces, AssertCompleteTransparentFace);
+                Assert.All(faces, face =>
+                {
+                    Assert.Equal(3, face.GetProperty("faceDirection").GetByte());
+                    Assert.Equal(551, face.GetProperty("voxelWorld")[1].GetInt32());
+                });
             }
 
             var activeUploads = new HashSet<long>();

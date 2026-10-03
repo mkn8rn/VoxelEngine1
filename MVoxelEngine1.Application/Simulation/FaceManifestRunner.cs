@@ -8,6 +8,7 @@ using MVoxelEngine1.Infrastructure.Managers;
 using MVoxelEngine1.Infrastructure.Models;
 using MVoxelEngine1.Infrastructure.Models.Simulation;
 using MVoxelEngine1.WorldGeneration;
+using MVoxelEngine1.WorldGeneration.Native;
 
 namespace MVoxelEngine1.Application.Simulation
 {
@@ -40,7 +41,7 @@ namespace MVoxelEngine1.Application.Simulation
 
             try
             {
-                using var world = new World(textureAtlas);
+                using var world = NativeWorld.CreateHeadless(textureAtlas);
                 var player = new Player(world);
                 if (steps.Count != 0)
                 {
@@ -66,32 +67,11 @@ namespace MVoxelEngine1.Application.Simulation
         }
 
         private static WorldFaceManifest CaptureWhenReady(
-            World world,
+            NativeWorld world,
             FaceGenerationMode requestedMode)
         {
-            TimeSpan timeout = TimeSpan.FromSeconds(60);
-            var clock = Stopwatch.StartNew();
-            WorldRenderStateNotReadyException? lastFailure = null;
-            while (clock.Elapsed < timeout)
-            {
-                try
-                {
-                    return WorldFaceManifestBuilder.Capture(
-                        world,
-                        FlagManager.flags.game!,
-                        FlagManager.flags.seed!.Value,
-                        requestedMode);
-                }
-                catch (WorldRenderStateNotReadyException ex)
-                {
-                    lastFailure = ex;
-                    Thread.Sleep(10);
-                }
-            }
-
-            throw new TimeoutException(
-                "The required render chunks did not become stable within 60 seconds.",
-                lastFailure);
+            return WorldFaceManifestBuilder.Capture(
+                world, FlagManager.flags.game!, FlagManager.flags.seed!.Value, requestedMode);
         }
 
         private static void WriteAtomic(

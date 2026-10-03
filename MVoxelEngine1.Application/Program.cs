@@ -10,7 +10,7 @@ namespace MVoxelEngine1.Application
 {
     class Program
     {
-        static async Task Main(string[] args)
+        static void Main(string[] args)
         {
             Environment.SetEnvironmentVariable("APP_ENVIRONMENT", "Development");
             ConsoleFlags.Parse(args);
@@ -48,7 +48,7 @@ namespace MVoxelEngine1.Application
                 if (writerFailAfterRecords is <= 0)
                     throw new InvalidOperationException("The simulated GPU writer failure record count must be positive.");
 
-                await SimulatedGpuUploadRunner.RunAsync(
+                SimulatedGpuUploadRunner.Run(
                     FlagManager.flags.simulatedGpuUploadOutput,
                     inputScript,
                     steps,

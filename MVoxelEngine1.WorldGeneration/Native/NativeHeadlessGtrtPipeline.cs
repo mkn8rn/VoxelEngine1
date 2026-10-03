@@ -392,6 +392,7 @@ public sealed class NativeGtrtPipeline : IDisposable
     public long InitialMeshMilliseconds => workers.InitialMeshMilliseconds;
 
     public int RequiredPacketCount => requiredPacketCount;
+    internal int CompletedRunCount => Volatile.Read(ref completedRunCount);
 
     public double? GenerationToRenderMilliseconds =>
         generationToRenderMilliseconds;
@@ -667,6 +668,25 @@ public sealed class NativeGtrtPipeline : IDisposable
         }
     }
 
+    internal void InspectState(NativeLeaseAction<byte> inspector)
+    {
+        ArgumentNullException.ThrowIfNull(inspector);
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
+        ValidateNoInspection();
+        if (Volatile.Read(ref completedRunCount) <= 0 ||
+            !packetConsumptionCompleted || pendingEdit)
+            throw new InvalidOperationException("Native world data is not ready for inspection.");
+        inspectingPackets = true;
+        try
+        {
+            session.Access(inspector);
+        }
+        finally
+        {
+            inspectingPackets = false;
+        }
+    }
+
     private void ValidateNoInspection()
     {
         if (inspectingPackets)
@@ -716,11 +736,6 @@ public sealed class NativeGtrtPipeline : IDisposable
             }
 
             NativeRenderPacketRecord record = packet.Record;
-            if (record.OpaqueFaceCount +
-                record.TransparentFaceCount == 0)
-            {
-                continue;
-            }
             if (record.OpaqueWordCount != packet.OpaqueWords.Length ||
                 record.TransparentWordCount !=
                     packet.TransparentWords.Length)
@@ -730,6 +745,8 @@ public sealed class NativeGtrtPipeline : IDisposable
                 return;
             }
 
+            if (packetCaptured && record.OpaqueFaceCount + record.TransparentFaceCount == 0)
+                continue;
             capturedPacket = new NativePreUploadPacket(
                 record.RenderDataId,
                 chunk.ChunkX,
@@ -740,7 +757,8 @@ public sealed class NativeGtrtPipeline : IDisposable
                 record.TransparentFaceCount,
                 record.TransparentWordCount);
             packetCaptured = true;
-            return;
+            if (record.OpaqueFaceCount + record.TransparentFaceCount != 0)
+                return;
         }
     }
 

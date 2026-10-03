@@ -88,6 +88,8 @@ namespace MVoxelEngine1.Tests
 
             using JsonDocument document = JsonDocument.Parse(File.ReadAllText(outputPath));
             JsonElement root = document.RootElement;
+            Assert.Equal("Native", root.GetProperty("worldImplementation").GetString());
+            Assert.Equal(0, root.GetProperty("windowConstructionCount").GetInt32());
             Assert.Equal(2, root.GetProperty("schemaVersion").GetInt32());
             Assert.Equal("simulatedGpuUpload", root.GetProperty("mode").GetString());
             Assert.Equal(123456, root.GetProperty("seed").GetInt32());

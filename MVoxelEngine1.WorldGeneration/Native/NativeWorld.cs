@@ -6,6 +6,7 @@ using MVoxelEngine1.Infrastructure.Loaders;
 using MVoxelEngine1.Infrastructure.Managers;
 using MVoxelEngine1.Infrastructure.Models;
 using OpenTK.Graphics.OpenGL4;
+using Supprocom.NativeAllocationManagement;
 
 namespace MVoxelEngine1.WorldGeneration.Native;
 
@@ -36,6 +37,14 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
 
     public Guid ID { get; private set; }
     public Guid RegionID { get; private set; }
+    public int Revision
+    {
+        get
+        {
+            ValidateOwner();
+            return pipeline.CompletedRunCount;
+        }
+    }
 
     private NativeWorld(
         NativeGtrtPipeline pipeline,
@@ -275,6 +284,20 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
         try
         {
             pipeline.InspectRenderPackets(inspector);
+        }
+        finally
+        {
+            inspectingPackets = false;
+        }
+    }
+
+    internal void InspectState(NativeLeaseAction<byte> inspector)
+    {
+        ValidateMutation();
+        inspectingPackets = true;
+        try
+        {
+            pipeline.InspectState(inspector);
         }
         finally
         {

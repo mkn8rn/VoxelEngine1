@@ -56,24 +56,24 @@ namespace MVoxelEngine1.Application.Simulation
 
                 var stepClock = Stopwatch.StartNew();
                 double appliedSeconds = 0;
-                double scheduledSeconds = 0;
+                long stepFrameIndex = 0;
                 double stepStartSimulationSeconds = simulationElapsedSeconds;
                 while (appliedSeconds < step.DurationSeconds)
                 {
-                    scheduledSeconds = Math.Min(
-                        scheduledSeconds + frameIntervalSeconds,
+                    double scheduledSeconds = Math.Min(
+                        ++stepFrameIndex * frameIntervalSeconds,
                         step.DurationSeconds);
                     WaitUntil(stepClock, scheduledSeconds);
 
-                    double elapsedSeconds = Math.Min(
-                        stepClock.Elapsed.TotalSeconds,
-                        step.DurationSeconds);
-                    double deltaSeconds = elapsedSeconds - appliedSeconds;
+                    // Every scheduled slice is paced by elapsed wall time. A slow
+                    // streaming frame drains the backlog through the same Player
+                    // updates instead of skipping intervening chunk positions.
+                    double deltaSeconds = scheduledSeconds - appliedSeconds;
                     if (deltaSeconds <= 0)
                         continue;
 
                     player.Update(step.Keys, deltaSeconds);
-                    appliedSeconds = elapsedSeconds;
+                    appliedSeconds = scheduledSeconds;
                     simulationElapsedSeconds = stepStartSimulationSeconds + appliedSeconds;
                     frameIndex++;
                     frameUpdated?.Invoke(new TimedPlayerMovementFrame(

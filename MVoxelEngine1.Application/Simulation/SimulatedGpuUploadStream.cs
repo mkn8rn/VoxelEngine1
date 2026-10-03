@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Buffers;
 using System.Threading.Channels;
 using System.Runtime.ExceptionServices;
 using MVoxelEngine1.Application.Gameplay;
@@ -9,6 +10,7 @@ using MVoxelEngine1.Infrastructure.Managers;
 using MVoxelEngine1.Infrastructure.Models;
 using MVoxelEngine1.Infrastructure.Models.Simulation;
 using MVoxelEngine1.WorldGeneration;
+using MVoxelEngine1.WorldGeneration.Native;
 using OpenTK.Mathematics;
 
 namespace MVoxelEngine1.Application.Simulation
@@ -17,9 +19,9 @@ namespace MVoxelEngine1.Application.Simulation
     {
         public required long FrameIndex { get; init; }
 
-        public required IReadOnlyList<WorldRenderChunk> OpaquePassChunks { get; init; }
+        public required IReadOnlyList<NativeChunkRenderPacketDescriptor> OpaquePassChunks { get; init; }
 
-        public required IReadOnlyList<WorldRenderChunk> TransparentPassChunks { get; init; }
+        public required IReadOnlyList<NativeChunkRenderPacketDescriptor> TransparentPassChunks { get; init; }
     }
 
     internal sealed class SimulatedGpuUploadStream : IAsyncDisposable
@@ -50,10 +52,6 @@ namespace MVoxelEngine1.Application.Simulation
             int PlayerChunkY,
             int PlayerChunkZ);
 
-        private sealed record FaceDiagnostics(
-            ushort[] BlockIds,
-            ushort[] NeighborBlockIds);
-
         private abstract record StreamRecord;
 
         private sealed record QueuedRecord(
@@ -61,13 +59,7 @@ namespace MVoxelEngine1.Application.Simulation
             long RetainedPayloadBytes,
             StreamRecord Record);
 
-        private sealed record UploadRecord(
-            long FrameIndex,
-            ChunkIdentity Chunk,
-            ChunkRenderUploadData Data,
-            ChunkRenderUploadRetention Retention,
-            FaceDiagnostics OpaqueDiagnostics,
-            FaceDiagnostics TransparentDiagnostics) : StreamRecord;
+        private sealed record UploadRecord(long Sequence, byte[] Payload) : StreamRecord;
 
         private sealed record DeletionRecord(
             long FrameIndex,
@@ -109,7 +101,7 @@ namespace MVoxelEngine1.Application.Simulation
             long DeletionCount,
             int SnapshotCount) : StreamRecord;
 
-        private readonly World world;
+        private readonly NativeWorld world;
         private readonly Player player;
         private readonly int windowWidth;
         private readonly int windowHeight;
@@ -140,13 +132,14 @@ namespace MVoxelEngine1.Application.Simulation
         private bool outputResourcesDisposed;
         private bool finalOutputPublished;
         private bool disposed;
+        private int validatedRevision = -1;
 
         public SimulatedGpuUploadStream(
             string outputPath,
             string inputScript,
             int frameRate,
             BlockTextureAtlas textureAtlas,
-            World world,
+            NativeWorld world,
             Player player,
             int windowWidth,
             int windowHeight,
@@ -221,40 +214,37 @@ namespace MVoxelEngine1.Application.Simulation
             double deltaSeconds,
             PlayerInputKeys input)
         {
-            using IDisposable renderStateScope = world.AcquireRenderStateReadScope();
-            IReadOnlyList<WorldRenderChunk> opaqueChunks = world.CaptureActiveRenderChunks();
+            if (FlagManager.flags.faceGenerationMode == FaceGenerationMode.Reference &&
+                validatedRevision != world.Revision)
+            {
+                WorldFaceManifest reference = WorldFaceManifestBuilder.Capture(
+                    world, FlagManager.flags.game!, FlagManager.flags.seed!.Value, FaceGenerationMode.Reference);
+                WorldFaceManifest optimized = WorldFaceManifestBuilder.Capture(
+                    world, FlagManager.flags.game!, FlagManager.flags.seed!.Value, FaceGenerationMode.Optimized);
+                if (reference.Faces.Sha256 != optimized.Faces.Sha256)
+                    throw new InvalidDataException("Native streaming faces differ from the reference authority.");
+                validatedRevision = world.Revision;
+            }
             long uploadsBeforeFrame = uploadCount;
-            var renderDataActiveDuringFrame = new HashSet<long>(activeRenderData);
-            foreach (WorldRenderChunk chunk in opaqueChunks)
-            {
-                EnsureUploadQueued(frameIndex, chunk);
-                if (chunk.UploadData is not null)
-                    renderDataActiveDuringFrame.Add(chunk.UploadData.RenderDataId);
-            }
-
-            IReadOnlyList<WorldRenderChunk> transparentChunks = world.CaptureActiveRenderChunks();
-            foreach (WorldRenderChunk chunk in transparentChunks)
-                EnsureUploadQueued(frameIndex, chunk);
-
+            var chunks = new List<NativeChunkRenderPacketDescriptor>();
             var currentRenderData = new HashSet<long>();
-            foreach (WorldRenderChunk chunk in transparentChunks)
+            world.InspectRenderPackets((in NativeChunkRenderPacketDescriptor descriptor,
+                ReadOnlySpan<uint> opaque, ReadOnlySpan<uint> transparent) =>
             {
-                if (chunk.UploadData is not null)
-                    currentRenderData.Add(chunk.UploadData.RenderDataId);
-            }
-
-            foreach (long renderDataId in renderDataActiveDuringFrame)
+                chunks.Add(descriptor);
+                currentRenderData.Add(descriptor.RenderDataId);
+                EnsureUploadQueued(frameIndex, in descriptor, opaque, transparent);
+            });
+            foreach (long renderDataId in activeRenderData)
             {
                 if (currentRenderData.Contains(renderDataId))
                     continue;
                 if (!uploadedRenderData.TryGetValue(renderDataId, out ChunkIdentity chunk))
                     continue;
-
                 QueueRecord(new DeletionRecord(frameIndex, renderDataId, chunk));
                 uploadedRenderData.Remove(renderDataId);
                 deletionCount++;
             }
-
             activeRenderData = currentRenderData;
             QueueRecord(new RenderFrameRecord(
                 frameIndex,
@@ -263,17 +253,17 @@ namespace MVoxelEngine1.Application.Simulation
                 deltaSeconds,
                 input,
                 CaptureCamera(),
-                transparentChunks.Count,
+                chunks.Count,
                 uploadCount - uploadsBeforeFrame,
-                CaptureDrawList(opaqueChunks, transparent: false),
-                CaptureDrawList(transparentChunks, transparent: true)));
+                CaptureDrawList(chunks, transparent: false),
+                CaptureDrawList(chunks, transparent: true)));
             frameCount++;
 
             return new SimulatedRenderFrameState
             {
                 FrameIndex = frameIndex,
-                OpaquePassChunks = opaqueChunks,
-                TransparentPassChunks = transparentChunks
+                OpaquePassChunks = chunks,
+                TransparentPassChunks = chunks
             };
         }
 
@@ -285,8 +275,8 @@ namespace MVoxelEngine1.Application.Simulation
             ActiveChunkCapture[] chunks = frame.TransparentPassChunks
                 .Select(chunk => new ActiveChunkCapture(
                     CaptureChunkIdentity(chunk),
-                    chunk.UploadData?.RenderDataId,
-                    chunk.IsOpenGlUploaded))
+                    chunk.RenderDataId,
+                    false))
                 .ToArray();
             QueueRecord(new SnapshotRecord(
                 snapshotCount,
@@ -481,123 +471,95 @@ namespace MVoxelEngine1.Application.Simulation
             }
         }
 
-        private void EnsureUploadQueued(long frameIndex, WorldRenderChunk chunk)
+        private void EnsureUploadQueued(long frameIndex,
+            in NativeChunkRenderPacketDescriptor data, ReadOnlySpan<uint> opaque, ReadOnlySpan<uint> transparent)
         {
-            ChunkRenderUploadData? data = chunk.UploadData;
-            if (data is null || uploadedRenderData.ContainsKey(data.RenderDataId))
+            if (uploadedRenderData.ContainsKey(data.RenderDataId))
                 return;
-            if (chunk.IsOpenGlUploaded)
-                throw new InvalidOperationException("Headless render data was uploaded through OpenGL.");
-
-            ChunkRenderUploadRetention? retention = data.Retain();
-            try
+            if (PackedFaceRectangle.CountLogicalFaces(opaque) != data.OpaqueFaceCount ||
+                PackedFaceRectangle.CountLogicalFaces(transparent) != data.TransparentFaceCount)
+                throw new InvalidDataException("Native upload rectangle counts are inconsistent.");
+            ChunkIdentity identity = CaptureChunkIdentity(data);
+            var buffer = new ArrayBufferWriter<byte>();
+            using (var capture = new Utf8JsonWriter(buffer))
             {
-                ValidateUploadData(data, retention);
-                ChunkIdentity identity = CaptureChunkIdentity(chunk);
-                var record = new UploadRecord(
-                    frameIndex,
-                    identity,
-                    data,
-                    retention,
-                    CaptureFaceDiagnostics(
-                        data,
-                        retention,
-                        chunk,
-                        transparent: false),
-                    CaptureFaceDiagnostics(
-                        data,
-                        retention,
-                        chunk,
-                        transparent: true));
-                QueueRecord(record);
-                retention = null;
-                uploadedRenderData.Add(data.RenderDataId, identity);
-                uploadCount++;
+                capture.WriteStartObject();
+                capture.WriteString("type", "simulatedGpuUpload");
+                capture.WriteNumber("sequence", nextSequence);
+                capture.WriteNumber("frameIndex", frameIndex);
+                capture.WriteNumber("renderDataId", data.RenderDataId);
+                capture.WriteBoolean("actualGpuUploadPerformed", false);
+                capture.WriteString("faceGenerationMode", "Optimized");
+                capture.WriteStartObject("chunkIndex");
+                capture.WriteNumber("x", identity.ChunkX);
+                capture.WriteNumber("y", identity.ChunkY);
+                capture.WriteNumber("z", identity.ChunkZ);
+                capture.WriteEndObject();
+                WriteVector(capture, "worldOrigin", data.ChunkWorldX, data.ChunkWorldY, data.ChunkWorldZ);
+                WriteVector(capture, "shaderChunkPosition", data.ChunkWorldX + 1,
+                    data.ChunkWorldY + 1, data.ChunkWorldZ + 1);
+                capture.WriteBoolean("fullyOccluded", data.IsEmpty);
+                capture.WriteNumber("opaqueFaceCount", data.OpaqueFaceCount);
+                capture.WriteNumber("opaqueRectangleCount", data.OpaqueRectangleCount);
+                capture.WriteNumber("transparentFaceCount", data.TransparentFaceCount);
+                capture.WriteNumber("transparentRectangleCount", data.TransparentRectangleCount);
+                WriteNativeFaces(capture, "opaqueFaces", in data, opaque, false);
+                WriteNativeFaces(capture, "transparentFaces", in data, transparent, true);
+                capture.WriteEndObject();
+                capture.Flush();
             }
-            finally
-            {
-                retention?.Dispose();
-            }
+            // Only diagnostic JSON leaves this callback. Mesh words remain in
+            // the borrowed native packet, and never enter a second mesh owner.
+            QueueRecord(new UploadRecord(nextSequence, buffer.WrittenSpan.ToArray()));
+            uploadedRenderData.Add(data.RenderDataId, identity);
+            uploadCount++;
         }
 
-        private FaceDiagnostics CaptureFaceDiagnostics(
-            ChunkRenderUploadData data,
-            ChunkRenderUploadRetention retention,
-            WorldRenderChunk chunk,
-            bool transparent)
+        private void WriteNativeFaces(Utf8JsonWriter capture, string name,
+            in NativeChunkRenderPacketDescriptor data, ReadOnlySpan<uint> words, bool transparent)
         {
-            int count = transparent ? data.TransparentFaceCount : data.OpaqueFaceCount;
-            return transparent
-                ? retention.ReadTransparent(
-                    view => CaptureFaceDiagnostics(
-                        data,
-                        chunk,
-                        count,
-                        view.AsSpan()),
-                    rectangles => CaptureFaceDiagnostics(
-                        data,
-                        chunk,
-                        count,
-                        rectangles))
-                : retention.ReadOpaque(
-                    view => CaptureFaceDiagnostics(
-                        data,
-                        chunk,
-                        count,
-                        view.AsSpan()),
-                    rectangles => CaptureFaceDiagnostics(
-                        data,
-                        chunk,
-                        count,
-                        rectangles));
-        }
-
-        private FaceDiagnostics CaptureFaceDiagnostics(
-            ChunkRenderUploadData data,
-            WorldRenderChunk chunk,
-            int count,
-            ReadOnlySpan<uint> rectangles)
-        {
-            var blockIds = new ushort[count];
-            var neighborBlockIds = new ushort[count];
-            int originX = checked((int)data.ChunkWorldX);
-            int originY = checked((int)data.ChunkWorldY);
-            int originZ = checked((int)data.ChunkWorldZ);
-            int maxX = GameManager.settings.chunkMaxX;
-            int maxY = GameManager.settings.chunkMaxY;
-            int maxZ = GameManager.settings.chunkMaxZ;
-
-            var reader = new PackedFaceRectangleReader(rectangles);
-            int index = 0;
+            capture.WriteStartArray(name);
+            var reader = new PackedFaceRectangleReader(words);
             while (reader.MoveNext())
             {
-                if (index >= count)
-                    throw new InvalidDataException("Packed face count exceeds its declared count.");
-
-                int localX = reader.X;
-                int localY = reader.Y;
-                int localZ = reader.Z;
+                int x = checked(data.ChunkWorldX + reader.X);
+                int y = checked(data.ChunkWorldY + reader.Y);
+                int z = checked(data.ChunkWorldZ + reader.Z);
                 (int dx, int dy, int dz) = GetFaceNormal(reader.Direction);
-                int neighborX = localX + dx;
-                int neighborY = localY + dy;
-                int neighborZ = localZ + dz;
-                blockIds[index] = chunk.GetBlockLocal(localX, localY, localZ);
-                neighborBlockIds[index] =
-                    neighborX >= 0 && neighborX < maxX &&
-                    neighborY >= 0 && neighborY < maxY &&
-                    neighborZ >= 0 && neighborZ < maxZ
-                        ? chunk.GetBlockLocal(neighborX, neighborY, neighborZ)
-                        : world.GetBlock(
-                            originX + neighborX,
-                            originY + neighborY,
-                            originZ + neighborZ);
-                index++;
+                ushort source = world.GetBlock(x, y, z);
+                ushort neighbor = world.GetBlock(x + dx, y + dy, z + dz);
+                capture.WriteStartObject();
+                capture.WriteString("renderPass", transparent ? "transparent" : "opaque");
+                WriteVector(capture, "offset", reader.X, reader.Y, reader.Z);
+                capture.WriteNumber("tileIndex", reader.TileIndex);
+                capture.WriteNumber("faceDirection", reader.Direction);
+                capture.WriteString("faceName", GetFaceName(reader.Direction));
+                WriteVector(capture, "voxelWorld", x, y, z);
+                capture.WriteNumber("blockId", source);
+                WriteBlockName(capture, "blockName", source);
+                WriteVector(capture, "neighborWorldAtUpload", x + dx, y + dy, z + dz);
+                capture.WriteNumber("neighborBlockIdAtUpload", neighbor);
+                WriteBlockName(capture, "neighborBlockNameAtUpload", neighbor);
+                capture.WriteEndObject();
             }
+            capture.WriteEndArray();
+        }
 
-            if (index != count)
-                throw new InvalidDataException("Packed face count does not match its declared count.");
+        private static void WriteVector(Utf8JsonWriter capture, string name, int x, int y, int z)
+        {
+            capture.WriteStartArray(name);
+            capture.WriteNumberValue(x);
+            capture.WriteNumberValue(y);
+            capture.WriteNumberValue(z);
+            capture.WriteEndArray();
+        }
 
-            return new FaceDiagnostics(blockIds, neighborBlockIds);
+        private static void WriteBlockName(Utf8JsonWriter capture, string name, ushort id)
+        {
+            if (TerrainLoader.allBlockTypesByIds.TryGetValue(id, out string? blockName))
+                capture.WriteString(name, blockName);
+            else
+                capture.WriteNull(name);
         }
 
         private void QueueRecord(StreamRecord record)
@@ -649,8 +611,7 @@ namespace MVoxelEngine1.Application.Simulation
         {
             try
             {
-                if (queued.Record is UploadRecord upload)
-                    upload.Retention.Dispose();
+                // Diagnostic records contain no native lease or mesh retention.
             }
             finally
             {
@@ -682,31 +643,20 @@ namespace MVoxelEngine1.Application.Simulation
                 cz);
         }
 
-        private static ChunkIdentity CaptureChunkIdentity(WorldRenderChunk chunk) => new(
-            chunk.ChunkX,
-            chunk.ChunkY,
-            chunk.ChunkZ,
-            chunk.WorldOriginX,
-            chunk.WorldOriginY,
-            chunk.WorldOriginZ);
+        private static ChunkIdentity CaptureChunkIdentity(NativeChunkRenderPacketDescriptor data) => new(
+            data.ChunkWorldX / GameManager.settings.chunkMaxX,
+            data.ChunkWorldY / GameManager.settings.chunkMaxY,
+            data.ChunkWorldZ / GameManager.settings.chunkMaxZ,
+            data.ChunkWorldX, data.ChunkWorldY, data.ChunkWorldZ);
 
         private static long[] CaptureDrawList(
-            IReadOnlyList<WorldRenderChunk> chunks,
-            bool transparent)
+            IReadOnlyList<NativeChunkRenderPacketDescriptor> chunks, bool transparent)
         {
-            var renderDataIds = new List<long>(chunks.Count);
-            foreach (WorldRenderChunk chunk in chunks)
-            {
-                ChunkRenderUploadData? data = chunk.UploadData;
-                if (data is null || data.FullyOccluded)
-                    continue;
-
-                int faceCount = transparent ? data.TransparentFaceCount : data.OpaqueFaceCount;
-                if (faceCount > 0)
-                    renderDataIds.Add(data.RenderDataId);
-            }
-
-            return renderDataIds.ToArray();
+            var ids = new List<long>();
+            foreach (NativeChunkRenderPacketDescriptor data in chunks)
+                if ((transparent ? data.TransparentFaceCount : data.OpaqueFaceCount) > 0)
+                    ids.Add(data.RenderDataId);
+            return ids.ToArray();
         }
 
         private void WriteSessionHeader(
@@ -723,9 +673,11 @@ namespace MVoxelEngine1.Application.Simulation
             writer.WriteNumber("actualGpuUploadCount", 0);
             writer.WriteString("game", FlagManager.flags.game);
             writer.WriteNumber("seed", FlagManager.flags.seed!.Value);
-            writer.WriteString(
-                "faceGenerationMode",
+            writer.WriteString("faceGenerationMode", "Optimized");
+            writer.WriteString("validationMode",
                 (FlagManager.flags.faceGenerationMode ?? FaceGenerationMode.Optimized).ToString());
+            writer.WriteString("worldImplementation", "Native");
+            writer.WriteNumber("windowConstructionCount", 0);
             writer.WriteString("worldId", world.ID);
             writer.WriteString("regionId", world.RegionID);
             writer.WriteString("inputScript", inputScript);
@@ -763,37 +715,9 @@ namespace MVoxelEngine1.Application.Simulation
 
         private void WriteUploadRecord(UploadRecord record, long sequence)
         {
-            ChunkRenderUploadData data = record.Data;
-            writer.WriteStartObject();
-            writer.WriteString("type", "simulatedGpuUpload");
-            writer.WriteNumber("sequence", sequence);
-            writer.WriteNumber("frameIndex", record.FrameIndex);
-            writer.WriteNumber("renderDataId", data.RenderDataId);
-            writer.WriteBoolean("actualGpuUploadPerformed", false);
-            writer.WriteString("faceGenerationMode", data.FaceGenerationMode.ToString());
-            WriteChunkIndex(record.Chunk);
-            WriteVector("worldOrigin", data.ChunkWorldX, data.ChunkWorldY, data.ChunkWorldZ);
-            WriteVector("shaderChunkPosition", data.ChunkWorldX + 1, data.ChunkWorldY + 1, data.ChunkWorldZ + 1);
-            writer.WriteBoolean("fullyOccluded", data.FullyOccluded);
-            writer.WriteNumber("opaqueFaceCount", data.OpaqueFaceCount);
-            writer.WriteNumber("opaqueRectangleCount", data.OpaqueRectangleCount);
-            writer.WriteNumber("transparentFaceCount", data.TransparentFaceCount);
-            writer.WriteNumber(
-                "transparentRectangleCount",
-                data.TransparentRectangleCount);
-            WriteFaces(
-                "opaqueFaces",
-                data,
-                record.Retention,
-                record.OpaqueDiagnostics,
-                transparent: false);
-            WriteFaces(
-                "transparentFaces",
-                data,
-                record.Retention,
-                record.TransparentDiagnostics,
-                transparent: true);
-            writer.WriteEndObject();
+            if (record.Sequence != sequence)
+                throw new InvalidDataException("Native diagnostic upload sequence changed.");
+            writer.WriteRawValue(record.Payload, skipInputValidation: true);
         }
 
         private void WriteDeletionRecord(DeletionRecord record, long sequence)
@@ -894,115 +818,6 @@ namespace MVoxelEngine1.Application.Simulation
             writer.WriteBoolean("windowCreated", false);
             writer.WriteEndObject();
             writer.WriteEndObject();
-        }
-
-        private void WriteFaces(
-            string propertyName,
-            ChunkRenderUploadData data,
-            ChunkRenderUploadRetention retention,
-            FaceDiagnostics diagnostics,
-            bool transparent)
-        {
-            int count = transparent ? data.TransparentFaceCount : data.OpaqueFaceCount;
-            if (transparent)
-            {
-                retention.ReadTransparent(view =>
-                {
-                    WriteFaces(
-                        propertyName,
-                        data,
-                        diagnostics,
-                        true,
-                        count,
-                        view.AsSpan());
-                    return 0;
-                }, rectangles =>
-                {
-                    WriteFaces(
-                        propertyName,
-                        data,
-                        diagnostics,
-                        true,
-                        count,
-                        rectangles);
-                    return 0;
-                });
-            }
-            else
-            {
-                retention.ReadOpaque(view =>
-                {
-                    WriteFaces(
-                        propertyName,
-                        data,
-                        diagnostics,
-                        false,
-                        count,
-                        view.AsSpan());
-                    return 0;
-                }, rectangles =>
-                {
-                    WriteFaces(
-                        propertyName,
-                        data,
-                        diagnostics,
-                        false,
-                        count,
-                        rectangles);
-                    return 0;
-                });
-            }
-        }
-
-        private void WriteFaces(
-            string propertyName,
-            ChunkRenderUploadData data,
-            FaceDiagnostics diagnostics,
-            bool transparent,
-            int count,
-            ReadOnlySpan<uint> rectangles)
-        {
-            int originX = checked((int)data.ChunkWorldX);
-            int originY = checked((int)data.ChunkWorldY);
-            int originZ = checked((int)data.ChunkWorldZ);
-
-            writer.WriteStartArray(propertyName);
-            var reader = new PackedFaceRectangleReader(rectangles);
-            int index = 0;
-            while (reader.MoveNext())
-            {
-                if (index >= count)
-                    throw new InvalidDataException("Packed face count exceeds its declared count.");
-
-                int localX = reader.X;
-                int localY = reader.Y;
-                int localZ = reader.Z;
-                byte direction = reader.Direction;
-                (int dx, int dy, int dz) = GetFaceNormal(direction);
-                int worldX = originX + localX;
-                int worldY = originY + localY;
-                int worldZ = originZ + localZ;
-                ushort blockId = diagnostics.BlockIds[index];
-                ushort neighborBlockId = diagnostics.NeighborBlockIds[index];
-
-                writer.WriteStartObject();
-                writer.WriteString("renderPass", transparent ? "transparent" : "opaque");
-                WriteVector("offset", localX, localY, localZ);
-                writer.WriteNumber("tileIndex", reader.TileIndex);
-                writer.WriteNumber("faceDirection", direction);
-                writer.WriteString("faceName", GetFaceName(direction));
-                WriteVector("voxelWorld", worldX, worldY, worldZ);
-                writer.WriteNumber("blockId", blockId);
-                WriteBlockName("blockName", blockId);
-                WriteVector("neighborWorldAtUpload", worldX + dx, worldY + dy, worldZ + dz);
-                writer.WriteNumber("neighborBlockIdAtUpload", neighborBlockId);
-                WriteBlockName("neighborBlockNameAtUpload", neighborBlockId);
-                writer.WriteEndObject();
-                index++;
-            }
-            writer.WriteEndArray();
-            if (index != count)
-                throw new InvalidDataException("Packed face count does not match its declared count.");
         }
 
         private void WriteCamera(CameraCapture camera)
@@ -1190,14 +1005,7 @@ namespace MVoxelEngine1.Application.Simulation
             const long RecordOverheadEstimate = 256;
             return record switch
             {
-                UploadRecord upload => checked(
-                    RecordOverheadEstimate +
-                    upload.Data.OpaqueWordCount * sizeof(uint) +
-                    upload.Data.TransparentWordCount * sizeof(uint) +
-                    upload.OpaqueDiagnostics.BlockIds.Length * sizeof(ushort) +
-                    upload.OpaqueDiagnostics.NeighborBlockIds.Length * sizeof(ushort) +
-                    upload.TransparentDiagnostics.BlockIds.Length * sizeof(ushort) +
-                    upload.TransparentDiagnostics.NeighborBlockIds.Length * sizeof(ushort)),
+                UploadRecord upload => checked(RecordOverheadEstimate + upload.Payload.Length),
                 RenderFrameRecord frame => checked(
                     RecordOverheadEstimate +
                     frame.OpaqueDrawRenderDataIds.Length * sizeof(long) +
@@ -1231,41 +1039,6 @@ namespace MVoxelEngine1.Application.Simulation
                     return;
 
                 observed = previous;
-            }
-        }
-
-        private static void ValidateUploadData(
-            ChunkRenderUploadData data,
-            ChunkRenderUploadRetention retention)
-        {
-            bool opaqueValid = retention.ReadOpaque(view =>
-                PackedFaceRectangle.GetRectangleCount(view.AsSpan()) ==
-                    data.OpaqueRectangleCount &&
-                PackedFaceRectangle.CountLogicalFaces(view.AsSpan()) ==
-                    data.OpaqueFaceCount,
-                rectangles =>
-                    PackedFaceRectangle.GetRectangleCount(rectangles) ==
-                        data.OpaqueRectangleCount &&
-                    PackedFaceRectangle.CountLogicalFaces(rectangles) ==
-                        data.OpaqueFaceCount);
-            if (!opaqueValid)
-            {
-                throw new InvalidDataException($"Opaque render data {data.RenderDataId} has inconsistent buffer lengths.");
-            }
-
-            bool transparentValid = retention.ReadTransparent(view =>
-                PackedFaceRectangle.GetRectangleCount(view.AsSpan()) ==
-                    data.TransparentRectangleCount &&
-                PackedFaceRectangle.CountLogicalFaces(view.AsSpan()) ==
-                    data.TransparentFaceCount,
-                rectangles =>
-                    PackedFaceRectangle.GetRectangleCount(rectangles) ==
-                        data.TransparentRectangleCount &&
-                    PackedFaceRectangle.CountLogicalFaces(rectangles) ==
-                        data.TransparentFaceCount);
-            if (!transparentValid)
-            {
-                throw new InvalidDataException($"Transparent render data {data.RenderDataId} has inconsistent buffer lengths.");
             }
         }
 
