@@ -87,7 +87,7 @@ internal sealed class NativeWorldSaveExporter
                 continue;
             }
 
-            (int batchX, int batchZ) = Quadrant.GetBatchIndices(
+            (int batchX, int batchZ) = NativeSavePartition.GetBatchIndices(
                 chunk.ChunkX,
                 chunk.ChunkZ);
             bool handled = false;
@@ -104,7 +104,7 @@ internal sealed class NativeWorldSaveExporter
                 }
 
                 (int earlierBatchX, int earlierBatchZ) =
-                    Quadrant.GetBatchIndices(
+                    NativeSavePartition.GetBatchIndices(
                         earlier.ChunkX,
                         earlier.ChunkZ);
                 if (earlierBatchX == batchX &&
@@ -142,7 +142,7 @@ internal sealed class NativeWorldSaveExporter
             if (chunk.State != ActiveRecord)
                 continue;
             (int currentBatchX, int currentBatchZ) =
-                Quadrant.GetBatchIndices(chunk.ChunkX, chunk.ChunkZ);
+                NativeSavePartition.GetBatchIndices(chunk.ChunkX, chunk.ChunkZ);
             if (currentBatchX == batchX && currentBatchZ == batchZ)
                 chunkCount++;
         }
@@ -187,7 +187,7 @@ internal sealed class NativeWorldSaveExporter
                     if (chunk.State != ActiveRecord)
                         continue;
                     (int currentBatchX, int currentBatchZ) =
-                        Quadrant.GetBatchIndices(
+                        NativeSavePartition.GetBatchIndices(
                             chunk.ChunkX,
                             chunk.ChunkZ);
                     if (currentBatchX != batchX ||
@@ -224,7 +224,7 @@ internal sealed class NativeWorldSaveExporter
                 if (chunk.State != ActiveRecord)
                     continue;
                 (int currentBatchX, int currentBatchZ) =
-                    Quadrant.GetBatchIndices(
+                    NativeSavePartition.GetBatchIndices(
                         chunk.ChunkX,
                         chunk.ChunkZ);
                 if (currentBatchX == batchX && currentBatchZ == batchZ)
@@ -401,7 +401,7 @@ internal sealed class NativeWorldSaveExporter
         CountBlock(
             ref view,
             blockId,
-            Section.VOXELS_PER_SECTION,
+            VoxelSection.VoxelCount,
             out ushort opaqueCount,
             out ushort transparentCount,
             out ushort emptyCount);
@@ -424,25 +424,25 @@ internal sealed class NativeWorldSaveExporter
         if (section.RawVoxelOffset < 0 ||
             section.RawVoxelOffset >
                 view.MaterializedRawVoxels.Length -
-                Section.VOXELS_PER_SECTION)
+                VoxelSection.VoxelCount)
         {
             throw new InvalidDataException(
                 "A native raw section range is invalid.");
         }
         ReadOnlySpan<ushort> raw = view.MaterializedRawVoxels.Slice(
             section.RawVoxelOffset,
-            Section.VOXELS_PER_SECTION);
+            VoxelSection.VoxelCount);
         CountBlocks(
             ref view,
             raw,
             out ushort opaqueCount,
             out ushort transparentCount,
             out ushort emptyCount);
-        if (emptyCount == Section.VOXELS_PER_SECTION)
+        if (emptyCount == VoxelSection.VoxelCount)
             return false;
 
         int payloadLength = checked(
-            11 + Section.VOXELS_PER_SECTION * sizeof(ushort));
+            11 + VoxelSection.VoxelCount * sizeof(ushort));
         WriteSectionHeader(
             writer,
             kind: 3,
@@ -484,7 +484,7 @@ internal sealed class NativeWorldSaveExporter
         int transparent = 0;
         int empty = 0;
         for (int voxelIndex = 0;
-             voxelIndex < Section.VOXELS_PER_SECTION;
+             voxelIndex < VoxelSection.VoxelCount;
              voxelIndex++)
         {
             int paletteIndex = ReadPackedIndex(
@@ -504,7 +504,7 @@ internal sealed class NativeWorldSaveExporter
                 ref transparent,
                 ref empty);
         }
-        if (empty == Section.VOXELS_PER_SECTION)
+        if (empty == VoxelSection.VoxelCount)
             return false;
 
         int payloadLength = checked(
@@ -546,7 +546,7 @@ internal sealed class NativeWorldSaveExporter
         byte flags = 1 << 3;
         if (emptyCount == 0)
             flags |= 1 << 2;
-        if (emptyCount == Section.VOXELS_PER_SECTION)
+        if (emptyCount == VoxelSection.VoxelCount)
             flags |= 1 << 4;
         writer.Write(flags);
     }

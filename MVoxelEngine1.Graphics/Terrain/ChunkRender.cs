@@ -1,4 +1,4 @@
-﻿using MVoxelEngine1.Graphics.BufferObjects;
+using MVoxelEngine1.Graphics.BufferObjects;
 using MVoxelEngine1.Graphics.Models;
 using MVoxelEngine1.Infrastructure.Managers;
 using OpenTK.Graphics.OpenGL4;
@@ -15,7 +15,6 @@ using MVoxelEngine1.Infrastructure.Models.Generation;
 using MVoxelEngine1.Infrastructure.Diagnostics;
 using MVoxelEngine1.Infrastructure.Loaders;
 using MVoxelEngine1.Infrastructure.Models;
-using MVoxelEngine1.Graphics.Terrain.Sections;
 using System.Linq;
 using System.Threading;
 using System.Diagnostics;
@@ -25,7 +24,6 @@ namespace MVoxelEngine1.Graphics.Terrain
     public partial class ChunkRender : INativeChunkRenderer
     {
         private static readonly ConcurrentQueue<ChunkRender> pendingDeletion = new();
-        private static long nextRenderDataId;
 
         private bool isBuilt = false;
         private Vector3 chunkWorldPosition;
@@ -53,14 +51,7 @@ namespace MVoxelEngine1.Graphics.Terrain
 
         public static BlockTextureAtlas terrainTextureAtlas { get; set; }
 
-        private readonly ChunkData chunkMeta;
-        private readonly int maxX; private readonly int maxY; private readonly int maxZ;
-        private readonly bool faceNegX, facePosX, faceNegY, facePosY, faceNegZ, facePosZ;
-        private readonly bool nNegXPosX, nPosXNegX, nNegYPosY, nPosYNegY, nNegZPosZ, nPosZNegZ;
-        private readonly bool allOneBlock; private readonly ushort allOneBlockId;
-        private readonly int prepassSolidCount; private readonly int prepassExposureEstimate;
         private bool fullyOccluded;
-        private ChunkRenderUploadData? uploadData;
 
         // Static quad data (positions & base UVs 0..1) reused for all faces.
         private static readonly byte[] QuadPositions = new byte[]
@@ -78,54 +69,7 @@ namespace MVoxelEngine1.Graphics.Terrain
 
         public static ReadOnlyMemory<ushort> QuadIndexUploadData => QuadIndices;
 
-        public ChunkRenderUploadData UploadData =>
-            uploadData ??
-            throw new InvalidOperationException(
-                "This renderer uses a native upload packet.");
-
         public bool IsOpenGlUploaded => isBuilt;
-
-        public ChunkRender(
-            ChunkPrerenderData prerenderData,
-            FaceGenerationMode faceGenerationMode,
-            Func<int, int, int, ushort>? getLocalBlock,
-            ReferenceNeighborBlockPlanes? referenceNeighbors,
-            PackedFaceNativePool packedFacePool)
-        {
-            ArgumentNullException.ThrowIfNull(packedFacePool);
-            this.prepassSolidCount = prerenderData.PrepassSolidCount;
-            this.prepassExposureEstimate = prerenderData.PrepassExposureEstimate;
-            this.chunkMeta = prerenderData.chunkData;
-            this.maxX = prerenderData.maxX; this.maxY = prerenderData.maxY; this.maxZ = prerenderData.maxZ;
-            chunkWorldPosition = new Vector3(prerenderData.chunkData.x, prerenderData.chunkData.y, prerenderData.chunkData.z);
-            faceNegX = prerenderData.FaceNegX; facePosX = prerenderData.FacePosX; faceNegY = prerenderData.FaceNegY; facePosY = prerenderData.FacePosY; faceNegZ = prerenderData.FaceNegZ; facePosZ = prerenderData.FacePosZ;
-            nNegXPosX = prerenderData.NeighborNegXPosX; nPosXNegX = prerenderData.NeighborPosXNegX; nNegYPosY = prerenderData.NeighborNegYPosY; nPosYNegY = prerenderData.NeighborPosYNegY; nNegZPosZ = prerenderData.NeighborNegZPosZ; nPosZNegZ = prerenderData.NeighborPosZNegZ;
-            allOneBlock = prerenderData.AllOneBlock; allOneBlockId = prerenderData.AllOneBlockId;
-            FaceRectangleMeshData? meshData = null;
-            try
-            {
-                meshData = GenerateFaces(
-                    prerenderData,
-                    faceGenerationMode,
-                    getLocalBlock,
-                    referenceNeighbors,
-                    packedFacePool);
-                SetMeshCounts(meshData);
-                uploadData = new ChunkRenderUploadData(
-                    Interlocked.Increment(ref nextRenderDataId),
-                    chunkWorldPosition.X,
-                    chunkWorldPosition.Y,
-                    chunkWorldPosition.Z,
-                    fullyOccluded,
-                    faceGenerationMode,
-                    meshData);
-                meshData = null;
-            }
-            finally
-            {
-                meshData?.Dispose();
-            }
-        }
 
         private ChunkRender(
             in NativeChunkRenderPacketDescriptor descriptor)
@@ -233,246 +177,12 @@ namespace MVoxelEngine1.Graphics.Terrain
             isBuilt = true;
         }
 
-        private FaceRectangleMeshData GenerateFaces(
-            ChunkPrerenderData prerenderData,
-            FaceGenerationMode faceGenerationMode,
-            Func<int, int, int, ushort>? getLocalBlock,
-            ReferenceNeighborBlockPlanes? referenceNeighbors,
-            PackedFaceNativePool packedFacePool)
-        {
-            if (faceGenerationMode == FaceGenerationMode.Reference)
-            {
-                if (getLocalBlock is null)
-                    throw new ArgumentNullException(nameof(getLocalBlock));
-                if (referenceNeighbors is null)
-                    throw new ArgumentNullException(nameof(referenceNeighbors));
-
-                return GenerateReferenceFaces(
-                    prerenderData,
-                    getLocalBlock,
-                    referenceNeighbors);
-            }
-
-            if (faceGenerationMode != FaceGenerationMode.Optimized)
-                throw new ArgumentOutOfRangeException(nameof(faceGenerationMode));
-
-            if (prepassSolidCount > 0 && faceNegX && facePosX && faceNegY && facePosY && faceNegZ && facePosZ &&
-                nNegXPosX && nPosXNegX && nNegYPosY && nPosYNegY && nNegZPosZ && nPosZNegZ)
-            {
-                fullyOccluded = true;
-                return new FaceRectangleMeshData(
-                    0,
-                    Array.Empty<uint>(),
-                    0,
-                    Array.Empty<uint>());
-            }
-
-            bool recordPerformance = StartupPerformanceRecorder.IsRunning;
-            bool usesGeneratedSpans = prerenderData.GeneratedSpans is not null;
-            long buildStart = recordPerformance ? Stopwatch.GetTimestamp() : 0;
-            var sectionRender = new SectionRender(
-                prerenderData,
-                terrainTextureAtlas,
-                packedFacePool);
-            FaceRectangleMeshData meshData = sectionRender.Build();
-            if (recordPerformance)
-            {
-                MeshPerformanceRecorder.RecordBuiltChunk(
-                    usesGeneratedSpans,
-                    MeshPerformanceRecorder.GetElapsedTicks(buildStart));
-            }
-            return meshData;
-        }
-
-        private void SetMeshCounts(FaceRectangleMeshData mesh)
-        {
-            opaqueFaceCount = mesh.OpaqueFaceCount;
-            opaqueRectangleCount = mesh.OpaqueRectangleCount;
-            transparentFaceCount = mesh.TransparentFaceCount;
-            transparentRectangleCount = mesh.TransparentRectangleCount;
-            fullyOccluded = opaqueFaceCount == 0 && transparentFaceCount == 0;
-        }
-
-        private FaceRectangleMeshData GenerateReferenceFaces(
-            ChunkPrerenderData prerenderData,
-            Func<int, int, int, ushort> getLocalBlock,
-            ReferenceNeighborBlockPlanes referenceNeighbors)
-        {
-            ReferenceFaceGenerationResult faces = prerenderData.GeneratedSpans is not null
-                ? ReferenceFaceGenerator.Generate(
-                    maxX,
-                    maxY,
-                    maxZ,
-                    prerenderData.GeneratedSpans.GetBlockLocal,
-                    referenceNeighbors,
-                    TerrainLoader.IsOpaque)
-                : allOneBlock && allOneBlockId != 0
-                ? ReferenceFaceGenerator.GenerateUniform(
-                    maxX,
-                    maxY,
-                    maxZ,
-                    allOneBlockId,
-                    referenceNeighbors,
-                    TerrainLoader.IsOpaque)
-                : ReferenceFaceGenerator.GenerateSections(
-                    maxX,
-                    maxY,
-                    maxZ,
-                    getLocalBlock,
-                    referenceNeighbors,
-                    TerrainLoader.IsOpaque,
-                    prerenderData.SectionDescs);
-
-            uint[] opaqueTileIndices = BuildReferenceTileIndices(
-                faces.OpaqueBlockIds,
-                faces.OpaqueDirections);
-            uint[] transparentTileIndices = BuildReferenceTileIndices(
-                faces.TransparentBlockIds,
-                faces.TransparentDirections);
-            return FaceRectangleMeshData.FromFaces(
-                faces.OpaqueFaceCount,
-                faces.OpaqueOffsets,
-                opaqueTileIndices,
-                faces.OpaqueDirections,
-                faces.TransparentFaceCount,
-                faces.TransparentOffsets,
-                transparentTileIndices,
-                faces.TransparentDirections);
-        }
-
-        private static uint[] BuildReferenceTileIndices(
-            ReadOnlySpan<ushort> blockIds,
-            ReadOnlySpan<byte> directions)
-        {
-            if (blockIds.Length != directions.Length)
-                throw new InvalidOperationException("Reference face arrays have different lengths.");
-
-            var result = new uint[blockIds.Length];
-            var cache = new Dictionary<int, uint>();
-            for (int index = 0; index < result.Length; index++)
-            {
-                int key = (blockIds[index] << 3) | directions[index];
-                if (!cache.TryGetValue(key, out uint tileIndex))
-                {
-                    tileIndex = SectionRender.ComputeTileIndex(
-                        terrainTextureAtlas,
-                        blockIds[index],
-                        (Faces)directions[index]);
-                    cache.Add(key, tileIndex);
-                }
-
-                result[index] = tileIndex;
-            }
-
-            return result;
-        }
-
-        public void Build()
-        {
-            if (isBuilt) return;
-            if (Volatile.Read(ref deletionScheduled) != 0)
-                throw new ObjectDisposedException(nameof(ChunkRender));
-
-            StartupPerformanceRecorder.RecordGpuStreamingStart();
-
-            // Shared index buffer (bind per-VAO after VAO bind to attach)
-            quadIndexIBO = new IBO(QuadIndices, QuadIndices.Length);
-            quadIndexBuilt = true;
-
-            // Shared static quad position VBO
-            quadPosVBO = new VBO(QuadPositions, QuadPositions.Length);
-            quadPosBuilt = true;
-
-            // ----- OPAQUE VAO -----
-            if (opaqueRectangleCount > 0)
-            {
-                opaqueVAO = new VAO();
-                opaqueVAO.Bind();
-
-                // position (location 0)
-                quadPosVBO.Bind();
-                opaqueVAO.LinkToVAO(0, 3, VertexAttribPointerType.UnsignedByte, false, quadPosVBO);
-
-                ChunkRenderUploadData currentUploadData = uploadData ??
-                    throw new InvalidOperationException(
-                        "The native renderer must upload during its packet callback.");
-                opaqueRectangleVBO = currentUploadData.ReadOpaque(
-                    static view => new VBO(view.AsSpan()),
-                    static rectangles => new VBO(rectangles));
-                opaqueVAO.LinkIntegerToVAO(
-                    2,
-                    PackedFaceRectangle.WordsPerRectangle,
-                    VertexAttribIntegerType.UnsignedInt,
-                    opaqueRectangleVBO);
-                opaqueVAO.SetDivisor(2, 1);
-                opaqueRectangleBuilt = true;
-
-                // Attach IBO to this VAO
-                quadIndexIBO.Bind();
-
-                // Explicitly disable transparent-only attributes on this VAO
-                opaqueVAO.SetAttribEnabled(5, false);
-
-                // Mark this VAO as built for safe deletion later.
-                opaqueVaoBuilt = true;
-            }
-
-            // ----- TRANSPARENT VAO -----
-            if (transparentRectangleCount > 0)
-            {
-                transparentVAO = new VAO();
-                transparentVAO.Bind();
-
-                // position (location 0)
-                quadPosVBO.Bind();
-                transparentVAO.LinkToVAO(0, 3, VertexAttribPointerType.UnsignedByte, false, quadPosVBO);
-
-                ChunkRenderUploadData currentUploadData = uploadData ??
-                    throw new InvalidOperationException(
-                        "The native renderer must upload during its packet callback.");
-                transparentRectangleVBO = currentUploadData.ReadTransparent(
-                    static view => new VBO(
-                        view.AsSpan(),
-                        RenderPass.Transparent),
-                    static rectangles => new VBO(
-                        rectangles,
-                        RenderPass.Transparent));
-                transparentVAO.LinkIntegerToVAO(
-                    5,
-                    PackedFaceRectangle.WordsPerRectangle,
-                    VertexAttribIntegerType.UnsignedInt,
-                    transparentRectangleVBO);
-                transparentVAO.SetDivisor(5, 1);
-                transparentRectangleBuilt = true;
-
-                // Attach IBO to this VAO
-                quadIndexIBO.Bind();
-
-                // Explicitly disable opaque-only attributes on this VAO
-                transparentVAO.SetAttribEnabled(2, false);
-
-                // Mark this VAO as built for safe deletion later.
-                transparentVaoBuilt = true;
-            }
-
-            isBuilt = true;
-            if (opaqueFaceCount != 0 || transparentFaceCount != 0)
-            {
-                double? generationToRender =
-                    StartupPerformanceRecorder.RecordGenerationToRender();
-                if (generationToRender.HasValue)
-                {
-                    Console.WriteLine(FormattableString.Invariant(
-                        $"Generation to Render time (GTRT): {generationToRender.Value:R} ms."));
-                }
-            }
-        }
-
         // Opaque pass: draws opaque face instances only. Depth test/write is managed by the caller.
         public void RenderOpaque(ShaderProgram program)
         {
             ProcessPendingDeletes();
-            if (!isBuilt) Build();
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref deletionScheduled) != 0, this);
+            if (!isBuilt) throw new InvalidOperationException("Native words must be uploaded before rendering.");
 
             if (fullyOccluded || opaqueRectangleCount == 0)
                 return;
@@ -503,7 +213,8 @@ namespace MVoxelEngine1.Graphics.Terrain
         public void RenderTransparent(ShaderProgram program)
         {
             ProcessPendingDeletes();
-            if (!isBuilt) Build();
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref deletionScheduled) != 0, this);
+            if (!isBuilt) throw new InvalidOperationException("Native words must be uploaded before rendering.");
 
             if (fullyOccluded || transparentRectangleCount == 0)
                 return;
@@ -542,7 +253,6 @@ namespace MVoxelEngine1.Graphics.Terrain
             if (Interlocked.Exchange(ref deletionScheduled, 1) != 0)
                 return;
 
-            Interlocked.Exchange(ref uploadData, null)?.Dispose();
             if (isBuilt)
                 pendingDeletion.Enqueue(this);
         }

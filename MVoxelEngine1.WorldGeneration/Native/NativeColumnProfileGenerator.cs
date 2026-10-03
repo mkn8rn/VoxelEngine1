@@ -196,7 +196,7 @@ internal static class NativeColumnProfileGenerator
         int baseWorldX = unchecked(column.ChunkX * sizeX);
         int baseWorldZ = unchecked(column.ChunkZ * sizeZ);
         NativeOpenSimplexNoiseState noise = session.NoiseState;
-        Quadrant.FillHeightMap(
+        NativeHeightMap.FillHeightMap(
             noise.Permutation,
             noise.Permutation2D,
             baseWorldX,

@@ -1,4 +1,4 @@
-﻿using MVoxelEngine1.Infrastructure.Models.Generation;
+using MVoxelEngine1.Infrastructure.Models.Generation;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;

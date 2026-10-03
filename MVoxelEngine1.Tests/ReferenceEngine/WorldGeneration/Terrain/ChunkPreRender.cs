@@ -1,4 +1,4 @@
-﻿using MVoxelEngine1.Graphics.Terrain;
+using MVoxelEngine1.Graphics.Terrain;
 using MVoxelEngine1.Infrastructure.Models.Generation;
 using MVoxelEngine1.Infrastructure.Models.Generation;
 using MVoxelEngine1.Infrastructure.Models.Terrain;
@@ -208,7 +208,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
 
         internal ChunkMeshPrepassStats MeshPrepassStats; // changed to field to allow direct mutation
 
-        // Mesh prepass stats generated during flattening to avoid extra scans in ChunkRender
+        // Mesh prepass stats generated during flattening to avoid extra scans in ReferenceChunkRender
         internal struct ChunkMeshPrepassStats
         {
             public int SolidCount;              // opaque voxel count at chunk level
@@ -472,7 +472,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             return arr;
         }
 
-        internal ChunkRender? CreateRender(
+        internal ReferenceChunkRender? CreateRender(
             FaceGenerationMode faceGenerationMode,
             ReferenceNeighborBlockPlanes? referenceNeighbors,
             PackedFaceNativePool packedFacePool)
@@ -487,7 +487,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             if (generatedSpans is not null)
             {
                 MeshPrepassStats = default;
-                return new ChunkRender(
+                return new ReferenceChunkRender(
                     BuildPrerenderData(null),
                     faceGenerationMode,
                     GetBlockLocal,
@@ -513,7 +513,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                     HasStats = uniformOpaque
                 };
                 var prerenderUniform = BuildPrerenderData(BuildSectionDescriptors());
-                return new ChunkRender(
+                return new ReferenceChunkRender(
                     prerenderUniform,
                     faceGenerationMode,
                     GetBlockLocal,
@@ -577,7 +577,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             if (totalOpaque == 0 && !anyTransparent) return null;
 
             var prerender = BuildPrerenderData(BuildSectionDescriptors());
-            return new ChunkRender(
+            return new ReferenceChunkRender(
                 prerender,
                 faceGenerationMode,
                 GetBlockLocal,
@@ -585,9 +585,9 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                 packedFacePool);
         }
 
-        internal void PublishRender(ChunkRender? renderer)
+        internal void PublishRender(ReferenceChunkRender? renderer)
         {
-            ChunkRender? previous = chunkRender;
+            ReferenceChunkRender? previous = chunkRender;
             chunkRender = renderer;
             previous?.ScheduleDelete();
         }

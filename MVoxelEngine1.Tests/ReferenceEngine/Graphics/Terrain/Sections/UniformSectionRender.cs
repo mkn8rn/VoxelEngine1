@@ -1,4 +1,4 @@
-﻿using MVoxelEngine1.Infrastructure.Models.Generation;
+using MVoxelEngine1.Infrastructure.Models.Generation;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using MVoxelEngine1.Graphics.Models;

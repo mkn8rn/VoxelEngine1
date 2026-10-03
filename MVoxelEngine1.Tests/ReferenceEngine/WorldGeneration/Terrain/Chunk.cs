@@ -1,4 +1,4 @@
-﻿using MVoxelEngine1.WorldGeneration.Utils;
+using MVoxelEngine1.WorldGeneration.Utils;
 using MVoxelEngine1.Graphics;
 using MVoxelEngine1.Infrastructure.Diagnostics;
 using MVoxelEngine1.Graphics.Terrain;
@@ -24,7 +24,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
         private readonly byte generatedMaterialMask;
 
         public Vector3 position { get; set; }
-        public ChunkRender? chunkRender;
+        public ReferenceChunkRender? chunkRender;
         public ChunkData chunkData;
         public string saveDirectory;
         public long generationSeed;
@@ -274,9 +274,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
         }
 
         // Opaque pass forwarding for this chunk's renderer.
-        public void RenderOpaque(ShaderProgram program) => chunkRender?.RenderOpaque(program);
         // Transparent pass forwarding for this chunk's renderer.
-        public void RenderTransparent(ShaderProgram program) => chunkRender?.RenderTransparent(program);
 
         public Section GetOrCreateSection(int sx, int sy, int sz)
         {

@@ -230,13 +230,13 @@ public sealed class NativeGtrtPipeline : IDisposable
             game = NativeGameSnapshot.Create(textureAtlas);
             int sectionCountX = DivideRoundUp(
                 settings.chunkMaxX,
-                Section.SECTION_SIZE);
+                VoxelSection.Size);
             int sectionCountY = DivideRoundUp(
                 settings.chunkMaxY,
-                Section.SECTION_SIZE);
+                VoxelSection.Size);
             int sectionCountZ = DivideRoundUp(
                 settings.chunkMaxZ,
-                Section.SECTION_SIZE);
+                VoxelSection.Size);
             int editableSectionCapacity = checked(
                 NativeGtrtSessionLayout.DefaultMaterializedChunkCapacity *
                 sectionCountX *

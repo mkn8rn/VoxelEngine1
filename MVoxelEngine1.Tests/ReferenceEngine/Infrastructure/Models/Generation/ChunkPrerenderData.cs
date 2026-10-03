@@ -1,4 +1,4 @@
-﻿using MVoxelEngine1.Infrastructure.Models.Terrain;
+using MVoxelEngine1.Infrastructure.Models.Terrain;
 using System;
 using System.Collections.Generic;
 using System.Linq;

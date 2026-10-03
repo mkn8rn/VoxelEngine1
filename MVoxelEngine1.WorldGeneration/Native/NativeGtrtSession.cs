@@ -368,14 +368,14 @@ internal readonly struct NativeGtrtSessionLayout
         ProfilesPerColumn = checked(chunkSizeX * chunkSizeZ);
         ProfileCount = checked(ColumnCount * ProfilesPerColumn);
         SectionCountX = checked(
-            (chunkSizeX + Section.SECTION_SIZE - 1) /
-            Section.SECTION_SIZE);
+            (chunkSizeX + VoxelSection.Size - 1) /
+            VoxelSection.Size);
         SectionCountY = checked(
-            (chunkSizeY + Section.SECTION_SIZE - 1) /
-            Section.SECTION_SIZE);
+            (chunkSizeY + VoxelSection.Size - 1) /
+            VoxelSection.Size);
         SectionCountZ = checked(
-            (chunkSizeZ + Section.SECTION_SIZE - 1) /
-            Section.SECTION_SIZE);
+            (chunkSizeZ + VoxelSection.Size - 1) /
+            VoxelSection.Size);
         SectionsPerChunk = checked(
             SectionCountX * SectionCountY * SectionCountZ);
         MaterializedChunkCapacity = materializedChunkCapacity;
@@ -386,7 +386,7 @@ internal readonly struct NativeGtrtSessionLayout
         MaterializedSectionMapCount = checked(
             materializedChunkCapacity * SectionsPerChunk);
         MaterializedRawVoxelCount = checked(
-            resolvedRawSectionCapacity * Section.VOXELS_PER_SECTION);
+            resolvedRawSectionCapacity * VoxelSection.VoxelCount);
         GenerationWorkerCount = generationWorkerCount;
         GenerationFloatCountPerWorker = checked(
             ProfilesPerColumn * 2);

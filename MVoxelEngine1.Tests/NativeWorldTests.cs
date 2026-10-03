@@ -33,6 +33,21 @@ public sealed class NativeWorldTests
     }
 
     [Fact]
+    public void ProductionAssembliesContainOnlyTheNativeTerrainAndPacketRoute()
+    {
+        Assert.Null(typeof(NativeWorld).Assembly.GetType("MVoxelEngine1.WorldGeneration.World"));
+        Assert.Null(typeof(NativeWorld).Assembly.GetType("MVoxelEngine1.WorldGeneration.Terrain.Chunk"));
+        Assert.Null(typeof(BlockType).Assembly.GetType("MVoxelEngine1.Infrastructure.Models.Generation.Section"));
+        Assert.Null(typeof(BlockType).Assembly.GetType("MVoxelEngine1.Infrastructure.Models.Generation.GeneratedChunkSpanData"));
+        Assert.Null(typeof(ChunkRender).Assembly.GetType("MVoxelEngine1.Graphics.Terrain.ChunkRenderUploadData"));
+        Assert.Null(typeof(ChunkRender).Assembly.GetType("MVoxelEngine1.Graphics.Terrain.FaceRectangleMeshData"));
+        Assert.Null(typeof(ChunkRender).Assembly.GetType("MVoxelEngine1.Graphics.Models.RawFaceData"));
+        Assert.DoesNotContain(typeof(ChunkRender).GetFields(
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic),
+            field => field.FieldType.IsArray);
+    }
+
+    [Fact]
     public void RetiredPacketsRemainInspectableUntilMovement()
     {
         LoadDefaultGame();

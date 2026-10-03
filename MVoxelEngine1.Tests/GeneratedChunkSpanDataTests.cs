@@ -77,15 +77,15 @@ namespace MVoxelEngine1.Tests
                 waterBlockId: secondTransparentRuntimeBlock);
 
             ChunkPrerenderData data = CreatePrerenderData(source);
-            ChunkRender.terrainTextureAtlas = atlas;
+            ReferenceChunkRender.terrainTextureAtlas = atlas;
             using var pool = new PackedFaceNativePool();
-            using var optimized = new ChunkRender(
+            using var optimized = new ReferenceChunkRender(
                 data,
                 FaceGenerationMode.Optimized,
                 null,
                 null,
                 pool);
-            using var reference = new ChunkRender(
+            using var reference = new ReferenceChunkRender(
                 data,
                 FaceGenerationMode.Reference,
                 source.GetBlockLocal,
@@ -141,15 +141,15 @@ namespace MVoxelEngine1.Tests
                 waterBlockId: secondTransparentRuntimeBlock);
 
             ChunkPrerenderData data = CreatePrerenderData(source);
-            ChunkRender.terrainTextureAtlas = atlas;
+            ReferenceChunkRender.terrainTextureAtlas = atlas;
             using var pool = new PackedFaceNativePool();
-            using var optimized = new ChunkRender(
+            using var optimized = new ReferenceChunkRender(
                 data,
                 FaceGenerationMode.Optimized,
                 null,
                 null,
                 pool);
-            using var reference = new ChunkRender(
+            using var reference = new ReferenceChunkRender(
                 data,
                 FaceGenerationMode.Reference,
                 source.GetBlockLocal,
@@ -176,15 +176,15 @@ namespace MVoxelEngine1.Tests
                 waterBlockId: (ushort)BaseBlockType.Water,
                 orderedContiguousSpans: true);
             ChunkPrerenderData data = CreatePrerenderData(source);
-            ChunkRender.terrainTextureAtlas = atlas;
+            ReferenceChunkRender.terrainTextureAtlas = atlas;
             using var pool = new PackedFaceNativePool();
-            using var optimized = new ChunkRender(
+            using var optimized = new ReferenceChunkRender(
                 data,
                 FaceGenerationMode.Optimized,
                 null,
                 null,
                 pool);
-            using var reference = new ChunkRender(
+            using var reference = new ReferenceChunkRender(
                 data,
                 FaceGenerationMode.Reference,
                 source.GetBlockLocal,
@@ -230,9 +230,9 @@ namespace MVoxelEngine1.Tests
                 soilBlockId: (ushort)BaseBlockType.Soil,
                 waterBlockId: (ushort)BaseBlockType.Water,
                 orderedContiguousSpans: true);
-            ChunkRender.terrainTextureAtlas = atlas;
+            ReferenceChunkRender.terrainTextureAtlas = atlas;
             using var pool = new PackedFaceNativePool();
-            using var managed = new ChunkRender(
+            using var managed = new ReferenceChunkRender(
                 CreatePrerenderData(source),
                 FaceGenerationMode.Optimized,
                 null,
@@ -314,10 +314,10 @@ namespace MVoxelEngine1.Tests
                 soilBlockId: (ushort)BaseBlockType.Soil,
                 waterBlockId: (ushort)BaseBlockType.Water);
             ChunkPrerenderData data = CreatePrerenderData(source);
-            ChunkRender.terrainTextureAtlas = atlas;
+            ReferenceChunkRender.terrainTextureAtlas = atlas;
             using var pool = new PackedFaceNativePool();
 
-            Assert.Throws<InvalidDataException>(() => new ChunkRender(
+            Assert.Throws<InvalidDataException>(() => new ReferenceChunkRender(
                 data,
                 FaceGenerationMode.Optimized,
                 null,
@@ -350,15 +350,15 @@ namespace MVoxelEngine1.Tests
                 soilBlockId: (ushort)BaseBlockType.Stone,
                 waterBlockId: 257);
             ChunkPrerenderData data = CreatePrerenderData(source);
-            ChunkRender.terrainTextureAtlas = atlas;
+            ReferenceChunkRender.terrainTextureAtlas = atlas;
             using var pool = new PackedFaceNativePool();
-            using var optimized = new ChunkRender(
+            using var optimized = new ReferenceChunkRender(
                 data,
                 FaceGenerationMode.Optimized,
                 null,
                 null,
                 pool);
-            using var reference = new ChunkRender(
+            using var reference = new ReferenceChunkRender(
                 data,
                 FaceGenerationMode.Reference,
                 source.GetBlockLocal,
@@ -398,15 +398,15 @@ namespace MVoxelEngine1.Tests
                 waterBlockId: (ushort)BaseBlockType.Water,
                 materialMask: 0b001);
             ChunkPrerenderData data = CreatePrerenderData(source);
-            ChunkRender.terrainTextureAtlas = atlas;
+            ReferenceChunkRender.terrainTextureAtlas = atlas;
             using var pool = new PackedFaceNativePool();
-            using var optimized = new ChunkRender(
+            using var optimized = new ReferenceChunkRender(
                 data,
                 FaceGenerationMode.Optimized,
                 null,
                 null,
                 pool);
-            using var reference = new ChunkRender(
+            using var reference = new ReferenceChunkRender(
                 data,
                 FaceGenerationMode.Reference,
                 source.GetBlockLocal,
@@ -450,9 +450,9 @@ namespace MVoxelEngine1.Tests
                 stoneBlockId: (ushort)BaseBlockType.Stone,
                 soilBlockId: (ushort)BaseBlockType.Soil,
                 waterBlockId: (ushort)BaseBlockType.Water);
-            ChunkRender.terrainTextureAtlas = atlas;
+            ReferenceChunkRender.terrainTextureAtlas = atlas;
             using var pool = new PackedFaceNativePool();
-            using var large = new ChunkRender(
+            using var large = new ReferenceChunkRender(
                 CreatePrerenderData(largeSource),
                 FaceGenerationMode.Optimized,
                 null,
@@ -483,13 +483,13 @@ namespace MVoxelEngine1.Tests
                 soilBlockId: (ushort)BaseBlockType.Soil,
                 waterBlockId: (ushort)BaseBlockType.Water);
             ChunkPrerenderData smallData = CreatePrerenderData(smallSource);
-            using var optimized = new ChunkRender(
+            using var optimized = new ReferenceChunkRender(
                 smallData,
                 FaceGenerationMode.Optimized,
                 null,
                 null,
                 pool);
-            using var reference = new ChunkRender(
+            using var reference = new ReferenceChunkRender(
                 smallData,
                 FaceGenerationMode.Reference,
                 smallSource.GetBlockLocal,
@@ -515,9 +515,9 @@ namespace MVoxelEngine1.Tests
                 soilBlockId: (ushort)BaseBlockType.Soil,
                 waterBlockId: (ushort)BaseBlockType.Water);
             ChunkPrerenderData prerenderData = CreatePrerenderData(source);
-            ChunkRender.terrainTextureAtlas = atlas;
+            ReferenceChunkRender.terrainTextureAtlas = atlas;
             var pool = new PackedFaceNativePool();
-            var renderer = new ChunkRender(
+            var renderer = new ReferenceChunkRender(
                 prerenderData,
                 FaceGenerationMode.Optimized,
                 null,
@@ -562,7 +562,7 @@ namespace MVoxelEngine1.Tests
                 stoneBlockId: (ushort)BaseBlockType.Stone,
                 soilBlockId: (ushort)BaseBlockType.Soil,
                 waterBlockId: (ushort)BaseBlockType.Water);
-            (ChunkRender renderer, WeakReference<ulong[]> neighbor,
+            (ReferenceChunkRender renderer, WeakReference<ulong[]> neighbor,
                 PackedFaceNativePool pool) =
                 CreateRendererWithBorrowedNeighbor(source, atlas);
 
@@ -910,7 +910,7 @@ namespace MVoxelEngine1.Tests
 
         [MethodImpl(MethodImplOptions.NoInlining)]
         private static (
-            ChunkRender Renderer,
+            ReferenceChunkRender Renderer,
             WeakReference<ulong[]> Neighbor,
             PackedFaceNativePool Pool)
             CreateRendererWithBorrowedNeighbor(
@@ -920,9 +920,9 @@ namespace MVoxelEngine1.Tests
             ChunkPrerenderData data = CreatePrerenderData(source);
             ulong[] neighbor = data.NeighborPlaneNegX;
             var weakNeighbor = new WeakReference<ulong[]>(neighbor);
-            ChunkRender.terrainTextureAtlas = atlas;
+            ReferenceChunkRender.terrainTextureAtlas = atlas;
             var pool = new PackedFaceNativePool();
-            var renderer = new ChunkRender(
+            var renderer = new ReferenceChunkRender(
                 data,
                 FaceGenerationMode.Optimized,
                 null,

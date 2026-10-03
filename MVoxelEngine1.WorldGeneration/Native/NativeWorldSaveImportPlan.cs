@@ -75,13 +75,13 @@ internal sealed class NativeWorldSaveImportPlan
 
         int sectionCountX = DivideRoundUp(
             settings.chunkMaxX,
-            Section.SECTION_SIZE);
+            VoxelSection.Size);
         int sectionCountY = DivideRoundUp(
             settings.chunkMaxY,
-            Section.SECTION_SIZE);
+            VoxelSection.Size);
         int sectionCountZ = DivideRoundUp(
             settings.chunkMaxZ,
-            Section.SECTION_SIZE);
+            VoxelSection.Size);
         if (!Directory.Exists(quadsDirectory))
         {
             return new NativeWorldSaveImportPlan(
@@ -483,9 +483,9 @@ internal sealed class NativeWorldSaveImportPlan
             case SavedSectionKind.Raw:
                 ReadOnlySpan<byte> raw = payload.AsSpan(
                     section.DataOffset,
-                    Section.VOXELS_PER_SECTION * sizeof(ushort));
+                    VoxelSection.VoxelCount * sizeof(ushort));
                 for (int index = 0;
-                     index < Section.VOXELS_PER_SECTION;
+                     index < VoxelSection.VoxelCount;
                      index++)
                 {
                     ushort blockId = BinaryPrimitives.ReadUInt16LittleEndian(
@@ -513,7 +513,7 @@ internal sealed class NativeWorldSaveImportPlan
                     section.WordOffset,
                     section.WordCount * sizeof(uint));
                 for (int voxelIndex = 0;
-                     voxelIndex < Section.VOXELS_PER_SECTION;
+                     voxelIndex < VoxelSection.VoxelCount;
                      voxelIndex++)
                 {
                     int paletteIndex = ReadPackedIndex(
@@ -559,10 +559,10 @@ internal sealed class NativeWorldSaveImportPlan
         byte[] payload,
         scoped in SavedSection section)
     {
-        Span<ushort> voxels = stackalloc ushort[Section.VOXELS_PER_SECTION];
+        Span<ushort> voxels = stackalloc ushort[VoxelSection.VoxelCount];
         ReadOnlySpan<byte> bytes = payload.AsSpan(
             section.DataOffset,
-            Section.VOXELS_PER_SECTION * sizeof(ushort));
+            VoxelSection.VoxelCount * sizeof(ushort));
         for (int index = 0; index < voxels.Length; index++)
         {
             voxels[index] = BinaryPrimitives.ReadUInt16LittleEndian(
@@ -796,7 +796,7 @@ internal sealed class NativeWorldSaveImportPlan
                 break;
             case SavedSectionKind.Raw:
                 int dataOffset = checked(payloadOffset + reader.Position);
-                reader.Skip(Section.VOXELS_PER_SECTION * sizeof(ushort));
+                reader.Skip(VoxelSection.VoxelCount * sizeof(ushort));
                 section = new SavedSection(
                     kind,
                     0,
@@ -811,7 +811,7 @@ internal sealed class NativeWorldSaveImportPlan
                 byte bitsPerIndex = reader.ReadByte();
                 int paletteCount = reader.ReadUInt16();
                 if (bitsPerIndex is 0 or > 16 ||
-                    paletteCount is <= 0 or > Section.VOXELS_PER_SECTION)
+                    paletteCount is <= 0 or > VoxelSection.VoxelCount)
                 {
                     throw new InvalidDataException(
                         "A saved packed section has invalid indexing metadata.");
@@ -820,7 +820,7 @@ internal sealed class NativeWorldSaveImportPlan
                 reader.Skip(checked(paletteCount * sizeof(ushort)));
                 int wordCount = reader.ReadInt32();
                 int minimumWordCount = checked(
-                    (Section.VOXELS_PER_SECTION * bitsPerIndex + 31) / 32);
+                    (VoxelSection.VoxelCount * bitsPerIndex + 31) / 32);
                 if (wordCount < minimumWordCount)
                 {
                     throw new InvalidDataException(
@@ -889,7 +889,7 @@ internal sealed class NativeWorldSaveImportPlan
         chunkZ = BinaryPrimitives.ReadInt32LittleEndian(header[8..]);
         int payloadLength = BinaryPrimitives.ReadInt32LittleEndian(header[12..]);
         (int expectedBatchX, int expectedBatchZ) =
-            Quadrant.GetBatchIndices(chunkX, chunkZ);
+            NativeSavePartition.GetBatchIndices(chunkX, chunkZ);
         if (expectedBatchX != batchX || expectedBatchZ != batchZ ||
             payloadLength <= 0 ||
             payloadLength >

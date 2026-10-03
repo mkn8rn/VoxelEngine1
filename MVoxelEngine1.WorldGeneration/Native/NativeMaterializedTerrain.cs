@@ -322,7 +322,7 @@ internal static class NativeMaterializedTerrain
 
         Span<ushort> raw = session.MaterializedRawVoxels.Slice(
             rawVoxelOffset,
-            Section.VOXELS_PER_SECTION);
+            VoxelSection.VoxelCount);
         if (newSection)
         {
             if (newChunk ||
@@ -578,7 +578,7 @@ internal static class NativeMaterializedTerrain
                 return false;
             Span<ushort> raw = session.MaterializedRawVoxels.Slice(
                 rawVoxelOffset,
-                Section.VOXELS_PER_SECTION);
+                VoxelSection.VoxelCount);
             if (!CopyGeneratedSection(
                     ref session,
                     chunkIndex,
@@ -860,7 +860,7 @@ internal static class NativeMaterializedTerrain
         int sectionIndex,
         scoped ReadOnlySpan<ushort> voxels)
     {
-        if (voxels.Length != Section.VOXELS_PER_SECTION ||
+        if (voxels.Length != VoxelSection.VoxelCount ||
             !CanImportSection(
                 ref session,
                 materializedChunkIndex,
@@ -887,7 +887,7 @@ internal static class NativeMaterializedTerrain
 
         voxels.CopyTo(session.MaterializedRawVoxels.Slice(
             rawVoxelOffset,
-            Section.VOXELS_PER_SECTION));
+            VoxelSection.VoxelCount));
         session.MaterializedSections[sectionRecordIndex] =
             new NativeMaterializedSectionRecord
             {
@@ -916,7 +916,7 @@ internal static class NativeMaterializedTerrain
         scoped ReadOnlySpan<uint> packedWords)
     {
         int minimumWordCount = bitsPerIndex is > 0 and <= 16
-            ? checked((Section.VOXELS_PER_SECTION * bitsPerIndex + 31) / 32)
+            ? checked((VoxelSection.VoxelCount * bitsPerIndex + 31) / 32)
             : -1;
         if (palette.IsEmpty ||
             palette.Length > ushort.MaxValue ||
@@ -942,7 +942,7 @@ internal static class NativeMaterializedTerrain
             }
         }
         for (int voxelIndex = 0;
-             voxelIndex < Section.VOXELS_PER_SECTION;
+             voxelIndex < VoxelSection.VoxelCount;
              voxelIndex++)
         {
             int paletteIndex = ReadPackedIndex(
@@ -1016,17 +1016,17 @@ internal static class NativeMaterializedTerrain
             out int sectionX,
             out int sectionY,
             out int sectionZ);
-        int baseX = sectionX * Section.SECTION_SIZE;
-        int baseY = sectionY * Section.SECTION_SIZE;
-        int baseZ = sectionZ * Section.SECTION_SIZE;
+        int baseX = sectionX * VoxelSection.Size;
+        int baseY = sectionY * VoxelSection.Size;
+        int baseZ = sectionZ * VoxelSection.Size;
         int endX = Math.Min(
-            baseX + Section.SECTION_SIZE,
+            baseX + VoxelSection.Size,
             session.ChunkSizeX);
         int endY = Math.Min(
-            baseY + Section.SECTION_SIZE,
+            baseY + VoxelSection.Size,
             session.ChunkSizeY);
         int endZ = Math.Min(
-            baseZ + Section.SECTION_SIZE,
+            baseZ + VoxelSection.Size,
             session.ChunkSizeZ);
         for (int localZ = baseZ; localZ < endZ; localZ++)
         {
@@ -1149,7 +1149,7 @@ internal static class NativeMaterializedTerrain
         }
 
         int rawSectionIndex = state.MaterializedRawSectionCount++;
-        return checked(rawSectionIndex * Section.VOXELS_PER_SECTION);
+        return checked(rawSectionIndex * VoxelSection.VoxelCount);
     }
 
     private static bool TryDecodePackedSection(
@@ -1157,7 +1157,7 @@ internal static class NativeMaterializedTerrain
         scoped in NativeMaterializedSectionRecord section,
         Span<ushort> destination)
     {
-        if (destination.Length != Section.VOXELS_PER_SECTION)
+        if (destination.Length != VoxelSection.VoxelCount)
         {
             session.Fail(NativeGtrtFailureCode.InvalidMaterializedTerrain);
             return false;
@@ -1307,10 +1307,10 @@ internal static class NativeMaterializedTerrain
                 section.PackedWordOffset == -1,
             NativeSectionStorageKind.Raw =>
                 section.RawVoxelOffset >= 0 &&
-                section.RawVoxelOffset % Section.VOXELS_PER_SECTION == 0 &&
+                section.RawVoxelOffset % VoxelSection.VoxelCount == 0 &&
                 section.RawVoxelOffset <=
                     session.MaterializedRawVoxels.Length -
-                    Section.VOXELS_PER_SECTION,
+                    VoxelSection.VoxelCount,
             NativeSectionStorageKind.Packed =>
                 section.RawVoxelOffset == -1 &&
                 section.BitsPerIndex is > 0 and <= 16 &&
@@ -1345,13 +1345,13 @@ internal static class NativeMaterializedTerrain
     {
         int sectionX = coordinatesAreSections
             ? x
-            : x / Section.SECTION_SIZE;
+            : x / VoxelSection.Size;
         int sectionY = coordinatesAreSections
             ? y
-            : y / Section.SECTION_SIZE;
+            : y / VoxelSection.Size;
         int sectionZ = coordinatesAreSections
             ? z
-            : z / Section.SECTION_SIZE;
+            : z / VoxelSection.Size;
         return checked(
             ((sectionX * session.SectionCountY) + sectionY) *
             session.SectionCountZ + sectionZ);
@@ -1359,9 +1359,9 @@ internal static class NativeMaterializedTerrain
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int GetSectionLocalIndex(int x, int y, int z) =>
-        (((z & (Section.SECTION_SIZE - 1)) * Section.SECTION_SIZE) +
-         (x & (Section.SECTION_SIZE - 1))) * Section.SECTION_SIZE +
-        (y & (Section.SECTION_SIZE - 1));
+        (((z & (VoxelSection.Size - 1)) * VoxelSection.Size) +
+         (x & (VoxelSection.Size - 1))) * VoxelSection.Size +
+        (y & (VoxelSection.Size - 1));
 
     private static void GetSectionCoordinates(
         scoped ref NativeGtrtSessionView session,
