@@ -3,6 +3,9 @@ using MVoxelEngine1.Infrastructure.Models.Generation;
 
 namespace MVoxelEngine1.WorldGeneration.Native;
 
+internal readonly record struct NativeMaterializedStorageRequirements(
+    int ChunkCount, int SectionCount, int RawSectionCount);
+
 internal static class NativeMaterializedTerrain
 {
     private const int ActiveRecord = 1;
@@ -503,6 +506,59 @@ internal static class NativeMaterializedTerrain
         return true;
     }
 
+    internal static bool TryGetEditStorageRequirements(
+        scoped ref NativeGtrtSessionView session,
+        int chunkIndex,
+        int localX,
+        int localY,
+        int localZ,
+        out NativeMaterializedStorageRequirements requirements)
+    {
+        requirements = default;
+        if (!CanWrite(ref session) || (uint)chunkIndex >= (uint)session.ChunkCount)
+            return false;
+
+        NativeChunkRecord chunk = session.Chunks[chunkIndex];
+        int materializedIndex = chunk.MaterializedChunkIndex;
+        NativeMaterializedChunkRecord materialized = materializedIndex >= 0
+            ? session.MaterializedChunks[materializedIndex] : default;
+        int targetSection = GetSectionIndex(ref session, localX, localY, localZ);
+        int newSections = 0;
+        int newRawSections = 0;
+        Span<ushort> scratch = stackalloc ushort[VoxelSection.VoxelCount];
+        for (int sectionIndex = 0; sectionIndex < session.SectionsPerChunk; sectionIndex++)
+        {
+            int recordIndex = materializedIndex >= 0
+                ? session.MaterializedSectionMaps[materialized.SectionMapOffset + sectionIndex] : -1;
+            if (recordIndex >= 0)
+            {
+                if (sectionIndex == targetSection &&
+                    session.MaterializedSections[recordIndex].StorageKind != NativeSectionStorageKind.Raw)
+                    newRawSections++;
+                continue;
+            }
+            bool generated = materializedIndex < 0 ||
+                materialized.StorageKind == NativeChunkStorageKind.HybridSections;
+            if (!generated && sectionIndex != targetSection)
+                continue;
+            newSections++;
+            if (sectionIndex == targetSection)
+            {
+                newRawSections++;
+                continue;
+            }
+            if (!CopyGeneratedSection(ref session, chunkIndex, sectionIndex, scratch))
+                return false;
+            if (scratch.IndexOfAnyExcept(scratch[0]) >= 0)
+                newRawSections++;
+        }
+        requirements = new NativeMaterializedStorageRequirements(
+            checked(session.State.MaterializedChunkCount + (materializedIndex < 0 ? 1 : 0)),
+            checked(session.State.MaterializedSectionCount + newSections),
+            checked(session.State.MaterializedRawSectionCount + newRawSections));
+        return true;
+    }
+
     internal static bool TryMaterializeCompleteChunk(
         scoped ref NativeGtrtSessionView session,
         int chunkIndex)
@@ -544,20 +600,27 @@ internal static class NativeMaterializedTerrain
         }
 
         int missingSectionCount = 0;
+        int missingRawSectionCount = 0;
+        Span<ushort> scratch = stackalloc ushort[VoxelSection.VoxelCount];
         for (int sectionIndex = 0;
              sectionIndex < session.SectionsPerChunk;
              sectionIndex++)
         {
             int mapIndex = checked(
                 materialized.SectionMapOffset + sectionIndex);
-            if (session.MaterializedSectionMaps[mapIndex] < 0)
-                missingSectionCount++;
+            if (session.MaterializedSectionMaps[mapIndex] >= 0)
+                continue;
+            missingSectionCount++;
+            if (!CopyGeneratedSection(ref session, chunkIndex, sectionIndex, scratch))
+                return false;
+            if (scratch.IndexOfAnyExcept(scratch[0]) >= 0)
+                missingRawSectionCount++;
         }
 
         if (missingSectionCount >
                 session.MaterializedSectionCapacity -
                 session.State.MaterializedSectionCount ||
-            missingSectionCount >
+            missingRawSectionCount >
                 session.MaterializedRawSectionCapacity -
                 session.State.MaterializedRawSectionCount)
         {
@@ -575,19 +638,22 @@ internal static class NativeMaterializedTerrain
             if (session.MaterializedSectionMaps[mapIndex] >= 0)
                 continue;
 
-            int rawVoxelOffset = TryAllocateRawSection(ref session);
-            if (rawVoxelOffset < 0)
-                return false;
-            Span<ushort> raw = session.MaterializedRawVoxels.Slice(
-                rawVoxelOffset,
-                VoxelSection.VoxelCount);
             if (!CopyGeneratedSection(
                     ref session,
                     chunkIndex,
                     sectionIndex,
-                    raw))
+                    scratch))
             {
                 return false;
+            }
+            bool uniform = scratch.IndexOfAnyExcept(scratch[0]) < 0;
+            int rawVoxelOffset = -1;
+            if (!uniform)
+            {
+                rawVoxelOffset = TryAllocateRawSection(ref session);
+                if (rawVoxelOffset < 0)
+                    return false;
+                scratch.CopyTo(session.MaterializedRawVoxels.Slice(rawVoxelOffset, VoxelSection.VoxelCount));
             }
 
             int sectionRecordIndex =
@@ -601,7 +667,8 @@ internal static class NativeMaterializedTerrain
                     PaletteOffset = -1,
                     PackedWordOffset = -1,
                     Revision = 1,
-                    StorageKind = NativeSectionStorageKind.Raw
+                    UniformBlockId = uniform ? scratch[0] : (ushort)0,
+                    StorageKind = uniform ? NativeSectionStorageKind.Uniform : NativeSectionStorageKind.Raw
                 };
             session.MaterializedSectionMaps[mapIndex] = sectionRecordIndex;
         }
@@ -1014,7 +1081,7 @@ internal static class NativeMaterializedTerrain
         scoped ref NativeGtrtSessionView session,
         int chunkIndex,
         int sectionIndex,
-        Span<ushort> destination)
+        scoped Span<ushort> destination)
     {
         destination.Clear();
         GetSectionCoordinates(
@@ -1344,7 +1411,7 @@ internal static class NativeMaterializedTerrain
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int GetSectionIndex(
+    internal static int GetSectionIndex(
         scoped ref NativeGtrtSessionView session,
         int x,
         int y,
@@ -1366,7 +1433,7 @@ internal static class NativeMaterializedTerrain
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int GetSectionLocalIndex(int x, int y, int z) =>
+    internal static int GetSectionLocalIndex(int x, int y, int z) =>
         (((z & (VoxelSection.Size - 1)) * VoxelSection.Size) +
          (x & (VoxelSection.Size - 1))) * VoxelSection.Size +
         (y & (VoxelSection.Size - 1));

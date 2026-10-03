@@ -12,6 +12,46 @@ public sealed class NativeMaterializedTerrainTests
 {
     private const ushort OtherTransparentBlockId = 256;
     private const ushort CustomTransparentBlockId = 257;
+    private const ushort StoneId = (byte)BaseBlockType.Stone;
+
+    [Fact]
+    public void CompleteMaterializationStoresUniformSectionsWithoutRawVoxelReservation()
+    {
+        LoadDefaultGame();
+        var atlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
+        using NativeGameSnapshot game = NativeGameSnapshot.Create(atlas);
+        using NativeGtrtSession session = CreateSession(game, 32, 1, 8, materializedRawSectionCapacity: 1);
+        session.PublishSeed(123456);
+        session.Access(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            PrepareTerrain(ref view);
+            view.Profiles.Fill(new BlockColumnProfile
+            {
+                StoneStart = 0, StoneEnd = 31, SoilStart = -1, SoilEnd = -1,
+                WaterStart = -1, WaterEnd = -1
+            });
+            int chunkIndex = view.GetChunkIndex(0, 0, 0);
+            Assert.True(NativeMaterializedTerrain.TryGetEditStorageRequirements(
+                ref view, chunkIndex, 2, 5, 3, out NativeMaterializedStorageRequirements requirements));
+            Assert.Equal(new NativeMaterializedStorageRequirements(1, 8, 1), requirements);
+            Assert.True(NativeMaterializedTerrain.TrySetBlock(ref view, chunkIndex, 2, 5, 3, CustomTransparentBlockId));
+            Assert.True(NativeMaterializedTerrain.TryMaterializeCompleteChunk(ref view, chunkIndex));
+            Assert.Equal(8, view.State.MaterializedSectionCount);
+            Assert.Equal(1, view.State.MaterializedRawSectionCount);
+            for (int index = 1; index < 8; index++)
+            {
+                Assert.Equal(NativeSectionStorageKind.Uniform, view.MaterializedSections[index].StorageKind);
+                Assert.Equal(StoneId, view.MaterializedSections[index].UniformBlockId);
+                Assert.Equal(-1, view.MaterializedSections[index].RawVoxelOffset);
+            }
+            for (int x = 0; x < 32; x++)
+                for (int y = 0; y < 32; y++)
+                    for (int z = 0; z < 32; z++)
+                        AssertBlock(ref view, chunkIndex, x, y, z,
+                            x == 2 && y == 5 && z == 3 ? CustomTransparentBlockId : StoneId);
+        });
+    }
 
     [Fact]
     public void HybridEditCopiesGeneratedSectionAndPreservesCustomBlock()
@@ -347,7 +387,8 @@ public sealed class NativeMaterializedTerrainTests
         NativeGameSnapshot game,
         int chunkSize,
         int materializedChunkCapacity,
-        int materializedSectionCapacity)
+        int materializedSectionCapacity,
+        int materializedRawSectionCapacity = -1)
     {
         byte[] snapshotBytes = game.CopyBytes();
         var gameView = new NativeGameSnapshotView(snapshotBytes);
@@ -359,7 +400,8 @@ public sealed class NativeMaterializedTerrainTests
             gameView.GetGeneratedMaterials(),
             gameSnapshotByteCount: snapshotBytes.Length,
             materializedChunkCapacity: materializedChunkCapacity,
-            materializedSectionCapacity: materializedSectionCapacity);
+            materializedSectionCapacity: materializedSectionCapacity,
+            materializedRawSectionCapacity: materializedRawSectionCapacity);
         return NativeGtrtSession.Create(layout, game);
     }
 

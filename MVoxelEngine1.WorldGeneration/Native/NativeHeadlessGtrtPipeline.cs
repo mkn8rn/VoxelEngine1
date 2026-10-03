@@ -64,6 +64,7 @@ public sealed class NativeGtrtPipeline : IDisposable
     private readonly NativeLeaseAction<byte> capturePacketAction;
     private readonly NativeLeaseAction<byte> consumePacketsAction;
     private readonly NativeLeaseAction<byte> editBlockAction;
+    private readonly NativeLeaseAction<byte> planBlockEditAction;
     private readonly NativeLeaseAction<byte> rollbackBlockAction;
     private readonly NativeLeaseAction<byte> readBlockAction;
     private readonly NativeLeaseAction<byte> inspectPacketsAction;
@@ -114,9 +115,16 @@ public sealed class NativeGtrtPipeline : IDisposable
     private int pendingEditedLocalZ;
     private int pendingPreviousMaterializedChunkIndex;
     private int pendingCurrentMaterializedChunkIndex;
-    private long pendingPreviousRevision;
-    private long pendingPreviousPersistedRevision;
-    private NativeChunkStorageKind pendingPreviousStorageKind;
+    private NativeMaterializedStorageRequirements pendingStorageRequirements;
+    private NativeChunkRecord pendingPreviousActiveChunk;
+    private NativeMaterializedChunkRecord pendingPreviousMaterializedChunk;
+    private NativeMaterializedSectionRecord pendingPreviousSection;
+    private int pendingPreviousSectionIndex;
+    private int pendingPreviousChunkCount;
+    private int pendingPreviousSectionCount;
+    private int pendingPreviousRawSectionCount;
+    private bool pendingEditPlanned;
+    private bool pendingEditMutationStarted;
     private long publishedSeed;
     private long coordinatorManagedAllocationBytes;
     private double? generationToRenderMilliseconds;
@@ -143,6 +151,7 @@ public sealed class NativeGtrtPipeline : IDisposable
         capturePacketAction = CaptureFirstPacket;
         consumePacketsAction = ConsumePackets;
         editBlockAction = EditBlockCore;
+        planBlockEditAction = PlanBlockEditCore;
         rollbackBlockAction = RollbackBlockCore;
         readBlockAction = ReadBlockCore;
         inspectPacketsAction = InspectPacketsCore;
@@ -249,7 +258,7 @@ public sealed class NativeGtrtPipeline : IDisposable
                 editableSectionCapacity +
                 (savePlan?.SectionCount ?? 0));
             int materializedRawSectionCapacity = checked(
-                editableSectionCapacity +
+                NativeGtrtSessionLayout.DefaultMaterializedChunkCapacity +
                 (savePlan?.RawSectionCount ?? 0));
             session = NativeGtrtSession.Create(
                 settings,
@@ -503,8 +512,19 @@ public sealed class NativeGtrtPipeline : IDisposable
         pendingBlockId = blockId;
         pendingEditActionSucceeded = false;
         pendingEditChanged = false;
+        pendingEditPlanned = false;
+        pendingEditMutationStarted = false;
         try
         {
+            session.Access(planBlockEditAction);
+            if (!pendingEditPlanned)
+                throw new InvalidOperationException("The native block edit is not valid in the resident world.");
+            if (!pendingEditChanged)
+            {
+                Volatile.Write(ref completedRunCount, runCount);
+                return false;
+            }
+            session.EnsureMaterializedCapacity(pendingStorageRequirements);
             session.Access(editBlockAction);
             if (!pendingEditActionSucceeded)
             {
@@ -512,12 +532,6 @@ public sealed class NativeGtrtPipeline : IDisposable
                 throw new InvalidOperationException(
                     "The native block edit could not enter storage.");
             }
-            if (!pendingEditChanged)
-            {
-                Volatile.Write(ref completedRunCount, runCount);
-                return false;
-            }
-
             pendingEdit = true;
             RememberCurrentRun(runCount);
             try
@@ -543,10 +557,25 @@ public sealed class NativeGtrtPipeline : IDisposable
                 throw new AggregateException(failure, rollbackFailure);
             }
         }
-        catch
+        catch (Exception failure)
         {
+            if (!pendingEdit && pendingEditMutationStarted)
+            {
+                try
+                {
+                    session.Access(rollbackBlockAction);
+                    if (!pendingRollbackSucceeded)
+                        throw new InvalidOperationException("The native edit preparation could not roll back.");
+                    pendingEditMutationStarted = false;
+                }
+                catch (Exception rollbackFailure)
+                {
+                    Volatile.Write(ref completedRunCount, int.MinValue);
+                    throw new AggregateException(failure, rollbackFailure);
+                }
+            }
             if (Volatile.Read(ref completedRunCount) == -1)
-                Volatile.Write(ref completedRunCount, int.MinValue);
+                Volatile.Write(ref completedRunCount, runCount);
             throw;
         }
         finally
@@ -906,7 +935,7 @@ public sealed class NativeGtrtPipeline : IDisposable
         }
     }
 
-    private void EditBlockCore(scoped NativeLeaseView<byte> owner)
+    private void PlanBlockEditCore(scoped NativeLeaseView<byte> owner)
     {
         var view = new NativeGtrtSessionView(owner.AsSpan());
         GetChunkAndLocalCoordinate(
@@ -938,40 +967,61 @@ public sealed class NativeGtrtPipeline : IDisposable
         }
         if (previousBlockId == pendingBlockId)
         {
-            pendingEditActionSucceeded = true;
+            pendingEditPlanned = true;
             return;
         }
         if (!view.TryGetBlockDescriptor(pendingBlockId, out _))
             return;
 
+        pendingEditedChunkX = chunkX;
+        pendingEditedChunkY = chunkY;
+        pendingEditedChunkZ = chunkZ;
+        pendingEditedLocalX = localX;
+        pendingEditedLocalY = localY;
+        pendingEditedLocalZ = localZ;
+        pendingPreviousBlockId = previousBlockId;
+        pendingEditPlanned = NativeMaterializedTerrain.TryGetEditStorageRequirements(
+            ref view, chunkIndex, localX, localY, localZ, out pendingStorageRequirements);
+        pendingEditChanged = pendingEditPlanned;
+    }
+
+    private void EditBlockCore(scoped NativeLeaseView<byte> owner)
+    {
+        var view = new NativeGtrtSessionView(owner.AsSpan());
+        int chunkX = pendingEditedChunkX;
+        int chunkY = pendingEditedChunkY;
+        int chunkZ = pendingEditedChunkZ;
+        int localX = pendingEditedLocalX;
+        int localY = pendingEditedLocalY;
+        int localZ = pendingEditedLocalZ;
+        int chunkIndex = view.GetChunkIndex(chunkX, chunkY, chunkZ);
         NativeChunkRecord activeChunk = view.Chunks[chunkIndex];
+        pendingPreviousActiveChunk = activeChunk;
+        pendingPreviousChunkCount = view.State.MaterializedChunkCount;
+        pendingPreviousSectionCount = view.State.MaterializedSectionCount;
+        pendingPreviousRawSectionCount = view.State.MaterializedRawSectionCount;
         pendingPreviousMaterializedChunkIndex =
             activeChunk.MaterializedChunkIndex;
+        pendingPreviousSectionIndex = -1;
         if (pendingPreviousMaterializedChunkIndex >= 0)
         {
-            NativeMaterializedChunkRecord previous =
+            pendingPreviousMaterializedChunk =
                 view.MaterializedChunks[
                     pendingPreviousMaterializedChunkIndex];
-            pendingPreviousRevision = previous.Revision;
-            pendingPreviousPersistedRevision =
-                previous.PersistedRevision;
-            pendingPreviousStorageKind = previous.StorageKind;
-        }
-        else
-        {
-            pendingPreviousRevision = 0;
-            pendingPreviousPersistedRevision = 0;
-            pendingPreviousStorageKind =
-                NativeChunkStorageKind.GeneratedProfile;
+            int section = NativeMaterializedTerrain.GetSectionIndex(ref view, localX, localY, localZ);
+            pendingPreviousSectionIndex = view.MaterializedSectionMaps[pendingPreviousMaterializedChunk.SectionMapOffset + section];
+            if (pendingPreviousSectionIndex >= 0)
+                pendingPreviousSection = view.MaterializedSections[pendingPreviousSectionIndex];
         }
 
+        pendingEditMutationStarted = true;
         if (!NativeMaterializedTerrain.TrySetBlock(
                 ref view,
                 chunkIndex,
                 localX,
                 localY,
                 localZ,
-                previousBlockId) ||
+                pendingPreviousBlockId) ||
             !NativeMaterializedTerrain.TryMaterializeCompleteChunk(
                 ref view,
                 chunkIndex))
@@ -991,13 +1041,6 @@ public sealed class NativeGtrtPipeline : IDisposable
         {
             return;
         }
-        pendingPreviousBlockId = previousBlockId;
-        pendingEditedChunkX = chunkX;
-        pendingEditedChunkY = chunkY;
-        pendingEditedChunkZ = chunkZ;
-        pendingEditedLocalX = localX;
-        pendingEditedLocalY = localY;
-        pendingEditedLocalZ = localZ;
         view.InvalidateEditedMeshes(chunkX, chunkY, chunkZ, localX, localY, localZ);
         pendingEditChanged = true;
         pendingEditActionSucceeded = true;
@@ -1011,39 +1054,43 @@ public sealed class NativeGtrtPipeline : IDisposable
             pendingEditedChunkX,
             pendingEditedChunkY,
             pendingEditedChunkZ);
-        if (chunkIndex < 0 ||
-            !NativeMaterializedTerrain.TrySetBlock(
-                ref view,
-                chunkIndex,
-                pendingEditedLocalX,
-                pendingEditedLocalY,
-                pendingEditedLocalZ,
-                pendingPreviousBlockId))
-        {
+        if (chunkIndex < 0)
             return;
-        }
 
-        int materializedChunkIndex =
-            view.Chunks[chunkIndex].MaterializedChunkIndex;
-        if (materializedChunkIndex != pendingCurrentMaterializedChunkIndex)
-            return;
-        ref NativeMaterializedChunkRecord materialized =
-            ref view.MaterializedChunks[materializedChunkIndex];
+        int materializedChunkIndex = pendingPreviousMaterializedChunkIndex >= 0
+            ? pendingPreviousMaterializedChunkIndex : pendingPreviousChunkCount;
         if (pendingPreviousMaterializedChunkIndex >= 0)
         {
-            materialized.StorageKind = pendingPreviousStorageKind;
-            materialized.Revision = pendingPreviousRevision;
-            materialized.PersistedRevision =
-                pendingPreviousPersistedRevision;
+            if (pendingPreviousSectionIndex >= 0)
+            {
+                if (pendingPreviousSection.StorageKind == NativeSectionStorageKind.Raw)
+                {
+                    int voxelIndex = pendingPreviousSection.RawVoxelOffset +
+                        NativeMaterializedTerrain.GetSectionLocalIndex(pendingEditedLocalX, pendingEditedLocalY, pendingEditedLocalZ);
+                    view.MaterializedRawVoxels[voxelIndex] = pendingPreviousBlockId;
+                }
+                view.MaterializedSections[pendingPreviousSectionIndex] = pendingPreviousSection;
+            }
+            view.MaterializedChunks[materializedChunkIndex] = pendingPreviousMaterializedChunk;
+            Span<int> maps = view.MaterializedSectionMaps.Slice(
+                pendingPreviousMaterializedChunk.SectionMapOffset, view.SectionsPerChunk);
+            foreach (ref int entry in maps)
+                if (entry >= pendingPreviousSectionCount)
+                    entry = -1;
         }
         else
         {
-            materialized.PersistedRevision = materialized.Revision;
+            if (view.State.MaterializedChunkCount > pendingPreviousChunkCount)
+                view.RemoveMaterializedChunkIndex(materializedChunkIndex);
+            view.MaterializedChunks[materializedChunkIndex] = default;
+            view.MaterializedSectionMaps.Slice(materializedChunkIndex * view.SectionsPerChunk, view.SectionsPerChunk).Fill(-1);
         }
 
-        ref NativeChunkRecord active = ref view.Chunks[chunkIndex];
-        active.StorageKind = materialized.StorageKind;
-        active.DirtyRevision = materialized.Revision;
+        view.State.MaterializedChunkCount = pendingPreviousChunkCount;
+        view.State.MaterializedSectionCount = pendingPreviousSectionCount;
+        view.State.MaterializedRawSectionCount = pendingPreviousRawSectionCount;
+        view.State.FailureCode = 0;
+        view.Chunks[chunkIndex] = pendingPreviousActiveChunk;
         foreach (ref NativeChunkRecord chunk in view.Chunks)
             chunk.Flags &= ~(int)NativeChunkFlags.MeshInvalidated;
         pendingRollbackSucceeded = true;
@@ -1121,13 +1168,15 @@ public sealed class NativeGtrtPipeline : IDisposable
         pendingEdit = false;
         pendingEditChanged = false;
         pendingEditActionSucceeded = false;
+        pendingEditPlanned = false;
+        pendingEditMutationStarted = false;
         pendingRollbackSucceeded = false;
         pendingPreviousBlockId = 0;
         pendingPreviousMaterializedChunkIndex = -1;
         pendingCurrentMaterializedChunkIndex = -1;
-        pendingPreviousRevision = 0;
-        pendingPreviousPersistedRevision = 0;
-        pendingPreviousStorageKind = default;
+        pendingPreviousActiveChunk = default;
+        pendingPreviousMaterializedChunk = default;
+        pendingPreviousSection = default;
     }
 
     private static void GetChunkAndLocalCoordinate(

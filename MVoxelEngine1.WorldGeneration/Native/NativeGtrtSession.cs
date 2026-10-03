@@ -1310,6 +1310,8 @@ internal ref partial struct NativeGtrtSessionView
 
     internal int SectionsPerChunk => header.SectionsPerChunk;
 
+    internal NativeGtrtSessionHeader SessionHeader => header;
+
     internal int MaterializedChunkCapacity =>
         header.MaterializedChunkCapacity;
 
@@ -2859,7 +2861,7 @@ internal ref partial struct NativeGtrtSessionView
     }
 }
 
-internal sealed class NativeGtrtSession : IDisposable
+internal sealed partial class NativeGtrtSession : IDisposable
 {
     private static readonly NativeLeaseAction<byte> RequestCancellationAction =
         RequestCancellationCore;

@@ -297,23 +297,96 @@ public sealed class NativeWorldTests
     }
 
     [Fact]
+    public void MoreThanSixtyFourEditedChunksSurviveNativeGrowthMovementAndReload()
+    {
+        LoadDefaultGame();
+        GameSettings settings = CreateSmallSettings();
+        using var workspace = new SaveWorkspace();
+        var atlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
+        NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(atlas, settings, 2, 2, streamGeneration: true);
+        using (NativeWorld world = NativeWorld.CreateForTesting(pipeline, 123456,
+            new TrackingRendererFactory().Create, workspace.QuadsDirectory))
+        {
+            for (int chunkX = -40; chunkX < 40; chunkX++)
+            {
+                world.PlayerChunkPosition = (chunkX, 0, 0);
+                Assert.True(world.SetBlock(chunkX * 4, 0, 0, CustomTransparentBlockId));
+            }
+            pipeline.InspectState(owner =>
+            {
+                var view = new NativeGtrtSessionView(owner.AsSpan());
+                Assert.Equal(80, view.State.MaterializedChunkCount);
+                Assert.Equal(80, view.State.MaterializedRawSectionCount);
+                Assert.True(view.MaterializedChunkCapacity >= 80);
+                Assert.True(view.MaterializedRawSectionCapacity >= 80);
+                for (int x = -40; x < 40; x++)
+                    Assert.True(view.FindMaterializedChunkIndex(x, 0, 0) >= 0);
+            });
+            for (int chunkX = 39; chunkX >= -40; chunkX--)
+            {
+                world.PlayerChunkPosition = (chunkX, 0, 0);
+                Assert.Equal(CustomTransparentBlockId, world.GetBlock(chunkX * 4, 0, 0));
+            }
+            // Save reports published quad files; these 80 chunks occupy six quads.
+            Assert.Equal(6, world.Save());
+            Assert.Equal(0, world.Save());
+        }
+        NativeWorldSaveImportPlan plan = NativeWorldSaveImportPlan.Create(workspace.QuadsDirectory, settings);
+        Assert.Equal(80, plan.ChunkCount);
+        var reloadAtlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
+        using NativeWorld reloaded = NativeWorld.CreateForTesting(
+            NativeGtrtPipeline.Create(reloadAtlas, settings, 2, 2, savePlan: plan), 123456,
+            new TrackingRendererFactory().Create);
+        for (int chunkX = -40; chunkX < 40; chunkX++)
+        {
+            reloaded.PlayerChunkPosition = (chunkX, 0, 0);
+            Assert.Equal(CustomTransparentBlockId, reloaded.GetBlock(chunkX * 4, 0, 0));
+        }
+    }
+
+    [Fact]
+    public void InvalidEditsLeaveCurrentPacketsAndSubsequentEditsUsable()
+    {
+        LoadDefaultGame();
+        var atlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
+        var factory = new TrackingRendererFactory();
+        using NativeWorld world = NativeWorld.CreateForTesting(
+            NativeGtrtPipeline.Create(atlas, CreateSmallSettings(), 2, 2), 123456, factory.Create);
+        string before = factory.LiveBankIdentity;
+        Assert.Throws<InvalidOperationException>(() => world.SetBlock(0, 0, 0, ushort.MaxValue));
+        Assert.Throws<InvalidOperationException>(() => world.SetBlock(400, 0, 0, CustomTransparentBlockId));
+        Assert.Equal(before, factory.LiveBankIdentity);
+        Assert.True(world.SetBlock(0, 0, 0, CustomTransparentBlockId));
+        Assert.Equal(CustomTransparentBlockId, world.GetBlock(0, 0, 0));
+    }
+
+    private static (int Chunks, int Sections, int RawSections) MaterializedCounts(NativeGtrtPipeline pipeline)
+    {
+        (int, int, int) counts = default;
+        pipeline.InspectState(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            counts = (view.State.MaterializedChunkCount, view.State.MaterializedSectionCount,
+                view.State.MaterializedRawSectionCount);
+        });
+        return counts;
+    }
+
+    [Fact]
     public void RendererFailureRollsBackEditAndKeepsWorldUsable()
     {
         LoadDefaultGame();
         var atlas = new BlockTextureAtlas(
             BlockTextureAtlasUploadMode.SimulatedGpuUpload);
         var factory = new TrackingRendererFactory();
+        NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(atlas, CreateSmallSettings(), 2, 2, streamGeneration: true);
         using NativeWorld world = NativeWorld.CreateForTesting(
-            NativeGtrtPipeline.Create(
-                atlas,
-                CreateSmallSettings(),
-                generationWorkerCount: 2,
-                meshWorkerCount: 2,
-                streamGeneration: true),
+            pipeline,
             seed: 123456,
             factory.Create);
         ushort previous = world.GetBlock(-1, 0, -1);
         string initialIdentity = factory.LiveBankIdentity;
+        var beforeCounts = MaterializedCounts(pipeline);
         factory.FailAtAttempt = checked(factory.CreatedCount + 3);
 
         Assert.Throws<RendererFactoryFailure>(() => world.SetBlock(
@@ -323,6 +396,7 @@ public sealed class NativeWorldTests
             CustomTransparentBlockId));
 
         Assert.Equal(previous, world.GetBlock(-1, 0, -1));
+        Assert.Equal(beforeCounts, MaterializedCounts(pipeline));
         Assert.Equal(27, factory.LiveRendererCount);
         Assert.Equal(initialIdentity, factory.LiveBankIdentity);
 

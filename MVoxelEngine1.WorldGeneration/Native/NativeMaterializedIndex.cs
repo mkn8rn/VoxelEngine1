@@ -86,7 +86,7 @@ internal ref partial struct NativeGtrtSessionView
         }
     }
 
-    private static int GetMaterializedSlot(int x, int y, int z, int capacity)
+    internal static int GetMaterializedSlot(int x, int y, int z, int capacity)
     {
         uint hash = unchecked((uint)x * 0x9e3779b9u ^ BitOperations.RotateLeft((uint)y, 11) ^
             BitOperations.RotateLeft((uint)z, 22));
