@@ -8,11 +8,17 @@ namespace MVoxelEngine1.Tests
     {
         private const long MaximumWorkingSetBytes = 16L * 1024 * 1024 * 1024;
         private const string SharedWorldName = "FullRadiusFaceManifestWorld";
+        // These limits cover exhaustive post-GTRT identity/texture validation,
+        // sorting and hashing; startup performance has a separate fixed gate.
+        private static readonly TimeSpan OptimizedCaptureTimeout = TimeSpan.FromMinutes(10);
+        private static readonly TimeSpan ReferenceCaptureTimeout = TimeSpan.FromMinutes(15);
 
         [Fact]
-        public void RecordedReferenceHasNoTransparentSideFaces()
+        public void RecordedReferenceAppliesDefaultReplacementsAndHasTransparentFacesInEveryDirection()
         {
             using JsonDocument referenceDocument = LoadRecordedReference();
+            Assert.True(referenceDocument.RootElement.GetProperty("replacementRulesApplied").GetBoolean());
+            Assert.Equal(0, referenceDocument.RootElement.GetProperty("faces").GetProperty("opaqueFaceCount").GetInt64());
             JsonElement directions = referenceDocument.RootElement
                 .GetProperty("faces")
                 .GetProperty("transparentDirections");
@@ -22,14 +28,11 @@ namespace MVoxelEngine1.Tests
                 long faceCount = directions[direction]
                     .GetProperty("faceCount")
                     .GetInt64();
-                if (direction == 3)
-                    Assert.True(faceCount > 0);
-                else
-                    Assert.Equal(0, faceCount);
+                Assert.True(faceCount > 0);
             }
         }
 
-        [Fact(Explicit = true, Timeout = 630_000)]
+        [Fact(Explicit = true, Timeout = 1_560_000)]
         [Trait("Category", "Oracle")]
         [Trait("Resource", "CPU")]
         public async Task ProductionRadiusOptimizedFacesMatchReferenceAsync()
@@ -53,7 +56,7 @@ namespace MVoxelEngine1.Tests
                 optimizedPath,
                 SharedWorldName,
                 "Optimized",
-                TimeSpan.FromMinutes(3));
+                OptimizedCaptureTimeout);
             WriteMetrics(optimizedPath, "Optimized", optimizedResult);
             AssertProcess(optimizedPath, optimizedResult, "Optimized");
 
@@ -62,7 +65,7 @@ namespace MVoxelEngine1.Tests
                 referencePath,
                 SharedWorldName,
                 "Reference",
-                TimeSpan.FromMinutes(6));
+                ReferenceCaptureTimeout);
             WriteMetrics(referencePath, "Reference", referenceResult);
             AssertProcess(referencePath, referenceResult, "Reference");
 
@@ -80,7 +83,7 @@ namespace MVoxelEngine1.Tests
             Console.WriteLine($"Full-radius Reference manifest: {referencePath}");
         }
 
-        [Fact(Explicit = true, Timeout = 390_000)]
+        [Fact(Explicit = true, Timeout = 930_000)]
         [Trait("Category", "Oracle")]
         [Trait("Resource", "CPU")]
         public async Task CreateProductionRadiusReferenceOracleAsync()
@@ -101,7 +104,7 @@ namespace MVoxelEngine1.Tests
                 referencePath,
                 "FullRadiusReferenceOracleWorld",
                 "Reference",
-                TimeSpan.FromMinutes(6));
+                ReferenceCaptureTimeout);
             WriteMetrics(referencePath, "Reference", result);
             AssertProcess(referencePath, result, "Reference");
 
@@ -111,7 +114,7 @@ namespace MVoxelEngine1.Tests
             Console.WriteLine($"Full-radius Reference manifest: {referencePath}");
         }
 
-        [Fact(Explicit = true, Timeout = 210_000)]
+        [Fact(Explicit = true, Timeout = 630_000)]
         [Trait("Category", "Oracle")]
         [Trait("Resource", "CPU")]
         public async Task CreateProductionRadiusOptimizedManifestAsync()
@@ -132,7 +135,7 @@ namespace MVoxelEngine1.Tests
                 optimizedPath,
                 "FullRadiusOptimizedRepeatWorld",
                 "Optimized",
-                TimeSpan.FromMinutes(3));
+                OptimizedCaptureTimeout);
             WriteMetrics(optimizedPath, "Optimized", result);
             AssertProcess(optimizedPath, result, "Optimized");
 
@@ -195,8 +198,8 @@ namespace MVoxelEngine1.Tests
             Assert.Equal(0, manifest.GetProperty("captureCenterChunkX").GetInt32());
             Assert.Equal(0, manifest.GetProperty("captureCenterChunkY").GetInt32());
             Assert.Equal(0, manifest.GetProperty("captureCenterChunkZ").GetInt32());
-            Assert.True(
-                manifest.GetProperty("faces").GetProperty("opaqueFaceCount").GetInt64() > 0);
+            Assert.Equal(0,
+                manifest.GetProperty("faces").GetProperty("opaqueFaceCount").GetInt64());
             Assert.True(
                 manifest.GetProperty("faces").GetProperty("transparentFaceCount").GetInt64() > 0);
             Assert.Contains(

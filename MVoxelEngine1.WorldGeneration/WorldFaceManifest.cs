@@ -173,13 +173,19 @@ namespace MVoxelEngine1.WorldGeneration
             private long opaqueCount;
             private long transparentCount;
             private bool completed;
+            private const int BytesPerHashBuffer = 18 * 128;
 
             public void AppendSorted(IReadOnlyList<CanonicalRenderFace> faces)
             {
                 if (completed)
                     throw new InvalidOperationException("The canonical face digest is complete.");
+                if (faces.Count == 0)
+                    return;
 
                 Span<byte> encoded = stackalloc byte[18];
+                Span<byte> buffers = stackalloc byte[15 * BytesPerHashBuffer];
+                Span<int> lengths = stackalloc int[15];
+                lengths.Clear();
                 for (int index = 0; index < faces.Count; index++)
                 {
                     CanonicalRenderFace face = faces[index];
@@ -197,18 +203,18 @@ namespace MVoxelEngine1.WorldGeneration
                     }
 
                     Encode(face, encoded);
-                    all.AppendData(encoded);
+                    AppendBuffered(0, buffers, lengths, encoded);
                     if (face.RenderPass == CanonicalRenderPass.Opaque)
                     {
-                        opaque.AppendData(encoded);
-                        opaqueDirections[face.Direction].AppendData(encoded);
+                        AppendBuffered(1, buffers, lengths, encoded);
+                        AppendBuffered(3 + face.Direction, buffers, lengths, encoded);
                         opaqueCounts[face.Direction]++;
                         opaqueCount++;
                     }
                     else
                     {
-                        transparent.AppendData(encoded);
-                        transparentDirections[face.Direction].AppendData(encoded);
+                        AppendBuffered(2, buffers, lengths, encoded);
+                        AppendBuffered(9 + face.Direction, buffers, lengths, encoded);
                         transparentCounts[face.Direction]++;
                         transparentCount++;
                     }
@@ -216,7 +222,33 @@ namespace MVoxelEngine1.WorldGeneration
                     faceCount++;
                     previous = face;
                 }
+                for (int i = 0; i < lengths.Length; i++)
+                    if (lengths[i] != 0)
+                        GetHasher(i).AppendData(buffers.Slice(i * BytesPerHashBuffer, lengths[i]));
             }
+
+            private void AppendBuffered(int index, Span<byte> buffers, Span<int> lengths, ReadOnlySpan<byte> encoded)
+            {
+                int length = lengths[index];
+                Span<byte> buffer = buffers.Slice(index * BytesPerHashBuffer, BytesPerHashBuffer);
+                encoded.CopyTo(buffer.Slice(length));
+                length += encoded.Length;
+                if (length == BytesPerHashBuffer)
+                {
+                    GetHasher(index).AppendData(buffer);
+                    length = 0;
+                }
+                lengths[index] = length;
+            }
+
+            private IncrementalHash GetHasher(int index) => index switch
+            {
+                0 => all,
+                1 => opaque,
+                2 => transparent,
+                < 9 => opaqueDirections[index - 3],
+                _ => transparentDirections[index - 9]
+            };
 
             public CanonicalFaceSetDigest Complete()
             {
@@ -302,7 +334,7 @@ namespace MVoxelEngine1.WorldGeneration
         {
             if (face.Direction >= 6)
                 throw new ArgumentOutOfRangeException(nameof(face), "The face direction must be from 0 through 5.");
-            if (!Enum.IsDefined(face.RenderPass))
+            if (face.RenderPass is not (CanonicalRenderPass.Opaque or CanonicalRenderPass.Transparent))
                 throw new ArgumentOutOfRangeException(nameof(face), "The render pass is invalid.");
             if (face.BlockId == (ushort)BaseBlockType.Empty)
                 throw new ArgumentException("A rendered face cannot use the empty block identifier.", nameof(face));
@@ -366,6 +398,7 @@ namespace MVoxelEngine1.WorldGeneration
             world.InspectState(owner =>
             {
                 var view = new NativeGtrtSessionView(owner.AsSpan());
+                var reference = new NativeReferenceFaceGenerator(ref view);
                 var chunks = new List<ManifestChunk>();
                 for (int index = 0; index < view.Chunks.Length; index++)
                 {
@@ -393,16 +426,16 @@ namespace MVoxelEngine1.WorldGeneration
                     slabX = chunk.X;
                     List<CanonicalRenderFace> faces;
                     if (faceGenerationMode == FaceGenerationMode.Reference)
-                        faces = NativeReferenceFaceGenerator.Generate(ref view, chunk.Index);
+                        faces = reference.Generate(ref view, chunk.Index);
                     else
                     {
                         if (!view.TryInspectRetiredPacket(chunk.Index, out NativePacketReadView packet))
                             throw new InvalidDataException("Native render packet changed during capture.");
                         faces = new List<CanonicalRenderFace>(checked(
                             packet.Record.OpaqueFaceCount + packet.Record.TransparentFaceCount));
-                        CapturePass(ref view, chunk.Index, packet.Record.OpaqueFaceCount,
+                        CapturePass(ref view, reference, chunk.Index, packet.Record.OpaqueFaceCount,
                             packet.OpaqueWords, CanonicalRenderPass.Opaque, faces, expectedTiles);
-                        CapturePass(ref view, chunk.Index, packet.Record.TransparentFaceCount,
+                        CapturePass(ref view, reference, chunk.Index, packet.Record.TransparentFaceCount,
                             packet.TransparentWords, CanonicalRenderPass.Transparent, faces, expectedTiles);
                     }
                     CanonicalRenderFaceHasher.Sort(faces);
@@ -440,7 +473,7 @@ namespace MVoxelEngine1.WorldGeneration
             faces.Clear();
         }
 
-        private static void CapturePass(ref NativeGtrtSessionView view, int index, int faceCount,
+        private static void CapturePass(ref NativeGtrtSessionView view, NativeReferenceFaceGenerator reference, int index, int faceCount,
             ReadOnlySpan<uint> rectangles, CanonicalRenderPass pass,
             List<CanonicalRenderFace> destination, Dictionary<int, uint> expectedTiles)
         {
@@ -454,11 +487,11 @@ namespace MVoxelEngine1.WorldGeneration
                 if ((uint)x >= (uint)view.ChunkSizeX || (uint)y >= (uint)view.ChunkSizeY ||
                     (uint)z >= (uint)view.ChunkSizeZ)
                     throw new InvalidDataException("Native packet face is outside its chunk.");
-                ushort source = NativeReferenceFaceGenerator.GetBlock(ref view, index, x, y, z);
+                ushort source = reference.GetBlock(ref view, index, x, y, z);
                 (int dx, int dy, int dz) = NativeReferenceFaceGenerator.Normal(reader.Direction);
-                ushort neighbor = NativeReferenceFaceGenerator.GetBlock(ref view, index, x + dx, y + dy, z + dz);
-                if ((pass == CanonicalRenderPass.Opaque) != NativeReferenceFaceGenerator.IsOpaque(ref view, source) ||
-                    !NativeReferenceFaceGenerator.Visible(ref view, source, neighbor))
+                ushort neighbor = reference.GetBlock(ref view, index, x + dx, y + dy, z + dz);
+                if ((pass == CanonicalRenderPass.Opaque) != reference.IsOpaque(source) ||
+                    !reference.Visible(source, neighbor))
                     throw new InvalidDataException("Native packet contains a hidden face or an incorrect render pass.");
                 if (reader.TileIndex != GetExpectedTileIndex(source, reader.Direction, expectedTiles))
                     throw new InvalidDataException("Native packet texture differs from the loaded runtime texture.");
