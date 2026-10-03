@@ -7,7 +7,7 @@ using Supprocom.NativeAllocationManagement;
 
 namespace MVoxelEngine1.WorldGeneration.Native;
 
-internal sealed class NativeWorldSaveImportPlan
+internal sealed partial class NativeWorldSaveImportPlan
 {
     private const ushort QuadVersion = 1;
     private const ushort ChunkVersion = 1;
@@ -18,6 +18,7 @@ internal sealed class NativeWorldSaveImportPlan
     private static ReadOnlySpan<byte> ChunkMagic => "MVCH"u8;
 
     private readonly SavedFile[] files;
+    private readonly SavedChunkDescriptor[] savedChunks;
     private readonly NativeLeaseAction<byte> validateChunkAction;
     private readonly NativeLeaseAction<byte> importChunkAction;
     private readonly int sectionCountX;
@@ -39,9 +40,11 @@ internal sealed class NativeWorldSaveImportPlan
         int sectionCount,
         int rawSectionCount,
         int paletteCount,
-        int packedWordCount)
+        int packedWordCount,
+        SavedChunkDescriptor[]? savedChunks = null)
     {
         this.files = files;
+        this.savedChunks = savedChunks ?? [];
         this.sectionCountX = sectionCountX;
         this.sectionCountY = sectionCountY;
         this.sectionCountZ = sectionCountZ;
@@ -52,6 +55,13 @@ internal sealed class NativeWorldSaveImportPlan
         PackedWordCount = packedWordCount;
         validateChunkAction = ValidatePendingChunk;
         importChunkAction = ImportPendingChunk;
+        reserveSavedChunksAction = ReserveSavedChunksCore;
+        selectSavedChunksAction = SelectSavedChunksCore;
+        selectBlockSourceAction = SelectBlockSourceCore;
+        captureSourceAction = CaptureSourceCore;
+        rollbackSourceImportsAction = RollbackSourceImportsCore;
+        savedCandidates = new int[chunkCount];
+        savedStreams = new FileStream?[files.Length];
     }
 
     internal int ChunkCount { get; }
@@ -104,6 +114,7 @@ internal sealed class NativeWorldSaveImportPlan
         var files = new SavedFile[paths.Length];
         var chunkCoordinates = new HashSet<(int X, int Y, int Z)>();
         var totals = new ImportTotals();
+        var savedChunks = new List<SavedChunkDescriptor>();
         for (int index = 0; index < paths.Length; index++)
         {
             string path = paths[index];
@@ -116,7 +127,9 @@ internal sealed class NativeWorldSaveImportPlan
                 chunkCoordinates,
                 ref totals,
                 out int batchX,
-                out int batchZ);
+                out int batchZ,
+                savedChunks,
+                index);
             stream.Position = 0;
             byte[] hash = SHA256.HashData(stream);
             files[index] = new SavedFile(path, batchX, batchZ, hash);
@@ -131,7 +144,8 @@ internal sealed class NativeWorldSaveImportPlan
             totals.SectionCount,
             totals.RawSectionCount,
             totals.PaletteCount,
-            totals.PackedWordCount);
+            totals.PackedWordCount,
+            savedChunks.ToArray());
     }
 
     internal void Import(NativeGtrtSession session)
@@ -241,7 +255,9 @@ internal sealed class NativeWorldSaveImportPlan
         HashSet<(int X, int Y, int Z)> chunkCoordinates,
         ref ImportTotals totals,
         out int batchX,
-        out int batchZ)
+        out int batchZ,
+        List<SavedChunkDescriptor> savedChunks,
+        int fileIndex)
     {
         using var reader = new BinaryReader(
             stream,
@@ -253,6 +269,7 @@ internal sealed class NativeWorldSaveImportPlan
             out batchZ);
         for (int index = 0; index < chunkCount; index++)
         {
+            long payloadOffset = checked(stream.Position + ChunkRecordHeaderSize);
             byte[] payload = ReadChunkRecord(
                 reader,
                 batchX,
@@ -275,6 +292,14 @@ internal sealed class NativeWorldSaveImportPlan
                 sectionCountY,
                 sectionCountZ);
             totals.Add(in shape);
+            savedChunks.Add(new SavedChunkDescriptor(chunkX, chunkY, chunkZ, shape.Temperature, shape.Humidity,
+                new NativeSavedChunkSource
+                {
+                    FileIndex = fileIndex, PayloadOffset = payloadOffset, PayloadByteCount = payload.Length,
+                    SectionCount = shape.SectionCount, RawSectionCount = shape.RawSectionCount,
+                    PaletteCount = shape.PaletteCount, PackedWordCount = shape.PackedWordCount,
+                    UniformBlockId = shape.UniformBlockId, IsUniform = shape.IsUniform ? (byte)1 : (byte)0
+                }));
         }
 
         if (stream.Position != stream.Length)
@@ -983,6 +1008,8 @@ internal sealed class NativeWorldSaveImportPlan
         internal float Temperature;
         internal float Humidity;
     }
+
+    private readonly record struct SavedChunkDescriptor(int X, int Y, int Z, float Temperature, float Humidity, NativeSavedChunkSource Source);
 
     private struct ImportTotals
     {

@@ -32,7 +32,7 @@ internal ref partial struct NativeGtrtSessionView
                     return -1;
                 }
                 ref NativeMaterializedChunkRecord chunk = ref MaterializedChunks[index];
-                if (chunk.State == 1 && chunk.ChunkX == chunkX && chunk.ChunkY == chunkY && chunk.ChunkZ == chunkZ)
+                if (chunk.State != 0 && chunk.ChunkX == chunkX && chunk.ChunkY == chunkY && chunk.ChunkZ == chunkZ)
                     return index;
             }
             slot = (slot + 1) & (table.Length - 1);

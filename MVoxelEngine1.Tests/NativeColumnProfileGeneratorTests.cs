@@ -137,6 +137,7 @@ public sealed class NativeColumnProfileGeneratorTests
         using NativeGtrtSession measured = NativeGtrtSession.Create(layout);
         measured.PublishSeed(seed);
         harness.Result = false;
+        using var allocationScope = new NoGcAllocationScope();
         long before = GC.GetAllocatedBytesForCurrentThread();
         measured.Access(harness.Action);
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;

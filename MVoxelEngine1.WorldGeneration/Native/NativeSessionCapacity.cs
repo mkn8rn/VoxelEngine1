@@ -20,7 +20,9 @@ internal sealed partial class NativeGtrtSession
         NativeTerrainMaterialSet materials = info.Materials;
         if (requirements.ChunkCount <= previous.MaterializedChunkCapacity &&
             requirements.SectionCount <= previous.MaterializedSectionCapacity &&
-            requirements.RawSectionCount <= previous.MaterializedRawSectionCapacity)
+            requirements.RawSectionCount <= previous.MaterializedRawSectionCapacity &&
+            requirements.PaletteCount <= previous.MaterializedPaletteCapacity &&
+            requirements.PackedWordCount <= previous.MaterializedPackedWordCapacity)
             return;
 
         NativeGtrtSessionLayout layout = SelectExpandedLayout(previous, materials, requirements, maximumByteCount);
@@ -126,7 +128,8 @@ internal sealed partial class NativeGtrtSession
             GrowCapacity(previous.MaterializedChunkCapacity, requirements.ChunkCount, geometric),
             GrowCapacity(previous.MaterializedSectionCapacity, requirements.SectionCount, geometric),
             GrowCapacity(previous.MaterializedRawSectionCapacity, requirements.RawSectionCount, geometric),
-            previous.MaterializedPaletteCapacity, previous.MaterializedPackedWordCapacity);
+            GrowCapacity(previous.MaterializedPaletteCapacity, requirements.PaletteCount, geometric),
+            GrowCapacity(previous.MaterializedPackedWordCapacity, requirements.PackedWordCount, geometric));
 
     private static int GrowCapacity(int current, int required, bool geometric) =>
         required <= current ? current : Math.Max(required, geometric ? checked(current * 2) : current);
@@ -186,7 +189,7 @@ internal static class NativeGtrtSessionCloner
         for (int recordIndex = 0; recordIndex < chunks.Length; recordIndex++)
         {
             NativeMaterializedChunkRecord chunk = chunks[recordIndex];
-            if (chunk.State != 1)
+            if (chunk.State == 0)
                 continue;
             int slot = NativeGtrtSessionView.GetMaterializedSlot(chunk.ChunkX, chunk.ChunkY, chunk.ChunkZ, index.Length);
             while (index[slot] != 0)

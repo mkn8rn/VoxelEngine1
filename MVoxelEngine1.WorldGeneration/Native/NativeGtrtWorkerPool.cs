@@ -4,8 +4,22 @@ using Supprocom.NativeAllocationManagement;
 
 namespace MVoxelEngine1.WorldGeneration.Native;
 
+internal readonly record struct NativeWorkerAllocationSample(
+    int ManagedThreadId,
+    int WorkerIndex,
+    bool GeneratesTerrain,
+    long WaitBytes,
+    long WorkBytes,
+    long CompletionBytes,
+    long TotalBytes);
+
 internal sealed class NativeGtrtWorkerPool : IDisposable
 {
+    private static readonly NativeLeaseAction<byte> WarmSessionAction =
+        static (scoped NativeLeaseView<byte> owner) =>
+        {
+            _ = new NativeGtrtSessionView(owner.AsSpan());
+        };
     private static readonly TimeSpan WorkerStartTimeout =
         TimeSpan.FromSeconds(30);
     private static readonly TimeSpan WorkerCompletionTimeout =
@@ -15,6 +29,8 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
 
     private readonly NativeGtrtSession session;
     private readonly ManualResetEvent readyGate = new(false);
+    private readonly ManualResetEvent armedGate = new(false);
+    private readonly ManualResetEvent publicationGate = new(false);
     private readonly ManualResetEvent generationCompletionGate = new(false);
     private readonly ManualResetEvent completionGate = new(false);
     private readonly NativeGtrtWorker[] workers;
@@ -23,6 +39,7 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
     private readonly int generationWorkerCount;
     private readonly int meshWorkerCount;
     private int readyWorkerCount;
+    private int remainingArmWorkerCount;
     private int remainingGenerationWorkerCount;
     private int remainingMeshWorkerCount;
     private int remainingWorkerCount;
@@ -30,6 +47,7 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
     private int shutdownRequested;
     private int startupPerformanceEnabled;
     private int disposed;
+    private int runEpoch;
     private bool completionValid;
     private NativeGtrtFailureCode completionFailure;
     private long initialGenerationMilliseconds = -1;
@@ -109,6 +127,16 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
     internal long InitialMeshMilliseconds =>
         Volatile.Read(ref initialMeshMilliseconds);
 
+    internal int WorkerCount => workers.Length;
+
+    internal void CopyAllocationSamples(Span<NativeWorkerAllocationSample> destination)
+    {
+        if (destination.Length < workers.Length)
+            throw new ArgumentException("The worker allocation destination is too small.", nameof(destination));
+        for (int index = 0; index < workers.Length; index++)
+            destination[index] = workers[index].AllocationSample;
+    }
+
     internal void Run(
         long seed,
         int centerChunkX = 0,
@@ -144,15 +172,22 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
             }
         }
 
+        armedGate.Reset();
+        publicationGate.Reset();
         generationCompletionGate.Reset();
         completionGate.Reset();
         Volatile.Write(ref startupPerformanceEnabled, 0);
         remainingWorkerCount = workers.Length;
+        remainingArmWorkerCount = workers.Length;
         remainingGenerationWorkerCount = generationWorkerCount;
         remainingMeshWorkerCount = meshWorkerCount;
+        runEpoch = checked(runEpoch + 1);
 
         try
         {
+            SignalWorkers();
+            if (!armedGate.WaitOne(WorkerStartTimeout))
+                throw new TimeoutException("The native GTRT workers did not arm before seed publication.");
             session.PrepareRun(
                 seed,
                 centerChunkX,
@@ -170,11 +205,13 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
         {
             Volatile.Write(ref shutdownRequested, 1);
             Volatile.Write(ref runState, 3);
+            publicationGate.Set();
+            generationCompletionGate.Set();
             SignalWorkers();
             throw;
         }
 
-        SignalWorkers();
+        publicationGate.Set();
         if (!completionGate.WaitOne(WorkerCompletionTimeout))
         {
             session.RequestCancellation();
@@ -184,6 +221,8 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
 
         foreach (NativeGtrtWorker worker in workers)
         {
+            while (worker.MeasuredRunEpoch != runEpoch)
+                Thread.Yield();
             if (worker.Fault is not null)
             {
                 throw new InvalidOperationException(
@@ -217,6 +256,7 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
             session.RequestCancellation();
 
         SignalWorkers();
+        publicationGate.Set();
         generationCompletionGate.Set();
         JoinWorkers();
         DisposeWaitHandles();
@@ -233,6 +273,8 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
         foreach (NativeGtrtWorker worker in workers)
             worker.DisposeStartSignal();
         generationCompletionGate.Dispose();
+        publicationGate.Dispose();
+        armedGate.Dispose();
         completionGate.Dispose();
         readyGate.Dispose();
     }
@@ -247,7 +289,13 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
             readyGate.Set();
     }
 
-    private void NotifyCompleted(NativeGtrtWorkerKind kind)
+    private void NotifyArmed()
+    {
+        if (Interlocked.Decrement(ref remainingArmWorkerCount) == 0)
+            armedGate.Set();
+    }
+
+    private void NotifyStageCompleted(NativeGtrtWorkerKind kind)
     {
         if (Volatile.Read(ref runState) == 1)
         {
@@ -285,6 +333,10 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
             }
         }
 
+    }
+
+    private void NotifyWorkerFinished()
+    {
         int remaining = Interlocked.Decrement(ref remainingWorkerCount);
         if (remaining == 0)
             completionGate.Set();
@@ -335,6 +387,7 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
         private readonly Thread thread;
         private readonly AutoResetEvent startSignal = new(false);
         private bool started;
+        private int measuredRunEpoch;
 
         internal NativeGtrtWorker(
             NativeGtrtWorkerPool owner,
@@ -360,9 +413,13 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
 
         internal long ManagedAllocationBytes { get; private set; }
 
+        internal NativeWorkerAllocationSample AllocationSample { get; private set; }
+
+        internal int MeasuredRunEpoch => Volatile.Read(ref measuredRunEpoch);
+
         internal void Start()
         {
-            thread.Start();
+            thread.UnsafeStart();
             started = true;
         }
 
@@ -374,6 +431,12 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
 
         private void Run()
         {
+            session.Access(WarmSessionAction);
+            startSignal.Set();
+            startSignal.WaitOne();
+            _ = startSignal.WaitOne(0);
+            _ = owner.publicationGate.WaitOne(0);
+            _ = owner.generationCompletionGate.WaitOne(0);
             owner.NotifyReady();
             while (true)
             {
@@ -381,8 +444,15 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
                 if (owner.ShutdownRequested)
                     return;
 
+                long allocationStart = GC.GetAllocatedBytesForCurrentThread();
+                owner.NotifyArmed();
+                long workStart = allocationStart;
+                long workEnd = allocationStart;
                 try
                 {
+                    owner.publicationGate.WaitOne();
+                    if (owner.ShutdownRequested)
+                        return;
                     if (kind == NativeGtrtWorkerKind.Mesh &&
                         !owner.streamGeneration)
                     {
@@ -391,14 +461,9 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
                             return;
                     }
 
-                    long allocationStart =
-                        GC.GetAllocatedBytesForCurrentThread();
+                    workStart = GC.GetAllocatedBytesForCurrentThread();
                     session.Access(workAction);
-                    long allocated =
-                        GC.GetAllocatedBytesForCurrentThread() -
-                        allocationStart;
-                    if (allocated > ManagedAllocationBytes)
-                        ManagedAllocationBytes = allocated;
+                    workEnd = GC.GetAllocatedBytesForCurrentThread();
                 }
                 catch (Exception exception)
                 {
@@ -406,7 +471,23 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
                 }
                 finally
                 {
-                    owner.NotifyCompleted(kind);
+                    owner.NotifyStageCompleted(kind);
+                    owner.NotifyWorkerFinished();
+                    long allocationEnd = GC.GetAllocatedBytesForCurrentThread();
+                    long allocated = allocationEnd - allocationStart;
+                    if (allocated >= ManagedAllocationBytes)
+                    {
+                        ManagedAllocationBytes = allocated;
+                        AllocationSample = new NativeWorkerAllocationSample(
+                            Environment.CurrentManagedThreadId,
+                            workerIndex,
+                            kind == NativeGtrtWorkerKind.Generation,
+                            workStart - allocationStart,
+                            workEnd - workStart,
+                            allocationEnd - workEnd,
+                            allocated);
+                    }
+                    Volatile.Write(ref measuredRunEpoch, owner.runEpoch);
                 }
 
                 if (Fault is not null)

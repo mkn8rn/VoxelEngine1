@@ -32,7 +32,8 @@ internal enum NativeChunkStorageKind : int
     GeneratedProfile = 0,
     HybridSections = 1,
     MaterializedSections = 2,
-    UniformSections = 3
+    UniformSections = 3,
+    DeferredSaved = 4
 }
 
 internal enum NativeSectionStorageKind : int
@@ -201,6 +202,21 @@ internal struct NativeMaterializedChunkRecord
     internal ushort UniformBlockId;
     internal float Temperature;
     internal float Humidity;
+    internal NativeSavedChunkSource SavedSource;
+}
+
+[StructLayout(LayoutKind.Sequential, Pack = 8)]
+internal struct NativeSavedChunkSource
+{
+    internal int FileIndex;
+    internal long PayloadOffset;
+    internal int PayloadByteCount;
+    internal int SectionCount;
+    internal int RawSectionCount;
+    internal int PaletteCount;
+    internal int PackedWordCount;
+    internal ushort UniformBlockId;
+    internal byte IsUniform;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -722,7 +738,7 @@ internal readonly struct NativeGtrtSessionLayout
 internal readonly struct NativeGtrtSessionHeader
 {
     internal const uint ExpectedMagic = 0x54525447;
-    internal const int ExpectedVersion = 18;
+    internal const int ExpectedVersion = 19;
 
     internal NativeGtrtSessionHeader(NativeGtrtSessionLayout layout)
     {

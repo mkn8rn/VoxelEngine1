@@ -16,6 +16,177 @@ public sealed class NativeWorldSaveImportTests
     private const ushort CustomTransparentBlockId = 257;
 
     [Fact]
+    public void PartialDeferredImportRestoresAllocationCountsAndRetriesBothPayloads()
+    {
+        LoadDefaultGame();
+        GameSettings settings = CreateSettings(chunkSize: 16, lod1Radius: 0);
+        using var workspace = new SaveWorkspace();
+        ushort[] raw = new ushort[VoxelSection.VoxelCount];
+        Array.Fill(raw, SoilId);
+        raw[0] = WaterId;
+        WriteQuads(workspace.QuadsDirectory,
+            [new ChunkFixture(0, 0, 0, [SectionFixture.Raw(raw)]),
+                new ChunkFixture(8, 0, 0, [SectionFixture.Raw(raw)]),
+                new ChunkFixture(9, 0, 0, [SectionFixture.Raw(raw)])], 1, 1, 1);
+        NativeWorldSaveImportPlan plan = NativeWorldSaveImportPlan.Create(workspace.QuadsDirectory, settings);
+        var atlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
+        NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(atlas, settings, 2, 2, savePlan: plan);
+        using NativeWorld world = NativeWorld.CreateForTesting(pipeline, 123456, NullRenderer);
+        plan.BeforeDeferredImportForTesting = candidate =>
+        {
+            if (candidate == 1)
+                throw new IOException("Requested failure after importing the first deferred chunk.");
+        };
+        Assert.Throws<IOException>(() => world.PlayerChunkPosition = (8, 0, 0));
+        Assert.Equal((0, 0, 0), world.PlayerChunkPosition);
+        Assert.Equal((1, 2), SavedPayloadCounts(pipeline));
+        pipeline.InspectState(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            Assert.Equal(1, view.State.MaterializedRawSectionCount);
+            Assert.Equal(1, view.State.MaterializedSectionCount);
+            Assert.Equal(0, view.State.FailureCode);
+        });
+        plan.BeforeDeferredImportForTesting = null;
+        world.PlayerChunkPosition = (8, 0, 0);
+        Assert.Equal(WaterId, world.GetBlock(128, 0, 0));
+        Assert.Equal(WaterId, world.GetBlock(144, 0, 0));
+        Assert.Equal((3, 0), SavedPayloadCounts(pipeline));
+    }
+
+    [Fact]
+    public void DistantRawSavesDoNotReserveTheirEntirePayloadArenaAtStartup()
+    {
+        LoadDefaultGame();
+        GameSettings settings = CreateSettings(chunkSize: 16, lod1Radius: 0);
+        using var workspace = new SaveWorkspace();
+        ushort[] raw = new ushort[VoxelSection.VoxelCount];
+        raw[0] = SoilId;
+        ChunkFixture[] chunks = new ChunkFixture[101];
+        chunks[0] = new ChunkFixture(0, 0, 0, [SectionFixture.Raw(raw)]);
+        for (int index = 1; index < chunks.Length; index++)
+            chunks[index] = new ChunkFixture(8 + index * 4, 0, 0, [SectionFixture.Raw(raw)]);
+        WriteQuads(workspace.QuadsDirectory, chunks, 1, 1, 1);
+        NativeWorldSaveImportPlan plan = NativeWorldSaveImportPlan.Create(workspace.QuadsDirectory, settings);
+        Assert.Equal(101, plan.RawSectionCount);
+        var atlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
+        NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(atlas, settings, 2, 2, savePlan: plan);
+        using NativeWorld world = NativeWorld.CreateForTesting(pipeline, 123456, NullRenderer);
+        Assert.Equal((1, 100), SavedPayloadCounts(pipeline));
+        pipeline.InspectState(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            Assert.Equal(64, view.MaterializedRawSectionCapacity);
+            Assert.Equal(1, view.State.MaterializedRawSectionCount);
+            Assert.Equal(1, view.State.MaterializedSectionCount);
+        });
+    }
+
+    [Fact]
+    public void DistantSavedPayloadsStayDeferredUntilMovementOrAWorldBlockQuery()
+    {
+        LoadDefaultGame();
+        GameSettings settings = CreateSettings(chunkSize: 16, lod1Radius: 0);
+        using var workspace = new SaveWorkspace();
+        ushort[] raw = new ushort[VoxelSection.VoxelCount];
+        Array.Fill(raw, SoilId);
+        raw[0] = WaterId;
+        WriteQuads(workspace.QuadsDirectory,
+            [new ChunkFixture(0, 0, 0, [SectionFixture.Raw(raw)]),
+                new ChunkFixture(8, 0, 0, [SectionFixture.Raw(raw)]),
+                new ChunkFixture(0, 100, 0, [SectionFixture.Raw(raw)])], 1, 1, 1);
+        NativeWorldSaveImportPlan plan = NativeWorldSaveImportPlan.Create(workspace.QuadsDirectory, settings);
+        var atlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
+        NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(atlas, settings, 2, 2, savePlan: plan);
+        using var allocationScope = new NoGcAllocationScope();
+        using NativeWorld world = NativeWorld.CreateForTesting(pipeline, 123456, NullRenderer);
+        Assert.Equal((1, 2), SavedPayloadCounts(pipeline));
+        Assert.Equal(WaterId, world.GetBlock(0, 1600, 0));
+        Assert.Equal((2, 1), SavedPayloadCounts(pipeline));
+        world.PlayerChunkPosition = (8, 0, 0);
+        Assert.Equal(WaterId, world.GetBlock(128, 0, 0));
+        Assert.Equal((3, 0), SavedPayloadCounts(pipeline));
+        Assert.Equal(0, pipeline.MaximumWorkerManagedAllocationBytes);
+        Assert.Equal(0, pipeline.CoordinatorManagedAllocationBytes);
+    }
+
+    [Fact]
+    public void OwnSaveRefreshesDeferredOffsetsWhenAnEarlierChunkPayloadGrows()
+    {
+        LoadDefaultGame();
+        GameSettings settings = CreateSettings(chunkSize: 16, lod1Radius: 0);
+        using var workspace = new SaveWorkspace();
+        WriteQuads(workspace.QuadsDirectory,
+            [new ChunkFixture(0, 0, 0, [SectionFixture.Uniform(SoilId)], 21, 43),
+                new ChunkFixture(8, 0, 0, [SectionFixture.Uniform(WaterId)], 65, 87)], 1, 1, 1);
+        NativeWorldSaveImportPlan plan = NativeWorldSaveImportPlan.Create(workspace.QuadsDirectory, settings);
+        var atlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
+        NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(atlas, settings, 2, 2, savePlan: plan);
+        using NativeWorld world = NativeWorld.CreateForTesting(pipeline, 123456, NullRenderer, workspace.QuadsDirectory);
+        Assert.Equal((1, 1), SavedPayloadCounts(pipeline));
+        Assert.True(world.SetBlock(0, 0, 0, CustomTransparentBlockId));
+        Assert.Equal(1, world.Save());
+        Assert.Equal((1, 1), SavedPayloadCounts(pipeline));
+        world.PlayerChunkPosition = (8, 0, 0);
+        Assert.Equal(WaterId, world.GetBlock(128, 0, 0));
+        pipeline.InspectState(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            int index = view.FindMaterializedChunkIndex(8, 0, 0);
+            Assert.Equal(65, view.MaterializedChunks[index].Temperature);
+            Assert.Equal(87, view.MaterializedChunks[index].Humidity);
+        });
+        world.PlayerChunkPosition = (0, 0, 0);
+        Assert.Equal(CustomTransparentBlockId, world.GetBlock(0, 0, 0));
+    }
+
+    [Fact]
+    public void ChangedDeferredSourceRejectsMovementAndRetainsThePublishedWorldForRetry()
+    {
+        LoadDefaultGame();
+        GameSettings settings = CreateSettings(chunkSize: 16, lod1Radius: 0);
+        using var workspace = new SaveWorkspace();
+        WriteQuads(workspace.QuadsDirectory,
+            [new ChunkFixture(0, 0, 0, [SectionFixture.Uniform(SoilId)]),
+                new ChunkFixture(8, 0, 0, [SectionFixture.Uniform(WaterId)])], 1, 1, 1);
+        NativeWorldSaveImportPlan plan = NativeWorldSaveImportPlan.Create(workspace.QuadsDirectory, settings);
+        var atlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
+        NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(atlas, settings, 2, 2, savePlan: plan);
+        using NativeWorld world = NativeWorld.CreateForTesting(pipeline, 123456, NullRenderer);
+        string path = Directory.GetFiles(workspace.QuadsDirectory, "quad*x*.bin").Single();
+        byte[] original = File.ReadAllBytes(path);
+        byte[] changed = (byte[])original.Clone();
+        changed[^1] ^= 1;
+        File.WriteAllBytes(path, changed);
+        Assert.Throws<InvalidDataException>(() => world.PlayerChunkPosition = (8, 0, 0));
+        Assert.Equal((0, 0, 0), world.PlayerChunkPosition);
+        Assert.Equal(1, world.Revision);
+        Assert.Equal(SoilId, world.GetBlock(0, 0, 0));
+        Assert.Equal((1, 1), SavedPayloadCounts(pipeline));
+        File.WriteAllBytes(path, original);
+        world.PlayerChunkPosition = (8, 0, 0);
+        Assert.Equal(WaterId, world.GetBlock(128, 0, 0));
+    }
+
+    private static (int Loaded, int Deferred) SavedPayloadCounts(NativeGtrtPipeline pipeline)
+    {
+        (int Loaded, int Deferred) counts = default;
+        pipeline.InspectState(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            for (int index = 0; index < view.State.MaterializedChunkCount; index++)
+            {
+                if (view.MaterializedChunks[index].State == NativeMaterializedTerrain.DeferredRecord)
+                    counts.Deferred++;
+                else if (view.MaterializedChunks[index].State == 1)
+                    counts.Loaded++;
+            }
+            Assert.True(view.MaterializedRawSectionCapacity >= view.State.MaterializedRawSectionCount);
+        });
+        return counts;
+    }
+
+    [Fact]
     public void TruncatedClimateFooterFailsDuringSavePlanning()
     {
         LoadDefaultGame();

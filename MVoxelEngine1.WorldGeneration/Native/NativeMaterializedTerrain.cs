@@ -4,11 +4,33 @@ using MVoxelEngine1.Infrastructure.Models.Generation;
 namespace MVoxelEngine1.WorldGeneration.Native;
 
 internal readonly record struct NativeMaterializedStorageRequirements(
-    int ChunkCount, int SectionCount, int RawSectionCount);
+    int ChunkCount, int SectionCount, int RawSectionCount, int PaletteCount = 0, int PackedWordCount = 0);
 
 internal static class NativeMaterializedTerrain
 {
     private const int ActiveRecord = 1;
+    internal const int DeferredRecord = 2;
+
+    internal static bool TryReserveSavedChunk(scoped ref NativeGtrtSessionView session,
+        int chunkX, int chunkY, int chunkZ, out int index)
+    {
+        index = session.FindMaterializedChunkIndex(chunkX, chunkY, chunkZ);
+        if (!CanImport(ref session))
+            return false;
+        if (index >= 0)
+            return true;
+        if (session.State.MaterializedChunkCount >= session.MaterializedChunkCapacity)
+            return false;
+        index = session.State.MaterializedChunkCount++;
+        session.MaterializedChunks[index] = new NativeMaterializedChunkRecord
+        {
+            ChunkX = chunkX, ChunkY = chunkY, ChunkZ = chunkZ,
+            SectionMapOffset = checked(index * session.SectionsPerChunk),
+            StorageKind = NativeChunkStorageKind.DeferredSaved, State = DeferredRecord
+        };
+        session.IndexMaterializedChunk(index);
+        return true;
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     internal static bool TryGetBlock(
@@ -836,16 +858,20 @@ internal static class NativeMaterializedTerrain
     {
         materializedChunkIndex = -1;
         if (!CanImport(ref session) ||
-            (isUniform &&
-             !session.TryGetBlockDescriptor(uniformBlockId, out _)) ||
-            session.FindMaterializedChunkIndex(chunkX, chunkY, chunkZ) >= 0)
+            (isUniform && !session.TryGetBlockDescriptor(uniformBlockId, out _)))
         {
             session.Fail(NativeGtrtFailureCode.InvalidMaterializedTerrain);
             return false;
         }
 
         ref NativeGtrtSessionState state = ref session.State;
-        if (state.MaterializedChunkCount >=
+        int existing = session.FindMaterializedChunkIndex(chunkX, chunkY, chunkZ);
+        if (existing >= 0 && session.MaterializedChunks[existing].State != 2)
+        {
+            session.Fail(NativeGtrtFailureCode.InvalidMaterializedTerrain);
+            return false;
+        }
+        if (existing < 0 && state.MaterializedChunkCount >=
             session.MaterializedChunkCapacity)
         {
             session.Fail(
@@ -853,7 +879,8 @@ internal static class NativeMaterializedTerrain
             return false;
         }
 
-        materializedChunkIndex = state.MaterializedChunkCount++;
+        materializedChunkIndex = existing >= 0 ? existing : state.MaterializedChunkCount++;
+        NativeSavedChunkSource savedSource = existing >= 0 ? session.MaterializedChunks[existing].SavedSource : default;
         int sectionMapOffset = checked(
             materializedChunkIndex * session.SectionsPerChunk);
         session.MaterializedChunks[materializedChunkIndex] =
@@ -868,7 +895,8 @@ internal static class NativeMaterializedTerrain
                 SectionMapOffset = sectionMapOffset,
                 State = ActiveRecord,
                 Revision = 1,
-                UniformBlockId = uniformBlockId
+                UniformBlockId = uniformBlockId,
+                SavedSource = savedSource
             };
 
         session.IndexMaterializedChunk(materializedChunkIndex);
@@ -1142,7 +1170,12 @@ internal static class NativeMaterializedTerrain
     private static bool CanImport(scoped ref NativeGtrtSessionView session)
     {
         ref NativeGtrtSessionState state = ref session.State;
-        return state.PublicationState == 0 &&
+        if (state.PublicationState is not (0 or 1) || state.TransactionOpen != 0)
+            return false;
+        if (state.PublicationState == 1 &&
+            (state.RemainingColumns != 0 || state.RemainingChunks != 0 || state.ReadyPacketCount != 0))
+            return false;
+        return state.FailureCode == 0 &&
             Volatile.Read(ref state.ClaimedGenerationCount) == 0 &&
             Volatile.Read(ref state.ClaimedMeshCount) == 0 &&
             Volatile.Read(ref state.PacketConsumerCount) == 0 &&

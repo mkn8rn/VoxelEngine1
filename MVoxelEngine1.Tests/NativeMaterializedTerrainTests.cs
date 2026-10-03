@@ -369,6 +369,7 @@ public sealed class NativeMaterializedTerrainTests
         measured.PublishSeed(123456);
         measured.Access(harness.PrepareAction);
         harness.Succeeded = false;
+        using var allocationScope = new NoGcAllocationScope();
         long before = GC.GetAllocatedBytesForCurrentThread();
         measured.Access(harness.EditAction);
         measured.Access(harness.QueryAction);

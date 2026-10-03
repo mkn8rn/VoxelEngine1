@@ -1,5 +1,6 @@
 using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
+using System.Buffers.Binary;
 using MVoxelEngine1.Infrastructure.Models.Generation;
 using MVoxelEngine1.Infrastructure.Models.Terrain;
 using MVoxelEngine1.WorldGeneration.Terrain;
@@ -161,57 +162,65 @@ internal sealed class NativeWorldSaveExporter
         bool published = false;
         try
         {
-            using (var stream = new FileStream(
-                       temporaryPath,
-                       FileMode.CreateNew,
-                       FileAccess.ReadWrite,
-                       FileShare.None,
-                       bufferSize: 256 * 1024,
-                       FileOptions.WriteThrough))
-            using (var writer = new BinaryWriter(
-                       stream,
-                       System.Text.Encoding.UTF8,
-                       leaveOpen: true))
+            using (FileStream? existing = File.Exists(finalPath)
+                       ? new FileStream(finalPath, FileMode.Open, FileAccess.Read, FileShare.Read) : null)
             {
-                writer.Write(QuadMagic);
-                writer.Write(QuadVersion);
-                writer.Write((ushort)0);
-                writer.Write(batchX);
-                writer.Write(batchZ);
-                writer.Write(chunkCount);
-
-                for (int index = 0; index < materializedCount; index++)
+                if (existing is not null)
+                    chunkCount = checked(chunkCount + CopyUnloadedRecords(ref view, existing, null, batchX, batchZ));
+                using (var stream = new FileStream(
+                           temporaryPath,
+                           FileMode.CreateNew,
+                           FileAccess.ReadWrite,
+                           FileShare.None,
+                           bufferSize: 256 * 1024,
+                           FileOptions.WriteThrough))
+                using (var writer = new BinaryWriter(
+                           stream,
+                           System.Text.Encoding.UTF8,
+                           leaveOpen: true))
                 {
-                    NativeMaterializedChunkRecord chunk =
-                        view.MaterializedChunks[index];
-                    if (chunk.State != ActiveRecord)
-                        continue;
-                    (int currentBatchX, int currentBatchZ) =
-                        NativeSavePartition.GetBatchIndices(
-                            chunk.ChunkX,
-                            chunk.ChunkZ);
-                    if (currentBatchX != batchX ||
-                        currentBatchZ != batchZ)
+                    writer.Write(QuadMagic);
+                    writer.Write(QuadVersion);
+                    writer.Write((ushort)0);
+                    writer.Write(batchX);
+                    writer.Write(batchZ);
+                    writer.Write(chunkCount);
+
+                    for (int index = 0; index < materializedCount; index++)
                     {
-                        continue;
+                        NativeMaterializedChunkRecord chunk =
+                            view.MaterializedChunks[index];
+                        if (chunk.State != ActiveRecord)
+                            continue;
+                        (int currentBatchX, int currentBatchZ) =
+                            NativeSavePartition.GetBatchIndices(
+                                chunk.ChunkX,
+                                chunk.ChunkZ);
+                        if (currentBatchX != batchX ||
+                            currentBatchZ != batchZ)
+                        {
+                            continue;
+                        }
+
+                        writer.Write(chunk.ChunkX);
+                        writer.Write(chunk.ChunkY);
+                        writer.Write(chunk.ChunkZ);
+                        long payloadLengthPosition = stream.Position;
+                        writer.Write(0);
+                        long payloadStart = stream.Position;
+                        WriteChunk(ref view, writer, index, in chunk);
+                        long payloadEnd = stream.Position;
+                        int payloadLength = checked((int)(payloadEnd - payloadStart));
+                        stream.Position = payloadLengthPosition;
+                        writer.Write(payloadLength);
+                        stream.Position = payloadEnd;
                     }
+                    if (existing is not null)
+                        _ = CopyUnloadedRecords(ref view, existing, writer, batchX, batchZ);
 
-                    writer.Write(chunk.ChunkX);
-                    writer.Write(chunk.ChunkY);
-                    writer.Write(chunk.ChunkZ);
-                    long payloadLengthPosition = stream.Position;
-                    writer.Write(0);
-                    long payloadStart = stream.Position;
-                    WriteChunk(ref view, writer, index, in chunk);
-                    long payloadEnd = stream.Position;
-                    int payloadLength = checked((int)(payloadEnd - payloadStart));
-                    stream.Position = payloadLengthPosition;
-                    writer.Write(payloadLength);
-                    stream.Position = payloadEnd;
+                    writer.Flush();
+                    stream.Flush(flushToDisk: true);
                 }
-
-                writer.Flush();
-                stream.Flush(flushToDisk: true);
             }
 
             publishFile(temporaryPath, finalPath);
@@ -262,6 +271,57 @@ internal sealed class NativeWorldSaveExporter
             File.Replace(temporaryPath, finalPath, null);
         else
             File.Move(temporaryPath, finalPath);
+    }
+
+    private static int CopyUnloadedRecords(scoped ref NativeGtrtSessionView view, FileStream source,
+        BinaryWriter? destination, int batchX, int batchZ)
+    {
+        source.Position = 0;
+        Span<byte> header = stackalloc byte[20];
+        source.ReadExactly(header);
+        if (!header[..4].SequenceEqual(QuadMagic) ||
+            BinaryPrimitives.ReadUInt16LittleEndian(header[4..]) != QuadVersion ||
+            BinaryPrimitives.ReadInt32LittleEndian(header[8..]) != batchX ||
+            BinaryPrimitives.ReadInt32LittleEndian(header[12..]) != batchZ)
+            throw new InvalidDataException("The existing saved quad header is invalid.");
+        int count = BinaryPrimitives.ReadInt32LittleEndian(header[16..]);
+        if (count < 0)
+            throw new InvalidDataException("The existing saved quad record count is invalid.");
+        Span<byte> record = stackalloc byte[16];
+        Span<byte> buffer = stackalloc byte[16_384];
+        int copied = 0;
+        for (int index = 0; index < count; index++)
+        {
+            source.ReadExactly(record);
+            int x = BinaryPrimitives.ReadInt32LittleEndian(record);
+            int y = BinaryPrimitives.ReadInt32LittleEndian(record[4..]);
+            int z = BinaryPrimitives.ReadInt32LittleEndian(record[8..]);
+            int bytes = BinaryPrimitives.ReadInt32LittleEndian(record[12..]);
+            if (bytes <= 0 || bytes > source.Length - source.Position ||
+                NativeSavePartition.GetBatchIndices(x, z) != (batchX, batchZ))
+                throw new InvalidDataException("An existing saved chunk record is invalid.");
+            int materialized = view.FindMaterializedChunkIndex(x, y, z);
+            bool keep = materialized < 0 || view.MaterializedChunks[materialized].State != ActiveRecord;
+            if (!keep || destination is null)
+            {
+                source.Position += bytes;
+                if (keep)
+                    copied++;
+                continue;
+            }
+            destination.Write(record);
+            while (bytes != 0)
+            {
+                int length = Math.Min(bytes, buffer.Length);
+                source.ReadExactly(buffer[..length]);
+                destination.Write(buffer[..length]);
+                bytes -= length;
+            }
+            copied++;
+        }
+        if (source.Position != source.Length)
+            throw new InvalidDataException("The existing saved quad has trailing records.");
+        return copied;
     }
 
     private static void WriteChunk(

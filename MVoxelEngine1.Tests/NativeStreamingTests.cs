@@ -21,6 +21,7 @@ public sealed class NativeStreamingTests
         var atlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
         ChunkRender.terrainTextureAtlas = atlas;
         using NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(atlas, GameManager.settings, 2, 3, stream);
+        using var allocationScope = new NoGcAllocationScope();
         using NativeWorld world = NativeWorld.CreateForTesting(pipeline, 123456, HeadlessRenderer);
         Assert.Equal(new NativeStreamingStatistics(25, 0, 27, 0), world.StreamingStatistics);
         int surfaceY = 0;

@@ -67,6 +67,7 @@ public sealed class NativeMaterializedIndexTests
             }
         };
         session.Access(query);
+        using var allocationScope = new NoGcAllocationScope();
         long before = GC.GetAllocatedBytesForCurrentThread();
         session.Access(query);
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;

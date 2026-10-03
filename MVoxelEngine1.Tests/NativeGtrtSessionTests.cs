@@ -549,6 +549,7 @@ public sealed class NativeGtrtSessionTests
 
         using NativeGtrtSession measured = NativeGtrtSession.Create(layout);
         measured.PublishSeed(123456);
+        using var allocationScope = new NoGcAllocationScope();
         long before = GC.GetAllocatedBytesForCurrentThread();
         measured.Access(ExecutePacketLifecycleAction);
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
@@ -719,6 +720,7 @@ public sealed class NativeGtrtSessionTests
             warmup.PublishSeed(123456);
 
         using NativeGtrtSession session = NativeGtrtSession.Create(layout);
+        using var allocationScope = new NoGcAllocationScope();
         long before = GC.GetAllocatedBytesForCurrentThread();
         session.PublishSeed(123456);
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
@@ -916,6 +918,7 @@ public sealed class NativeGtrtSessionTests
 
         using var measured = NativeGtrtSession.Create(layout);
         measured.PublishSeed(123456);
+        using var allocationScope = new NoGcAllocationScope();
         long before = GC.GetAllocatedBytesForCurrentThread();
         measured.Access(ExecuteSchedulerAction);
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;

@@ -45,6 +45,7 @@ public sealed class NativeGtrtWorkerPoolTests
                 generationWorkerCount: 3,
                 meshWorkerCount: 3);
 
+        using var allocationScope = new NoGcAllocationScope();
         NativePreUploadPacket packet = pipeline.Run(123456);
 
         Assert.True(packet.RenderDataId > 0);
@@ -153,6 +154,7 @@ public sealed class NativeGtrtWorkerPoolTests
             meshWorkerCount: 3,
             streamGeneration: true);
 
+        using var allocationScope = new NoGcAllocationScope();
         NativePreUploadPacket initial = pipeline.Run(123456);
         Assert.Throws<InvalidOperationException>(() =>
             pipeline.MoveToChunk(2, -1, 3));
@@ -187,6 +189,7 @@ public sealed class NativeGtrtWorkerPoolTests
         var atlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
         using NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(atlas, CreateSmallSettings(),
             generationWorkerCount: 1, meshWorkerCount: 5, streamGeneration: streamGeneration);
+        using var allocationScope = new NoGcAllocationScope();
         _ = pipeline.Run(123456);
         _ = ConsumeBounds(pipeline);
         for (int move = 0; move < 32; move++)
@@ -232,7 +235,15 @@ public sealed class NativeGtrtWorkerPoolTests
                    meshWorkerCount: 3,
                    streamGeneration: streamGeneration))
         {
+            using var allocationScope = new NoGcAllocationScope();
             workers.Run(123456);
+            var samples = new NativeWorkerAllocationSample[workers.WorkerCount];
+            workers.CopyAllocationSamples(samples);
+            foreach (NativeWorkerAllocationSample sample in samples)
+            {
+                Assert.True(sample.TotalBytes == 0,
+                    $"Worker allocation: {sample}");
+            }
             Assert.Equal(0, workers.MaximumManagedAllocationBytes);
         }
 

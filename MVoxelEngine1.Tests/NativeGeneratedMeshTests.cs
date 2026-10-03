@@ -128,6 +128,7 @@ public sealed class NativeGeneratedMeshTests
         measured.PublishSeed(123456);
         measured.Access(harness.PrepareAction);
         harness.Succeeded = false;
+        using var allocationScope = new NoGcAllocationScope();
         long before = GC.GetAllocatedBytesForCurrentThread();
         measured.Access(harness.BuildAction);
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
@@ -332,6 +333,7 @@ public sealed class NativeGeneratedMeshTests
         measured.PublishSeed(123456);
         measured.Access(harness.PrepareAction);
         harness.Succeeded = false;
+        using var allocationScope = new NoGcAllocationScope();
         long before = GC.GetAllocatedBytesForCurrentThread();
         measured.Access(harness.BuildAction);
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;

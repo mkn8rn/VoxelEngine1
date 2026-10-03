@@ -61,6 +61,8 @@ public sealed class NativeGtrtPipeline : IDisposable
     private readonly NativeGtrtSession session;
     private readonly NativeGtrtWorkerPool workers;
     private readonly NativeWorldSaveExporter saveExporter;
+    private NativeWorldSaveImportPlan? savePlan;
+    private readonly GameSettings settings;
     private readonly NativeLeaseAction<byte> capturePacketAction;
     private readonly NativeLeaseAction<byte> consumePacketsAction;
     private readonly NativeLeaseAction<byte> editBlockAction;
@@ -137,11 +139,14 @@ public sealed class NativeGtrtPipeline : IDisposable
         NativeGtrtWorkerPool workers,
         int requiredPacketCount,
         GameSettings settings,
-        Action<string, string>? savePublisher)
+        Action<string, string>? savePublisher,
+        NativeWorldSaveImportPlan? savePlan)
     {
         this.game = game;
         this.session = session;
         this.workers = workers;
+        this.settings = settings;
+        this.savePlan = savePlan;
         saveExporter = new NativeWorldSaveExporter(session, savePublisher);
         this.requiredPacketCount = requiredPacketCount;
         chunkSizeX = settings.chunkMaxX;
@@ -254,12 +259,8 @@ public sealed class NativeGtrtPipeline : IDisposable
             int materializedChunkCapacity = checked(
                 NativeGtrtSessionLayout.DefaultMaterializedChunkCapacity +
                 (savePlan?.ChunkCount ?? 0));
-            int materializedSectionCapacity = checked(
-                editableSectionCapacity +
-                (savePlan?.SectionCount ?? 0));
-            int materializedRawSectionCapacity = checked(
-                NativeGtrtSessionLayout.DefaultMaterializedChunkCapacity +
-                (savePlan?.RawSectionCount ?? 0));
+            int materializedSectionCapacity = editableSectionCapacity;
+            int materializedRawSectionCapacity = NativeGtrtSessionLayout.DefaultMaterializedChunkCapacity;
             session = NativeGtrtSession.Create(
                 settings,
                 game,
@@ -268,9 +269,9 @@ public sealed class NativeGtrtPipeline : IDisposable
                 materializedChunkCapacity,
                 materializedSectionCapacity,
                 materializedRawSectionCapacity,
-                savePlan?.PaletteCount ?? 0,
-                savePlan?.PackedWordCount ?? 0);
-            savePlan?.Import(session);
+                materializedPaletteCapacity: 0,
+                materializedPackedWordCapacity: 0);
+            savePlan?.PrepareLazyImport(session);
             workers = new NativeGtrtWorkerPool(
                 session,
                 generationWorkerCount,
@@ -282,7 +283,8 @@ public sealed class NativeGtrtPipeline : IDisposable
                 workers,
                 requiredPacketCount,
                 settings,
-                savePublisher);
+                savePublisher,
+                savePlan);
         }
         catch
         {
@@ -353,6 +355,7 @@ public sealed class NativeGtrtPipeline : IDisposable
         RememberCurrentRun(runCount);
         try
         {
+            savePlan?.EnsureResidentPayloads(session, centerChunkX, centerChunkY, centerChunkZ);
             NativePreUploadPacket packet = RunCore(
                 publishedSeed,
                 centerChunkX,
@@ -368,6 +371,8 @@ public sealed class NativeGtrtPipeline : IDisposable
         catch
         {
             RestorePreviousRun();
+            if (Volatile.Read(ref completedRunCount) == -1)
+                Volatile.Write(ref completedRunCount, runCount);
             throw;
         }
     }
@@ -626,6 +631,10 @@ public sealed class NativeGtrtPipeline : IDisposable
         pendingWorldY = worldY;
         pendingWorldZ = worldZ;
         pendingReadSucceeded = false;
+        GetChunkAndLocalCoordinate(worldX, chunkSizeX, out int sourceX, out _);
+        GetChunkAndLocalCoordinate(worldY, chunkSizeY, out int sourceY, out _);
+        GetChunkAndLocalCoordinate(worldZ, chunkSizeZ, out int sourceZ, out _);
+        savePlan?.EnsureBlockPayload(session, sourceX, sourceY, sourceZ, inspectingPackets);
         session.Access(readBlockAction);
         if (!pendingReadSucceeded)
         {
@@ -648,7 +657,29 @@ public sealed class NativeGtrtPipeline : IDisposable
             throw new InvalidOperationException(
                 "Native world data is not ready for a save.");
         }
-        return saveExporter.SaveDirtyChunks(quadsDirectory);
+        int published;
+        savePlan?.VerifyDeferredSourceFiles();
+        try
+        {
+            published = saveExporter.SaveDirtyChunks(quadsDirectory);
+        }
+        catch
+        {
+            RefreshDeferredSaveMetadata(quadsDirectory);
+            throw;
+        }
+        if (published != 0)
+            RefreshDeferredSaveMetadata(quadsDirectory);
+        return published;
+    }
+
+    private void RefreshDeferredSaveMetadata(string quadsDirectory)
+    {
+        if (savePlan is null || !savePlan.HasDeferredChunks)
+            return;
+        NativeWorldSaveImportPlan refreshed = NativeWorldSaveImportPlan.Create(quadsDirectory, settings);
+        refreshed.ReserveSavedMetadata(session);
+        savePlan = refreshed;
     }
 
     public int ConsumeReadyPackets(
