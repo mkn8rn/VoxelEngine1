@@ -276,6 +276,7 @@ internal static class NativeColumnProfileGenerator
         }
         column.GenerationEpoch = work.Epoch;
         session.ColumnSummaries[work.RecordIndex] = summary;
+        column.SummaryComputed = 1;
         return true;
     }
 }

@@ -108,6 +108,10 @@ internal static class NativeGeneratedMesh
         Span<int> positiveFaces,
         scoped ref NativeGeneratedFaceWriter writer)
     {
+        if (!NativeUniformChunkMesh.TryEmit(ref session, chunkIndex, negativeFaces, ref writer, out bool handled))
+            return false;
+        if (handled)
+            return writer.Valid;
         if (!TryRequiresVoxelMesh(
                 ref session,
                 chunkIndex,

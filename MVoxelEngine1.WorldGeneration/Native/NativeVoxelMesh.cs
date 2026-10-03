@@ -178,7 +178,7 @@ internal static class NativeVoxelMesh
         return true;
     }
 
-    private static bool TryEmitMask(
+    internal static bool TryEmitMask(
         scoped ref NativeGtrtSessionView session,
         Span<int> faces,
         int uSize,
@@ -363,7 +363,7 @@ internal static class NativeVoxelMesh
         }
     }
 
-    private static void GetAnchor(
+    internal static void GetAnchor(
         byte direction,
         int normalCoordinate,
         int u,

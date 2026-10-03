@@ -150,6 +150,7 @@ internal struct NativeColumnRecord
     internal int GenerationEpoch;
     internal NativeColumnState State;
     internal int ReplacementMode;
+    internal int SummaryComputed;
     internal NativeTerrainMaterialSet ResolvedMaterials;
 }
 
@@ -712,7 +713,7 @@ internal readonly struct NativeGtrtSessionLayout
 internal readonly struct NativeGtrtSessionHeader
 {
     internal const uint ExpectedMagic = 0x54525447;
-    internal const int ExpectedVersion = 15;
+    internal const int ExpectedVersion = 16;
 
     internal NativeGtrtSessionHeader(NativeGtrtSessionLayout layout)
     {
