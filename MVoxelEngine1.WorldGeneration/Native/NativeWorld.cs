@@ -18,6 +18,9 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
 {
     private static readonly NativeChunkRendererFactory OpenGlRendererFactory =
         CreateOpenGlRenderer;
+    private static readonly NativeChunkRendererFactory HeadlessRendererFactory =
+        static (in NativeChunkRenderPacketDescriptor descriptor,
+            ReadOnlySpan<uint> opaqueWords, ReadOnlySpan<uint> transparentWords) => null;
 
     private readonly NativeGtrtPipeline pipeline;
     private readonly NativeChunkRendererFactory rendererFactory;
@@ -29,6 +32,10 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
     private (int cx, int cy, int cz) playerChunkPosition;
     private int stagingCount;
     private int disposed;
+    private bool inspectingPackets;
+
+    public Guid ID { get; private set; }
+    public Guid RegionID { get; private set; }
 
     private NativeWorld(
         NativeGtrtPipeline pipeline,
@@ -63,7 +70,15 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
         }
     }
 
-    public static NativeWorld CreateOpenGl(BlockTextureAtlas textureAtlas)
+    public static NativeWorld CreateOpenGl(BlockTextureAtlas textureAtlas) =>
+        Create(textureAtlas, OpenGlRendererFactory);
+
+    public static NativeWorld CreateHeadless(BlockTextureAtlas textureAtlas) =>
+        Create(textureAtlas, HeadlessRendererFactory);
+
+    private static NativeWorld Create(
+        BlockTextureAtlas textureAtlas,
+        NativeChunkRendererFactory rendererFactory)
     {
         ArgumentNullException.ThrowIfNull(textureAtlas);
 
@@ -82,11 +97,14 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
                 GameManager.settings);
         NativeGtrtPipeline pipeline =
             NativeGtrtPipeline.Create(textureAtlas, savePlan);
-        return CreateOwned(
+        NativeWorld world = CreateOwned(
             pipeline,
             loader.seed,
-            OpenGlRendererFactory,
+            rendererFactory,
             quadsDirectory);
+        world.ID = loader.ID;
+        world.RegionID = loader.RegionID;
+        return world;
     }
 
     internal static NativeWorld CreateForTesting(
@@ -105,7 +123,7 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
         }
         set
         {
-            ValidateOwner();
+            ValidateMutation();
             if (value == playerChunkPosition)
                 return;
 
@@ -141,7 +159,7 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
         int worldZ,
         ushort blockId)
     {
-        ValidateOwner();
+        ValidateMutation();
         if (!pipeline.BeginBlockEdit(
                 worldX,
                 worldY,
@@ -182,7 +200,7 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
 
     public int Save()
     {
-        ValidateOwner();
+        ValidateMutation();
         if (quadsDirectory is null)
         {
             throw new InvalidOperationException(
@@ -195,6 +213,8 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
     {
         ArgumentNullException.ThrowIfNull(program);
         ValidateOwner();
+        if (rendererFactory == HeadlessRendererFactory)
+            throw new InvalidOperationException("A headless world cannot execute OpenGL rendering.");
         ChunkRender.ProcessPendingDeletes();
 
         GL.DepthMask(true);
@@ -210,6 +230,8 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
     public void Dispose()
     {
         ValidateOwnerThread();
+        if (inspectingPackets)
+            throw new InvalidOperationException("The native world is being inspected.");
         if (Interlocked.Exchange(ref disposed, 1) != 0)
             return;
 
@@ -244,6 +266,27 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
 
         if (failure is not null)
             ExceptionDispatchInfo.Capture(failure).Throw();
+    }
+
+    public void InspectRenderPackets(NativeChunkRenderPacketAction inspector)
+    {
+        ValidateMutation();
+        inspectingPackets = true;
+        try
+        {
+            pipeline.InspectRenderPackets(inspector);
+        }
+        finally
+        {
+            inspectingPackets = false;
+        }
+    }
+
+    private void ValidateMutation()
+    {
+        ValidateOwner();
+        if (inspectingPackets)
+            throw new InvalidOperationException("The native world is being inspected.");
     }
 
     private void PublishReadyPackets()

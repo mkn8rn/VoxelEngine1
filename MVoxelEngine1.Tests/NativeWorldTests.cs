@@ -33,6 +33,69 @@ public sealed class NativeWorldTests
     }
 
     [Fact]
+    public void RetiredPacketsRemainInspectableUntilMovement()
+    {
+        LoadDefaultGame();
+        var atlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
+        var factory = new TrackingRendererFactory();
+        using NativeWorld world = NativeWorld.CreateForTesting(
+            NativeGtrtPipeline.Create(atlas, CreateSmallSettings(), 2, 2),
+            123456, factory.Create);
+        var first = new HashSet<long>();
+        world.InspectRenderPackets((in NativeChunkRenderPacketDescriptor descriptor,
+            ReadOnlySpan<uint> opaque, ReadOnlySpan<uint> transparent) =>
+        {
+            Assert.True(first.Add(descriptor.RenderDataId));
+            Assert.Equal(descriptor.OpaqueFaceCount, PackedFaceRectangle.CountLogicalFaces(opaque));
+            Assert.Equal(descriptor.TransparentFaceCount, PackedFaceRectangle.CountLogicalFaces(transparent));
+            _ = world.GetBlock(descriptor.ChunkWorldX, descriptor.ChunkWorldY, descriptor.ChunkWorldZ);
+            Assert.Throws<InvalidOperationException>(() => world.PlayerChunkPosition = (1, 0, 0));
+            Assert.Throws<InvalidOperationException>(() => world.SetBlock(0, 0, 0, SoilId));
+            Assert.Throws<InvalidOperationException>(() => world.Dispose());
+        });
+        Assert.Equal(world.RendererSlotCount, first.Count);
+        int observed = 0;
+        world.InspectRenderPackets((in NativeChunkRenderPacketDescriptor descriptor,
+            ReadOnlySpan<uint> opaque, ReadOnlySpan<uint> transparent) =>
+        {
+            Assert.Contains(descriptor.RenderDataId, first);
+            observed++;
+        });
+        Assert.Equal(first.Count, observed);
+        Assert.Equal(27, factory.CreatedCount);
+        world.PlayerChunkPosition = (1, 0, 0);
+        int replacements = 0;
+        world.InspectRenderPackets((in NativeChunkRenderPacketDescriptor descriptor,
+            ReadOnlySpan<uint> opaque, ReadOnlySpan<uint> transparent) =>
+        {
+            if (!first.Contains(descriptor.RenderDataId))
+                replacements++;
+        });
+        Assert.True(replacements > 0);
+    }
+
+    [Fact]
+    public void InspectorFailureReleasesTheBorrowWithoutPoisoningTheWorld()
+    {
+        LoadDefaultGame();
+        var atlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
+        var factory = new TrackingRendererFactory();
+        using NativeWorld world = NativeWorld.CreateForTesting(
+            NativeGtrtPipeline.Create(atlas, CreateSmallSettings(), 2, 2),
+            123456, factory.Create);
+        Assert.Throws<IOException>(() => world.InspectRenderPackets(
+            (in NativeChunkRenderPacketDescriptor descriptor,
+                ReadOnlySpan<uint> opaque, ReadOnlySpan<uint> transparent) =>
+                throw new IOException("Requested inspector failure.")));
+        _ = world.GetBlock(0, 0, 0);
+        world.PlayerChunkPosition = (1, 0, 0);
+        int observed = 0;
+        world.InspectRenderPackets((in NativeChunkRenderPacketDescriptor descriptor,
+            ReadOnlySpan<uint> opaque, ReadOnlySpan<uint> transparent) => observed++);
+        Assert.Equal(world.RendererSlotCount, observed);
+    }
+
+    [Fact]
     public void InitialPacketsReplaceExactlyOnceAfterCameraMovement()
     {
         LoadDefaultGame();

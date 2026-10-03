@@ -66,9 +66,11 @@ public sealed class NativeGtrtPipeline : IDisposable
     private readonly NativeLeaseAction<byte> editBlockAction;
     private readonly NativeLeaseAction<byte> rollbackBlockAction;
     private readonly NativeLeaseAction<byte> readBlockAction;
+    private readonly NativeLeaseAction<byte> inspectPacketsAction;
     private readonly int requiredPacketCount;
     private NativePreUploadPacket capturedPacket;
     private NativeChunkRenderPacketAction? pendingPacketConsumer;
+    private NativeChunkRenderPacketAction? pendingPacketInspector;
     private Exception? packetConsumerFailure;
     private bool packetCaptured;
     private int consumedPacketCount;
@@ -105,6 +107,7 @@ public sealed class NativeGtrtPipeline : IDisposable
     private long coordinatorManagedAllocationBytes;
     private double? generationToRenderMilliseconds;
     private int disposed;
+    private bool inspectingPackets;
 
     private NativeGtrtPipeline(
         NativeGameSnapshot game,
@@ -123,6 +126,7 @@ public sealed class NativeGtrtPipeline : IDisposable
         editBlockAction = EditBlockCore;
         rollbackBlockAction = RollbackBlockCore;
         readBlockAction = ReadBlockCore;
+        inspectPacketsAction = InspectPacketsCore;
     }
 
     public static NativeGtrtPipeline Create(
@@ -296,6 +300,7 @@ public sealed class NativeGtrtPipeline : IDisposable
         int centerChunkY,
         int centerChunkZ)
     {
+        ValidateNoInspection();
         ObjectDisposedException.ThrowIf(
             Volatile.Read(ref disposed) != 0,
             this);
@@ -397,6 +402,7 @@ public sealed class NativeGtrtPipeline : IDisposable
         int worldZ,
         ushort blockId)
     {
+        ValidateNoInspection();
         ObjectDisposedException.ThrowIf(
             Volatile.Read(ref disposed) != 0,
             this);
@@ -596,6 +602,7 @@ public sealed class NativeGtrtPipeline : IDisposable
 
     public void Dispose()
     {
+        ValidateNoInspection();
         if (Interlocked.Exchange(ref disposed, 1) != 0)
             return;
 
@@ -635,6 +642,60 @@ public sealed class NativeGtrtPipeline : IDisposable
 
         if (failure is not null)
             ExceptionDispatchInfo.Capture(failure).Throw();
+    }
+
+    public void InspectRenderPackets(NativeChunkRenderPacketAction inspector)
+    {
+        ArgumentNullException.ThrowIfNull(inspector);
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
+        ValidateNoInspection();
+        if (Volatile.Read(ref completedRunCount) <= 0 ||
+            !packetConsumptionCompleted || pendingEdit)
+        {
+            throw new InvalidOperationException("Native render data is not ready for inspection.");
+        }
+        inspectingPackets = true;
+        pendingPacketInspector = inspector;
+        try
+        {
+            session.Access(inspectPacketsAction);
+        }
+        finally
+        {
+            pendingPacketInspector = null;
+            inspectingPackets = false;
+        }
+    }
+
+    private void ValidateNoInspection()
+    {
+        if (inspectingPackets)
+            throw new InvalidOperationException("Native render inspection is already active.");
+    }
+
+    private void InspectPacketsCore(scoped NativeLeaseView<byte> owner)
+    {
+        var view = new NativeGtrtSessionView(owner.AsSpan());
+        NativeChunkRenderPacketAction inspector = pendingPacketInspector!;
+        for (int index = 0; index < view.Chunks.Length; index++)
+        {
+            if (!view.TryInspectRetiredPacket(index, out NativePacketReadView packet))
+                continue;
+            NativeChunkRecord chunk = view.Chunks[index];
+            NativeRenderPacketRecord record = packet.Record;
+            var descriptor = new NativeChunkRenderPacketDescriptor(
+                record.RenderDataId,
+                checked(chunk.ChunkX * view.ChunkSizeX),
+                checked(chunk.ChunkY * view.ChunkSizeY),
+                checked(chunk.ChunkZ * view.ChunkSizeZ),
+                record.RegistryEpoch,
+                record.PublicationEpoch,
+                record.OpaqueFaceCount,
+                record.OpaqueWordCount,
+                record.TransparentFaceCount,
+                record.TransparentWordCount);
+            inspector(in descriptor, packet.OpaqueWords, packet.TransparentWords);
+        }
     }
 
     private void CaptureFirstPacket(
@@ -903,13 +964,14 @@ public sealed class NativeGtrtPipeline : IDisposable
             view.ChunkSizeZ,
             out int chunkZ,
             out int localZ);
-        int chunkIndex = view.GetChunkIndex(chunkX, chunkY, chunkZ);
+        int residentY = view.State.CenterChunkY;
+        int chunkIndex = view.GetChunkIndex(chunkX, residentY, chunkZ);
         if (chunkIndex < 0 ||
             !NativeGeneratedTerrain.TryGetBlock(
                 ref view,
                 chunkIndex,
                 localX,
-                localY,
+                checked(localY + (chunkY - residentY) * view.ChunkSizeY),
                 localZ,
                 out pendingReadBlockId))
         {

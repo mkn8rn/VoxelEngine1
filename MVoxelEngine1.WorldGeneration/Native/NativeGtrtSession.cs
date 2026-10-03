@@ -2105,6 +2105,29 @@ internal ref struct NativeGtrtSessionView
         return true;
     }
 
+    internal bool TryInspectRetiredPacket(
+        int chunkIndex,
+        out NativePacketReadView packet)
+    {
+        packet = default;
+        if ((uint)chunkIndex >= (uint)Chunks.Length)
+            return false;
+        NativeChunkRecord chunk = Chunks[chunkIndex];
+        NativeRenderPacketRecord source = Packets[chunk.PacketIndex];
+        if (ReadState(ref chunk.State) != NativeChunkState.Retired ||
+            ReadState(ref source.State) != NativeRenderPacketState.Retired ||
+            source.PublicationEpoch != State.SessionEpoch ||
+            source.ChunkIndex != chunkIndex)
+        {
+            return false;
+        }
+        packet = new NativePacketReadView(
+            source,
+            PacketWords.Slice(source.OpaqueWordOffset, source.OpaqueWordCount),
+            PacketWords.Slice(source.TransparentWordOffset, source.TransparentWordCount));
+        return true;
+    }
+
     internal void Fail(NativeGtrtFailureCode failure) =>
         RecordFailure(ref State, failure);
 
