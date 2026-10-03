@@ -1,44 +1,30 @@
+using System.Reflection;
+
 namespace MVoxelEngine1.Tests
 {
     internal static class TestPaths
     {
         public static string GameDataRoot => Path.Combine(AppContext.BaseDirectory, "GameData");
 
-        public static string RepositoryRoot
-        {
-            get
-            {
-                DirectoryInfo? directory = new(AppContext.BaseDirectory);
-                while (directory is not null)
-                {
-                    if (File.Exists(Path.Combine(directory.FullName, "MVoxelEngine1.sln")))
-                        return directory.FullName;
+        public static string RepositoryRoot => Path.GetFullPath(GetMetadata("RepositoryRoot"));
 
-                    directory = directory.Parent;
-                }
-
-                throw new DirectoryNotFoundException("Repository root was not found.");
-            }
-        }
+        public static string ResultsRoot { get; } = Path.Combine(
+            Path.GetTempPath(), "MVoxelEngine1.Tests", "results", Guid.NewGuid().ToString("N"));
 
         public static string ApplicationExecutable
         {
             get
             {
-#if DEBUG
-                const string configuration = "Debug";
-#else
-                const string configuration = "Release";
-#endif
                 return Path.Combine(
-                    RepositoryRoot,
-                    "MVoxelEngine1.Application",
-                    "bin",
-                    configuration,
-                    "net10.0",
-                    "MVoxelEngine1.Application.exe");
+                    Path.GetDirectoryName(GetMetadata("ApplicationTargetPath"))!,
+                    "MVoxelEngine1.Application" + (OperatingSystem.IsWindows() ? ".exe" : string.Empty));
             }
         }
+
+        private static string GetMetadata(string key) => typeof(TestPaths).Assembly
+            .GetCustomAttributes<AssemblyMetadataAttribute>()
+            .Single(attribute => attribute.Key == key).Value
+            ?? throw new InvalidOperationException($"Missing build metadata: {key}.");
 
         public static TestWorkspace CreateWorkspace()
         {

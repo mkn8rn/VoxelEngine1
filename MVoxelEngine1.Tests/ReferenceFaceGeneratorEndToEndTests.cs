@@ -19,8 +19,7 @@ namespace MVoxelEngine1.Tests
                 workspace.GameDataRoot,
                 waterLevel: 551);
             string resultsDirectory = Path.Combine(
-                TestPaths.RepositoryRoot,
-                "TestResults",
+                TestPaths.ResultsRoot,
                 "reference-face-streaming");
             Directory.CreateDirectory(resultsDirectory);
             string outputPath = Path.Combine(

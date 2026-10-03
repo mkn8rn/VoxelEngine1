@@ -110,12 +110,13 @@ public sealed class NativeGtrtPipeline : IDisposable
         NativeGameSnapshot game,
         NativeGtrtSession session,
         NativeGtrtWorkerPool workers,
-        int requiredPacketCount)
+        int requiredPacketCount,
+        Action<string, string>? savePublisher)
     {
         this.game = game;
         this.session = session;
         this.workers = workers;
-        saveExporter = new NativeWorldSaveExporter(session);
+        saveExporter = new NativeWorldSaveExporter(session, savePublisher);
         this.requiredPacketCount = requiredPacketCount;
         capturePacketAction = CaptureFirstPacket;
         consumePacketsAction = ConsumePackets;
@@ -183,7 +184,8 @@ public sealed class NativeGtrtPipeline : IDisposable
         int generationWorkerCount,
         int meshWorkerCount,
         bool streamGeneration = false,
-        NativeWorldSaveImportPlan? savePlan = null)
+        NativeWorldSaveImportPlan? savePlan = null,
+        Action<string, string>? savePublisher = null)
     {
         ArgumentNullException.ThrowIfNull(textureAtlas);
         ArgumentNullException.ThrowIfNull(settings);
@@ -244,7 +246,8 @@ public sealed class NativeGtrtPipeline : IDisposable
                 game,
                 session,
                 workers,
-                requiredPacketCount);
+                requiredPacketCount,
+                savePublisher);
         }
         catch
         {

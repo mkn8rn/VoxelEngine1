@@ -90,8 +90,7 @@ namespace MVoxelEngine1.Tests
                 samples[0].Managed.OutputSha256,
                 DateTimeOffset.UtcNow);
             string resultsDirectory = Path.Combine(
-                TestPaths.RepositoryRoot,
-                "TestResults",
+                TestPaths.ResultsRoot,
                 "diagnostics");
             Directory.CreateDirectory(resultsDirectory);
             string resultPath = Path.Combine(

@@ -16,7 +16,7 @@ namespace MVoxelEngine1.Tests
             string application = TestPaths.ApplicationExecutable;
             Assert.True(File.Exists(application), $"Application executable was not found at {application}.");
 
-            string resultsDirectory = Path.Combine(TestPaths.RepositoryRoot, "TestResults", "benchmarks");
+            string resultsDirectory = Path.Combine(TestPaths.ResultsRoot, "benchmarks");
             Directory.CreateDirectory(resultsDirectory);
             string resultPath = Path.Combine(
                 resultsDirectory,
@@ -212,8 +212,7 @@ namespace MVoxelEngine1.Tests
                 $"Application executable was not found at {application}.");
 
             string resultsDirectory = Path.Combine(
-                TestPaths.RepositoryRoot,
-                "TestResults",
+                TestPaths.ResultsRoot,
                 "benchmarks");
             Directory.CreateDirectory(resultsDirectory);
             string resultPath = Path.Combine(

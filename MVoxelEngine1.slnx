@@ -1,0 +1,11 @@
+<Solution>
+  <Project Path="MVoxelEngine1.Application/MVoxelEngine1.Application.csproj">
+    <BuildDependency Project="MVoxelEngine1.Infrastructure/MVoxelEngine1.Infrastructure.csproj" />
+  </Project>
+  <Project Path="MVoxelEngine1.Graphics/MVoxelEngine1.Graphics.csproj" />
+  <Project Path="MVoxelEngine1.Infrastructure/MVoxelEngine1.Infrastructure.csproj" />
+  <Project Path="MVoxelEngine1.Tests/MVoxelEngine1.Tests.csproj" />
+  <Project Path="MVoxelEngine1.WorldGeneration/MVoxelEngine1.WorldGeneration.csproj">
+    <BuildDependency Project="MVoxelEngine1.Infrastructure/MVoxelEngine1.Infrastructure.csproj" />
+  </Project>
+</Solution>

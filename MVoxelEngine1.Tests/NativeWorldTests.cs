@@ -296,12 +296,20 @@ public sealed class NativeWorldTests
         var atlas = new BlockTextureAtlas(
             BlockTextureAtlasUploadMode.SimulatedGpuUpload);
         var factory = new TrackingRendererFactory();
+        bool failPublication = false;
+        void PublishSave(string temporaryPath, string finalPath)
+        {
+            if (failPublication)
+                throw new IOException("Requested atomic save publication failure.");
+            NativeWorldSaveExporter.PublishAtomicFile(temporaryPath, finalPath);
+        }
         using NativeWorld world = NativeWorld.CreateForTesting(
             NativeGtrtPipeline.Create(
                 atlas,
                 settings,
                 generationWorkerCount: 2,
-                meshWorkerCount: 2),
+                meshWorkerCount: 2,
+                savePublisher: PublishSave),
             seed: 123456,
             factory.Create,
             workspace.QuadsDirectory);
@@ -327,13 +335,14 @@ public sealed class NativeWorldTests
             : (ushort)0;
         Assert.True(world.SetBlock(1, 0, 0, secondBlock));
 
-        using (var locked = new FileStream(
-                   quadPath,
-                   FileMode.Open,
-                   FileAccess.Read,
-                   FileShare.Read))
+        failPublication = true;
+        try
         {
             Assert.ThrowsAny<IOException>(() => world.Save());
+        }
+        finally
+        {
+            failPublication = false;
         }
 
         Assert.True(firstHash.AsSpan().SequenceEqual(

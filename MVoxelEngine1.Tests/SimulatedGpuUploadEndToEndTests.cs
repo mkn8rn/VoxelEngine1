@@ -16,8 +16,7 @@ namespace MVoxelEngine1.Tests
             Assert.True(File.Exists(application), $"Application executable was not found at {application}.");
 
             string resultsDirectory = Path.Combine(
-                TestPaths.RepositoryRoot,
-                "TestResults",
+                TestPaths.ResultsRoot,
                 "simulated-gpu-uploads");
             Directory.CreateDirectory(resultsDirectory);
             string outputPath = Path.Combine(

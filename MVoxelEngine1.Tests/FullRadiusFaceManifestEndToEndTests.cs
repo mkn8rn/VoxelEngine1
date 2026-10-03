@@ -36,8 +36,7 @@ namespace MVoxelEngine1.Tests
         {
             using TestWorkspace workspace = TestPaths.CreateWorkspace();
             string resultsDirectory = Path.Combine(
-                TestPaths.RepositoryRoot,
-                "TestResults",
+                TestPaths.ResultsRoot,
                 "face-manifests",
                 "full-radius");
             Directory.CreateDirectory(resultsDirectory);
@@ -88,8 +87,7 @@ namespace MVoxelEngine1.Tests
         {
             using TestWorkspace workspace = TestPaths.CreateWorkspace();
             string resultsDirectory = Path.Combine(
-                TestPaths.RepositoryRoot,
-                "TestResults",
+                TestPaths.ResultsRoot,
                 "face-manifests",
                 "full-radius");
             Directory.CreateDirectory(resultsDirectory);
@@ -120,8 +118,7 @@ namespace MVoxelEngine1.Tests
         {
             using TestWorkspace workspace = TestPaths.CreateWorkspace();
             string resultsDirectory = Path.Combine(
-                TestPaths.RepositoryRoot,
-                "TestResults",
+                TestPaths.ResultsRoot,
                 "face-manifests",
                 "full-radius");
             Directory.CreateDirectory(resultsDirectory);

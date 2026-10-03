@@ -12,7 +12,18 @@
 
   <ItemGroup>
     <Using Include="Xunit" />
+    <AssemblyMetadata Include="RepositoryRoot" Value="$(MSBuildProjectDirectory)/.." />
   </ItemGroup>
+
+  <Target Name="ResolveApplicationTestPath" BeforeTargets="GetAssemblyAttributes">
+    <MSBuild Projects="../MVoxelEngine1.Application/MVoxelEngine1.Application.csproj"
+             Targets="GetTargetPath" Properties="Configuration=$(Configuration)">
+      <Output TaskParameter="TargetOutputs" ItemName="ApplicationTestTarget" />
+    </MSBuild>
+    <ItemGroup>
+      <AssemblyMetadata Include="ApplicationTargetPath" Value="@(ApplicationTestTarget)" />
+    </ItemGroup>
+  </Target>
 
   <ItemGroup>
     <PackageReference Include="xunit.v3.mtp-v2" Version="3.2.2" />

@@ -252,8 +252,7 @@ namespace MVoxelEngine1.Tests
                 cachedMean < scalarMean,
                 DateTimeOffset.UtcNow);
             string resultsDirectory = Path.Combine(
-                TestPaths.RepositoryRoot,
-                "TestResults",
+                TestPaths.ResultsRoot,
                 "diagnostics");
             Directory.CreateDirectory(resultsDirectory);
             string resultPath = Path.Combine(

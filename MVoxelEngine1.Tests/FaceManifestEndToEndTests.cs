@@ -22,8 +22,7 @@ namespace MVoxelEngine1.Tests
                 workspace.GameDataRoot,
                 waterLevel: 551);
             string resultsDirectory = Path.Combine(
-                TestPaths.RepositoryRoot,
-                "TestResults",
+                TestPaths.ResultsRoot,
                 "face-manifests");
             Directory.CreateDirectory(resultsDirectory);
             string runId = DateTime.UtcNow.ToString("yyyyMMddTHHmmssfffZ");
@@ -138,8 +137,7 @@ namespace MVoxelEngine1.Tests
                 workspace.GameDataRoot,
                 waterLevel: 551);
             string resultsDirectory = Path.Combine(
-                TestPaths.RepositoryRoot,
-                "TestResults",
+                TestPaths.ResultsRoot,
                 "face-manifests");
             Directory.CreateDirectory(resultsDirectory);
             string runId = DateTime.UtcNow.ToString("yyyyMMddTHHmmssfffZ");

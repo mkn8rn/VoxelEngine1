@@ -18,14 +18,18 @@ internal sealed class NativeWorldSaveExporter
 
     private readonly NativeGtrtSession session;
     private readonly NativeLeaseAction<byte> saveAction;
+    private readonly Action<string, string> publishFile;
     private string? pendingQuadsDirectory;
     private int savedBatchCount;
 
-    internal NativeWorldSaveExporter(NativeGtrtSession session)
+    internal NativeWorldSaveExporter(
+        NativeGtrtSession session,
+        Action<string, string>? publishFile = null)
     {
         ArgumentNullException.ThrowIfNull(session);
         this.session = session;
         saveAction = SaveCore;
+        this.publishFile = publishFile ?? PublishAtomicFile;
     }
 
     internal int SaveDirtyChunks(string quadsDirectory)
@@ -123,7 +127,7 @@ internal sealed class NativeWorldSaveExporter
         }
     }
 
-    private static void WriteBatch(
+    private void WriteBatch(
         scoped ref NativeGtrtSessionView view,
         string quadsDirectory,
         int batchX,
@@ -210,10 +214,7 @@ internal sealed class NativeWorldSaveExporter
                 stream.Flush(flushToDisk: true);
             }
 
-            if (File.Exists(finalPath))
-                File.Replace(temporaryPath, finalPath, null);
-            else
-                File.Move(temporaryPath, finalPath);
+            publishFile(temporaryPath, finalPath);
             published = true;
 
             for (int index = 0; index < materializedCount; index++)
@@ -253,6 +254,14 @@ internal sealed class NativeWorldSaveExporter
             if (published && File.Exists(temporaryPath))
                 File.Delete(temporaryPath);
         }
+    }
+
+    internal static void PublishAtomicFile(string temporaryPath, string finalPath)
+    {
+        if (File.Exists(finalPath))
+            File.Replace(temporaryPath, finalPath, null);
+        else
+            File.Move(temporaryPath, finalPath);
     }
 
     private static void WriteChunk(

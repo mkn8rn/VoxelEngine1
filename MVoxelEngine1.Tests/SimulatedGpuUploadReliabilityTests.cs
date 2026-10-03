@@ -14,8 +14,7 @@ namespace MVoxelEngine1.Tests
             using TestWorkspace workspace = TestPaths.CreateWorkspace();
             SimulatedGpuUploadTestSupport.ConfigureSmallWorld(workspace.GameDataRoot);
             string resultsDirectory = Path.Combine(
-                TestPaths.RepositoryRoot,
-                "TestResults",
+                TestPaths.ResultsRoot,
                 "simulated-gpu-uploads");
             Directory.CreateDirectory(resultsDirectory);
             string timestamp = DateTime.UtcNow.ToString("yyyyMMddTHHmmssfffZ");
@@ -95,8 +94,7 @@ namespace MVoxelEngine1.Tests
                 lod1RenderDistance: 0);
             SimulatedGpuUploadTestSupport.SetWaterLevel(workspace.GameDataRoot, waterLevel: 551);
             string resultsDirectory = Path.Combine(
-                TestPaths.RepositoryRoot,
-                "TestResults",
+                TestPaths.ResultsRoot,
                 "simulated-gpu-uploads");
             Directory.CreateDirectory(resultsDirectory);
             string outputPath = Path.Combine(
