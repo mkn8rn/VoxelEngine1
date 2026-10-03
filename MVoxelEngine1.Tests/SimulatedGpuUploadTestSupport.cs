@@ -58,6 +58,14 @@ namespace MVoxelEngine1.Tests
                 biome.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
         }
 
+        public static void SetBlockTransparency(string gameDataRoot, string uniqueName, bool transparent)
+        {
+            string path = Path.Combine(gameDataRoot, "Default", "Data", "Blocks", "Types", uniqueName + ".txt");
+            JsonObject block = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+            block["IsTransparent"] = transparent;
+            File.WriteAllText(path, block.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+        }
+
         public static ProcessStartInfo CreateStartInfo(
             TestWorkspace workspace,
             string outputPath,
@@ -166,8 +174,17 @@ namespace MVoxelEngine1.Tests
             {
                 while (!process.HasExited)
                 {
-                    process.Refresh();
-                    peakWorkingSetBytes = Math.Max(peakWorkingSetBytes, process.WorkingSet64);
+                    try
+                    {
+                        process.Refresh();
+                        peakWorkingSetBytes = Math.Max(peakWorkingSetBytes, process.WorkingSet64);
+                        if (OperatingSystem.IsWindows())
+                            windowObserved |= process.MainWindowHandle != IntPtr.Zero;
+                    }
+                    catch (InvalidOperationException) when (process.HasExited)
+                    {
+                        break;
+                    }
                     if (maximumWorkingSetBytes.HasValue &&
                         peakWorkingSetBytes > maximumWorkingSetBytes.Value)
                     {
@@ -180,9 +197,6 @@ namespace MVoxelEngine1.Tests
                             $"Peak working set: {peakWorkingSetBytes} bytes. " +
                             $"Output: {Tail(limitOutput)} Error: {Tail(limitError)}");
                     }
-
-                    if (OperatingSystem.IsWindows())
-                        windowObserved |= process.MainWindowHandle != IntPtr.Zero;
 
                     await Task.Delay(10, combinedCancellation.Token);
                 }

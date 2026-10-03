@@ -501,7 +501,7 @@ public sealed class NativeWorldTests
 
     private static ushort SoilId => (byte)BaseBlockType.Soil;
 
-    private const ushort CustomTransparentBlockId = 257;
+    private const ushort CustomTransparentBlockId = 256;
 
     private sealed class TrackingRendererFactory
     {

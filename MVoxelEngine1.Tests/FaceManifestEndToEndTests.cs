@@ -21,6 +21,9 @@ namespace MVoxelEngine1.Tests
             SimulatedGpuUploadTestSupport.SetWaterLevel(
                 workspace.GameDataRoot,
                 waterLevel: 551);
+            // This fixture checks opaque terrain against transparent water.
+            SimulatedGpuUploadTestSupport.SetBlockTransparency(workspace.GameDataRoot, "LimeWhole", false);
+            SimulatedGpuUploadTestSupport.SetBlockTransparency(workspace.GameDataRoot, "Rendzina", false);
             string resultsDirectory = Path.Combine(
                 TestPaths.ResultsRoot,
                 "face-manifests");

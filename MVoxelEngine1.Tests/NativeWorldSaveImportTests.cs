@@ -340,8 +340,10 @@ public sealed class NativeWorldSaveImportTests
         Assert.Equal(0, packet.ChunkZ);
         Assert.Equal(0, packet.OpaqueFaceCount);
         Assert.Equal(0, packet.OpaqueRectangleCount);
-        Assert.Equal(256, packet.TransparentFaceCount);
-        Assert.Equal(1, packet.TransparentRectangleCount);
+        // Activated rules make generated neighbours transparent Limestone;
+        // every water boundary against that different ID is visible.
+        Assert.Equal(6 * 256, packet.TransparentFaceCount);
+        Assert.Equal(6, packet.TransparentRectangleCount);
 
         int consumed = pipeline.ConsumeReadyPackets(
             static (in NativeChunkRenderPacketDescriptor descriptor,
@@ -354,9 +356,9 @@ public sealed class NativeWorldSaveImportTests
                 Assert.Equal(0, descriptor.OpaqueFaceCount);
                 Assert.Equal(0, descriptor.OpaqueRectangleCount);
                 Assert.True(opaqueWords.IsEmpty);
-                Assert.Equal(256, descriptor.TransparentFaceCount);
-                Assert.Equal(1, descriptor.TransparentRectangleCount);
-                Assert.Equal(256, PackedFaceRectangle.CountLogicalFaces(
+                Assert.Equal(6 * 256, descriptor.TransparentFaceCount);
+                Assert.Equal(6, descriptor.TransparentRectangleCount);
+                Assert.Equal(6 * 256, PackedFaceRectangle.CountLogicalFaces(
                     transparentWords));
 
                 Span<int> directionCounts = stackalloc int[6];
@@ -369,11 +371,9 @@ public sealed class NativeWorldSaveImportTests
                     Assert.InRange(reader.Z, 0, 15);
                     directionCounts[reader.Direction]++;
                 }
-                Assert.Equal(256, directionCounts[2]);
                 for (int direction = 0; direction < 6; direction++)
                 {
-                    if (direction != 2)
-                        Assert.Equal(0, directionCounts[direction]);
+                    Assert.Equal(256, directionCounts[direction]);
                 }
             });
         Assert.Equal(1, consumed);

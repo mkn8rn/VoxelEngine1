@@ -38,7 +38,7 @@ internal static class NativeGeneratedMesh
             Span<int> positiveFaces =
                 session.GetMeshPositiveFaceScratch(workerIndex);
             var counter = new NativeGeneratedFaceWriter(
-                session.Materials);
+                NativeGeneratedTerrain.GetMaterials(ref session, claimedWork.RecordIndex));
             if (!Emit(
                     ref session,
                     claimedWork.RecordIndex,
@@ -66,7 +66,7 @@ internal static class NativeGeneratedMesh
             }
 
             var writer = new NativeGeneratedFaceWriter(
-                session.Materials,
+                NativeGeneratedTerrain.GetMaterials(ref session, claimedWork.RecordIndex),
                 packet.OpaqueWords,
                 packet.TransparentWords);
             if (!Emit(
@@ -126,6 +126,7 @@ internal static class NativeGeneratedMesh
         }
 
         NativeChunkRecord chunk = session.Chunks[chunkIndex];
+        NativeTerrainMaterialSet materials = NativeGeneratedTerrain.GetMaterials(ref session, chunkIndex);
         ReadOnlySpan<BlockColumnProfile> columns =
             session.GetColumnProfiles(chunk.ColumnIndex);
         int horizontalFaceCount = checked(
@@ -137,7 +138,7 @@ internal static class NativeGeneratedMesh
             0,
             horizontalFaceCount);
         bool directInteriorSides = SupportsContiguousFastPath(
-            session.Materials);
+            materials);
 
         if (directInteriorSides)
         {
@@ -155,7 +156,9 @@ internal static class NativeGeneratedMesh
             bottomFaces.Fill(-1);
             topFaces.Fill(-1);
             NativeBlockDescriptor descriptor =
-                GetMaterial(session.Materials, material);
+                GetMaterial(materials, material);
+            if (descriptor.Id == 0)
+                continue;
             writer.SelectMaterial(material, IsOpaque(descriptor));
             if (!GenerateMaterial(
                     ref session,
@@ -202,8 +205,9 @@ internal static class NativeGeneratedMesh
             return false;
         }
 
-        required = chunk.StorageKind !=
-            NativeChunkStorageKind.GeneratedProfile;
+        NativeColumnRecord column = session.Columns[chunk.ColumnIndex];
+        required = chunk.StorageKind != NativeChunkStorageKind.GeneratedProfile ||
+            column.ReplacementMode == 2;
         if (required)
             return true;
 
@@ -220,6 +224,18 @@ internal static class NativeGeneratedMesh
                 case 3: neighborY++; break;
                 case 4: neighborZ--; break;
                 case 5: neighborZ++; break;
+            }
+
+            int neighborColumnIndex = session.GetColumnIndex(neighborX, neighborZ);
+            if (neighborColumnIndex >= 0)
+            {
+                NativeColumnRecord neighborColumn = session.Columns[neighborColumnIndex];
+                if (neighborColumn.ReplacementMode == 2 ||
+                    !SameMaterials(ref session, in column, in neighborColumn))
+                {
+                    required = true;
+                    return true;
+                }
             }
 
             int neighborIndex = session.GetChunkIndex(
@@ -257,6 +273,14 @@ internal static class NativeGeneratedMesh
         }
 
         return true;
+    }
+
+    private static bool SameMaterials(scoped ref NativeGtrtSessionView session,
+        scoped in NativeColumnRecord first, scoped in NativeColumnRecord second)
+    {
+        NativeTerrainMaterialSet a = first.ReplacementMode == 1 ? first.ResolvedMaterials : session.Materials;
+        NativeTerrainMaterialSet b = second.ReplacementMode == 1 ? second.ResolvedMaterials : session.Materials;
+        return a.Stone.Id == b.Stone.Id && a.Soil.Id == b.Soil.Id && a.Water.Id == b.Water.Id;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -373,10 +397,11 @@ internal static class NativeGeneratedMesh
         int depth = session.ChunkSizeZ;
         int horizontalIndex = x * depth + z;
 
-        ushort bottomId = session.Materials.GetBlockWorld(
+        NativeTerrainMaterialSet materials = NativeGeneratedTerrain.GetMaterials(ref session, chunkIndex);
+        ushort bottomId = materials.GetBlockWorld(
             in column,
             worldStart - 1);
-        if (!session.Materials.TryIsOpaque(
+        if (!materials.TryIsOpaque(
                 bottomId,
                 out bool bottomOpaque))
         {
@@ -392,10 +417,10 @@ internal static class NativeGeneratedMesh
             bottomFaces[horizontalIndex] = localStart;
         }
 
-        ushort topId = session.Materials.GetBlockWorld(
+        ushort topId = materials.GetBlockWorld(
             in column,
             worldEnd + 1);
-        if (!session.Materials.TryIsOpaque(topId, out bool topOpaque))
+        if (!materials.TryIsOpaque(topId, out bool topOpaque))
         {
             session.Fail(NativeGtrtFailureCode.InvalidGeneratedMesh);
             return false;
@@ -515,7 +540,7 @@ internal static class NativeGeneratedMesh
         }
 
         EmitColumnRange(
-            session.Materials,
+            NativeGeneratedTerrain.GetMaterials(ref session, chunkIndex),
             in neighbor,
             blockId,
             blockOpaque,

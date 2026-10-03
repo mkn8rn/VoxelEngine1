@@ -181,6 +181,29 @@ public sealed class NativeGtrtWorkerPoolTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public void EveryPersistentWorkerCompletesEachRepeatedMovement(bool streamGeneration)
+    {
+        LoadDefaultGame();
+        var atlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
+        using NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(atlas, CreateSmallSettings(),
+            generationWorkerCount: 1, meshWorkerCount: 5, streamGeneration: streamGeneration);
+        _ = pipeline.Run(123456);
+        _ = ConsumeBounds(pipeline);
+        for (int move = 0; move < 32; move++)
+        {
+            int centerX = move % 2 + 1;
+            _ = pipeline.MoveToChunk(centerX, 0, 0);
+            PacketBounds bounds = ConsumeBounds(pipeline);
+            Assert.Equal((centerX - 1) * 4, bounds.MinimumX);
+            Assert.Equal((centerX + 1) * 4, bounds.MaximumX);
+        }
+        Assert.Equal(0, pipeline.MaximumWorkerManagedAllocationBytes);
+        Assert.Equal(0, pipeline.CoordinatorManagedAllocationBytes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public void PersistentWorkersMatchSequentialNativePackets(
         bool streamGeneration)
     {

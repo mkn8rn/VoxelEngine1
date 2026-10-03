@@ -20,6 +20,7 @@ namespace MVoxelEngine1.Tests
                 // Intersect solid terrain in the same chunk as the real water
                 // surface; loaded-grid edges must not create false water caps.
                 waterLevel: 531);
+            SimulatedGpuUploadTestSupport.SetBlockTransparency(workspace.GameDataRoot, "Rendzina", false);
             string resultsDirectory = Path.Combine(
                 TestPaths.ResultsRoot,
                 "reference-face-streaming");

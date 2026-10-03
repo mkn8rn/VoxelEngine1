@@ -268,6 +268,12 @@ internal static class NativeColumnProfileGenerator
         }
 
         column.BiomeIndex = biomeIndex;
+        if (session.HasGameSnapshot)
+        {
+            var game = session.GameSnapshot;
+            column.ReplacementMode = NativeReplacementRules.ResolveMaterials(
+                ref game, in biome, session.Materials, out column.ResolvedMaterials);
+        }
         column.GenerationEpoch = work.Epoch;
         session.ColumnSummaries[work.RecordIndex] = summary;
         return true;

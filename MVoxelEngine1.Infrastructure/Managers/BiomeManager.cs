@@ -8,6 +8,7 @@ using MVoxelEngine1.Infrastructure.Models.Terrain;
 using MVoxelEngine1.Infrastructure.Loaders;
 using MVoxelEngine1.Infrastructure.Models.Generation.Biomes;
 using System.Text;
+using System.Linq;
 
 namespace MVoxelEngine1.Infrastructure.Managers
 {
@@ -91,8 +92,15 @@ namespace MVoxelEngine1.Infrastructure.Managers
 
                         foreach (var rule in rules)
                         {
-                            if (rule.generation_type != GenerationType.SimpleReplacement)
-                                continue; // only map SimpleReplacement for now
+                            if (rule.generation_type is not (GenerationType.InlineReplacement or GenerationType.SimpleReplacement))
+                                throw new NotSupportedException($"Generation type '{rule.generation_type}' is not supported.");
+                            if (rule.microbiome_id is not null || rule.noise_type is not null ||
+                                rule.fill_proportion is not (null or 1))
+                                throw new NotSupportedException("Replacement microbiome and noise filters are not implemented.");
+                            if (rule.absolute_min_ylevel > rule.absolute_max_ylevel ||
+                                rule.relative_min_depth > rule.relative_max_depth ||
+                                rule.relative_min_depth < 0 || rule.relative_max_depth < 0)
+                                throw new InvalidDataException("Replacement rule bounds are invalid.");
 
                             // Resolve target block type 
                             var targetBlock = ResolveBlockType(rule.block_type_id);
@@ -115,10 +123,10 @@ namespace MVoxelEngine1.Infrastructure.Managers
                                     {
                                         // Allow a block unique/name mapping -> its base type
                                         var bt = ResolveBlockType(token);
-                                        if (bt != null && !baseList.Contains(bt.BaseType))
+                                        if (bt == null)
+                                            throw new InvalidDataException($"Unknown base block token '{token}' in biome '{biomeFolderName}'.");
+                                        if (!baseList.Contains(bt.BaseType))
                                             baseList.Add(bt.BaseType);
-                                        else
-                                            Console.WriteLine($"[Biome][WARN] Unknown base block type token '{token}' in biome '{biomeFolderName}'.");
                                     }
                                 }
                             }
@@ -131,13 +139,18 @@ namespace MVoxelEngine1.Infrastructure.Managers
                                 foreach (var btId in rule.blocks_to_replace)
                                 {
                                     var blockType = TerrainLoader.allBlockTypeObjects.Find(b => b.ID == btId);
-                                    if (blockType != null && !blockList.Contains(blockType))
+                                    if (blockType == null)
+                                        throw new InvalidDataException($"Unknown replacement source block '{btId}'.");
+                                    if (!blockList.Contains(blockType))
                                         blockList.Add(blockType);
                                 }
                             }
 
                             var simpleRule = new SimpleReplacementRule
                             {
+                                GenerationType = rule.generation_type,
+                                RelativeMinDepth = rule.relative_min_depth,
+                                RelativeMaxDepth = rule.relative_max_depth,
                                 base_blocks_to_replace = baseList,
                                 blocks_to_replace = blockList,
                                 block_type = targetBlock,
@@ -149,8 +162,12 @@ namespace MVoxelEngine1.Infrastructure.Managers
                             simpleReplacementRules.Add(simpleRule);
                         }
 
-                        // Order by priority (ascending: lower number first)
-                        simpleReplacementRules.Sort((a,b)=> a.priority.CompareTo(b.priority));
+                        // Inline rules precede post-generation replacements. Stable
+                        // ordering preserves file order for equal priorities.
+                        simpleReplacementRules = simpleReplacementRules
+                            .OrderBy(static rule => rule.GenerationType)
+                            .ThenBy(static rule => rule.priority)
+                            .ToList();
                     }
                     catch (Exception ex)
                     {
@@ -231,11 +248,13 @@ namespace MVoxelEngine1.Infrastructure.Managers
                     minY,
                     maxY,
                     r.microbiomeId,
-                    r.priority);
+                    r.priority,
+                    r.GenerationType,
+                    r.RelativeMinDepth ?? int.MinValue,
+                    r.RelativeMaxDepth ?? int.MaxValue);
                 compiled.Add(compiledRule);
             }
-            // Already sorted by original simpleReplacements ordering (which was by priority). Ensure stable ascending.
-            compiled.Sort((a,b)=> a.Priority.CompareTo(b.Priority));
+            // The source list is already stably ordered by stage and priority.
             biome.compiledSimpleReplacementRules = compiled.ToArray();
 
             // Vertical bucketing by section Y (assuming fixed 16-high sections). Determine vertical span using game settings.

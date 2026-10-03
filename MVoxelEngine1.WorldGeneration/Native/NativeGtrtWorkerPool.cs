@@ -14,7 +14,6 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
         TimeSpan.FromSeconds(30);
 
     private readonly NativeGtrtSession session;
-    private readonly Semaphore startSignals = new(0, int.MaxValue);
     private readonly ManualResetEvent readyGate = new(false);
     private readonly ManualResetEvent generationCompletionGate = new(false);
     private readonly ManualResetEvent completionGate = new(false);
@@ -76,16 +75,20 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
                 NativeGtrtWorkerKind.Mesh);
         }
 
-        foreach (NativeGtrtWorker worker in workers)
-            worker.Start();
-
-        if (!readyGate.WaitOne(WorkerStartTimeout))
+        try
+        {
+            foreach (NativeGtrtWorker worker in workers)
+                worker.Start();
+            if (!readyGate.WaitOne(WorkerStartTimeout))
+                throw new TimeoutException("The native GTRT workers did not enter their start gate.");
+        }
+        catch
         {
             Volatile.Write(ref shutdownRequested, 1);
-            startSignals.Release(workers.Length);
+            SignalWorkers();
             JoinWorkers();
-            throw new TimeoutException(
-                "The native GTRT workers did not enter their start gate.");
+            DisposeWaitHandles();
+            throw;
         }
     }
 
@@ -167,11 +170,11 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
         {
             Volatile.Write(ref shutdownRequested, 1);
             Volatile.Write(ref runState, 3);
-            startSignals.Release(workers.Length);
+            SignalWorkers();
             throw;
         }
 
-        startSignals.Release(workers.Length);
+        SignalWorkers();
         if (!completionGate.WaitOne(WorkerCompletionTimeout))
         {
             session.RequestCancellation();
@@ -212,13 +215,25 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
         if (priorState == 1)
             session.RequestCancellation();
 
-        startSignals.Release(workers.Length);
+        SignalWorkers();
         generationCompletionGate.Set();
         JoinWorkers();
+        DisposeWaitHandles();
+    }
+
+    private void SignalWorkers()
+    {
+        foreach (NativeGtrtWorker worker in workers)
+            worker.Signal();
+    }
+
+    private void DisposeWaitHandles()
+    {
+        foreach (NativeGtrtWorker worker in workers)
+            worker.DisposeStartSignal();
         generationCompletionGate.Dispose();
         completionGate.Dispose();
         readyGate.Dispose();
-        startSignals.Dispose();
     }
 
     private bool ShutdownRequested =>
@@ -316,6 +331,8 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
         private readonly NativeGtrtWorkerKind kind;
         private readonly NativeLeaseAction<byte> workAction;
         private readonly Thread thread;
+        private readonly AutoResetEvent startSignal = new(false);
+        private bool started;
 
         internal NativeGtrtWorker(
             NativeGtrtWorkerPool owner,
@@ -341,16 +358,24 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
 
         internal long ManagedAllocationBytes { get; private set; }
 
-        internal void Start() => thread.Start();
+        internal void Start()
+        {
+            thread.Start();
+            started = true;
+        }
 
-        internal bool Join(TimeSpan timeout) => thread.Join(timeout);
+        internal void Signal() => startSignal.Set();
+
+        internal void DisposeStartSignal() => startSignal.Dispose();
+
+        internal bool Join(TimeSpan timeout) => !started || thread.Join(timeout);
 
         private void Run()
         {
             owner.NotifyReady();
             while (true)
             {
-                owner.startSignals.WaitOne();
+                startSignal.WaitOne();
                 if (owner.ShutdownRequested)
                     return;
 

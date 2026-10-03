@@ -9,6 +9,9 @@ namespace MVoxelEngine1.Infrastructure.Models.Generation.Biomes
 {
     public class SimpleReplacementRule
     {
+        public GenerationType GenerationType { get; set; } = GenerationType.SimpleReplacement;
+        public int? RelativeMinDepth { get; set; }
+        public int? RelativeMaxDepth { get; set; }
         public required List<BlockType> blocks_to_replace { get; set; }
         public required List<BaseBlockType> base_blocks_to_replace { get; set; }
         public required BlockType block_type { get; set; }

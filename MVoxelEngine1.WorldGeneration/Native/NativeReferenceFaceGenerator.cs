@@ -108,17 +108,22 @@ internal static class NativeReferenceFaceGenerator
         int column = view.GetColumnIndex(x, z);
         if (column < 0)
             return false;
+        NativeColumnRecord generated = view.Columns[column];
+        if (generated.ReplacementMode == 2)
+            return false;
+        NativeTerrainMaterialSet materials = generated.ReplacementMode == 1
+            ? generated.ResolvedMaterials : view.Materials;
         NativeColumnSummary summary = view.ColumnSummaries[column];
         int bottom = checked(y * view.ChunkSizeY);
         int top = checked(bottom + view.ChunkSizeY - 1);
         if (summary.HasMaterial == 0 || top < summary.MinimumMaterialStart || bottom > summary.MaximumMaterialEnd)
             return true;
         if (summary.AllColumnsHaveStone != 0 && bottom >= summary.StoneStartMaximum && top <= summary.StoneEndMinimum)
-            id = view.Materials.Stone.Id;
+            id = materials.Stone.Id;
         else if (summary.AllColumnsHaveSoil != 0 && bottom >= summary.SoilStartMaximum && top <= summary.SoilEndMinimum)
-            id = view.Materials.Soil.Id;
+            id = materials.Soil.Id;
         else if (summary.AllColumnsHaveWater != 0 && bottom >= summary.WaterStartMaximum && top <= summary.WaterEndMinimum)
-            id = view.Materials.Water.Id;
+            id = materials.Water.Id;
         else
             return false;
         return true;

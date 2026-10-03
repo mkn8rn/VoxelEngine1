@@ -11,11 +11,15 @@ internal readonly struct NativeTerrainMaterialSet
     internal NativeTerrainMaterialSet(
         NativeBlockDescriptor stone,
         NativeBlockDescriptor soil,
-        NativeBlockDescriptor water)
+        NativeBlockDescriptor water,
+        bool resolved = false)
     {
-        Validate(in stone, BaseBlockType.Stone);
-        Validate(in soil, BaseBlockType.Soil);
-        Validate(in water, BaseBlockType.Water);
+        if (!resolved)
+        {
+            Validate(in stone, BaseBlockType.Stone);
+            Validate(in soil, BaseBlockType.Soil);
+            Validate(in water, BaseBlockType.Water);
+        }
         Stone = stone;
         Soil = soil;
         Water = water;
@@ -165,6 +169,13 @@ internal readonly struct NativeTerrainMaterialSet
 
 internal static class NativeGeneratedTerrain
 {
+    internal static NativeTerrainMaterialSet GetMaterials(
+        scoped ref NativeGtrtSessionView session, int chunkIndex)
+    {
+        NativeColumnRecord column = session.Columns[session.Chunks[chunkIndex].ColumnIndex];
+        return column.ReplacementMode == 1 ? column.ResolvedMaterials : session.Materials;
+    }
+
     internal static bool TryGetBlock(
         scoped ref NativeGtrtSessionView session,
         int chunkIndex,
@@ -298,7 +309,16 @@ internal static class NativeGeneratedTerrain
             localZ);
         BlockColumnProfile profile = session.Profiles[profileIndex];
         int worldY = unchecked(chunkY * session.ChunkSizeY + localY);
-        blockId = session.Materials.GetBlockWorld(in profile, worldY);
+        NativeTerrainMaterialSet materials = column.ReplacementMode == 1
+            ? column.ResolvedMaterials : session.Materials;
+        blockId = materials.GetBlockWorld(in profile, worldY);
+        if (column.ReplacementMode == 2)
+        {
+            var game = session.GameSnapshot;
+            blockId = NativeReplacementRules.Apply(
+                ref game, in game.Biomes[column.BiomeIndex], blockId, worldY,
+                Math.Max(profile.StoneEnd, profile.SoilEnd));
+        }
         return true;
     }
 

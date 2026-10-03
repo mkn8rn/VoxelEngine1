@@ -141,6 +141,8 @@ internal struct NativeColumnRecord
     internal int BiomeIndex;
     internal int GenerationEpoch;
     internal NativeColumnState State;
+    internal int ReplacementMode;
+    internal NativeTerrainMaterialSet ResolvedMaterials;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -699,7 +701,7 @@ internal readonly struct NativeGtrtSessionLayout
 internal readonly struct NativeGtrtSessionHeader
 {
     internal const uint ExpectedMagic = 0x54525447;
-    internal const int ExpectedVersion = 13;
+    internal const int ExpectedVersion = 14;
 
     internal NativeGtrtSessionHeader(NativeGtrtSessionLayout layout)
     {

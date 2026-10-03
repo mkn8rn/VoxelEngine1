@@ -147,8 +147,9 @@ namespace MVoxelEngine1.Tests
                 Assert.All(faces, AssertCompleteTransparentFace);
                 Assert.All(faces, face =>
                 {
-                    Assert.Equal(3, face.GetProperty("faceDirection").GetByte());
-                    Assert.Equal(551, face.GetProperty("voxelWorld")[1].GetInt32());
+                    if (face.GetProperty("blockId").GetUInt16() == 11 &&
+                        face.GetProperty("faceDirection").GetByte() == 3)
+                        Assert.Equal(551, face.GetProperty("voxelWorld")[1].GetInt32());
                 });
             }
 
@@ -185,7 +186,9 @@ namespace MVoxelEngine1.Tests
                 transparentUploads,
                 upload => upload.GetProperty("transparentFaces")
                     .EnumerateArray()
-                    .Any(face => face.GetProperty("blockId").GetUInt16() == 11));
+                    .Any(face => face.GetProperty("blockId").GetUInt16() == 11 &&
+                        face.GetProperty("faceDirection").GetByte() == 3 &&
+                        face.GetProperty("voxelWorld")[1].GetInt32() == 551));
             Console.WriteLine($"Transparent render result: {outputPath}");
         }
 

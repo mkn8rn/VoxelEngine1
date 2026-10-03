@@ -142,6 +142,9 @@ internal readonly struct NativeReplacementRule
         MaxY = source.MaxY;
         MicroBiomeId = source.MicroBiomeId ?? -1;
         Priority = source.Priority;
+        GenerationType = source.GenerationType;
+        RelativeMinDepth = source.RelativeMinDepth;
+        RelativeMaxDepth = source.RelativeMaxDepth;
     }
 
     internal ushort ReplacementId { get; }
@@ -159,13 +162,16 @@ internal readonly struct NativeReplacementRule
     internal int MicroBiomeId { get; }
 
     internal int Priority { get; }
+    internal GenerationType GenerationType { get; }
+    internal int RelativeMinDepth { get; }
+    internal int RelativeMaxDepth { get; }
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 4)]
 internal readonly struct NativeGameSnapshotHeader
 {
     internal const uint ExpectedMagic = 0x4D41474E;
-    internal const int ExpectedVersion = 1;
+    internal const int ExpectedVersion = 2;
 
     internal NativeGameSnapshotHeader(
         int totalByteCount,
@@ -324,6 +330,7 @@ internal sealed class NativeGameSnapshot : IDisposable
 
         NativeBlockDescriptor[] blocks = BuildBlocks(atlas);
         BuildBiomes(
+            blocks,
             out NativeBiomeDescriptor[] biomes,
             out NativeReplacementRule[] replacementRules,
             out ushort[] specificIds);
@@ -458,6 +465,7 @@ internal sealed class NativeGameSnapshot : IDisposable
     }
 
     private static void BuildBiomes(
+        NativeBlockDescriptor[] blocks,
         out NativeBiomeDescriptor[] biomes,
         out NativeReplacementRule[] replacementRules,
         out ushort[] specificIds)
@@ -476,6 +484,15 @@ internal sealed class NativeGameSnapshot : IDisposable
             foreach (CompiledSimpleReplacementRule rule in
                      biome.compiledSimpleReplacementRules)
             {
+                if (rule.GenerationType is not (GenerationType.InlineReplacement or GenerationType.SimpleReplacement) ||
+                    rule.MicroBiomeId is not null || rule.MinY > rule.MaxY ||
+                    rule.RelativeMinDepth > rule.RelativeMaxDepth)
+                    throw new InvalidDataException($"Biome '{biome.name}' has an unsupported replacement rule.");
+                if ((blocks[rule.ReplacementId].Flags & NativeBlockFlags.Defined) == 0)
+                    throw new InvalidDataException($"Replacement block '{rule.ReplacementId}' is undefined.");
+                foreach (ushort id in rule.SpecificIdsSorted)
+                    if ((blocks[id].Flags & NativeBlockFlags.Defined) == 0)
+                        throw new InvalidDataException($"Replacement source '{id}' is undefined.");
                 int firstSpecificId = nativeSpecificIds.Count;
                 nativeSpecificIds.AddRange(rule.SpecificIdsSorted);
                 nativeRules.Add(new NativeReplacementRule(rule, firstSpecificId));
