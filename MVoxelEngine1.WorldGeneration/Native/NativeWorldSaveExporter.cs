@@ -558,8 +558,8 @@ internal sealed class NativeWorldSaveExporter
         scoped in NativeMaterializedChunkRecord chunk)
     {
         writer.Write(ChunkFooterMagic);
-        writer.Write(0f);
-        writer.Write(0f);
+        writer.Write(chunk.Temperature);
+        writer.Write(chunk.Humidity);
 
         uint flags = 0;
         ushort allOneBlockId = 0;

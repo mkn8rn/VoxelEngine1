@@ -370,6 +370,8 @@ internal sealed class NativeWorldSaveImportPlan
         {
             return;
         }
+        session.MaterializedChunks[materializedChunkIndex].Temperature = shape.Temperature;
+        session.MaterializedChunks[materializedChunkIndex].Humidity = shape.Humidity;
         if (shape.IsUniform)
         {
             ref NativeMaterializedChunkRecord materialized =
@@ -650,6 +652,7 @@ internal sealed class NativeWorldSaveImportPlan
         };
         bool uniformIdSet = false;
         int recordsStart = checked(ChunkHeaderSize + tableSize);
+        int recordsEnd = recordsStart;
         var usedOffsets = new HashSet<int>();
         for (int sectionIndex = 0;
              sectionIndex < expectedSectionCount;
@@ -673,6 +676,8 @@ internal sealed class NativeWorldSaveImportPlan
                         $"The saved chunk ({chunkX},{chunkY},{chunkZ}) has an invalid section offset.");
                 }
                 section = ParseSection(payload, offset);
+                int payloadLength = BinaryPrimitives.ReadUInt16LittleEndian(payload.Slice(offset + 1, sizeof(ushort)));
+                recordsEnd = Math.Max(recordsEnd, checked(offset + 3 + payloadLength));
             }
 
             bool sectionIsUniform = section.Kind is
@@ -715,6 +720,15 @@ internal sealed class NativeWorldSaveImportPlan
                         shape.PackedWordCount + section.WordCount);
                     break;
             }
+        }
+
+        if (recordsEnd < payload.Length)
+        {
+            ReadOnlySpan<byte> footer = payload[recordsEnd..];
+            if (footer.Length < 20 || !footer[..3].SequenceEqual("CMD"u8))
+                throw new InvalidDataException("The saved chunk metadata footer is invalid.");
+            shape.Temperature = BinaryPrimitives.ReadSingleLittleEndian(footer[3..]);
+            shape.Humidity = BinaryPrimitives.ReadSingleLittleEndian(footer[7..]);
         }
 
         if (shape.IsUniform)
@@ -966,6 +980,8 @@ internal sealed class NativeWorldSaveImportPlan
         internal int RawSectionCount;
         internal int PaletteCount;
         internal int PackedWordCount;
+        internal float Temperature;
+        internal float Humidity;
     }
 
     private struct ImportTotals

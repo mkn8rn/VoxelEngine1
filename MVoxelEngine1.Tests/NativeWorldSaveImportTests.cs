@@ -16,6 +16,66 @@ public sealed class NativeWorldSaveImportTests
     private const ushort CustomTransparentBlockId = 257;
 
     [Fact]
+    public void TruncatedClimateFooterFailsDuringSavePlanning()
+    {
+        LoadDefaultGame();
+        GameSettings settings = CreateSettings(chunkSize: 16, lod1Radius: 0);
+        using var workspace = new SaveWorkspace();
+        WriteQuads(workspace.QuadsDirectory,
+            [new ChunkFixture(0, 0, 0, [SectionFixture.Uniform(SoilId)], 42.5f, 12.25f)], 1, 1, 1);
+        string path = Directory.GetFiles(workspace.QuadsDirectory, "quad*x*.bin").Single();
+        byte[] bytes = File.ReadAllBytes(path);
+        int payloadLength = BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(32));
+        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(32), payloadLength - 61);
+        File.WriteAllBytes(path, bytes[..^61]);
+        Assert.Throws<InvalidDataException>(() => NativeWorldSaveImportPlan.Create(workspace.QuadsDirectory, settings));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void SavedClimateMetadataSurvivesNativeGrowthEditAndRepublishing(bool uniform)
+    {
+        LoadDefaultGame();
+        GameSettings settings = CreateSettings(chunkSize: 16, lod1Radius: 0);
+        using var workspace = new SaveWorkspace();
+        float temperature = 42.5f;
+        float humidity = -7.25f;
+        ushort[] raw = new ushort[VoxelSection.VoxelCount];
+        Array.Fill(raw, WaterId);
+        raw[0] = SoilId;
+        WriteQuads(workspace.QuadsDirectory,
+            [new ChunkFixture(0, 0, 0,
+                [uniform ? SectionFixture.Uniform(SoilId) : SectionFixture.Raw(raw)], temperature, humidity)], 1, 1, 1);
+        NativeWorldSaveImportPlan plan = NativeWorldSaveImportPlan.Create(workspace.QuadsDirectory, settings);
+        using NativeGameSnapshot game = CreateGameSnapshot();
+        using NativeGtrtSession session = CreateSession(settings, game, plan);
+        plan.Import(session);
+        session.EnsureMaterializedCapacity(new NativeMaterializedStorageRequirements(2, 2, 2));
+        session.PublishSeed(123456);
+        session.Access(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            Assert.Equal(temperature, view.MaterializedChunks[0].Temperature);
+            Assert.Equal(humidity, view.MaterializedChunks[0].Humidity);
+            int chunk = view.GetChunkIndex(0, 0, 0);
+            Assert.True(NativeMaterializedTerrain.TrySetBlock(ref view, chunk, 1, 0, 0, CustomTransparentBlockId));
+        });
+        Assert.Equal(1, new NativeWorldSaveExporter(session).SaveDirtyChunks(workspace.QuadsDirectory));
+        NativeWorldSaveImportPlan reloadedPlan = NativeWorldSaveImportPlan.Create(workspace.QuadsDirectory, settings);
+        using NativeGtrtSession reloaded = CreateSession(settings, game, reloadedPlan);
+        reloadedPlan.Import(reloaded);
+        reloaded.Access(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            Assert.Equal(BitConverter.SingleToInt32Bits(temperature), BitConverter.SingleToInt32Bits(view.MaterializedChunks[0].Temperature));
+            Assert.Equal(BitConverter.SingleToInt32Bits(humidity), BitConverter.SingleToInt32Bits(view.MaterializedChunks[0].Humidity));
+            Assert.True(NativeMaterializedTerrain.TryGetStoredBlock(ref view, 0, 1, 0, 0, out ushort block));
+            Assert.Equal(CustomTransparentBlockId, block);
+        });
+    }
+
+    [Fact]
     public void LegacyRepresentationsEnterCompactNativeStorageBeforeSeed()
     {
         LoadDefaultGame();
@@ -71,6 +131,8 @@ public sealed class NativeWorldSaveImportTests
             Assert.Equal(1, view.State.MaterializedChunkCount);
             Assert.Equal(6, view.State.MaterializedSectionCount);
             Assert.Equal(2, view.State.MaterializedRawSectionCount);
+            Assert.Equal(0, view.MaterializedChunks[0].Temperature);
+            Assert.Equal(0, view.MaterializedChunks[0].Humidity);
             Assert.Equal(6, view.State.MaterializedPaletteCursor);
             Assert.Equal(384, view.State.MaterializedPackedWordCursor);
             int packedSectionCount = 0;
@@ -780,6 +842,19 @@ public sealed class NativeWorldSaveImportTests
         foreach (uint offset in offsets)
             writer.Write(offset);
         stream.Position = endPosition;
+        if (chunk.Temperature.HasValue || chunk.Humidity.HasValue)
+        {
+            writer.Write("CMD"u8);
+            writer.Write(chunk.Temperature ?? 0f);
+            writer.Write(chunk.Humidity ?? 0f);
+            writer.Write(0u);
+            writer.Write((byte)0);
+            writer.Write((byte)0);
+            writer.Write((byte)0);
+            writer.Write((ushort)0);
+            for (int index = 0; index < 12; index++)
+                writer.Write(0);
+        }
         return stream.ToArray();
     }
 
@@ -787,7 +862,9 @@ public sealed class NativeWorldSaveImportTests
         int X,
         int Y,
         int Z,
-        SectionFixture?[] Sections);
+        SectionFixture?[] Sections,
+        float? Temperature = null,
+        float? Humidity = null);
 
     private sealed class SectionFixture
     {

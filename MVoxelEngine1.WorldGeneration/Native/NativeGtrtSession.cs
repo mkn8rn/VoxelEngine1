@@ -199,6 +199,8 @@ internal struct NativeMaterializedChunkRecord
     internal long Revision;
     internal long PersistedRevision;
     internal ushort UniformBlockId;
+    internal float Temperature;
+    internal float Humidity;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -720,7 +722,7 @@ internal readonly struct NativeGtrtSessionLayout
 internal readonly struct NativeGtrtSessionHeader
 {
     internal const uint ExpectedMagic = 0x54525447;
-    internal const int ExpectedVersion = 17;
+    internal const int ExpectedVersion = 18;
 
     internal NativeGtrtSessionHeader(NativeGtrtSessionLayout layout)
     {
