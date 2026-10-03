@@ -497,6 +497,21 @@ public sealed class NativeGtrtPipeline : IDisposable
 
     internal int ActiveMeshWorkerCount => workers.ActiveMeshWorkerCount;
 
+    internal int PreparedWorkerCount => workers.WorkerCount;
+
+    internal void CopyWorkerAllocationSamples(Span<NativeWorkerAllocationSample> destination) =>
+        workers.CopyAllocationSamples(destination);
+
+    internal void ObserveSeedPublication(Action observer) => session.ObservePublication(observer);
+
+    internal NativeSessionAllocationMetrics GetAllocationMetrics() => NativeSessionAllocationMetrics.Capture(session);
+
+    internal NativePreUploadPacket DescribePreUpload(in NativeChunkRenderPacketDescriptor descriptor) =>
+        new(descriptor.RenderDataId, descriptor.ChunkWorldX / chunkSizeX,
+            descriptor.ChunkWorldY / chunkSizeY, descriptor.ChunkWorldZ / chunkSizeZ,
+            descriptor.OpaqueFaceCount, descriptor.OpaqueWordCount,
+            descriptor.TransparentFaceCount, descriptor.TransparentWordCount);
+
     public int RequiredPacketCount => requiredPacketCount;
     internal int CompletedRunCount => Volatile.Read(ref completedRunCount);
 

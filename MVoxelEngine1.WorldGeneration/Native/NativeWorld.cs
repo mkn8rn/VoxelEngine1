@@ -26,6 +26,7 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
     private readonly NativeGtrtPipeline pipeline;
     private readonly NativeChunkRendererFactory rendererFactory;
     private readonly NativeChunkRenderPacketAction uploadPacketAction;
+    private readonly NativeGtrtAllocationMonitor? allocationMonitor;
     private readonly int ownerThreadId;
     private readonly string? quadsDirectory;
     private INativeChunkRenderer?[] currentRenderers;
@@ -53,7 +54,8 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
         NativeGtrtPipeline pipeline,
         long seed,
         NativeChunkRendererFactory rendererFactory,
-        string? quadsDirectory)
+        string? quadsDirectory,
+        NativeGtrtAllocationMonitor? allocationMonitor)
     {
         ArgumentNullException.ThrowIfNull(pipeline);
         ArgumentNullException.ThrowIfNull(rendererFactory);
@@ -61,6 +63,7 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
         this.pipeline = pipeline;
         this.rendererFactory = rendererFactory;
         this.quadsDirectory = quadsDirectory;
+        this.allocationMonitor = allocationMonitor;
         ownerThreadId = Environment.CurrentManagedThreadId;
         currentRenderers = new INativeChunkRenderer?[pipeline.RequiredPacketCount];
         stagingRenderers = new INativeChunkRenderer?[pipeline.RequiredPacketCount];
@@ -71,13 +74,21 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
 
         try
         {
+            allocationMonitor?.Prepare(pipeline);
             pipeline.Run(seed);
             PublishReadyPackets();
         }
         catch (Exception failure)
         {
+            Exception? monitorFailure = null;
+            try { allocationMonitor?.Dispose(); }
+            catch (Exception exception) { monitorFailure = exception; }
             Exception? cleanupFailure =
                 ReleaseAfterConstructionFailure();
+            if (monitorFailure is not null)
+                throw cleanupFailure is null
+                    ? new AggregateException(failure, monitorFailure)
+                    : new AggregateException(failure, monitorFailure, cleanupFailure);
             if (cleanupFailure is null)
                 ExceptionDispatchInfo.Capture(failure).Throw();
 
@@ -91,9 +102,18 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
     public static NativeWorld CreateHeadless(BlockTextureAtlas textureAtlas) =>
         Create(textureAtlas, HeadlessRendererFactory);
 
+    public static NativeWorld CreateHeadless(
+        BlockTextureAtlas textureAtlas,
+        NativeGtrtAllocationMonitor allocationMonitor)
+    {
+        ArgumentNullException.ThrowIfNull(allocationMonitor);
+        return Create(textureAtlas, HeadlessRendererFactory, allocationMonitor);
+    }
+
     private static NativeWorld Create(
         BlockTextureAtlas textureAtlas,
-        NativeChunkRendererFactory rendererFactory)
+        NativeChunkRendererFactory rendererFactory,
+        NativeGtrtAllocationMonitor? allocationMonitor = null)
     {
         ArgumentNullException.ThrowIfNull(textureAtlas);
 
@@ -116,7 +136,8 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
             pipeline,
             loader.seed,
             rendererFactory,
-            quadsDirectory);
+            quadsDirectory,
+            allocationMonitor);
         world.ID = loader.ID;
         world.RegionID = loader.RegionID;
         return world;
@@ -126,8 +147,9 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
         NativeGtrtPipeline pipeline,
         long seed,
         NativeChunkRendererFactory rendererFactory,
-        string? quadsDirectory = null) =>
-        CreateOwned(pipeline, seed, rendererFactory, quadsDirectory);
+        string? quadsDirectory = null,
+        NativeGtrtAllocationMonitor? allocationMonitor = null) =>
+        CreateOwned(pipeline, seed, rendererFactory, quadsDirectory, allocationMonitor);
 
     public (int cx, int cy, int cz) PlayerChunkPosition
     {
@@ -385,6 +407,8 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
         if (stagingPacketIds[index] != 0)
             throw new InvalidOperationException("Two native packets occupy the same renderer slot.");
         bool retained = currentPacketIds[index] == descriptor.RenderDataId;
+        if (!retained)
+            allocationMonitor?.BeforeRequiredUpload(in descriptor);
         stagingRenderers[index] = retained ? currentRenderers[index] : rendererFactory(
             in descriptor, opaqueWords, transparentWords);
         stagingOwned[index] = !retained;
@@ -441,7 +465,8 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
         NativeGtrtPipeline pipeline,
         long seed,
         NativeChunkRendererFactory rendererFactory,
-        string? quadsDirectory)
+        string? quadsDirectory,
+        NativeGtrtAllocationMonitor? allocationMonitor = null)
     {
         try
         {
@@ -449,7 +474,8 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
                 pipeline,
                 seed,
                 rendererFactory,
-                quadsDirectory);
+                quadsDirectory,
+                allocationMonitor);
         }
         catch
         {

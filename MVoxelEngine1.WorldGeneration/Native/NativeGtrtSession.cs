@@ -1860,6 +1860,7 @@ internal ref partial struct NativeGtrtSessionView
                 return false;
             }
 
+            StartupPerformanceRecorder.RecordSeedAccepted();
             state.Seed = seed;
             NativeOpenSimplexNoiseState noise = NoiseState;
             noise.Initialize(seed);
@@ -2895,6 +2896,7 @@ internal sealed partial class NativeGtrtSession : IDisposable
     private bool runPrepared;
     private int publishSeedCalled;
     private bool disposalPrepared;
+    private Action? publicationObserver;
 
     private NativeGtrtSession(NativeTransfer<byte>? source)
     {
@@ -3078,6 +3080,18 @@ internal sealed partial class NativeGtrtSession : IDisposable
         storage.Access(action);
     }
 
+    internal int OwnerLength => storage?.Length ?? 0;
+
+    internal int OwnerCapacity => storage?.Capacity ?? 0;
+
+    internal void ObservePublication(Action observer)
+    {
+        ArgumentNullException.ThrowIfNull(observer);
+        if (publishSeedCalled != 0 || runPrepared)
+            throw new InvalidOperationException("The publication observer must be prepared before the seed.");
+        publicationObserver = observer;
+    }
+
     internal void RequestCancellation()
     {
         if (storage is null)
@@ -3112,14 +3126,13 @@ internal sealed partial class NativeGtrtSession : IDisposable
     private void PrepareRunCore(scoped NativeLeaseView<byte> owner)
     {
         var view = new NativeGtrtSessionView(owner.AsSpan());
-        bool firstRun = view.State.PublicationState == 0;
+        if (view.State.PublicationState == 0)
+            publicationObserver?.Invoke();
         runPrepared = view.TryPrepareRun(
             pendingSeed,
             pendingCenterChunkX,
             pendingCenterChunkY,
             pendingCenterChunkZ);
-        if (runPrepared && firstRun)
-            StartupPerformanceRecorder.RecordSeedAccepted();
     }
 
     private void InitializeGameSnapshotCore(

@@ -25,6 +25,7 @@ namespace MVoxelEngine1.Infrastructure.Managers
                 worldName = PreferString(consoleFlags.worldName, envFlags.worldName),
                 seed = PreferValue(consoleFlags.seed, envFlags.seed),
                 benchmarkOutput = PreferString(consoleFlags.benchmarkOutput, envFlags.benchmarkOutput),
+                allocationValidationOutput = PreferString(consoleFlags.allocationValidationOutput, envFlags.allocationValidationOutput),
                 graphicsBenchmarkOutput = PreferString(
                     consoleFlags.graphicsBenchmarkOutput,
                     envFlags.graphicsBenchmarkOutput),
@@ -67,6 +68,8 @@ namespace MVoxelEngine1.Infrastructure.Managers
                 Console.WriteLine($"Set seed: {flags.seed.Value}");
             if (!string.IsNullOrEmpty(flags.benchmarkOutput))
                 Console.WriteLine($"Set benchmarkOutput: {flags.benchmarkOutput}");
+            if (!string.IsNullOrEmpty(flags.allocationValidationOutput))
+                Console.WriteLine($"Set allocationValidationOutput: {flags.allocationValidationOutput}");
             if (!string.IsNullOrEmpty(flags.graphicsBenchmarkOutput))
             {
                 Console.WriteLine(

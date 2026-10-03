@@ -151,6 +151,13 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
         private static int windowConstructionCount;
         private static int actualGpuUploadCount;
         private static int openGlCallsAllowed;
+        private static int graphicsForbidden;
+
+        public static int WindowConstructionCount => Volatile.Read(ref windowConstructionCount);
+
+        public static int ActualGpuUploadCount => Volatile.Read(ref actualGpuUploadCount);
+
+        public static void ForbidGraphics() => Volatile.Write(ref graphicsForbidden, 1);
 
         public static bool IsRunning => Volatile.Read(ref timer) is not null;
 
@@ -278,11 +285,9 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
 
         public static void RecordGpuStreamingStart()
         {
-            if (!IsRunning)
-                return;
-
             Interlocked.Increment(ref actualGpuUploadCount);
-            if (Volatile.Read(ref openGlCallsAllowed) == 0)
+            if (Volatile.Read(ref graphicsForbidden) != 0 ||
+                (IsRunning && Volatile.Read(ref openGlCallsAllowed) == 0))
             {
                 throw new InvalidOperationException(
                     "Headless GTRT mode forbids real GPU uploads.");
@@ -293,11 +298,9 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
 
         public static void RecordWindowConstruction()
         {
-            if (!IsRunning)
-                return;
-
             Interlocked.Increment(ref windowConstructionCount);
-            if (Volatile.Read(ref openGlCallsAllowed) == 0)
+            if (Volatile.Read(ref graphicsForbidden) != 0 ||
+                (IsRunning && Volatile.Read(ref openGlCallsAllowed) == 0))
             {
                 throw new InvalidOperationException(
                     "Headless GTRT mode forbids Window construction.");
@@ -537,7 +540,7 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
             Interlocked.CompareExchange(ref destination, durationTicks, 0);
         }
 
-        private static StartupBenchmarkParameters CaptureParameters()
+        public static StartupBenchmarkParameters CaptureParameters()
         {
             GameSettings settings = GameManager.settings;
             ProgramFlags flags = FlagManager.flags;

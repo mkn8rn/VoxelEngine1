@@ -48,6 +48,55 @@ public sealed class NativeWorldTests
     }
 
     [Fact]
+    public void AllocationEvidenceEndsBeforeTheFirstRequiredRendererAndIncludesPreparedWorkers()
+    {
+        LoadDefaultGame();
+        var atlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
+        using var monitor = new NativeGtrtAllocationMonitor();
+        byte[]? rendererPayload = null;
+        NativeGtrtAllocationEvidence? rendererEvidence = null;
+        INativeChunkRenderer? CreateRenderer(
+            in NativeChunkRenderPacketDescriptor descriptor,
+            ReadOnlySpan<uint> opaqueWords,
+            ReadOnlySpan<uint> transparentWords)
+        {
+            if (opaqueWords.IsEmpty && transparentWords.IsEmpty)
+                return null;
+            if (rendererEvidence is null)
+            {
+                rendererPayload = new byte[128 * 1024];
+                rendererEvidence = monitor.Capture();
+            }
+            return null;
+        }
+
+        using NativeWorld world = NativeWorld.CreateForTesting(
+            NativeGtrtPipeline.Create(atlas, CreateSmallSettings(), 2, 2,
+                runtimeGenerationWorkerCount: 5, runtimeMeshWorkerCount: 1),
+            123456, CreateRenderer, allocationMonitor: monitor);
+        NativeGtrtAllocationEvidence evidence = monitor.Capture();
+
+        Assert.NotNull(rendererPayload);
+        Assert.NotNull(rendererEvidence);
+        Assert.Equal(0, evidence.CoordinatorManagedBytes);
+        Assert.True(evidence.NoGcRegionCompleted);
+        Assert.Equal(0, evidence.Generation0Collections);
+        Assert.Equal(0, evidence.Generation1Collections);
+        Assert.Equal(0, evidence.Generation2Collections);
+        Assert.Equal(7, evidence.Workers.Count);
+        Assert.All(evidence.Workers, static worker =>
+        {
+            Assert.True(worker.ManagedThreadId > 0);
+            Assert.Equal(0, worker.TotalBytes);
+        });
+        Assert.True(evidence.FirstRequiredPacket.OpaqueWordCount + evidence.FirstRequiredPacket.TransparentWordCount > 0);
+        Assert.True(evidence.NativeStorage.OwnerLengthBytes > 0);
+        Assert.True(evidence.NativeStorage.OwnerCapacityBytes >= evidence.NativeStorage.OwnerLengthBytes);
+        Assert.Equal(evidence.CoordinatorManagedBytes, rendererEvidence.CoordinatorManagedBytes);
+        Assert.Equal(1, world.Revision);
+    }
+
+    [Fact]
     public void RetiredPacketsRemainInspectableUntilMovement()
     {
         LoadDefaultGame();

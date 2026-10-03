@@ -1,6 +1,7 @@
 ﻿using MVoxelEngine1.Infrastructure.Managers;
 using MVoxelEngine1.Infrastructure.Flags;
 using MVoxelEngine1.Infrastructure.Diagnostics;
+using MVoxelEngine1.Infrastructure.Models;
 using MVoxelEngine1.Infrastructure.Models.Simulation;
 using MVoxelEngine1.Application.Simulation;
 using System;
@@ -16,6 +17,19 @@ namespace MVoxelEngine1.Application
             ConsoleFlags.Parse(args);
             EnvironmentFlags.LoadEnvironmentFlags();
             FlagManager.ApplyFlags(args);
+
+            if (!string.IsNullOrWhiteSpace(FlagManager.flags.allocationValidationOutput) ||
+                !string.IsNullOrWhiteSpace(FlagManager.flags.faceManifestOutput) ||
+                !string.IsNullOrWhiteSpace(FlagManager.flags.simulatedGpuUploadOutput) ||
+                !string.IsNullOrWhiteSpace(FlagManager.flags.benchmarkOutput))
+                StartupPerformanceRecorder.ForbidGraphics();
+
+            if (!string.IsNullOrWhiteSpace(FlagManager.flags.allocationValidationOutput))
+            {
+                ValidateAllocationFlags();
+                HeadlessAllocationValidationRunner.Run(FlagManager.flags.allocationValidationOutput);
+                return;
+            }
 
             if (!string.IsNullOrWhiteSpace(FlagManager.flags.faceManifestOutput))
             {
@@ -92,6 +106,17 @@ namespace MVoxelEngine1.Application
             if (frameRate <= 0 || frameRate > 1000)
                 throw new InvalidOperationException("The simulated frame rate must be from 1 through 1000.");
             return frameRate;
+        }
+
+        private static void ValidateAllocationFlags()
+        {
+            ValidateBenchmarkFlags(headless: true);
+            if (!string.IsNullOrWhiteSpace(FlagManager.flags.benchmarkOutput) ||
+                !string.IsNullOrWhiteSpace(FlagManager.flags.faceManifestOutput) ||
+                !string.IsNullOrWhiteSpace(FlagManager.flags.simulatedGpuUploadOutput))
+                throw new InvalidOperationException("Allocation validation requires its own headless run.");
+            if (FlagManager.flags.faceGenerationMode is not (null or FaceGenerationMode.Optimized))
+                throw new InvalidOperationException("Allocation validation requires optimized native packets.");
         }
 
         private static void ValidateSimulatedGpuUploadFlags()

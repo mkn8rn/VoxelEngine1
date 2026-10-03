@@ -52,6 +52,7 @@ namespace MVoxelEngine1.Infrastructure.Models
         public string? worldName;
         public int? seed;
         public string? benchmarkOutput;
+        public string? allocationValidationOutput;
         public string? graphicsBenchmarkOutput;
         public string? faceManifestOutput;
         public string? simulatedGpuUploadOutput;

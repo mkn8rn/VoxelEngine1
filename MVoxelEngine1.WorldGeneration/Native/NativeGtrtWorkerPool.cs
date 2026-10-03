@@ -4,7 +4,7 @@ using Supprocom.NativeAllocationManagement;
 
 namespace MVoxelEngine1.WorldGeneration.Native;
 
-internal readonly record struct NativeWorkerAllocationSample(
+public readonly record struct NativeWorkerAllocationSample(
     int ManagedThreadId,
     int WorkerIndex,
     bool GeneratesTerrain,
@@ -465,6 +465,9 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
             _ = startSignal.WaitOne(0);
             _ = owner.publicationGate.WaitOne(0);
             _ = owner.generationCompletionGate.WaitOne(0);
+            AllocationSample = new NativeWorkerAllocationSample(
+                Environment.CurrentManagedThreadId, workerIndex,
+                kind == NativeGtrtWorkerKind.Generation, 0, 0, 0, 0);
             owner.NotifyReady();
             while (true)
             {
