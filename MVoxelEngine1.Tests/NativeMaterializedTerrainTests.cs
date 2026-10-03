@@ -188,6 +188,7 @@ public sealed class NativeMaterializedTerrainTests
             PrepareTerrain(ref view);
             Assert.Equal(-1, view.GetChunkIndex(0, 0, 0));
             Assert.Equal(1, view.State.MaterializedChunkCount);
+            view.CommitStreamingRun();
         });
 
         session.PrepareRun(123456, 0, 0, 0);

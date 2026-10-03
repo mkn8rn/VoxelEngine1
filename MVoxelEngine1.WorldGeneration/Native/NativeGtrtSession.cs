@@ -71,7 +71,8 @@ internal enum NativeRenderPacketState : int
 internal enum NativeChunkFlags : int
 {
     None = 0,
-    InitialMeshRequired = 1
+    InitialMeshRequired = 1,
+    MeshInvalidated = 2
 }
 
 internal enum NativeGtrtFailureCode : int
@@ -130,6 +131,13 @@ internal struct NativeGtrtSessionState
     internal int MaterializedRawSectionCount;
     internal int MaterializedPaletteCursor;
     internal int MaterializedPackedWordCursor;
+    internal int PlannedColumns;
+    internal int PlannedMeshes;
+    internal int RetainedColumns;
+    internal int RetainedPackets;
+    internal int TransactionOpen;
+    internal int FreeRangeCount;
+    internal int PacketAllocationLock;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -494,7 +502,8 @@ internal readonly struct NativeGtrtSessionLayout
             cursor,
             GameSnapshotByteCount,
             8);
-        TotalByteCount = cursor;
+        Streaming = new NativeStreamingLayout(cursor, ColumnCount, ChunkCount, ProfileCount, RequiredChunkCount);
+        TotalByteCount = Streaming.EndOffset;
     }
 
     internal int ChunkSizeX { get; }
@@ -627,6 +636,8 @@ internal readonly struct NativeGtrtSessionLayout
 
     internal int GameSnapshotOffset { get; }
 
+    internal NativeStreamingLayout Streaming { get; }
+
     internal int TotalByteCount { get; }
 
     internal static NativeGtrtSessionLayout Create(
@@ -701,7 +712,7 @@ internal readonly struct NativeGtrtSessionLayout
 internal readonly struct NativeGtrtSessionHeader
 {
     internal const uint ExpectedMagic = 0x54525447;
-    internal const int ExpectedVersion = 14;
+    internal const int ExpectedVersion = 15;
 
     internal NativeGtrtSessionHeader(NativeGtrtSessionLayout layout)
     {
@@ -779,8 +790,10 @@ internal readonly struct NativeGtrtSessionHeader
         PacketWordOffset = layout.PacketWordOffset;
         GameSnapshotOffset = layout.GameSnapshotOffset;
         GameSnapshotByteCount = layout.GameSnapshotByteCount;
+        Streaming = layout.Streaming;
     }
 
+    internal NativeStreamingLayout Streaming { get; }
     internal uint Magic { get; }
     internal int Version { get; }
     internal int TotalByteCount { get; }
@@ -870,7 +883,10 @@ internal ref struct NativeGtrtSessionInitializer
         var state = new NativeGtrtSessionState
         {
             RemainingColumns = layout.ColumnCount,
-            RemainingChunks = layout.RequiredChunkCount
+            RemainingChunks = layout.RequiredChunkCount,
+            PlannedColumns = layout.ColumnCount,
+            PlannedMeshes = layout.RequiredChunkCount,
+            FreeRangeCount = 1
         };
         MemoryMarshal.Write(bytes.Slice(layout.StateOffset), in state);
 
@@ -993,11 +1009,13 @@ internal ref struct NativeGtrtSessionInitializer
                     layout.MeshReadyOffset + index * readySlotSize)),
                 in readySlot);
         }
+        var freeRange = new NativePacketWordRange { Count = layout.PacketWordCapacity };
+        MemoryMarshal.Write(bytes.Slice(layout.Streaming.FreeRanges), in freeRange);
     }
 
 }
 
-internal ref struct NativeGtrtSessionView
+internal ref partial struct NativeGtrtSessionView
 {
     private Span<byte> bytes;
     private NativeGtrtSessionHeader header;
@@ -1782,7 +1800,7 @@ internal ref struct NativeGtrtSessionView
                 }
             }
 
-            Volatile.Write(ref state.PacketWordCursor, 0);
+            InitializePacketRanges();
             return true;
         }
         finally
@@ -1838,18 +1856,13 @@ internal ref struct NativeGtrtSessionView
             Volatile.Read(ref state.PacketConsumerCount) != 0 ||
             Volatile.Read(ref state.ReadyPacketCount) != 0 ||
             Volatile.Read(ref state.DisposalState) != 0 ||
-            !TryRecyclePacketStorage())
+            state.TransactionOpen != 0)
         {
             Fail(NativeGtrtFailureCode.InvalidSessionReset);
             return false;
         }
 
-        ResetRunRecords(
-            centerChunkX,
-            centerChunkY,
-            centerChunkZ,
-            checked(state.SessionEpoch + 1));
-        return true;
+        return TryPrepareStreamingRun(centerChunkX, centerChunkY, centerChunkZ);
     }
 
     private void ResetRunRecords(
@@ -1975,6 +1988,10 @@ internal ref struct NativeGtrtSessionView
         state.RemainingColumns = header.ColumnCount;
         state.MeshCursor = 0;
         state.RemainingChunks = header.RequiredChunkCount;
+        state.PlannedColumns = header.ColumnCount;
+        state.PlannedMeshes = header.RequiredChunkCount;
+        state.RetainedColumns = 0;
+        state.RetainedPackets = 0;
         state.ReadyPacketCount = 0;
         state.FailureCode = 0;
         state.CancellationState = 0;
@@ -2135,32 +2152,27 @@ internal ref struct NativeGtrtSessionView
 
     internal int GetColumnIndex(int chunkX, int chunkZ)
     {
-        int localX = chunkX - checked(
-            State.CenterChunkX + header.MinimumChunkX);
-        int localZ = chunkZ - checked(
-            State.CenterChunkZ + header.MinimumChunkZ);
-        if ((uint)localX >= (uint)header.ColumnWidth ||
-            (uint)localZ >= (uint)header.ColumnWidth)
-        {
+        long localX = (long)chunkX - State.CenterChunkX - header.MinimumChunkX;
+        long localZ = (long)chunkZ - State.CenterChunkZ - header.MinimumChunkZ;
+        if ((ulong)localX >= (ulong)header.ColumnWidth ||
+            (ulong)localZ >= (ulong)header.ColumnWidth)
             return -1;
-        }
-
-        return checked(localX * header.ColumnWidth + localZ);
+        return FloorMod((long)chunkX - header.MinimumChunkX, header.ColumnWidth) *
+            header.ColumnWidth + FloorMod((long)chunkZ - header.MinimumChunkZ, header.ColumnWidth);
     }
 
     internal int GetChunkIndex(int chunkX, int chunkY, int chunkZ)
     {
         int columnIndex = GetColumnIndex(chunkX, chunkZ);
-        int localY = chunkY - checked(
-            State.CenterChunkY + header.MinimumChunkY);
-        if (columnIndex < 0 ||
-            (uint)localY >= (uint)header.VerticalChunkCount)
-        {
+        long localY = (long)chunkY - State.CenterChunkY - header.MinimumChunkY;
+        if (columnIndex < 0 || (ulong)localY >= (ulong)header.VerticalChunkCount)
             return -1;
-        }
-
-        return checked(columnIndex * header.VerticalChunkCount + localY);
+        return columnIndex * header.VerticalChunkCount +
+            FloorMod((long)chunkY - header.MinimumChunkY, header.VerticalChunkCount);
     }
+
+    internal static int FloorMod(long coordinate, int width) =>
+        (int)((coordinate % width + width) % width);
 
     internal bool TryClaimGeneration(out NativeWorkItem work)
     {
@@ -2638,6 +2650,9 @@ internal ref struct NativeGtrtSessionView
         {
             int chunkIndex = GetChunkIndex(chunkX, chunkY, chunkZ);
             ref NativeChunkRecord chunk = ref chunks[chunkIndex];
+            ref NativeWorkItem job = ref jobs[chunkIndex];
+            if (ReadState(ref job.State) != NativeWorkState.Waiting)
+                continue;
             int dependencies = Interlocked.Decrement(
                 ref chunk.RemainingDependencies);
             if (dependencies < 0)
@@ -2653,7 +2668,6 @@ internal ref struct NativeGtrtSessionView
                 continue;
             }
 
-            ref NativeWorkItem job = ref jobs[chunkIndex];
             if (!TryTransition(
                     ref job.State,
                     NativeWorkState.Waiting,
@@ -2801,26 +2815,7 @@ internal ref struct NativeGtrtSessionView
         int wordCount,
         out int wordOffset)
     {
-        ref int cursor = ref State.PacketWordCursor;
-        while (true)
-        {
-            int observed = Volatile.Read(ref cursor);
-            if (wordCount > header.PacketWordCapacity - observed)
-            {
-                wordOffset = 0;
-                return false;
-            }
-
-            int next = observed + wordCount;
-            if (Interlocked.CompareExchange(
-                    ref cursor,
-                    next,
-                    observed) == observed)
-            {
-                wordOffset = observed;
-                return true;
-            }
-        }
+        return TryAllocatePacketRange(wordCount, out wordOffset);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -3002,7 +2997,7 @@ internal sealed class NativeGtrtSession : IDisposable
                 scoped NativeBuilderWriter<byte> writer,
                 scoped in NativeGtrtSessionLayout current) =>
             {
-                NativeGtrtSessionInitializer initializer = new(
+                scoped NativeGtrtSessionInitializer initializer = new(
                     writer.AsSpan());
                 initializer.Initialize(in current);
                 writer.Commit(current.TotalByteCount);

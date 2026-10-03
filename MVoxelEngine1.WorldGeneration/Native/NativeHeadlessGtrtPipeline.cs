@@ -68,6 +68,20 @@ public sealed class NativeGtrtPipeline : IDisposable
     private readonly NativeLeaseAction<byte> readBlockAction;
     private readonly NativeLeaseAction<byte> inspectPacketsAction;
     private readonly int requiredPacketCount;
+    private readonly int chunkSizeX;
+    private readonly int chunkSizeY;
+    private readonly int chunkSizeZ;
+    private readonly int requiredWidth;
+    private readonly NativeLeaseAction<byte> commitRunAction;
+    private readonly NativeLeaseAction<byte> rollbackRunAction;
+    private NativePreUploadPacket previousPacket;
+    private NativeStreamingStatistics streamingStatistics;
+    private NativeStreamingStatistics previousStatistics;
+    private int previousCenterX;
+    private int previousCenterY;
+    private int previousCenterZ;
+    private int previousRunCount;
+    private bool runRolledBack;
     private NativePreUploadPacket capturedPacket;
     private NativeChunkRenderPacketAction? pendingPacketConsumer;
     private NativeChunkRenderPacketAction? pendingPacketInspector;
@@ -114,6 +128,7 @@ public sealed class NativeGtrtPipeline : IDisposable
         NativeGtrtSession session,
         NativeGtrtWorkerPool workers,
         int requiredPacketCount,
+        GameSettings settings,
         Action<string, string>? savePublisher)
     {
         this.game = game;
@@ -121,12 +136,18 @@ public sealed class NativeGtrtPipeline : IDisposable
         this.workers = workers;
         saveExporter = new NativeWorldSaveExporter(session, savePublisher);
         this.requiredPacketCount = requiredPacketCount;
+        chunkSizeX = settings.chunkMaxX;
+        chunkSizeY = settings.chunkMaxY;
+        chunkSizeZ = settings.chunkMaxZ;
+        requiredWidth = checked(settings.lod1RenderDistance * 2 + 1);
         capturePacketAction = CaptureFirstPacket;
         consumePacketsAction = ConsumePackets;
         editBlockAction = EditBlockCore;
         rollbackBlockAction = RollbackBlockCore;
         readBlockAction = ReadBlockCore;
         inspectPacketsAction = InspectPacketsCore;
+        commitRunAction = CommitRunCore;
+        rollbackRunAction = RollbackRunCore;
     }
 
     public static NativeGtrtPipeline Create(
@@ -251,6 +272,7 @@ public sealed class NativeGtrtPipeline : IDisposable
                 session,
                 workers,
                 requiredPacketCount,
+                settings,
                 savePublisher);
         }
         catch
@@ -319,6 +341,7 @@ public sealed class NativeGtrtPipeline : IDisposable
                 "The native GTRT pipeline is already moving.");
         }
 
+        RememberCurrentRun(runCount);
         try
         {
             NativePreUploadPacket packet = RunCore(
@@ -335,10 +358,56 @@ public sealed class NativeGtrtPipeline : IDisposable
         }
         catch
         {
-            Volatile.Write(ref completedRunCount, int.MinValue);
+            RestorePreviousRun();
             throw;
         }
     }
+
+    private void RememberCurrentRun(int runCount)
+    {
+        previousPacket = capturedPacket;
+        previousStatistics = streamingStatistics;
+        previousCenterX = centerChunkX;
+        previousCenterY = centerChunkY;
+        previousCenterZ = centerChunkZ;
+        previousRunCount = runCount;
+    }
+
+    private void RestorePreviousRun()
+    {
+        runRolledBack = false;
+        session.Access(rollbackRunAction);
+        if (!runRolledBack)
+            return;
+        capturedPacket = previousPacket;
+        streamingStatistics = previousStatistics;
+        centerChunkX = previousCenterX;
+        centerChunkY = previousCenterY;
+        centerChunkZ = previousCenterZ;
+        packetCaptured = true;
+        packetConsumptionCompleted = true;
+        Volatile.Write(ref packetConsumptionState, 2);
+        Volatile.Write(ref completedRunCount, previousRunCount);
+    }
+
+    private static void CommitRunCore(scoped NativeLeaseView<byte> owner)
+    {
+        var view = new NativeGtrtSessionView(owner.AsSpan());
+        view.CommitStreamingRun();
+    }
+
+    private void RollbackRunCore(scoped NativeLeaseView<byte> owner)
+    {
+        var view = new NativeGtrtSessionView(owner.AsSpan());
+        runRolledBack = view.RollbackStreamingRun();
+    }
+
+    internal NativeStreamingStatistics StreamingStatistics => streamingStatistics;
+
+    internal int GetRendererSlot(in NativeChunkRenderPacketDescriptor descriptor) =>
+        (NativeGtrtSessionView.FloorMod(descriptor.ChunkWorldX / chunkSizeX, requiredWidth) * requiredWidth +
+         NativeGtrtSessionView.FloorMod(descriptor.ChunkWorldZ / chunkSizeZ, requiredWidth)) * requiredWidth +
+        NativeGtrtSessionView.FloorMod(descriptor.ChunkWorldY / chunkSizeY, requiredWidth);
 
     private NativePreUploadPacket RunCore(
         long seed,
@@ -450,6 +519,7 @@ public sealed class NativeGtrtPipeline : IDisposable
             }
 
             pendingEdit = true;
+            RememberCurrentRun(runCount);
             try
             {
                 _ = RunCore(
@@ -466,7 +536,8 @@ public sealed class NativeGtrtPipeline : IDisposable
             catch (Exception failure)
             {
                 Exception? rollbackFailure = RollbackPendingEditCore();
-                Volatile.Write(ref completedRunCount, int.MinValue);
+                if (rollbackFailure is not null)
+                    Volatile.Write(ref completedRunCount, int.MinValue);
                 if (rollbackFailure is null)
                     ExceptionDispatchInfo.Capture(failure).Throw();
                 throw new AggregateException(failure, rollbackFailure);
@@ -494,6 +565,7 @@ public sealed class NativeGtrtPipeline : IDisposable
             throw new InvalidOperationException(
                 "A complete native block edit is not ready to commit.");
         }
+        session.Access(commitRunAction);
         ClearPendingEdit();
     }
 
@@ -591,7 +663,14 @@ public sealed class NativeGtrtPipeline : IDisposable
                 throw new InvalidOperationException(
                     "The native packet scan did not consume every packet.");
             }
+            if (!pendingEdit)
+                session.Access(commitRunAction);
             return consumedPacketCount;
+        }
+        catch
+        {
+            RestorePreviousRun();
+            throw;
         }
         finally
         {
@@ -722,15 +801,17 @@ public sealed class NativeGtrtPipeline : IDisposable
         scoped NativeLeaseView<byte> owner)
     {
         var view = new NativeGtrtSessionView(owner.AsSpan());
+        streamingStatistics = view.StreamingStatistics;
         for (int chunkIndex = 0;
              chunkIndex < view.Chunks.Length;
              chunkIndex++)
         {
             NativeChunkRecord chunk = view.Chunks[chunkIndex];
-            if (chunk.State != NativeChunkState.PacketReady ||
-                !view.TryReadPacket(
-                    chunkIndex,
-                    out NativePacketReadView packet))
+            scoped NativePacketReadView packet;
+            bool readable = chunk.State == NativeChunkState.PacketReady
+                ? view.TryReadPacket(chunkIndex, out packet)
+                : view.TryInspectRetiredPacket(chunkIndex, out packet);
+            if (!readable)
             {
                 continue;
             }
@@ -774,10 +855,11 @@ public sealed class NativeGtrtPipeline : IDisposable
              chunkIndex++)
         {
             NativeChunkRecord chunk = view.Chunks[chunkIndex];
-            if (chunk.State != NativeChunkState.PacketReady ||
-                !view.TryActivatePacket(
-                    chunkIndex,
-                    out NativePacketReadView packet))
+            scoped NativePacketReadView packet = default;
+            bool retained = chunk.State == NativeChunkState.Retired;
+            bool readable = retained ? view.TryInspectRetiredPacket(chunkIndex, out packet) :
+                chunk.State == NativeChunkState.PacketReady && view.TryActivatePacket(chunkIndex, out packet);
+            if (!readable)
             {
                 continue;
             }
@@ -814,7 +896,7 @@ public sealed class NativeGtrtPipeline : IDisposable
             }
             finally
             {
-                if (!view.TryRetirePacket(chunkIndex))
+                if (!retained && !view.TryRetirePacket(chunkIndex))
                 {
                     throw new InvalidOperationException(
                         "The native render packet could not retire.");
@@ -916,6 +998,7 @@ public sealed class NativeGtrtPipeline : IDisposable
         pendingEditedLocalX = localX;
         pendingEditedLocalY = localY;
         pendingEditedLocalZ = localZ;
+        view.InvalidateEditedMeshes(chunkX, chunkY, chunkZ, localX, localY, localZ);
         pendingEditChanged = true;
         pendingEditActionSucceeded = true;
     }
@@ -961,6 +1044,8 @@ public sealed class NativeGtrtPipeline : IDisposable
         ref NativeChunkRecord active = ref view.Chunks[chunkIndex];
         active.StorageKind = materialized.StorageKind;
         active.DirtyRevision = materialized.Revision;
+        foreach (ref NativeChunkRecord chunk in view.Chunks)
+            chunk.Flags &= ~(int)NativeChunkFlags.MeshInvalidated;
         pendingRollbackSucceeded = true;
     }
 
@@ -1006,6 +1091,7 @@ public sealed class NativeGtrtPipeline : IDisposable
         pendingRollbackSucceeded = false;
         try
         {
+            RestorePreviousRun();
             session.Access(rollbackBlockAction);
             if (!pendingRollbackSucceeded)
             {

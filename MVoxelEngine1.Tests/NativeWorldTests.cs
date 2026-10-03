@@ -157,10 +157,20 @@ public sealed class NativeWorldTests
         Assert.Equal(31, factory.CreatedCount);
         Assert.Equal(4, factory.DisposedCount);
 
+        int observed = 0;
+        world.InspectRenderPackets((in NativeChunkRenderPacketDescriptor descriptor,
+            ReadOnlySpan<uint> opaque, ReadOnlySpan<uint> transparent) => observed++);
+        Assert.Equal(27, observed);
+        Assert.Equal(1, world.Revision);
+        factory.FailAtAttempt = int.MaxValue;
+        world.PlayerChunkPosition = (1, 0, 0);
+        Assert.Equal((1, 0, 0), world.PlayerChunkPosition);
+        Assert.Equal(new NativeStreamingStatistics(5, 20, 9, 18), world.StreamingStatistics);
+
         world.Dispose();
-        Assert.Equal(31, factory.DisposedCount);
+        Assert.Equal(factory.CreatedCount, factory.DisposedCount);
         world.Dispose();
-        Assert.Equal(31, factory.DisposedCount);
+        Assert.Equal(factory.CreatedCount, factory.DisposedCount);
     }
 
     [Fact]
@@ -289,7 +299,7 @@ public sealed class NativeWorldTests
             factory.Create);
         ushort previous = world.GetBlock(-1, 0, -1);
         string initialIdentity = factory.LiveBankIdentity;
-        factory.FailAtAttempt = checked(factory.CreatedCount + 5);
+        factory.FailAtAttempt = checked(factory.CreatedCount + 3);
 
         Assert.Throws<RendererFactoryFailure>(() => world.SetBlock(
             -1,

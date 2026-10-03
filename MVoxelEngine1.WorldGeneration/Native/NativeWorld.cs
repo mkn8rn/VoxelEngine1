@@ -30,6 +30,9 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
     private readonly string? quadsDirectory;
     private INativeChunkRenderer?[] currentRenderers;
     private INativeChunkRenderer?[] stagingRenderers;
+    private long[] currentPacketIds;
+    private long[] stagingPacketIds;
+    private readonly bool[] stagingOwned;
     private (int cx, int cy, int cz) playerChunkPosition;
     private int stagingCount;
     private int disposed;
@@ -61,6 +64,9 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
         ownerThreadId = Environment.CurrentManagedThreadId;
         currentRenderers = new INativeChunkRenderer?[pipeline.RequiredPacketCount];
         stagingRenderers = new INativeChunkRenderer?[pipeline.RequiredPacketCount];
+        currentPacketIds = new long[pipeline.RequiredPacketCount];
+        stagingPacketIds = new long[pipeline.RequiredPacketCount];
+        stagingOwned = new bool[pipeline.RequiredPacketCount];
         uploadPacketAction = UploadPacket;
 
         try
@@ -155,6 +161,7 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
     }
 
     internal int RendererSlotCount => currentRenderers.Length;
+    internal NativeStreamingStatistics StreamingStatistics => pipeline.StreamingStatistics;
 
     public ushort GetBlock(int worldX, int worldY, int worldZ)
     {
@@ -341,16 +348,17 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
             INativeChunkRenderer?[] previous = currentRenderers;
             currentRenderers = stagingRenderers;
             stagingRenderers = previous;
+            (currentPacketIds, stagingPacketIds) = (stagingPacketIds, currentPacketIds);
             bankPublished = true;
             Exception? releaseFailure =
-                ReleaseRendererSet(stagingRenderers);
+                ReleasePreviousRenderers();
             if (releaseFailure is not null)
                 ExceptionDispatchInfo.Capture(releaseFailure).Throw();
         }
         catch (Exception failure)
         {
             Exception? releaseFailure =
-                ReleaseRendererSet(stagingRenderers);
+                ReleaseStagedRenderers();
             if (releaseFailure is null)
                 ExceptionDispatchInfo.Capture(failure).Throw();
 
@@ -373,10 +381,51 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
                 "The native renderer bank received too many packets.");
         }
 
-        stagingRenderers[stagingCount++] = rendererFactory(
-            in descriptor,
-            opaqueWords,
-            transparentWords);
+        int index = pipeline.GetRendererSlot(in descriptor);
+        if (stagingPacketIds[index] != 0)
+            throw new InvalidOperationException("Two native packets occupy the same renderer slot.");
+        bool retained = currentPacketIds[index] == descriptor.RenderDataId;
+        stagingRenderers[index] = retained ? currentRenderers[index] : rendererFactory(
+            in descriptor, opaqueWords, transparentWords);
+        stagingOwned[index] = !retained;
+        stagingPacketIds[index] = descriptor.RenderDataId;
+        stagingCount++;
+    }
+
+    private Exception? ReleasePreviousRenderers()
+    {
+        Exception? failure = null;
+        for (int index = 0; index < stagingRenderers.Length; index++)
+        {
+            INativeChunkRenderer? renderer = stagingRenderers[index];
+            bool retained = stagingPacketIds[index] == currentPacketIds[index];
+            stagingRenderers[index] = null;
+            stagingPacketIds[index] = 0;
+            stagingOwned[index] = false;
+            if (retained || renderer is null)
+                continue;
+            try { renderer.Dispose(); }
+            catch (Exception exception) { failure ??= exception; }
+        }
+        return failure;
+    }
+
+    private Exception? ReleaseStagedRenderers()
+    {
+        Exception? failure = null;
+        for (int index = 0; index < stagingRenderers.Length; index++)
+        {
+            INativeChunkRenderer? renderer = stagingRenderers[index];
+            bool owned = stagingOwned[index];
+            stagingRenderers[index] = null;
+            stagingPacketIds[index] = 0;
+            stagingOwned[index] = false;
+            if (!owned || renderer is null)
+                continue;
+            try { renderer.Dispose(); }
+            catch (Exception exception) { failure ??= exception; }
+        }
+        return failure;
     }
 
     private static INativeChunkRenderer? CreateOpenGlRenderer(

@@ -192,6 +192,7 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
             }
         }
 
+        Volatile.Write(ref runState, 2);
         completionValid = false;
         completionFailure = NativeGtrtFailureCode.None;
         session.Access(validateCompletionAction);
@@ -312,7 +313,8 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
             Volatile.Read(ref state.RemainingColumns) == 0 &&
             Volatile.Read(ref state.RemainingChunks) == 0 &&
             Volatile.Read(ref state.ReadyPacketCount) ==
-                view.RequiredChunkCount &&
+                state.PlannedMeshes &&
+            state.PlannedMeshes + state.RetainedPackets == view.RequiredChunkCount &&
             Volatile.Read(ref state.ClaimedGenerationCount) == 0 &&
             Volatile.Read(ref state.ClaimedMeshCount) == 0;
     }
