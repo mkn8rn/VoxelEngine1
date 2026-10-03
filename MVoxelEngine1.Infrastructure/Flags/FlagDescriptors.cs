@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using MVoxelEngine1.Infrastructure.Models;
 
 namespace MVoxelEngine1.Infrastructure.Flags
@@ -37,10 +38,10 @@ namespace MVoxelEngine1.Infrastructure.Flags
             new FlagDescriptor("faceGenerationMode", (f,v) => { if (Enum.TryParse<FaceGenerationMode>(v, true, out var x) && Enum.IsDefined(x)) f.faceGenerationMode = x; }),
             new FlagDescriptor("windowWidth", (f,v) => { if (int.TryParse(v, out var x)) f.windowWidth = x; }),
             new FlagDescriptor("windowHeight", (f,v) => { if (int.TryParse(v, out var x)) f.windowHeight = x; }),
-            new FlagDescriptor("worldGenWorkersPerCore", (f,v) => { if (float.TryParse(v, out var x)) f.worldGenWorkersPerCore = x; }),
-            new FlagDescriptor("WorldGenWorkersPerCoreInitial", (f,v) => { if (float.TryParse(v, out var x)) f.worldGenWorkersPerCoreInitial = x; }),
-            new FlagDescriptor("meshRenderWorkersPerCore", (f,v) => { if (float.TryParse(v, out var x)) f.meshRenderWorkersPerCore = x; }),
-            new FlagDescriptor("MeshRenderWorkersPerCoreInitial", (f,v) => { if (float.TryParse(v, out var x)) f.meshRenderWorkersPerCoreInitial = x; }),
+            new FlagDescriptor("worldGenWorkersPerCore", (f,v) => f.worldGenWorkersPerCore = ParseWorkerMultiplier(v)),
+            new FlagDescriptor("WorldGenWorkersPerCoreInitial", (f,v) => f.worldGenWorkersPerCoreInitial = ParseWorkerMultiplier(v)),
+            new FlagDescriptor("meshRenderWorkersPerCore", (f,v) => f.meshRenderWorkersPerCore = ParseWorkerMultiplier(v)),
+            new FlagDescriptor("MeshRenderWorkersPerCoreInitial", (f,v) => f.meshRenderWorkersPerCoreInitial = ParseWorkerMultiplier(v)),
             new FlagDescriptor("renderStreamingIfAllowed", (f,v) => { if (bool.TryParse(v, out var x)) f.renderStreamingIfAllowed = x; }),
             new FlagDescriptor("GCConcurrent", (f,v) => { if (Enum.TryParse<GCConcurrent>(v, true, out var x)) f.GCConcurrent = x; }),
             new FlagDescriptor("GCLatencyMode", (f,v) => { if (Enum.TryParse<GCLatencyMode>(v, true, out var x)) f.GCLatencyMode = x; }),
@@ -56,6 +57,20 @@ namespace MVoxelEngine1.Infrastructure.Flags
         };
 
         private static readonly Dictionary<string, FlagDescriptor> _byName = CreateLookup();
+
+        private static float? ParseWorkerMultiplier(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return null;
+            // Existing environment files use a decimal comma. Treat it as a
+            // decimal separator in every culture, never as a thousands separator.
+            string normalized = value.Contains(',') ? value.Replace(',', '.') : value;
+            if (!float.TryParse(normalized, NumberStyles.Float, CultureInfo.InvariantCulture, out float result))
+                throw new FormatException("The worker multiplier must be a decimal number.");
+            if (!float.IsFinite(result) || result < 0)
+                throw new ArgumentOutOfRangeException(nameof(value), "The worker multiplier must be finite and nonnegative.");
+            return result;
+        }
 
         private static Dictionary<string, FlagDescriptor> CreateLookup()
         {

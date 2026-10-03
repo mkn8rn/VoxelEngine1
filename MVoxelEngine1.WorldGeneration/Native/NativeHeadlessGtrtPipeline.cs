@@ -187,7 +187,6 @@ public sealed class NativeGtrtPipeline : IDisposable
                 "The native headless GTRT path requires optimized faces.");
         }
 
-        float processorCount = Environment.ProcessorCount;
         float generationWorkersPerCore =
             FlagManager.flags.worldGenWorkersPerCoreInitial ??
             FlagManager.flags.worldGenWorkersPerCore ??
@@ -198,12 +197,12 @@ public sealed class NativeGtrtPipeline : IDisposable
             FlagManager.flags.meshRenderWorkersPerCore ??
             throw new InvalidOperationException(
                 "The mesh worker count is not set.");
-        int generationWorkerCount = Math.Max(
-            1,
-            (int)(generationWorkersPerCore * processorCount));
-        int meshWorkerCount = Math.Max(
-            1,
-            (int)(meshWorkersPerCore * processorCount));
+        int generationWorkerCount = GetWorkerCount(generationWorkersPerCore);
+        int meshWorkerCount = GetWorkerCount(meshWorkersPerCore);
+        int runtimeGenerationWorkerCount = GetWorkerCount(
+            FlagManager.flags.worldGenWorkersPerCore ?? generationWorkersPerCore);
+        int runtimeMeshWorkerCount = GetWorkerCount(
+            FlagManager.flags.meshRenderWorkersPerCore ?? meshWorkersPerCore);
         bool streamGeneration =
             GameManager.settings.renderStreamingAllowed &&
             (FlagManager.flags.renderStreamingIfAllowed ?? false);
@@ -214,7 +213,19 @@ public sealed class NativeGtrtPipeline : IDisposable
             generationWorkerCount,
             meshWorkerCount,
             streamGeneration,
-            savePlan);
+            savePlan,
+            runtimeGenerationWorkerCount: runtimeGenerationWorkerCount,
+            runtimeMeshWorkerCount: runtimeMeshWorkerCount);
+    }
+
+    internal static int GetWorkerCount(float workersPerCore)
+    {
+        if (!float.IsFinite(workersPerCore) || workersPerCore < 0)
+            throw new ArgumentOutOfRangeException(nameof(workersPerCore), "The worker multiplier must be finite and nonnegative.");
+        double count = (double)workersPerCore * Environment.ProcessorCount;
+        if (count > int.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(workersPerCore), "The worker count exceeds the supported range.");
+        return Math.Max(1, checked((int)count));
     }
 
     internal static NativeGtrtPipeline Create(
@@ -224,7 +235,9 @@ public sealed class NativeGtrtPipeline : IDisposable
         int meshWorkerCount,
         bool streamGeneration = false,
         NativeWorldSaveImportPlan? savePlan = null,
-        Action<string, string>? savePublisher = null)
+        Action<string, string>? savePublisher = null,
+        int? runtimeGenerationWorkerCount = null,
+        int? runtimeMeshWorkerCount = null)
     {
         ArgumentNullException.ThrowIfNull(textureAtlas);
         ArgumentNullException.ThrowIfNull(settings);
@@ -232,6 +245,10 @@ public sealed class NativeGtrtPipeline : IDisposable
             generationWorkerCount);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
             meshWorkerCount);
+        int runtimeGeneration = runtimeGenerationWorkerCount ?? generationWorkerCount;
+        int runtimeMesh = runtimeMeshWorkerCount ?? meshWorkerCount;
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(runtimeGeneration);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(runtimeMesh);
 
         int diameter = checked(settings.lod1RenderDistance * 2 + 1);
         int requiredPacketCount = checked(
@@ -264,8 +281,8 @@ public sealed class NativeGtrtPipeline : IDisposable
             session = NativeGtrtSession.Create(
                 settings,
                 game,
-                generationWorkerCount,
-                meshWorkerCount,
+                Math.Max(generationWorkerCount, runtimeGeneration),
+                Math.Max(meshWorkerCount, runtimeMesh),
                 materializedChunkCapacity,
                 materializedSectionCapacity,
                 materializedRawSectionCapacity,
@@ -276,7 +293,9 @@ public sealed class NativeGtrtPipeline : IDisposable
                 session,
                 generationWorkerCount,
                 meshWorkerCount,
-                streamGeneration);
+                streamGeneration,
+                runtimeGeneration,
+                runtimeMesh);
             return new NativeGtrtPipeline(
                 game,
                 session,
@@ -473,6 +492,10 @@ public sealed class NativeGtrtPipeline : IDisposable
         workers.InitialGenerationMilliseconds;
 
     public long InitialMeshMilliseconds => workers.InitialMeshMilliseconds;
+
+    internal int ActiveGenerationWorkerCount => workers.ActiveGenerationWorkerCount;
+
+    internal int ActiveMeshWorkerCount => workers.ActiveMeshWorkerCount;
 
     public int RequiredPacketCount => requiredPacketCount;
     internal int CompletedRunCount => Volatile.Read(ref completedRunCount);

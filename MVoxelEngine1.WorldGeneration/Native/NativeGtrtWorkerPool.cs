@@ -38,6 +38,10 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
     private readonly bool streamGeneration;
     private readonly int generationWorkerCount;
     private readonly int meshWorkerCount;
+    private readonly int runtimeGenerationWorkerCount;
+    private readonly int runtimeMeshWorkerCount;
+    private int activeGenerationWorkerCount;
+    private int activeMeshWorkerCount;
     private int readyWorkerCount;
     private int remainingArmWorkerCount;
     private int remainingGenerationWorkerCount;
@@ -57,25 +61,35 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
         NativeGtrtSession session,
         int generationWorkerCount,
         int meshWorkerCount,
-        bool streamGeneration = false)
+        bool streamGeneration = false,
+        int? runtimeGenerationWorkerCount = null,
+        int? runtimeMeshWorkerCount = null)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
             generationWorkerCount);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
             meshWorkerCount);
+        int runtimeGeneration = runtimeGenerationWorkerCount ?? generationWorkerCount;
+        int runtimeMesh = runtimeMeshWorkerCount ?? meshWorkerCount;
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(runtimeGeneration);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(runtimeMesh);
+        int maximumGeneration = Math.Max(generationWorkerCount, runtimeGeneration);
+        int maximumMesh = Math.Max(meshWorkerCount, runtimeMesh);
 
         _ = StartupPerformanceRecorder.IsRunning;
         this.session = session;
         this.streamGeneration = streamGeneration;
         validateCompletionAction = ValidateCompletion;
         workers = new NativeGtrtWorker[
-            checked(generationWorkerCount + meshWorkerCount)];
+            checked(maximumGeneration + maximumMesh)];
         this.generationWorkerCount = generationWorkerCount;
         this.meshWorkerCount = meshWorkerCount;
+        this.runtimeGenerationWorkerCount = runtimeGeneration;
+        this.runtimeMeshWorkerCount = runtimeMesh;
 
         int workerOffset = 0;
-        for (int index = 0; index < generationWorkerCount; index++)
+        for (int index = 0; index < maximumGeneration; index++)
         {
             workers[workerOffset++] = new NativeGtrtWorker(
                 this,
@@ -84,7 +98,7 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
                 NativeGtrtWorkerKind.Generation);
         }
 
-        for (int index = 0; index < meshWorkerCount; index++)
+        for (int index = 0; index < maximumMesh; index++)
         {
             workers[workerOffset++] = new NativeGtrtWorker(
                 this,
@@ -128,6 +142,10 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
         Volatile.Read(ref initialMeshMilliseconds);
 
     internal int WorkerCount => workers.Length;
+
+    internal int ActiveGenerationWorkerCount => activeGenerationWorkerCount;
+
+    internal int ActiveMeshWorkerCount => activeMeshWorkerCount;
 
     internal void CopyAllocationSamples(Span<NativeWorkerAllocationSample> destination)
     {
@@ -177,15 +195,19 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
         generationCompletionGate.Reset();
         completionGate.Reset();
         Volatile.Write(ref startupPerformanceEnabled, 0);
-        remainingWorkerCount = workers.Length;
-        remainingArmWorkerCount = workers.Length;
-        remainingGenerationWorkerCount = generationWorkerCount;
-        remainingMeshWorkerCount = meshWorkerCount;
+        activeGenerationWorkerCount = priorState == 0 ? generationWorkerCount : runtimeGenerationWorkerCount;
+        activeMeshWorkerCount = priorState == 0 ? meshWorkerCount : runtimeMeshWorkerCount;
+        remainingWorkerCount = checked(activeGenerationWorkerCount + activeMeshWorkerCount);
+        remainingArmWorkerCount = remainingWorkerCount;
+        remainingGenerationWorkerCount = activeGenerationWorkerCount;
+        remainingMeshWorkerCount = activeMeshWorkerCount;
         runEpoch = checked(runEpoch + 1);
 
         try
         {
-            SignalWorkers();
+            foreach (NativeGtrtWorker worker in workers)
+                if (worker.ActiveForRun)
+                    worker.Signal();
             if (!armedGate.WaitOne(WorkerStartTimeout))
                 throw new TimeoutException("The native GTRT workers did not arm before seed publication.");
             session.PrepareRun(
@@ -221,6 +243,8 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
 
         foreach (NativeGtrtWorker worker in workers)
         {
+            if (!worker.ActiveForRun)
+                continue;
             while (worker.MeasuredRunEpoch != runEpoch)
                 Thread.Yield();
             if (worker.Fault is not null)
@@ -416,6 +440,10 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
         internal NativeWorkerAllocationSample AllocationSample { get; private set; }
 
         internal int MeasuredRunEpoch => Volatile.Read(ref measuredRunEpoch);
+
+        internal bool ActiveForRun => kind == NativeGtrtWorkerKind.Generation
+            ? workerIndex < owner.activeGenerationWorkerCount
+            : workerIndex < owner.activeMeshWorkerCount;
 
         internal void Start()
         {

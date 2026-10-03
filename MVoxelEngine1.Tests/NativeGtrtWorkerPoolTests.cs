@@ -9,6 +9,44 @@ namespace MVoxelEngine1.Tests;
 
 public sealed class NativeGtrtWorkerPoolTests
 {
+    [Theory]
+    [InlineData(1, 5, 5, 1, false)]
+    [InlineData(1, 5, 5, 1, true)]
+    [InlineData(5, 1, 1, 5, false)]
+    [InlineData(5, 1, 1, 5, true)]
+    public void RuntimeWorkerCountsUseThePreparedPoolAndRetainCorrectMovement(
+        int initialGeneration, int initialMesh, int runtimeGeneration, int runtimeMesh, bool stream)
+    {
+        LoadDefaultGame();
+        var atlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
+        using NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(atlas, CreateSmallSettings(),
+            initialGeneration, initialMesh, stream, runtimeGenerationWorkerCount: runtimeGeneration,
+            runtimeMeshWorkerCount: runtimeMesh);
+        using var allocationScope = new NoGcAllocationScope();
+        _ = pipeline.Run(123456);
+        _ = ConsumeBounds(pipeline);
+        pipeline.InspectState(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            Assert.Equal(Math.Max(initialGeneration, runtimeGeneration), view.GenerationWorkerCount);
+            Assert.Equal(Math.Max(initialMesh, runtimeMesh), view.MeshWorkerCount);
+        });
+        Assert.Equal(initialGeneration, pipeline.ActiveGenerationWorkerCount);
+        Assert.Equal(initialMesh, pipeline.ActiveMeshWorkerCount);
+        for (int move = 0; move < 16; move++)
+        {
+            int centerX = move % 2 + 1;
+            _ = pipeline.MoveToChunk(centerX, 0, 0);
+            PacketBounds bounds = ConsumeBounds(pipeline);
+            Assert.Equal((centerX - 1) * 4, bounds.MinimumX);
+            Assert.Equal((centerX + 1) * 4, bounds.MaximumX);
+            Assert.Equal(runtimeGeneration, pipeline.ActiveGenerationWorkerCount);
+            Assert.Equal(runtimeMesh, pipeline.ActiveMeshWorkerCount);
+        }
+        Assert.Equal(0, pipeline.MaximumWorkerManagedAllocationBytes);
+        Assert.Equal(0, pipeline.CoordinatorManagedAllocationBytes);
+    }
+
     [Fact]
     public void StagedWorkersDisposeExactlyOnceBeforeSeedPublication()
     {
