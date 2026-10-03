@@ -430,6 +430,7 @@ internal static class NativeMaterializedTerrain
         if (!newChunk)
             materialized.Revision = checked(materialized.Revision + 1);
         Attach(
+            ref session,
             ref activeChunk,
             materializedChunkIndex,
             in materialized);
@@ -495,6 +496,7 @@ internal static class NativeMaterializedTerrain
         ref NativeMaterializedChunkRecord materialized =
             ref session.MaterializedChunks[materializedChunkIndex];
         Attach(
+            ref session,
             ref activeChunk,
             materializedChunkIndex,
             in materialized);
@@ -608,6 +610,7 @@ internal static class NativeMaterializedTerrain
             ref session.MaterializedChunks[materializedChunkIndex];
         completed.StorageKind = NativeChunkStorageKind.MaterializedSections;
         Attach(
+            ref session,
             ref activeChunk,
             materializedChunkIndex,
             in completed);
@@ -748,6 +751,7 @@ internal static class NativeMaterializedTerrain
         if (!newChunk)
             materialized.Revision = checked(materialized.Revision + 1);
         Attach(
+            ref session,
             ref activeChunk,
             materializedChunkIndex,
             in materialized);
@@ -800,6 +804,8 @@ internal static class NativeMaterializedTerrain
                 UniformBlockId = uniformBlockId
             };
 
+        session.IndexMaterializedChunk(materializedChunkIndex);
+
         int chunkIndex = session.GetChunkIndex(chunkX, chunkY, chunkZ);
         if (chunkIndex >= 0)
         {
@@ -808,6 +814,7 @@ internal static class NativeMaterializedTerrain
             NativeMaterializedChunkRecord materialized =
                 session.MaterializedChunks[materializedChunkIndex];
             Attach(
+                ref session,
                 ref activeChunk,
                 materializedChunkIndex,
                 in materialized);
@@ -1130,6 +1137,7 @@ internal static class NativeMaterializedTerrain
         if (activeChunkIndex >= 0)
         {
             Attach(
+                ref session,
                 ref session.Chunks[activeChunkIndex],
                 materializedChunkIndex,
                 in chunk);
@@ -1377,10 +1385,12 @@ internal static class NativeMaterializedTerrain
     }
 
     private static void Attach(
+        scoped ref NativeGtrtSessionView session,
         ref NativeChunkRecord chunk,
         int materializedChunkIndex,
         scoped in NativeMaterializedChunkRecord materialized)
     {
+        session.IndexMaterializedChunk(materializedChunkIndex);
         chunk.MaterializedChunkIndex = materializedChunkIndex;
         chunk.StorageKind = materialized.StorageKind;
         chunk.DirtyRevision = materialized.Revision;

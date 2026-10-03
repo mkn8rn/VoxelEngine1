@@ -380,6 +380,8 @@ internal readonly struct NativeGtrtSessionLayout
         SectionsPerChunk = checked(
             SectionCountX * SectionCountY * SectionCountZ);
         MaterializedChunkCapacity = materializedChunkCapacity;
+        MaterializedIndexCapacity = materializedChunkCapacity == 0 ? 0 :
+            checked((int)System.Numerics.BitOperations.RoundUpToPowerOf2(checked((uint)materializedChunkCapacity * 2)));
         MaterializedSectionCapacity = materializedSectionCapacity;
         MaterializedRawSectionCapacity = resolvedRawSectionCapacity;
         MaterializedPaletteCapacity = materializedPaletteCapacity;
@@ -503,6 +505,8 @@ internal readonly struct NativeGtrtSessionLayout
             cursor,
             GameSnapshotByteCount,
             8);
+        MaterializedIndexOffset = cursor;
+        cursor = AddRange<int>(cursor, MaterializedIndexCapacity, 8);
         Streaming = new NativeStreamingLayout(cursor, ColumnCount, ChunkCount, ProfileCount, RequiredChunkCount);
         TotalByteCount = Streaming.EndOffset;
     }
@@ -637,6 +641,9 @@ internal readonly struct NativeGtrtSessionLayout
 
     internal int GameSnapshotOffset { get; }
 
+    internal int MaterializedIndexOffset { get; }
+    internal int MaterializedIndexCapacity { get; }
+
     internal NativeStreamingLayout Streaming { get; }
 
     internal int TotalByteCount { get; }
@@ -713,7 +720,7 @@ internal readonly struct NativeGtrtSessionLayout
 internal readonly struct NativeGtrtSessionHeader
 {
     internal const uint ExpectedMagic = 0x54525447;
-    internal const int ExpectedVersion = 16;
+    internal const int ExpectedVersion = 17;
 
     internal NativeGtrtSessionHeader(NativeGtrtSessionLayout layout)
     {
@@ -792,8 +799,12 @@ internal readonly struct NativeGtrtSessionHeader
         GameSnapshotOffset = layout.GameSnapshotOffset;
         GameSnapshotByteCount = layout.GameSnapshotByteCount;
         Streaming = layout.Streaming;
+        MaterializedIndexOffset = layout.MaterializedIndexOffset;
+        MaterializedIndexCapacity = layout.MaterializedIndexCapacity;
     }
 
+    internal int MaterializedIndexOffset { get; }
+    internal int MaterializedIndexCapacity { get; }
     internal NativeStreamingLayout Streaming { get; }
     internal uint Magic { get; }
     internal int Version { get; }
@@ -1039,6 +1050,7 @@ internal ref partial struct NativeGtrtSessionView
         }
 
         this.bytes = bytes;
+        ValidateRange<int>(header.MaterializedIndexOffset, header.MaterializedIndexCapacity);
         ValidateRange<NativeGtrtSessionState>(header.StateOffset, 1);
         ValidateRange<byte>(
             header.NoiseStateOffset,
@@ -2003,34 +2015,6 @@ internal ref partial struct NativeGtrtSessionView
         state.PacketRecycleState = 0;
         state.ClaimedGenerationCount = 0;
         state.PacketConsumerCount = 0;
-    }
-
-    internal int FindMaterializedChunkIndex(
-        int chunkX,
-        int chunkY,
-        int chunkZ)
-    {
-        int count = State.MaterializedChunkCount;
-        Span<NativeMaterializedChunkRecord> chunks = MaterializedChunks;
-        if ((uint)count > (uint)chunks.Length)
-        {
-            Fail(NativeGtrtFailureCode.InvalidMaterializedTerrain);
-            return -1;
-        }
-
-        for (int index = 0; index < count; index++)
-        {
-            ref NativeMaterializedChunkRecord chunk = ref chunks[index];
-            if (chunk.State == 1 &&
-                chunk.ChunkX == chunkX &&
-                chunk.ChunkY == chunkY &&
-                chunk.ChunkZ == chunkZ)
-            {
-                return index;
-            }
-        }
-
-        return -1;
     }
 
     internal bool TryPrepareForDisposal()
