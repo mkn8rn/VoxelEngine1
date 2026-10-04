@@ -214,61 +214,10 @@ namespace MVoxelEngine1.Tests
         [Trait("Resource", "CPU")]
         public void CachedSmoothValueNoiseAvoidsProductionHashWork()
         {
+            TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
             NoiseBatchEvidence scalarWarmup = RunProductionNoiseBatch(
                 cached: false);
-            NoiseBatchEvidence cachedWarmup = RunProductionNoiseBatch(
-                cached: true);
-            Assert.Equal(scalarWarmup.Checksum, cachedWarmup.Checksum);
-
-            var samples = new NoisePairEvidence[PerformanceSampleCount];
-            for (int sampleIndex = 0; sampleIndex < samples.Length; sampleIndex++)
-            {
-                bool cachedFirst = (sampleIndex & 1) != 0;
-                NoiseBatchEvidence first = RunProductionNoiseBatch(cachedFirst);
-                NoiseBatchEvidence second = RunProductionNoiseBatch(!cachedFirst);
-                NoiseBatchEvidence scalar = cachedFirst ? second : first;
-                NoiseBatchEvidence cached = cachedFirst ? first : second;
-                Assert.Equal(scalar.Checksum, cached.Checksum);
-                samples[sampleIndex] = new NoisePairEvidence(
-                    sampleIndex,
-                    cachedFirst,
-                    scalar,
-                    cached,
-                    scalar.ElapsedMilliseconds / cached.ElapsedMilliseconds);
-            }
-
-            double scalarMean = samples.Average(
-                sample => sample.Scalar.ElapsedMilliseconds);
-            double cachedMean = samples.Average(
-                sample => sample.Cached.ElapsedMilliseconds);
-            var report = new NoiseReuseReport(
-                123456,
-                ProductionMapCount,
-                ProductionMapSize,
-                PerformanceWorkerCount,
-                PerformanceSampleCount,
-                samples,
-                scalarMean,
-                cachedMean,
-                scalarMean / cachedMean,
-                cachedMean < scalarMean,
-                DateTimeOffset.UtcNow);
-            string resultsDirectory = Path.Combine(
-                TestPaths.ResultsRoot,
-                "diagnostics");
-            Directory.CreateDirectory(resultsDirectory);
-            string resultPath = Path.Combine(
-                resultsDirectory,
-                $"terrain-value-noise-reuse-{DateTime.UtcNow:yyyyMMddTHHmmssfffZ}.json");
-            File.WriteAllText(
-                resultPath,
-                JsonSerializer.Serialize(
-                    report,
-                    EvidenceJsonOptions0));
-            Console.WriteLine($"Terrain value-noise result: {resultPath}");
-            Console.WriteLine(
-                $"Scalar mean: {scalarMean:R} ms. " +
-                $"Cached mean: {cachedMean:R} ms.");
+            ValidateCachedSmoothValueNoiseAvoidsProductionHashWorkEvidence(scalarWarmup);
         }
 
         private static NoiseBatchEvidence RunProductionNoiseBatch(bool cached)
@@ -474,5 +423,63 @@ namespace MVoxelEngine1.Tests
             double ScalarToCachedMeanSpeedup,
             bool CachedAdvantage,
             DateTimeOffset RecordedUtc);
+
+        private static void ValidateCachedSmoothValueNoiseAvoidsProductionHashWorkEvidence(global::MVoxelEngine1.Tests.TerrainGenerationUtilsTests.NoiseBatchEvidence scalarWarmup)
+        {
+            NoiseBatchEvidence cachedWarmup = RunProductionNoiseBatch(
+                cached: true);
+            Assert.Equal(scalarWarmup.Checksum, cachedWarmup.Checksum);
+
+            var samples = new NoisePairEvidence[PerformanceSampleCount];
+            for (int sampleIndex = 0; sampleIndex < samples.Length; sampleIndex++)
+            {
+                bool cachedFirst = (sampleIndex & 1) != 0;
+                NoiseBatchEvidence first = RunProductionNoiseBatch(cachedFirst);
+                NoiseBatchEvidence second = RunProductionNoiseBatch(!cachedFirst);
+                NoiseBatchEvidence scalar = cachedFirst ? second : first;
+                NoiseBatchEvidence cached = cachedFirst ? first : second;
+                Assert.Equal(scalar.Checksum, cached.Checksum);
+                samples[sampleIndex] = new NoisePairEvidence(
+                    sampleIndex,
+                    cachedFirst,
+                    scalar,
+                    cached,
+                    scalar.ElapsedMilliseconds / cached.ElapsedMilliseconds);
+            }
+
+            double scalarMean = samples.Average(
+                sample => sample.Scalar.ElapsedMilliseconds);
+            double cachedMean = samples.Average(
+                sample => sample.Cached.ElapsedMilliseconds);
+            var report = new NoiseReuseReport(
+                123456,
+                ProductionMapCount,
+                ProductionMapSize,
+                PerformanceWorkerCount,
+                PerformanceSampleCount,
+                samples,
+                scalarMean,
+                cachedMean,
+                scalarMean / cachedMean,
+                cachedMean < scalarMean,
+                DateTimeOffset.UtcNow);
+            string resultsDirectory = Path.Combine(
+                TestPaths.ResultsRoot,
+                "diagnostics");
+            Directory.CreateDirectory(resultsDirectory);
+            string resultPath = Path.Combine(
+                resultsDirectory,
+                $"terrain-value-noise-reuse-{DateTime.UtcNow:yyyyMMddTHHmmssfffZ}.json");
+            File.WriteAllText(
+                resultPath,
+                JsonSerializer.Serialize(
+                    report,
+                    EvidenceJsonOptions0));
+            Console.WriteLine($"Terrain value-noise result: {resultPath}");
+            Console.WriteLine(
+                $"Scalar mean: {scalarMean:R} ms. " +
+                $"Cached mean: {cachedMean:R} ms.");
+
+        }
     }
 }

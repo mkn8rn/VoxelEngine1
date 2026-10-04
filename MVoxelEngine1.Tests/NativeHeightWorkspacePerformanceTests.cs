@@ -27,6 +27,7 @@ namespace MVoxelEngine1.Tests
         [Trait("Resource", "CPU")]
         public void PublishedNamWorkspaceCompetesWithReusableManagedHeightBuffers()
         {
+            TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
             HeightBatchEvidence managedWarmup = RunHeightBatch(
                 "reusable-managed-array",
                 RunManagedWorker);
@@ -66,47 +67,7 @@ namespace MVoxelEngine1.Tests
                     native,
                     managed.ElapsedMilliseconds / native.ElapsedMilliseconds);
             }
-
-            double managedMean = samples.Average(
-                sample => sample.Managed.ElapsedMilliseconds);
-            double nativeMean = samples.Average(
-                sample => sample.Native.ElapsedMilliseconds);
-            double managedAllocationMean = samples.Average(
-                sample => sample.Managed.ManagedAllocatedBytes);
-            double nativeAllocationMean = samples.Average(
-                sample => sample.Native.ManagedAllocatedBytes);
-            var report = new HeightWorkspaceReport(
-                Seed,
-                MapCount,
-                MapSize,
-                WorkspaceLength,
-                WorkerCount,
-                SampleCount,
-                samples,
-                managedMean,
-                nativeMean,
-                managedMean / nativeMean,
-                managedAllocationMean,
-                nativeAllocationMean,
-                nativeMean < managedMean,
-                samples[0].Managed.OutputSha256,
-                DateTimeOffset.UtcNow);
-            string resultsDirectory = Path.Combine(
-                TestPaths.ResultsRoot,
-                "diagnostics");
-            Directory.CreateDirectory(resultsDirectory);
-            string resultPath = Path.Combine(
-                resultsDirectory,
-                $"native-height-workspace-{DateTime.UtcNow:yyyyMMddTHHmmssfffZ}.json");
-            File.WriteAllText(
-                resultPath,
-                JsonSerializer.Serialize(
-                    report,
-                    EvidenceJsonOptions0));
-            Console.WriteLine($"Native height workspace result: {resultPath}");
-            Console.WriteLine(
-                $"Managed mean: {managedMean:R} ms. " +
-                $"NAM mean: {nativeMean:R} ms.");
+            ValidatePublishedNamWorkspaceCompetesWithReusableManagedHeightBuffersEvidence(samples);
         }
 
         private static HeightBatchEvidence RunHeightBatch(
@@ -277,5 +238,51 @@ namespace MVoxelEngine1.Tests
             bool NativeAdvantage,
             string OutputSha256,
             DateTimeOffset RecordedUtc);
+
+        private static void ValidatePublishedNamWorkspaceCompetesWithReusableManagedHeightBuffersEvidence(global::MVoxelEngine1.Tests.NativeHeightWorkspacePerformanceTests.HeightPairEvidence[] samples)
+        {
+
+            double managedMean = samples.Average(
+                sample => sample.Managed.ElapsedMilliseconds);
+            double nativeMean = samples.Average(
+                sample => sample.Native.ElapsedMilliseconds);
+            double managedAllocationMean = samples.Average(
+                sample => sample.Managed.ManagedAllocatedBytes);
+            double nativeAllocationMean = samples.Average(
+                sample => sample.Native.ManagedAllocatedBytes);
+            var report = new HeightWorkspaceReport(
+                Seed,
+                MapCount,
+                MapSize,
+                WorkspaceLength,
+                WorkerCount,
+                SampleCount,
+                samples,
+                managedMean,
+                nativeMean,
+                managedMean / nativeMean,
+                managedAllocationMean,
+                nativeAllocationMean,
+                nativeMean < managedMean,
+                samples[0].Managed.OutputSha256,
+                DateTimeOffset.UtcNow);
+            string resultsDirectory = Path.Combine(
+                TestPaths.ResultsRoot,
+                "diagnostics");
+            Directory.CreateDirectory(resultsDirectory);
+            string resultPath = Path.Combine(
+                resultsDirectory,
+                $"native-height-workspace-{DateTime.UtcNow:yyyyMMddTHHmmssfffZ}.json");
+            File.WriteAllText(
+                resultPath,
+                JsonSerializer.Serialize(
+                    report,
+                    EvidenceJsonOptions0));
+            Console.WriteLine($"Native height workspace result: {resultPath}");
+            Console.WriteLine(
+                $"Managed mean: {managedMean:R} ms. " +
+                $"NAM mean: {nativeMean:R} ms.");
+
+        }
     }
 }

@@ -89,18 +89,7 @@ public sealed class NativeColumnProfileGeneratorTests
             nativeHash = Convert.ToHexString(native.GetHashAndReset());
             referenceHash = Convert.ToHexString(reference.GetHashAndReset());
         });
-        Assert.Equal(729, columnCount);
-        Assert.Equal(18_662_400, profileCount);
-        Assert.Equal(referenceHash, nativeHash);
-        Assert.Equal("6CE51114DDC88E9ED52501806A5A6F7BE3174C4B197ACF9CE352D71713A86286", nativeHash);
-        string output = Path.Combine(TestPaths.ResultsRoot, "default-full-profiles.json");
-        Directory.CreateDirectory(TestPaths.ResultsRoot);
-        File.WriteAllText(output, JsonSerializer.Serialize(new
-        {
-            game = "Default", seed, chunkSize = 160, lod1Radius = 12,
-            columnCount, profileCount, nativeHash, referenceHash, allProfileBytesEqual = true
-        }, EvidenceJsonOptions0));
-        Console.WriteLine($"Full-production profile authority evidence: {output}");
+        ValidateEveryProductionAndHaloProfileMatchesTheManagedHeightAuthorityEvidence(seed, profileCount, columnCount, nativeHash, referenceHash);
     }
 
     [Theory]
@@ -125,59 +114,7 @@ public sealed class NativeColumnProfileGeneratorTests
             biome,
             noise,
             out ColumnUniformRanges expectedSummary);
-        var layout = new NativeGtrtSessionLayout(
-            size,
-            chunkSizeY: 16,
-            size,
-            lod1Radius: 0,
-            materials: NativeTerrainMaterialSet.CreateConventional(),
-            generationWorkerCount: 2);
-        using NativeGtrtSession session = NativeGtrtSession.Create(layout);
-        session.PublishSeed(seed);
-
-        session.Access(owner =>
-        {
-            var view = new NativeGtrtSessionView(owner.AsSpan());
-            int targetIndex = view.GetColumnIndex(chunkX, chunkZ);
-            NativeWorkItem target = default;
-            bool found = false;
-            while (view.TryClaimGeneration(out NativeWorkItem claimed))
-            {
-                if (claimed.RecordIndex != targetIndex)
-                {
-                    Assert.True(view.TryAbandonGeneration(in claimed));
-                    continue;
-                }
-
-                target = claimed;
-                found = true;
-                break;
-            }
-
-            Assert.True(found);
-            Assert.True(NativeColumnProfileGenerator.TryGenerate(
-                ref view,
-                workerIndex: 1,
-                in target,
-                biomeIndex: 0,
-                in nativeBiome));
-            Assert.Equal(0, view.State.FailureCode);
-            Assert.Equal(0, view.GenerationWorkspaces[1].State);
-            Assert.Equal(0, view.Columns[targetIndex].BiomeIndex);
-            Assert.Equal(target.Epoch, view.Columns[targetIndex].GenerationEpoch);
-
-            Span<BlockColumnProfile> actual =
-                view.GetColumnProfiles(targetIndex);
-            Assert.Equal(expected.Length, actual.Length);
-            for (int index = 0; index < expected.Length; index++)
-                AssertProfileEqual(expected[index], actual[index]);
-
-            AssertSummaryEqual(
-                expectedSummary,
-                view.ColumnSummaries[targetIndex]);
-            Assert.True(view.TryAbandonGeneration(in target));
-            Assert.Equal(0, view.State.ClaimedGenerationCount);
-        });
+        ValidateNativeProfilesAndSummaryMatchManagedReferenceEvidence(chunkX, chunkZ, size, seed, nativeBiome, expected, expectedSummary);
     }
 
     [Fact]
@@ -520,5 +457,80 @@ public sealed class NativeColumnProfileGeneratorTests
             if (Result)
                 Result = session.TryAbandonGeneration(in work);
         }
+    }
+
+    private static void ValidateEveryProductionAndHaloProfileMatchesTheManagedHeightAuthorityEvidence(long seed, long profileCount, int columnCount, string? nativeHash, string? referenceHash)
+    {
+        Assert.Equal(729, columnCount);
+        Assert.Equal(18_662_400, profileCount);
+        Assert.Equal(referenceHash, nativeHash);
+        Assert.Equal("6CE51114DDC88E9ED52501806A5A6F7BE3174C4B197ACF9CE352D71713A86286", nativeHash);
+        string output = Path.Combine(TestPaths.ResultsRoot, "default-full-profiles.json");
+        Directory.CreateDirectory(TestPaths.ResultsRoot);
+        File.WriteAllText(output, JsonSerializer.Serialize(new
+        {
+            game = "Default", seed, chunkSize = 160, lod1Radius = 12,
+            columnCount, profileCount, nativeHash, referenceHash, allProfileBytesEqual = true
+        }, EvidenceJsonOptions0));
+        Console.WriteLine($"Full-production profile authority evidence: {output}");
+
+    }
+
+    private static void ValidateNativeProfilesAndSummaryMatchManagedReferenceEvidence(int chunkX, int chunkZ, int size, long seed, global::MVoxelEngine1.WorldGeneration.Native.NativeBiomeDescriptor nativeBiome, global::MVoxelEngine1.Infrastructure.Models.Generation.BlockColumnProfile[] expected, global::MVoxelEngine1.WorldGeneration.Terrain.ColumnUniformRanges expectedSummary)
+    {
+        var layout = new NativeGtrtSessionLayout(
+            size,
+            chunkSizeY: 16,
+            size,
+            lod1Radius: 0,
+            materials: NativeTerrainMaterialSet.CreateConventional(),
+            generationWorkerCount: 2);
+        using NativeGtrtSession session = NativeGtrtSession.Create(layout);
+        session.PublishSeed(seed);
+
+        session.Access(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            int targetIndex = view.GetColumnIndex(chunkX, chunkZ);
+            NativeWorkItem target = default;
+            bool found = false;
+            while (view.TryClaimGeneration(out NativeWorkItem claimed))
+            {
+                if (claimed.RecordIndex != targetIndex)
+                {
+                    Assert.True(view.TryAbandonGeneration(in claimed));
+                    continue;
+                }
+
+                target = claimed;
+                found = true;
+                break;
+            }
+
+            Assert.True(found);
+            Assert.True(NativeColumnProfileGenerator.TryGenerate(
+                ref view,
+                workerIndex: 1,
+                in target,
+                biomeIndex: 0,
+                in nativeBiome));
+            Assert.Equal(0, view.State.FailureCode);
+            Assert.Equal(0, view.GenerationWorkspaces[1].State);
+            Assert.Equal(0, view.Columns[targetIndex].BiomeIndex);
+            Assert.Equal(target.Epoch, view.Columns[targetIndex].GenerationEpoch);
+
+            Span<BlockColumnProfile> actual =
+                view.GetColumnProfiles(targetIndex);
+            Assert.Equal(expected.Length, actual.Length);
+            for (int index = 0; index < expected.Length; index++)
+                AssertProfileEqual(expected[index], actual[index]);
+
+            AssertSummaryEqual(
+                expectedSummary,
+                view.ColumnSummaries[targetIndex]);
+            Assert.True(view.TryAbandonGeneration(in target));
+            Assert.Equal(0, view.State.ClaimedGenerationCount);
+        });
+
     }
 }

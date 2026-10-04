@@ -359,53 +359,7 @@ public sealed class NativeWorldSaveImportTests
             Assert.Equal(3, view.State.MaterializedRawSectionCount);
             Assert.Equal(0, view.State.FailureCode);
         });
-
-        var exporter = new NativeWorldSaveExporter(session);
-        Assert.Equal(1, exporter.SaveDirtyChunks(workspace.QuadsDirectory));
-        Assert.Equal(0, exporter.SaveDirtyChunks(workspace.QuadsDirectory));
-
-        NativeWorldSaveImportPlan reloadedPlan =
-            NativeWorldSaveImportPlan.Create(
-                workspace.QuadsDirectory,
-                settings);
-        using NativeGameSnapshot reloadedGame = CreateGameSnapshot();
-        using NativeGtrtSession reloadedSession = CreateSession(
-            settings,
-            reloadedGame,
-            reloadedPlan);
-        reloadedPlan.Import(reloadedSession);
-        reloadedSession.PublishSeed(123456);
-        reloadedSession.Access(owner =>
-        {
-            var view = new NativeGtrtSessionView(owner.AsSpan());
-            int chunkIndex = view.GetChunkIndex(0, 0, 0);
-            AssertSavedBlock(ref view, chunkIndex, 1, 1, 17, SoilId);
-            AssertSavedBlock(
-                ref view,
-                chunkIndex,
-                3,
-                20,
-                5,
-                CustomTransparentBlockId);
-            AssertSavedBlock(
-                ref view,
-                chunkIndex,
-                2,
-                19,
-                20,
-                CustomTransparentBlockId);
-            AssertSavedBlock(
-                ref view,
-                chunkIndex,
-                22,
-                7,
-                8,
-                CustomTransparentBlockId);
-            AssertSavedBlock(ref view, chunkIndex, 17, 1, 17, 0);
-            AssertSavedBlock(ref view, chunkIndex, 23, 24, 9, WaterId);
-            AssertSavedBlock(ref view, chunkIndex, 20, 20, 20, WaterId);
-            Assert.Equal(0, view.State.FailureCode);
-        });
+        ValidateLegacyRepresentationsEnterCompactNativeStorageBeforeSeedEvidence(settings, workspace, session);
     }
 
     [Fact]
@@ -483,57 +437,7 @@ public sealed class NativeWorldSaveImportTests
             sectionCountX: 1,
             sectionCountY: 1,
             sectionCountZ: 1);
-        NativeWorldSaveImportPlan firstPlan =
-            NativeWorldSaveImportPlan.Create(
-                workspace.QuadsDirectory,
-                settings);
-        var firstAtlas = new BlockTextureAtlas(
-            BlockTextureAtlasUploadMode.SimulatedGpuUpload);
-        using (NativeWorld firstWorld = NativeWorld.CreateForTesting(
-                   NativeGtrtPipeline.Create(
-                       firstAtlas,
-                       settings,
-                       generationWorkerCount: 1,
-                       meshWorkerCount: 1,
-                       savePlan: firstPlan),
-                   seed: 123456,
-                   NullRenderer,
-                   workspace.QuadsDirectory))
-        {
-            Assert.Equal(SoilId, firstWorld.GetBlock(1, 1, 1));
-            Assert.True(firstWorld.SetBlock(
-                1,
-                1,
-                1,
-                CustomTransparentBlockId));
-            Assert.Equal(1, firstWorld.Save());
-            uint flags = ReadFirstChunkFlags(workspace.QuadsDirectory);
-            Assert.Equal(0u, flags & (1u << 3));
-            Assert.Equal(0, firstWorld.Save());
-        }
-
-        NativeWorldSaveImportPlan secondPlan =
-            NativeWorldSaveImportPlan.Create(
-                workspace.QuadsDirectory,
-                settings);
-        var secondAtlas = new BlockTextureAtlas(
-            BlockTextureAtlasUploadMode.SimulatedGpuUpload);
-        using NativeWorld secondWorld = NativeWorld.CreateForTesting(
-            NativeGtrtPipeline.Create(
-                secondAtlas,
-                settings,
-                generationWorkerCount: 1,
-                meshWorkerCount: 1,
-                savePlan: secondPlan),
-            seed: 123456,
-            NullRenderer,
-            workspace.QuadsDirectory);
-
-        Assert.Equal(
-            CustomTransparentBlockId,
-            secondWorld.GetBlock(1, 1, 1));
-        Assert.Equal(SoilId, secondWorld.GetBlock(2, 1, 1));
-        Assert.Equal(0, secondWorld.Save());
+        ValidateEditedUniformChunkSurvivesNativeSaveAndReloadEvidence(settings, workspace);
     }
 
     [Fact]
@@ -556,60 +460,7 @@ public sealed class NativeWorldSaveImportTests
             NativeWorldSaveImportPlan.Create(
                 workspace.QuadsDirectory,
                 settings);
-        var atlas = new BlockTextureAtlas(
-            BlockTextureAtlasUploadMode.SimulatedGpuUpload);
-        using NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(
-            atlas,
-            settings,
-            generationWorkerCount: 1,
-            meshWorkerCount: 1,
-            savePlan: plan);
-
-        NativePreUploadPacket packet = pipeline.Run(123456);
-
-        Assert.Equal(1, pipeline.RequiredPacketCount);
-        Assert.Equal(0, packet.ChunkX);
-        Assert.Equal(0, packet.ChunkY);
-        Assert.Equal(0, packet.ChunkZ);
-        Assert.Equal(0, packet.OpaqueFaceCount);
-        Assert.Equal(0, packet.OpaqueRectangleCount);
-        // Activated rules make generated neighbours transparent Limestone;
-        // every water boundary against that different ID is visible.
-        Assert.Equal(6 * 256, packet.TransparentFaceCount);
-        Assert.Equal(6, packet.TransparentRectangleCount);
-
-        int consumed = pipeline.ConsumeReadyPackets(
-            static (in NativeChunkRenderPacketDescriptor descriptor,
-                    ReadOnlySpan<uint> opaqueWords,
-                    ReadOnlySpan<uint> transparentWords) =>
-            {
-                Assert.Equal(0, descriptor.ChunkWorldX);
-                Assert.Equal(0, descriptor.ChunkWorldY);
-                Assert.Equal(0, descriptor.ChunkWorldZ);
-                Assert.Equal(0, descriptor.OpaqueFaceCount);
-                Assert.Equal(0, descriptor.OpaqueRectangleCount);
-                Assert.True(opaqueWords.IsEmpty);
-                Assert.Equal(6 * 256, descriptor.TransparentFaceCount);
-                Assert.Equal(6, descriptor.TransparentRectangleCount);
-                Assert.Equal(6 * 256, PackedFaceRectangle.CountLogicalFaces(
-                    transparentWords));
-
-                Span<int> directionCounts = stackalloc int[6];
-                var reader = new PackedFaceRectangleReader(
-                    transparentWords);
-                while (reader.MoveNext())
-                {
-                    Assert.InRange(reader.X, 0, 15);
-                    Assert.InRange(reader.Y, 0, 15);
-                    Assert.InRange(reader.Z, 0, 15);
-                    directionCounts[reader.Direction]++;
-                }
-                for (int direction = 0; direction < 6; direction++)
-                {
-                    Assert.Equal(256, directionCounts[direction]);
-                }
-            });
-        Assert.Equal(1, consumed);
+        ValidateUniformSavedChunkProducesTheExactNativePreUploadPacketEvidence(settings, plan);
     }
 
     [Fact]
@@ -1184,5 +1035,172 @@ public sealed class NativeWorldSaveImportTests
             if (Directory.Exists(Root))
                 Directory.Delete(Root, recursive: true);
         }
+    }
+
+    private static void ValidateLegacyRepresentationsEnterCompactNativeStorageBeforeSeedEvidence(global::MVoxelEngine1.Infrastructure.Models.GameSettings settings, global::MVoxelEngine1.Tests.NativeWorldSaveImportTests.SaveWorkspace workspace, global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSession session)
+    {
+
+        var exporter = new NativeWorldSaveExporter(session);
+        Assert.Equal(1, exporter.SaveDirtyChunks(workspace.QuadsDirectory));
+        Assert.Equal(0, exporter.SaveDirtyChunks(workspace.QuadsDirectory));
+
+        NativeWorldSaveImportPlan reloadedPlan =
+            NativeWorldSaveImportPlan.Create(
+                workspace.QuadsDirectory,
+                settings);
+        using NativeGameSnapshot reloadedGame = CreateGameSnapshot();
+        using NativeGtrtSession reloadedSession = CreateSession(
+            settings,
+            reloadedGame,
+            reloadedPlan);
+        reloadedPlan.Import(reloadedSession);
+        reloadedSession.PublishSeed(123456);
+        reloadedSession.Access(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            int chunkIndex = view.GetChunkIndex(0, 0, 0);
+            AssertSavedBlock(ref view, chunkIndex, 1, 1, 17, SoilId);
+            AssertSavedBlock(
+                ref view,
+                chunkIndex,
+                3,
+                20,
+                5,
+                CustomTransparentBlockId);
+            AssertSavedBlock(
+                ref view,
+                chunkIndex,
+                2,
+                19,
+                20,
+                CustomTransparentBlockId);
+            AssertSavedBlock(
+                ref view,
+                chunkIndex,
+                22,
+                7,
+                8,
+                CustomTransparentBlockId);
+            AssertSavedBlock(ref view, chunkIndex, 17, 1, 17, 0);
+            AssertSavedBlock(ref view, chunkIndex, 23, 24, 9, WaterId);
+            AssertSavedBlock(ref view, chunkIndex, 20, 20, 20, WaterId);
+            Assert.Equal(0, view.State.FailureCode);
+        });
+
+    }
+
+    private static void ValidateEditedUniformChunkSurvivesNativeSaveAndReloadEvidence(global::MVoxelEngine1.Infrastructure.Models.GameSettings settings, global::MVoxelEngine1.Tests.NativeWorldSaveImportTests.SaveWorkspace workspace)
+    {
+        NativeWorldSaveImportPlan firstPlan =
+            NativeWorldSaveImportPlan.Create(
+                workspace.QuadsDirectory,
+                settings);
+        var firstAtlas = new BlockTextureAtlas(
+            BlockTextureAtlasUploadMode.SimulatedGpuUpload);
+        using (NativeWorld firstWorld = NativeWorld.CreateForTesting(
+                   NativeGtrtPipeline.Create(
+                       firstAtlas,
+                       settings,
+                       generationWorkerCount: 1,
+                       meshWorkerCount: 1,
+                       savePlan: firstPlan),
+                   seed: 123456,
+                   NullRenderer,
+                   workspace.QuadsDirectory))
+        {
+            Assert.Equal(SoilId, firstWorld.GetBlock(1, 1, 1));
+            Assert.True(firstWorld.SetBlock(
+                1,
+                1,
+                1,
+                CustomTransparentBlockId));
+            Assert.Equal(1, firstWorld.Save());
+            uint flags = ReadFirstChunkFlags(workspace.QuadsDirectory);
+            Assert.Equal(0u, flags & (1u << 3));
+            Assert.Equal(0, firstWorld.Save());
+        }
+
+        NativeWorldSaveImportPlan secondPlan =
+            NativeWorldSaveImportPlan.Create(
+                workspace.QuadsDirectory,
+                settings);
+        var secondAtlas = new BlockTextureAtlas(
+            BlockTextureAtlasUploadMode.SimulatedGpuUpload);
+        using NativeWorld secondWorld = NativeWorld.CreateForTesting(
+            NativeGtrtPipeline.Create(
+                secondAtlas,
+                settings,
+                generationWorkerCount: 1,
+                meshWorkerCount: 1,
+                savePlan: secondPlan),
+            seed: 123456,
+            NullRenderer,
+            workspace.QuadsDirectory);
+
+        Assert.Equal(
+            CustomTransparentBlockId,
+            secondWorld.GetBlock(1, 1, 1));
+        Assert.Equal(SoilId, secondWorld.GetBlock(2, 1, 1));
+        Assert.Equal(0, secondWorld.Save());
+
+    }
+
+    private static void ValidateUniformSavedChunkProducesTheExactNativePreUploadPacketEvidence(global::MVoxelEngine1.Infrastructure.Models.GameSettings settings, global::MVoxelEngine1.WorldGeneration.Native.NativeWorldSaveImportPlan plan)
+    {
+        var atlas = new BlockTextureAtlas(
+            BlockTextureAtlasUploadMode.SimulatedGpuUpload);
+        using NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(
+            atlas,
+            settings,
+            generationWorkerCount: 1,
+            meshWorkerCount: 1,
+            savePlan: plan);
+
+        NativePreUploadPacket packet = pipeline.Run(123456);
+
+        Assert.Equal(1, pipeline.RequiredPacketCount);
+        Assert.Equal(0, packet.ChunkX);
+        Assert.Equal(0, packet.ChunkY);
+        Assert.Equal(0, packet.ChunkZ);
+        Assert.Equal(0, packet.OpaqueFaceCount);
+        Assert.Equal(0, packet.OpaqueRectangleCount);
+        // Activated rules make generated neighbours transparent Limestone;
+        // every water boundary against that different ID is visible.
+        Assert.Equal(6 * 256, packet.TransparentFaceCount);
+        Assert.Equal(6, packet.TransparentRectangleCount);
+
+        int consumed = pipeline.ConsumeReadyPackets(
+            static (in NativeChunkRenderPacketDescriptor descriptor,
+                    ReadOnlySpan<uint> opaqueWords,
+                    ReadOnlySpan<uint> transparentWords) =>
+            {
+                Assert.Equal(0, descriptor.ChunkWorldX);
+                Assert.Equal(0, descriptor.ChunkWorldY);
+                Assert.Equal(0, descriptor.ChunkWorldZ);
+                Assert.Equal(0, descriptor.OpaqueFaceCount);
+                Assert.Equal(0, descriptor.OpaqueRectangleCount);
+                Assert.True(opaqueWords.IsEmpty);
+                Assert.Equal(6 * 256, descriptor.TransparentFaceCount);
+                Assert.Equal(6, descriptor.TransparentRectangleCount);
+                Assert.Equal(6 * 256, PackedFaceRectangle.CountLogicalFaces(
+                    transparentWords));
+
+                Span<int> directionCounts = stackalloc int[6];
+                var reader = new PackedFaceRectangleReader(
+                    transparentWords);
+                while (reader.MoveNext())
+                {
+                    Assert.InRange(reader.X, 0, 15);
+                    Assert.InRange(reader.Y, 0, 15);
+                    Assert.InRange(reader.Z, 0, 15);
+                    directionCounts[reader.Direction]++;
+                }
+                for (int direction = 0; direction < 6; direction++)
+                {
+                    Assert.Equal(256, directionCounts[direction]);
+                }
+            });
+        Assert.Equal(1, consumed);
+
     }
 }

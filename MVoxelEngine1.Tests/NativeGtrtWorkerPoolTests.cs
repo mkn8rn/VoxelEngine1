@@ -265,57 +265,7 @@ public sealed class NativeGtrtWorkerPoolTests
             meshWorkerCount: 3,
             packetWordCapacity: 1_000_000,
             gameSnapshotByteCount: gameBytes.Length);
-        using NativeGtrtSession concurrent =
-            NativeGtrtSession.Create(concurrentLayout, game);
-        using (var workers = new NativeGtrtWorkerPool(
-                   concurrent,
-                   generationWorkerCount: 3,
-                   meshWorkerCount: 3,
-                   streamGeneration: streamGeneration))
-        {
-            using var allocationScope = new NoGcAllocationScope();
-            workers.Run(123456);
-            var samples = new NativeWorkerAllocationSample[workers.WorkerCount];
-            workers.CopyAllocationSamples(samples);
-            foreach (NativeWorkerAllocationSample sample in samples)
-            {
-                Assert.True(sample.TotalBytes == 0,
-                    $"Worker allocation: {sample}");
-            }
-            Assert.Equal(0, workers.MaximumManagedAllocationBytes);
-        }
-
-        var sequentialLayout = new NativeGtrtSessionLayout(
-            chunkSizeX: 4,
-            chunkSizeY: 8,
-            chunkSizeZ: 4,
-            lod1Radius: 1,
-            materials: gameView.GetGeneratedMaterials(),
-            generationWorkerCount: 1,
-            meshWorkerCount: 1,
-            packetWordCapacity: 1_000_000,
-            gameSnapshotByteCount: gameBytes.Length);
-        using NativeGtrtSession sequential =
-            NativeGtrtSession.Create(sequentialLayout, game);
-        RunSequential(sequential);
-
-        Dictionary<int, PacketCopy> expected = CopyPackets(sequential);
-        Dictionary<int, PacketCopy> actual = CopyPackets(concurrent);
-        Assert.NotEmpty(actual);
-        Assert.Equal(expected.Keys.Order(), actual.Keys.Order());
-        foreach ((int chunkIndex, PacketCopy expectedPacket) in expected)
-        {
-            PacketCopy actualPacket = actual[chunkIndex];
-            Assert.Equal(expectedPacket.RenderDataId, actualPacket.RenderDataId);
-            Assert.Equal(expectedPacket.OpaqueFaceCount, actualPacket.OpaqueFaceCount);
-            Assert.Equal(
-                expectedPacket.TransparentFaceCount,
-                actualPacket.TransparentFaceCount);
-            Assert.Equal(expectedPacket.OpaqueWords, actualPacket.OpaqueWords);
-            Assert.Equal(
-                expectedPacket.TransparentWords,
-                actualPacket.TransparentWords);
-        }
+        ValidatePersistentWorkersMatchSequentialNativePacketsEvidence(streamGeneration, game, gameBytes, gameView, concurrentLayout);
     }
 
     private static void RunSequential(NativeGtrtSession session)
@@ -490,5 +440,61 @@ public sealed class NativeGtrtWorkerPoolTests
             MinimumZ = Math.Min(MinimumZ, descriptor.ChunkWorldZ);
             MaximumZ = Math.Max(MaximumZ, descriptor.ChunkWorldZ);
         }
+    }
+
+    private static void ValidatePersistentWorkersMatchSequentialNativePacketsEvidence(bool streamGeneration, global::MVoxelEngine1.WorldGeneration.Native.NativeGameSnapshot game, byte[] gameBytes, scoped global::MVoxelEngine1.WorldGeneration.Native.NativeGameSnapshotView gameView, global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionLayout concurrentLayout)
+    {
+        using NativeGtrtSession concurrent =
+            NativeGtrtSession.Create(concurrentLayout, game);
+        using (var workers = new NativeGtrtWorkerPool(
+                   concurrent,
+                   generationWorkerCount: 3,
+                   meshWorkerCount: 3,
+                   streamGeneration: streamGeneration))
+        {
+            using var allocationScope = new NoGcAllocationScope();
+            workers.Run(123456);
+            var samples = new NativeWorkerAllocationSample[workers.WorkerCount];
+            workers.CopyAllocationSamples(samples);
+            foreach (NativeWorkerAllocationSample sample in samples)
+            {
+                Assert.True(sample.TotalBytes == 0,
+                    $"Worker allocation: {sample}");
+            }
+            Assert.Equal(0, workers.MaximumManagedAllocationBytes);
+        }
+
+        var sequentialLayout = new NativeGtrtSessionLayout(
+            chunkSizeX: 4,
+            chunkSizeY: 8,
+            chunkSizeZ: 4,
+            lod1Radius: 1,
+            materials: gameView.GetGeneratedMaterials(),
+            generationWorkerCount: 1,
+            meshWorkerCount: 1,
+            packetWordCapacity: 1_000_000,
+            gameSnapshotByteCount: gameBytes.Length);
+        using NativeGtrtSession sequential =
+            NativeGtrtSession.Create(sequentialLayout, game);
+        RunSequential(sequential);
+
+        Dictionary<int, PacketCopy> expected = CopyPackets(sequential);
+        Dictionary<int, PacketCopy> actual = CopyPackets(concurrent);
+        Assert.NotEmpty(actual);
+        Assert.Equal(expected.Keys.Order(), actual.Keys.Order());
+        foreach ((int chunkIndex, PacketCopy expectedPacket) in expected)
+        {
+            PacketCopy actualPacket = actual[chunkIndex];
+            Assert.Equal(expectedPacket.RenderDataId, actualPacket.RenderDataId);
+            Assert.Equal(expectedPacket.OpaqueFaceCount, actualPacket.OpaqueFaceCount);
+            Assert.Equal(
+                expectedPacket.TransparentFaceCount,
+                actualPacket.TransparentFaceCount);
+            Assert.Equal(expectedPacket.OpaqueWords, actualPacket.OpaqueWords);
+            Assert.Equal(
+                expectedPacket.TransparentWords,
+                actualPacket.TransparentWords);
+        }
+
     }
 }

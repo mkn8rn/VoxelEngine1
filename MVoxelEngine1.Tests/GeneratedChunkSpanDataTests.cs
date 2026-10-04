@@ -244,60 +244,7 @@ namespace MVoxelEngine1.Tests
 
             using NativeGameSnapshot snapshot =
                 NativeGameSnapshot.Create(atlas);
-            var layout = new NativeGtrtSessionLayout(
-                chunkSizeX: source.Width,
-                chunkSizeY: source.Height,
-                chunkSizeZ: source.Depth,
-                lod1Radius: 0,
-                materials: snapshot.GetGeneratedMaterials(),
-                generationWorkerCount: 1,
-                meshWorkerCount: 1,
-                packetWordCapacity: 1_000_000);
-            using NativeGtrtSession session = NativeGtrtSession.Create(layout);
-            session.PublishSeed(123456);
-
-            session.Access(owner =>
-            {
-                var view = new NativeGtrtSessionView(owner.AsSpan());
-                while (view.TryClaimGeneration(
-                    out NativeWorkItem generation))
-                {
-                    ref NativeColumnRecord column =
-                        ref view.Columns[generation.RecordIndex];
-                    if (column.ChunkX == 0 && column.ChunkZ == 0)
-                    {
-                        source.Columns.AsSpan().CopyTo(
-                            view.GetColumnProfiles(
-                                generation.RecordIndex));
-                    }
-
-                    column.GenerationEpoch = generation.Epoch;
-                    Assert.True(view.TryCompleteGeneration(in generation));
-                }
-
-                Assert.True(view.TryClaimMesh(out NativeWorkItem mesh));
-                bool built = NativeGeneratedMesh.TryBuild(
-                    ref view,
-                    in mesh,
-                    workerIndex: 0);
-                Assert.True(
-                    built,
-                    $"Native failure code: {view.State.FailureCode}.");
-                Assert.True(view.TryReadPacket(
-                    mesh.RecordIndex,
-                    out NativePacketReadView packet));
-                Assert.Equal(
-                    managed.UploadData.OpaqueFaceCount,
-                    packet.Record.OpaqueFaceCount);
-                Assert.Equal(
-                    managed.UploadData.TransparentFaceCount,
-                    packet.Record.TransparentFaceCount);
-                Assert.True(packet.OpaqueWords.SequenceEqual(
-                    expectedOpaque));
-                Assert.True(packet.TransparentWords.SequenceEqual(
-                    expectedTransparent));
-                Assert.Equal(0, view.State.FailureCode);
-            });
+            ValidateAssertNativeGeneratedPacketMatchesManagedRectangleWordsEvidence(source, managed, expectedOpaque, expectedTransparent, snapshot);
         }
 
         [Fact]
@@ -450,55 +397,7 @@ namespace MVoxelEngine1.Tests
                 stoneBlockId: (ushort)BaseBlockType.Stone,
                 soilBlockId: (ushort)BaseBlockType.Soil,
                 waterBlockId: (ushort)BaseBlockType.Water);
-            ReferenceChunkRender.terrainTextureAtlas = atlas;
-            using var pool = new PackedFaceNativePool();
-            using var large = new ReferenceChunkRender(
-                CreatePrerenderData(largeSource),
-                FaceGenerationMode.Optimized,
-                null,
-                null,
-                pool);
-
-            Assert.True(large.UploadData.OpaqueWordCount > 65_536);
-            large.Dispose();
-
-            var smallSource = new GeneratedChunkSpanData(
-                new[]
-                {
-                    new BlockColumnProfile
-                    {
-                        StoneStart = 0,
-                        StoneEnd = 0,
-                        SoilStart = -1,
-                        SoilEnd = -1,
-                        WaterStart = -1,
-                        WaterEnd = -1
-                    }
-                },
-                width: 1,
-                height: 1,
-                depth: 1,
-                chunkBaseY: 0,
-                stoneBlockId: (ushort)BaseBlockType.Stone,
-                soilBlockId: (ushort)BaseBlockType.Soil,
-                waterBlockId: (ushort)BaseBlockType.Water);
-            ChunkPrerenderData smallData = CreatePrerenderData(smallSource);
-            using var optimized = new ReferenceChunkRender(
-                smallData,
-                FaceGenerationMode.Optimized,
-                null,
-                null,
-                pool);
-            using var reference = new ReferenceChunkRender(
-                smallData,
-                FaceGenerationMode.Reference,
-                smallSource.GetBlockLocal,
-                new ReferenceNeighborBlockPlanes(),
-                pool);
-
-            Assert.Equal(
-                GetFaceRecords(reference.UploadData),
-                GetFaceRecords(optimized.UploadData));
+            ValidatePersistentNativePoolResetsGrownWorkspaceBetweenChunksEvidence(atlas, largeSource);
         }
 
         [Fact]
@@ -1033,6 +932,119 @@ namespace MVoxelEngine1.Tests
                 uint expected = (uint)(coordinate.y * atlas.tilesX + coordinate.x);
                 Assert.Equal(expected, reader.TileIndex);
             }
+        }
+
+        private static void ValidateAssertNativeGeneratedPacketMatchesManagedRectangleWordsEvidence(global::MVoxelEngine1.Infrastructure.Models.Generation.GeneratedChunkSpanData source, global::MVoxelEngine1.Graphics.Terrain.ReferenceChunkRender managed, uint[] expectedOpaque, uint[] expectedTransparent, global::MVoxelEngine1.WorldGeneration.Native.NativeGameSnapshot snapshot)
+        {
+            var layout = new NativeGtrtSessionLayout(
+                chunkSizeX: source.Width,
+                chunkSizeY: source.Height,
+                chunkSizeZ: source.Depth,
+                lod1Radius: 0,
+                materials: snapshot.GetGeneratedMaterials(),
+                generationWorkerCount: 1,
+                meshWorkerCount: 1,
+                packetWordCapacity: 1_000_000);
+            using NativeGtrtSession session = NativeGtrtSession.Create(layout);
+            session.PublishSeed(123456);
+
+            session.Access(owner =>
+            {
+                var view = new NativeGtrtSessionView(owner.AsSpan());
+                while (view.TryClaimGeneration(
+                    out NativeWorkItem generation))
+                {
+                    ref NativeColumnRecord column =
+                        ref view.Columns[generation.RecordIndex];
+                    if (column.ChunkX == 0 && column.ChunkZ == 0)
+                    {
+                        source.Columns.AsSpan().CopyTo(
+                            view.GetColumnProfiles(
+                                generation.RecordIndex));
+                    }
+
+                    column.GenerationEpoch = generation.Epoch;
+                    Assert.True(view.TryCompleteGeneration(in generation));
+                }
+
+                Assert.True(view.TryClaimMesh(out NativeWorkItem mesh));
+                bool built = NativeGeneratedMesh.TryBuild(
+                    ref view,
+                    in mesh,
+                    workerIndex: 0);
+                Assert.True(
+                    built,
+                    $"Native failure code: {view.State.FailureCode}.");
+                Assert.True(view.TryReadPacket(
+                    mesh.RecordIndex,
+                    out NativePacketReadView packet));
+                Assert.Equal(
+                    managed.UploadData.OpaqueFaceCount,
+                    packet.Record.OpaqueFaceCount);
+                Assert.Equal(
+                    managed.UploadData.TransparentFaceCount,
+                    packet.Record.TransparentFaceCount);
+                Assert.True(packet.OpaqueWords.SequenceEqual(
+                    expectedOpaque));
+                Assert.True(packet.TransparentWords.SequenceEqual(
+                    expectedTransparent));
+                Assert.Equal(0, view.State.FailureCode);
+            });
+
+        }
+
+        private static void ValidatePersistentNativePoolResetsGrownWorkspaceBetweenChunksEvidence(global::MVoxelEngine1.Graphics.Textures.BlockTextureAtlas atlas, global::MVoxelEngine1.Infrastructure.Models.Generation.GeneratedChunkSpanData largeSource)
+        {
+            ReferenceChunkRender.terrainTextureAtlas = atlas;
+            using var pool = new PackedFaceNativePool();
+            using var large = new ReferenceChunkRender(
+                CreatePrerenderData(largeSource),
+                FaceGenerationMode.Optimized,
+                null,
+                null,
+                pool);
+
+            Assert.True(large.UploadData.OpaqueWordCount > 65_536);
+            large.Dispose();
+
+            var smallSource = new GeneratedChunkSpanData(
+                new[]
+                {
+                    new BlockColumnProfile
+                    {
+                        StoneStart = 0,
+                        StoneEnd = 0,
+                        SoilStart = -1,
+                        SoilEnd = -1,
+                        WaterStart = -1,
+                        WaterEnd = -1
+                    }
+                },
+                width: 1,
+                height: 1,
+                depth: 1,
+                chunkBaseY: 0,
+                stoneBlockId: (ushort)BaseBlockType.Stone,
+                soilBlockId: (ushort)BaseBlockType.Soil,
+                waterBlockId: (ushort)BaseBlockType.Water);
+            ChunkPrerenderData smallData = CreatePrerenderData(smallSource);
+            using var optimized = new ReferenceChunkRender(
+                smallData,
+                FaceGenerationMode.Optimized,
+                null,
+                null,
+                pool);
+            using var reference = new ReferenceChunkRender(
+                smallData,
+                FaceGenerationMode.Reference,
+                smallSource.GetBlockLocal,
+                new ReferenceNeighborBlockPlanes(),
+                pool);
+
+            Assert.Equal(
+                GetFaceRecords(reference.UploadData),
+                GetFaceRecords(optimized.UploadData));
+
         }
     }
 }

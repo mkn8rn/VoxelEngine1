@@ -94,60 +94,7 @@ public sealed class NativeStreamingTests
     {
         using TestWorkspace workspace = Configure();
         var atlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
-        ChunkRender.terrainTextureAtlas = atlas;
-        using NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(atlas, GameManager.settings, 2, 3, stream);
-        using var allocationScope = new NoGcAllocationScope();
-        using NativeWorld world = NativeWorld.CreateForTesting(pipeline, 123456, HeadlessRenderer);
-        Assert.Equal(new NativeStreamingStatistics(25, 0, 27, 0), world.StreamingStatistics);
-        int surfaceY = 0;
-        world.InspectState(owner =>
-        {
-            var view = new NativeGtrtSessionView(owner.AsSpan());
-            surfaceY = view.GetColumnProfiles(view.GetColumnIndex(0, 0))[0].SoilEnd / 8;
-        });
-        (int x, int y, int z)[] centers =
-        [
-            (0, surfaceY, 0), (1, surfaceY, 0), (1, surfaceY + 1, 0),
-            (0, surfaceY, -1), (-1, surfaceY, -2), (-2, surfaceY, -3),
-            (-3, surfaceY, -4), (-4, surfaceY, -5), (-5, surfaceY, -6),
-            (-6, surfaceY, -7), (-12, surfaceY + 4, 14), (0, surfaceY, 0)
-        ];
-        foreach ((int x, int y, int z) center in centers)
-        {
-            (int oldX, int oldY, int oldZ) = world.PlayerChunkPosition;
-            var previousPackets = CapturePackets(world);
-            var previousColumns = CaptureColumns(world);
-            world.PlayerChunkPosition = center;
-            int retainedColumns = Overlap(5, oldX, center.x) * Overlap(5, oldZ, center.z);
-            int retainedPackets = Overlap(3, oldX, center.x) * Overlap(3, oldY, center.y) * Overlap(3, oldZ, center.z);
-            Assert.Equal(new NativeStreamingStatistics(25 - retainedColumns, retainedColumns,
-                27 - retainedPackets, retainedPackets), world.StreamingStatistics);
-            var packets = CapturePackets(world);
-            int observedRetained = 0;
-            foreach (var pair in packets)
-            {
-                if (previousPackets.TryGetValue(pair.Key, out var previous))
-                {
-                    Assert.Equal(previous, pair.Value);
-                    observedRetained++;
-                }
-            }
-            Assert.Equal(retainedPackets, observedRetained);
-            var columns = CaptureColumns(world);
-            int observedColumns = 0;
-            foreach (var pair in columns)
-            {
-                if (previousColumns.TryGetValue(pair.Key, out var previous))
-                {
-                    Assert.Equal(previous, pair.Value);
-                    observedColumns++;
-                }
-            }
-            Assert.Equal(retainedColumns, observedColumns);
-            AssertReference(world);
-        }
-        Assert.Equal(0, pipeline.MaximumWorkerManagedAllocationBytes);
-        Assert.Equal(0, pipeline.CoordinatorManagedAllocationBytes);
+        ValidateRingMovementRetainsProfilesPacketsAndFacesAcrossWrappingAndTeleportsEvidence(stream, atlas);
     }
 
     [Fact]
@@ -231,5 +178,64 @@ public sealed class NativeStreamingTests
         _ = new TerrainLoader();
         BiomeManager.LoadAllBiomes();
         return workspace;
+    }
+
+    private static void ValidateRingMovementRetainsProfilesPacketsAndFacesAcrossWrappingAndTeleportsEvidence(bool stream, global::MVoxelEngine1.Graphics.Textures.BlockTextureAtlas atlas)
+    {
+        ChunkRender.terrainTextureAtlas = atlas;
+        using NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(atlas, GameManager.settings, 2, 3, stream);
+        using var allocationScope = new NoGcAllocationScope();
+        using NativeWorld world = NativeWorld.CreateForTesting(pipeline, 123456, HeadlessRenderer);
+        Assert.Equal(new NativeStreamingStatistics(25, 0, 27, 0), world.StreamingStatistics);
+        int surfaceY = 0;
+        world.InspectState(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            surfaceY = view.GetColumnProfiles(view.GetColumnIndex(0, 0))[0].SoilEnd / 8;
+        });
+        (int x, int y, int z)[] centers =
+        [
+            (0, surfaceY, 0), (1, surfaceY, 0), (1, surfaceY + 1, 0),
+            (0, surfaceY, -1), (-1, surfaceY, -2), (-2, surfaceY, -3),
+            (-3, surfaceY, -4), (-4, surfaceY, -5), (-5, surfaceY, -6),
+            (-6, surfaceY, -7), (-12, surfaceY + 4, 14), (0, surfaceY, 0)
+        ];
+        foreach ((int x, int y, int z) center in centers)
+        {
+            (int oldX, int oldY, int oldZ) = world.PlayerChunkPosition;
+            var previousPackets = CapturePackets(world);
+            var previousColumns = CaptureColumns(world);
+            world.PlayerChunkPosition = center;
+            int retainedColumns = Overlap(5, oldX, center.x) * Overlap(5, oldZ, center.z);
+            int retainedPackets = Overlap(3, oldX, center.x) * Overlap(3, oldY, center.y) * Overlap(3, oldZ, center.z);
+            Assert.Equal(new NativeStreamingStatistics(25 - retainedColumns, retainedColumns,
+                27 - retainedPackets, retainedPackets), world.StreamingStatistics);
+            var packets = CapturePackets(world);
+            int observedRetained = 0;
+            foreach (var pair in packets)
+            {
+                if (previousPackets.TryGetValue(pair.Key, out var previous))
+                {
+                    Assert.Equal(previous, pair.Value);
+                    observedRetained++;
+                }
+            }
+            Assert.Equal(retainedPackets, observedRetained);
+            var columns = CaptureColumns(world);
+            int observedColumns = 0;
+            foreach (var pair in columns)
+            {
+                if (previousColumns.TryGetValue(pair.Key, out var previous))
+                {
+                    Assert.Equal(previous, pair.Value);
+                    observedColumns++;
+                }
+            }
+            Assert.Equal(retainedColumns, observedColumns);
+            AssertReference(world);
+        }
+        Assert.Equal(0, pipeline.MaximumWorkerManagedAllocationBytes);
+        Assert.Equal(0, pipeline.CoordinatorManagedAllocationBytes);
+
     }
 }

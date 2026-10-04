@@ -309,40 +309,7 @@ public sealed class NativeWorldTests
             Assert.Equal(1, firstWorld.Save());
             Assert.Equal(0, firstWorld.Save());
         }
-
-        NativeWorldSaveImportPlan plan =
-            NativeWorldSaveImportPlan.Create(
-                workspace.QuadsDirectory,
-                settings);
-        Assert.Equal(1, plan.ChunkCount);
-        var secondAtlas = new BlockTextureAtlas(
-            BlockTextureAtlasUploadMode.SimulatedGpuUpload);
-        var secondFactory = new TrackingRendererFactory();
-        using NativeWorld secondWorld = NativeWorld.CreateForTesting(
-            NativeGtrtPipeline.Create(
-                secondAtlas,
-                settings,
-                generationWorkerCount: 2,
-                meshWorkerCount: 2,
-                streamGeneration: true,
-                savePlan: plan),
-            seed: 123456,
-            secondFactory.Create,
-            workspace.QuadsDirectory);
-
-        Assert.Equal(
-            CustomTransparentBlockId,
-            secondWorld.GetBlock(-1, 0, -1));
-        Assert.Equal(editedIdentity, secondFactory.LiveBankIdentity);
-        Assert.Equal(0, secondWorld.Save());
-
-        secondWorld.PlayerChunkPosition = (1, 0, 0);
-        secondWorld.PlayerChunkPosition = (0, 0, 0);
-
-        Assert.Equal(editedIdentity, secondFactory.LiveBankIdentity);
-        Assert.Equal(
-            CustomTransparentBlockId,
-            secondWorld.GetBlock(-1, 0, -1));
+        ValidateNegativeBlockEditSurvivesSaveReloadAndMovementEvidence(settings, workspace, editedIdentity);
     }
 
     [Fact]
@@ -827,5 +794,44 @@ public sealed class NativeWorldTests
         public RendererDisposeFailure() { }
         public RendererDisposeFailure(string message) : base(message) { }
         public RendererDisposeFailure(string message, Exception innerException) : base(message, innerException) { }
+    }
+
+    private static void ValidateNegativeBlockEditSurvivesSaveReloadAndMovementEvidence(global::MVoxelEngine1.Infrastructure.Models.GameSettings settings, global::MVoxelEngine1.Tests.NativeWorldTests.SaveWorkspace workspace, string editedIdentity)
+    {
+
+        NativeWorldSaveImportPlan plan =
+            NativeWorldSaveImportPlan.Create(
+                workspace.QuadsDirectory,
+                settings);
+        Assert.Equal(1, plan.ChunkCount);
+        var secondAtlas = new BlockTextureAtlas(
+            BlockTextureAtlasUploadMode.SimulatedGpuUpload);
+        var secondFactory = new TrackingRendererFactory();
+        using NativeWorld secondWorld = NativeWorld.CreateForTesting(
+            NativeGtrtPipeline.Create(
+                secondAtlas,
+                settings,
+                generationWorkerCount: 2,
+                meshWorkerCount: 2,
+                streamGeneration: true,
+                savePlan: plan),
+            seed: 123456,
+            secondFactory.Create,
+            workspace.QuadsDirectory);
+
+        Assert.Equal(
+            CustomTransparentBlockId,
+            secondWorld.GetBlock(-1, 0, -1));
+        Assert.Equal(editedIdentity, secondFactory.LiveBankIdentity);
+        Assert.Equal(0, secondWorld.Save());
+
+        secondWorld.PlayerChunkPosition = (1, 0, 0);
+        secondWorld.PlayerChunkPosition = (0, 0, 0);
+
+        Assert.Equal(editedIdentity, secondFactory.LiveBankIdentity);
+        Assert.Equal(
+            CustomTransparentBlockId,
+            secondWorld.GetBlock(-1, 0, -1));
+
     }
 }

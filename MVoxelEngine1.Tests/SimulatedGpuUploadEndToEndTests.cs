@@ -112,6 +112,59 @@ namespace MVoxelEngine1.Tests
             Assert.Equal("final", snapshots[1].GetProperty("name").GetString());
             AssertVector(snapshots[0].GetProperty("camera").GetProperty("position"), 0, 0, 0);
             AssertVector(snapshots[1].GetProperty("camera").GetProperty("position"), 0, 180, -120, 0.2);
+            await ValidateSeed123456StreamsRenderDataDuringTimedMovementWithoutWindowAsyncEvidenceAsync(workspace, outputPath, root, events, snapshots).ConfigureAwait(true);
+        }
+
+        private static void AddArgument(ProcessStartInfo startInfo, string name, string value)
+        {
+            startInfo.ArgumentList.Add($"--{name}");
+            startInfo.ArgumentList.Add(value);
+        }
+
+        private static JsonElement FindFirstFace(IEnumerable<JsonElement> uploads)
+        {
+            foreach (JsonElement upload in uploads)
+            {
+                foreach (string propertyName in new[] { "opaqueFaces", "transparentFaces" })
+                {
+                    JsonElement.ArrayEnumerator faces = upload.GetProperty(propertyName).EnumerateArray();
+                    if (faces.MoveNext())
+                        return faces.Current;
+                }
+            }
+
+            throw new InvalidDataException("No uploaded face was recorded.");
+        }
+
+        private static bool HasInputKey(JsonElement frame, string key)
+        {
+            return frame.GetProperty("inputKeys")
+                .EnumerateArray()
+                .Any(element => string.Equals(element.GetString(), key, StringComparison.Ordinal));
+        }
+
+        private static void AssertVector(
+            JsonElement vector,
+            double x,
+            double y,
+            double z,
+            double tolerance = 0)
+        {
+            double[] values = vector.EnumerateArray().Select(element => element.GetDouble()).ToArray();
+            Assert.Equal(3, values.Length);
+            Assert.InRange(values[0], x - tolerance, x + tolerance);
+            Assert.InRange(values[1], y - tolerance, y + tolerance);
+            Assert.InRange(values[2], z - tolerance, z + tolerance);
+        }
+
+        private static string Tail(string value)
+        {
+            const int maximumLength = 8_000;
+            return value.Length <= maximumLength ? value : value[^maximumLength..];
+        }
+
+        private static async global::System.Threading.Tasks.Task ValidateSeed123456StreamsRenderDataDuringTimedMovementWithoutWindowAsyncEvidenceAsync(global::MVoxelEngine1.Tests.TestWorkspace workspace, string outputPath, global::System.Text.Json.JsonElement root, global::System.Text.Json.JsonElement[] events, global::System.Text.Json.JsonElement[] snapshots)
+        {
             Assert.Equal(11, snapshots[1].GetProperty("playerChunk").GetProperty("y").GetInt32());
             Assert.Equal(-8, snapshots[1].GetProperty("playerChunk").GetProperty("z").GetInt32());
 
@@ -163,54 +216,7 @@ namespace MVoxelEngine1.Tests
             string worldFile = Assert.Single(Directory.GetFiles(worldsDirectory, "world.txt", SearchOption.AllDirectories));
             Assert.Equal("123456", (await File.ReadAllLinesAsync(worldFile,TestContext.Current.CancellationToken).ConfigureAwait(true))[3]);
             Console.WriteLine($"Simulated GPU upload result: {outputPath}");
-        }
 
-        private static void AddArgument(ProcessStartInfo startInfo, string name, string value)
-        {
-            startInfo.ArgumentList.Add($"--{name}");
-            startInfo.ArgumentList.Add(value);
-        }
-
-        private static JsonElement FindFirstFace(IEnumerable<JsonElement> uploads)
-        {
-            foreach (JsonElement upload in uploads)
-            {
-                foreach (string propertyName in new[] { "opaqueFaces", "transparentFaces" })
-                {
-                    JsonElement.ArrayEnumerator faces = upload.GetProperty(propertyName).EnumerateArray();
-                    if (faces.MoveNext())
-                        return faces.Current;
-                }
-            }
-
-            throw new InvalidDataException("No uploaded face was recorded.");
-        }
-
-        private static bool HasInputKey(JsonElement frame, string key)
-        {
-            return frame.GetProperty("inputKeys")
-                .EnumerateArray()
-                .Any(element => string.Equals(element.GetString(), key, StringComparison.Ordinal));
-        }
-
-        private static void AssertVector(
-            JsonElement vector,
-            double x,
-            double y,
-            double z,
-            double tolerance = 0)
-        {
-            double[] values = vector.EnumerateArray().Select(element => element.GetDouble()).ToArray();
-            Assert.Equal(3, values.Length);
-            Assert.InRange(values[0], x - tolerance, x + tolerance);
-            Assert.InRange(values[1], y - tolerance, y + tolerance);
-            Assert.InRange(values[2], z - tolerance, z + tolerance);
-        }
-
-        private static string Tail(string value)
-        {
-            const int maximumLength = 8_000;
-            return value.Length <= maximumLength ? value : value[^maximumLength..];
         }
     }
 }

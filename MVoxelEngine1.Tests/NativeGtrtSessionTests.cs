@@ -173,10 +173,7 @@ public sealed class NativeGtrtSessionTests
         {
             session.Dispose();
         }
-
-        session.Dispose();
-        Assert.Throws<ObjectDisposedException>(() =>
-            session.Access(static _ => { }));
+        ValidateNativeSessionOwnsInitializedGridJobsProfilesAndSeedEvidence(session);
     }
 
     [Fact]
@@ -768,58 +765,7 @@ public sealed class NativeGtrtSessionTests
                     Assert.True(view.TryCompleteGeneration(in work));
                 }
             }));
-
-        int[] meshVisits = new int[layout.ChunkCount];
-        RunWorkers(
-            workerCount: 4,
-            () => session.Access(owner =>
-            {
-                var view = new NativeGtrtSessionView(owner.AsSpan());
-                while (view.TryClaimMesh(out NativeWorkItem work))
-                {
-                    Interlocked.Increment(
-                        ref meshVisits[work.RecordIndex]);
-                    Assert.True(view.TryBeginPacket(
-                        in work,
-                        opaqueWordCount: 0,
-                        opaqueFaceCount: 0,
-                        transparentWordCount: 0,
-                        transparentFaceCount: 0,
-                        out _));
-                    Assert.True(view.TryCompleteMesh(in work));
-                }
-            }));
-
-        Assert.All(generationVisits, count => Assert.Equal(1, count));
-        session.Access(owner =>
-        {
-            var view = new NativeGtrtSessionView(owner.AsSpan());
-            Assert.Equal(0, view.State.FailureCode);
-            Assert.Equal(0, view.State.RemainingColumns);
-            Assert.Equal(0, view.State.RemainingChunks);
-            Assert.Equal(
-                layout.RequiredChunkCount,
-                view.State.ReadyPacketCount);
-
-            for (int index = 0; index < view.Chunks.Length; index++)
-            {
-                NativeChunkRecord chunk = view.Chunks[index];
-                bool required =
-                    ((NativeChunkFlags)chunk.Flags).HasFlag(
-                        NativeChunkFlags.InitialMeshRequired);
-                Assert.Equal(required ? 1 : 0, meshVisits[index]);
-                Assert.Equal(
-                    required
-                        ? NativeChunkState.PacketReady
-                        : NativeChunkState.Generated,
-                    chunk.State);
-                Assert.Equal(
-                    required
-                        ? NativeWorkState.Completed
-                        : NativeWorkState.Canceled,
-                    view.MeshJobs[index].State);
-            }
-        });
+        ValidateConcurrentWorkersClaimEveryNativeJobExactlyOnceEvidence(layout, session, generationVisits);
     }
 
     [Fact]
@@ -998,5 +944,71 @@ public sealed class NativeGtrtSessionTests
             workers[index] = Task.Run(action);
 
         Task.WaitAll(workers);
+    }
+
+    private static void ValidateNativeSessionOwnsInitializedGridJobsProfilesAndSeedEvidence(global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSession session)
+    {
+
+        session.Dispose();
+        Assert.Throws<ObjectDisposedException>(() =>
+            session.Access(static _ => { }));
+
+    }
+
+    private static void ValidateConcurrentWorkersClaimEveryNativeJobExactlyOnceEvidence(global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionLayout layout, global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSession session, int[] generationVisits)
+    {
+
+        int[] meshVisits = new int[layout.ChunkCount];
+        RunWorkers(
+            workerCount: 4,
+            () => session.Access(owner =>
+            {
+                var view = new NativeGtrtSessionView(owner.AsSpan());
+                while (view.TryClaimMesh(out NativeWorkItem work))
+                {
+                    Interlocked.Increment(
+                        ref meshVisits[work.RecordIndex]);
+                    Assert.True(view.TryBeginPacket(
+                        in work,
+                        opaqueWordCount: 0,
+                        opaqueFaceCount: 0,
+                        transparentWordCount: 0,
+                        transparentFaceCount: 0,
+                        out _));
+                    Assert.True(view.TryCompleteMesh(in work));
+                }
+            }));
+
+        Assert.All(generationVisits, count => Assert.Equal(1, count));
+        session.Access(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            Assert.Equal(0, view.State.FailureCode);
+            Assert.Equal(0, view.State.RemainingColumns);
+            Assert.Equal(0, view.State.RemainingChunks);
+            Assert.Equal(
+                layout.RequiredChunkCount,
+                view.State.ReadyPacketCount);
+
+            for (int index = 0; index < view.Chunks.Length; index++)
+            {
+                NativeChunkRecord chunk = view.Chunks[index];
+                bool required =
+                    ((NativeChunkFlags)chunk.Flags).HasFlag(
+                        NativeChunkFlags.InitialMeshRequired);
+                Assert.Equal(required ? 1 : 0, meshVisits[index]);
+                Assert.Equal(
+                    required
+                        ? NativeChunkState.PacketReady
+                        : NativeChunkState.Generated,
+                    chunk.State);
+                Assert.Equal(
+                    required
+                        ? NativeWorkState.Completed
+                        : NativeWorkState.Canceled,
+                    view.MeshJobs[index].State);
+            }
+        });
+
     }
 }

@@ -68,6 +68,88 @@ namespace MVoxelEngine1.Tests
                 (await File.ReadAllTextAsync(optimizedPath,TestContext.Current.CancellationToken).ConfigureAwait(true)));
             using JsonDocument referenceRepeatDocument = JsonDocument.Parse(
                 (await File.ReadAllTextAsync(referenceRepeatPath,TestContext.Current.CancellationToken).ConfigureAwait(true)));
+            ValidateOptimizedFacesMatchReferenceFacesAsyncEvidence(referenceDocument, optimizedDocument, referenceRepeatDocument);
+        }
+
+        [Fact(Timeout = 160_000)]
+        [Trait("Category", "EndToEnd")]
+        [Trait("Resource", "CPU")]
+        public async Task OptimizedStreamingFacesMatchReferenceAfterTimedMovementAsync()
+        {
+            TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+            using TestWorkspace workspace = TestPaths.CreateWorkspace();
+            SimulatedGpuUploadTestSupport.ConfigureSmallWorld(
+                workspace.GameDataRoot,
+                maximumWorldHeight: 768,
+                lod1RenderDistance: 2,
+                chunkSizeY: 256,
+                chunkSizeX: 32,
+                chunkSizeZ: 32);
+            SimulatedGpuUploadTestSupport.SetWaterLevel(
+                workspace.GameDataRoot,
+                waterLevel: 551);
+            string resultsDirectory = Path.Combine(
+                TestPaths.ResultsRoot,
+                "face-manifests");
+            Directory.CreateDirectory(resultsDirectory);
+            string runId = DateTime.UtcNow.ToString("yyyyMMddTHHmmssfffZ",System.Globalization.CultureInfo.CurrentCulture);
+            string referencePath = Path.Combine(
+                resultsDirectory,
+                $"reference-movement-seed-123456-{runId}.json");
+            string optimizedPath = Path.Combine(
+                resultsDirectory,
+                $"optimized-movement-seed-123456-{runId}.json");
+            const string inputScript = "W:1.1,D:1.1,Space:4.5";
+
+            SimulatedGpuProcessResult referenceResult = await RunManifestAsync(
+                workspace,
+                referencePath,
+                "ReferenceMovementManifestWorld",
+                "Reference",
+                inputScript,
+                10).ConfigureAwait(true);
+            await ValidateOptimizedStreamingFacesMatchReferenceAfterTimedMovementAsyncEvidenceAsync(workspace, referencePath, optimizedPath, inputScript, referenceResult).ConfigureAwait(true);
+        }
+
+        private static async Task<SimulatedGpuProcessResult> RunManifestAsync(
+            TestWorkspace workspace,
+            string outputPath,
+            string worldName,
+            string faceGenerationMode,
+            string? inputScript = null,
+            int? frameRate = null)
+        {
+            ProcessStartInfo startInfo =
+                SimulatedGpuUploadTestSupport.CreateFaceManifestStartInfo(
+                    workspace,
+                    outputPath,
+                    worldName,
+                    faceGenerationMode,
+                    inputScript,
+                    frameRate);
+            return await SimulatedGpuUploadTestSupport.RunAsync(
+                startInfo,
+                TimeSpan.FromSeconds(inputScript is null ? 75 : 100),
+                TestContext.Current.CancellationToken).ConfigureAwait(true);
+        }
+
+        private static void AssertManifestProcess(
+            SimulatedGpuProcessResult result,
+            string outputPath,
+            string faceGenerationMode)
+        {
+            Assert.True(
+                result.ExitCode == 0,
+                $"{faceGenerationMode} manifest failed. " +
+                $"Output: {SimulatedGpuUploadTestSupport.Tail(result.StandardOutput)} " +
+                $"Error: {SimulatedGpuUploadTestSupport.Tail(result.StandardError)}");
+            Assert.False(result.WindowObserved);
+            Assert.True(File.Exists(outputPath));
+            Assert.Empty(SimulatedGpuUploadTestSupport.FindIncompleteFiles(outputPath));
+        }
+
+        private static void ValidateOptimizedFacesMatchReferenceFacesAsyncEvidence(global::System.Text.Json.JsonDocument referenceDocument, global::System.Text.Json.JsonDocument optimizedDocument, global::System.Text.Json.JsonDocument referenceRepeatDocument)
+        {
             JsonElement reference = referenceDocument.RootElement;
             JsonElement optimized = optimizedDocument.RootElement;
             JsonElement referenceRepeat = referenceRepeatDocument.RootElement;
@@ -121,44 +203,11 @@ namespace MVoxelEngine1.Tests
             Assert.Equal(
                 referenceFaces.GetProperty("sha256").GetString(),
                 referenceRepeat.GetProperty("faces").GetProperty("sha256").GetString());
+
         }
 
-        [Fact(Timeout = 160_000)]
-        [Trait("Category", "EndToEnd")]
-        [Trait("Resource", "CPU")]
-        public async Task OptimizedStreamingFacesMatchReferenceAfterTimedMovementAsync()
+        private static async global::System.Threading.Tasks.Task ValidateOptimizedStreamingFacesMatchReferenceAfterTimedMovementAsyncEvidenceAsync(global::MVoxelEngine1.Tests.TestWorkspace workspace, string referencePath, string optimizedPath, string inputScript, global::MVoxelEngine1.Tests.SimulatedGpuProcessResult referenceResult)
         {
-            using TestWorkspace workspace = TestPaths.CreateWorkspace();
-            SimulatedGpuUploadTestSupport.ConfigureSmallWorld(
-                workspace.GameDataRoot,
-                maximumWorldHeight: 768,
-                lod1RenderDistance: 2,
-                chunkSizeY: 256,
-                chunkSizeX: 32,
-                chunkSizeZ: 32);
-            SimulatedGpuUploadTestSupport.SetWaterLevel(
-                workspace.GameDataRoot,
-                waterLevel: 551);
-            string resultsDirectory = Path.Combine(
-                TestPaths.ResultsRoot,
-                "face-manifests");
-            Directory.CreateDirectory(resultsDirectory);
-            string runId = DateTime.UtcNow.ToString("yyyyMMddTHHmmssfffZ",System.Globalization.CultureInfo.CurrentCulture);
-            string referencePath = Path.Combine(
-                resultsDirectory,
-                $"reference-movement-seed-123456-{runId}.json");
-            string optimizedPath = Path.Combine(
-                resultsDirectory,
-                $"optimized-movement-seed-123456-{runId}.json");
-            const string inputScript = "W:1.1,D:1.1,Space:4.5";
-
-            SimulatedGpuProcessResult referenceResult = await RunManifestAsync(
-                workspace,
-                referencePath,
-                "ReferenceMovementManifestWorld",
-                "Reference",
-                inputScript,
-                10).ConfigureAwait(true);
             SimulatedGpuProcessResult optimizedResult = await RunManifestAsync(
                 workspace,
                 optimizedPath,
@@ -208,43 +257,7 @@ namespace MVoxelEngine1.Tests
             Assert.Equal(
                 reference.GetProperty("faces").GetProperty("sha256").GetString(),
                 optimized.GetProperty("faces").GetProperty("sha256").GetString());
-        }
 
-        private static async Task<SimulatedGpuProcessResult> RunManifestAsync(
-            TestWorkspace workspace,
-            string outputPath,
-            string worldName,
-            string faceGenerationMode,
-            string? inputScript = null,
-            int? frameRate = null)
-        {
-            ProcessStartInfo startInfo =
-                SimulatedGpuUploadTestSupport.CreateFaceManifestStartInfo(
-                    workspace,
-                    outputPath,
-                    worldName,
-                    faceGenerationMode,
-                    inputScript,
-                    frameRate);
-            return await SimulatedGpuUploadTestSupport.RunAsync(
-                startInfo,
-                TimeSpan.FromSeconds(inputScript is null ? 75 : 100),
-                TestContext.Current.CancellationToken).ConfigureAwait(true);
-        }
-
-        private static void AssertManifestProcess(
-            SimulatedGpuProcessResult result,
-            string outputPath,
-            string faceGenerationMode)
-        {
-            Assert.True(
-                result.ExitCode == 0,
-                $"{faceGenerationMode} manifest failed. " +
-                $"Output: {SimulatedGpuUploadTestSupport.Tail(result.StandardOutput)} " +
-                $"Error: {SimulatedGpuUploadTestSupport.Tail(result.StandardError)}");
-            Assert.False(result.WindowObserved);
-            Assert.True(File.Exists(outputPath));
-            Assert.Empty(SimulatedGpuUploadTestSupport.FindIncompleteFiles(outputPath));
         }
     }
 }

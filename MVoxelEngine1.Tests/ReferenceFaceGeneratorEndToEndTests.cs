@@ -68,6 +68,41 @@ namespace MVoxelEngine1.Tests
                 upload =>
                     upload.GetProperty("opaqueFaceCount").GetInt32() > 0 &&
                     upload.GetProperty("transparentFaceCount").GetInt32() > 0);
+            ValidateReferenceModeKeepsMixedTransparentStreamingExactAsyncEvidence(workspace, uploads);
+        }
+
+        private static HashSet<ushort> LoadNonOpaqueBlockIds(string gameDataRoot)
+        {
+            var result = new HashSet<ushort>
+            {
+                (ushort)BaseBlockType.Empty,
+                (ushort)BaseBlockType.Gas,
+                (ushort)BaseBlockType.Glass,
+                (ushort)BaseBlockType.Water
+            };
+            string blockTypesDirectory = Path.Combine(
+                gameDataRoot,
+                "Default",
+                "Data",
+                "Blocks",
+                "Types");
+
+            foreach (string path in Directory.EnumerateFiles(
+                         blockTypesDirectory,
+                         "*.txt",
+                         SearchOption.TopDirectoryOnly))
+            {
+                using JsonDocument document = JsonDocument.Parse(File.ReadAllText(path));
+                JsonElement definition = document.RootElement;
+                if (definition.GetProperty("IsTransparent").GetBoolean())
+                    result.Add(definition.GetProperty("ID").GetUInt16());
+            }
+
+            return result;
+        }
+
+        private static void ValidateReferenceModeKeepsMixedTransparentStreamingExactAsyncEvidence(global::MVoxelEngine1.Tests.TestWorkspace workspace, global::System.Text.Json.JsonElement[] uploads)
+        {
             Assert.Contains(
                 uploads,
                 upload => upload.GetProperty("transparentFaceCount").GetInt32() > 0);
@@ -122,36 +157,7 @@ namespace MVoxelEngine1.Tests
                         $"Face: {face.GetRawText()}.");
                 }
             }
-        }
 
-        private static HashSet<ushort> LoadNonOpaqueBlockIds(string gameDataRoot)
-        {
-            var result = new HashSet<ushort>
-            {
-                (ushort)BaseBlockType.Empty,
-                (ushort)BaseBlockType.Gas,
-                (ushort)BaseBlockType.Glass,
-                (ushort)BaseBlockType.Water
-            };
-            string blockTypesDirectory = Path.Combine(
-                gameDataRoot,
-                "Default",
-                "Data",
-                "Blocks",
-                "Types");
-
-            foreach (string path in Directory.EnumerateFiles(
-                         blockTypesDirectory,
-                         "*.txt",
-                         SearchOption.TopDirectoryOnly))
-            {
-                using JsonDocument document = JsonDocument.Parse(File.ReadAllText(path));
-                JsonElement definition = document.RootElement;
-                if (definition.GetProperty("IsTransparent").GetBoolean())
-                    result.Add(definition.GetProperty("ID").GetUInt16());
-            }
-
-            return result;
         }
     }
 }

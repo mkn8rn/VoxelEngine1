@@ -41,51 +41,7 @@ public sealed class NativeGeneratedMeshTests
                     true, checked((ushort)neighborId), out _));
             }
         });
-        session.PublishSeed(123456);
-        session.Access(owner =>
-        {
-            var view = new NativeGtrtSessionView(owner.AsSpan());
-            var blocks = view.GameSnapshot;
-            while (view.TryClaimGeneration(out NativeWorkItem work))
-            {
-                var profile = new BlockColumnProfile
-                {
-                    StoneStart = 0, StoneEnd = 127, SoilStart = -1, SoilEnd = -1, WaterStart = -1, WaterEnd = -1
-                };
-                view.GetColumnProfiles(work.RecordIndex).Fill(profile);
-                var summary = NativeColumnSummary.CreateEmpty();
-                for (int i = 0; i < view.ProfilesPerColumn; i++)
-                    summary.Add(in profile);
-                view.ColumnSummaries[work.RecordIndex] = summary;
-                ref NativeColumnRecord column = ref view.Columns[work.RecordIndex];
-                column.ReplacementMode = 1;
-                column.ResolvedMaterials = new NativeTerrainMaterialSet(blocks.Blocks[sourceId],
-                    blocks.Blocks[5], blocks.Blocks[11], resolved: true);
-                column.GenerationEpoch = work.Epoch;
-                Assert.True(view.TryCompleteGeneration(in work));
-            }
-            Assert.False(NativeUniformChunkMesh.TryGetUniformBlock(ref view, 0, 0, 0, out _));
-            foreach (ref NativeColumnRecord column in view.Columns)
-                column.SummaryComputed = 1;
-            Assert.True(NativeUniformChunkMesh.TryGetUniformBlock(ref view, 0, 0, 0, out ushort uniform));
-            Assert.Equal(sourceId, uniform);
-            Assert.True(view.TryClaimMesh(out NativeWorkItem mesh));
-            Assert.True(NativeGeneratedMesh.TryBuild(ref view, in mesh, 0));
-            Assert.True(view.TryReadPacket(mesh.RecordIndex, out NativePacketReadView packet));
-            AssertPacketMatchesNaiveFaces(ref view, mesh.RecordIndex, in packet);
-            Assert.Equal(faces, packet.Record.OpaqueFaceCount + packet.Record.TransparentFaceCount);
-            Assert.Equal(faces == 0 ? 0 : 12, packet.OpaqueWords.Length + packet.TransparentWords.Length);
-            if (faces != 0)
-            {
-                ReadOnlySpan<uint> words = packet.OpaqueWords.IsEmpty ? packet.TransparentWords : packet.OpaqueWords;
-                var directions = new HashSet<byte>();
-                var reader = new PackedFaceRectangleReader(words);
-                while (reader.MoveNext())
-                    directions.Add(reader.Direction);
-                Assert.Equal(6, directions.Count);
-            }
-            Assert.Equal(0, view.State.FailureCode);
-        });
+        ValidateUniformChunkBoundariesMatchNaiveFacesInEveryDirectionEvidence(sourceId, faces, session);
     }
 
     [Fact]
@@ -701,5 +657,55 @@ public sealed class NativeGeneratedMeshTests
                 in claimedMesh,
                 workerIndex: 0);
         }
+    }
+
+    private static void ValidateUniformChunkBoundariesMatchNaiveFacesInEveryDirectionEvidence(int sourceId, int faces, global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSession session)
+    {
+        session.PublishSeed(123456);
+        session.Access(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            var blocks = view.GameSnapshot;
+            while (view.TryClaimGeneration(out NativeWorkItem work))
+            {
+                var profile = new BlockColumnProfile
+                {
+                    StoneStart = 0, StoneEnd = 127, SoilStart = -1, SoilEnd = -1, WaterStart = -1, WaterEnd = -1
+                };
+                view.GetColumnProfiles(work.RecordIndex).Fill(profile);
+                var summary = NativeColumnSummary.CreateEmpty();
+                for (int i = 0; i < view.ProfilesPerColumn; i++)
+                    summary.Add(in profile);
+                view.ColumnSummaries[work.RecordIndex] = summary;
+                ref NativeColumnRecord column = ref view.Columns[work.RecordIndex];
+                column.ReplacementMode = 1;
+                column.ResolvedMaterials = new NativeTerrainMaterialSet(blocks.Blocks[sourceId],
+                    blocks.Blocks[5], blocks.Blocks[11], resolved: true);
+                column.GenerationEpoch = work.Epoch;
+                Assert.True(view.TryCompleteGeneration(in work));
+            }
+            Assert.False(NativeUniformChunkMesh.TryGetUniformBlock(ref view, 0, 0, 0, out _));
+            foreach (ref NativeColumnRecord column in view.Columns)
+                column.SummaryComputed = 1;
+            Assert.True(NativeUniformChunkMesh.TryGetUniformBlock(ref view, 0, 0, 0, out ushort uniform));
+            Assert.Equal(sourceId, uniform);
+            Assert.True(view.TryClaimMesh(out NativeWorkItem mesh));
+            Assert.True(NativeGeneratedMesh.TryBuild(ref view, in mesh, 0));
+            Assert.True(view.TryReadPacket(mesh.RecordIndex, out NativePacketReadView packet));
+            AssertPacketMatchesNaiveFaces(ref view, mesh.RecordIndex, in packet);
+            Assert.Equal(faces, packet.Record.OpaqueFaceCount + packet.Record.TransparentFaceCount);
+            Assert.Equal(faces == 0 ? 0 : 12, packet.OpaqueWords.Length + packet.TransparentWords.Length);
+            if (faces != 0)
+            {
+                ReadOnlySpan<uint> words = packet.OpaqueWords.IsEmpty ? packet.TransparentWords : packet.OpaqueWords;
+                var directions = new HashSet<byte>();
+                var reader = new PackedFaceRectangleReader(words);
+                while (reader.MoveNext())
+                    directions.Add(reader.Direction);
+                Assert.Equal(6, directions.Count);
+            }
+            Assert.Equal(0, view.State.FailureCode);
+        });
+
     }
 }

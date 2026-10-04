@@ -13,6 +13,7 @@ namespace MVoxelEngine1.Tests
         [Trait("Resource", "CPU")]
         public async Task SlowWriterKeepsBoundedOrderedRecordsWithoutLossAsync()
         {
+            TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
             using TestWorkspace workspace = TestPaths.CreateWorkspace();
             SimulatedGpuUploadTestSupport.ConfigureSmallWorld(workspace.GameDataRoot);
             string resultsDirectory = Path.Combine(
@@ -28,60 +29,7 @@ namespace MVoxelEngine1.Tests
                 "W:1",
                 frameRate: 1000,
                 writerDelayMilliseconds: 25);
-
-            SimulatedGpuProcessResult result = await SimulatedGpuUploadTestSupport.RunAsync(
-                startInfo,
-                TimeSpan.FromSeconds(75),
-                TestContext.Current.CancellationToken).ConfigureAwait(true);
-            Assert.True(
-                result.ExitCode == 0,
-                $"Application exited with code {result.ExitCode}. " +
-                $"Output: {SimulatedGpuUploadTestSupport.Tail(result.StandardOutput)} " +
-                $"Error: {SimulatedGpuUploadTestSupport.Tail(result.StandardError)}");
-            Assert.False(result.WindowObserved);
-            Assert.True(File.Exists(outputPath));
-            Assert.Empty(SimulatedGpuUploadTestSupport.FindIncompleteFiles(outputPath));
-
-            using JsonDocument document = JsonDocument.Parse(await File.ReadAllTextAsync(outputPath, TestContext.Current.CancellationToken).ConfigureAwait(true));
-            JsonElement root = document.RootElement;
-            SimulatedGpuUploadTestSupport.AssertCompleteOrderedStream(root);
-            Assert.Equal(4, root.GetProperty("recordQueueCapacity").GetInt32());
-            Assert.Equal("wait", root.GetProperty("recordQueueFullPolicy").GetString());
-            Assert.Equal(25, root.GetProperty("writerDelayMilliseconds").GetInt32());
-            JsonElement summary = root.GetProperty("summary");
-            Assert.Equal(4, summary.GetProperty("peakRetainedRecordCount").GetInt32());
-            long peakRetainedPayloadBytes = summary
-                .GetProperty("peakRetainedRecordPayloadBytes")
-                .GetInt64();
-            Assert.True(peakRetainedPayloadBytes > 0);
-            Assert.InRange(result.PeakWorkingSetBytes, 1, 1_073_741_824);
-
-            string outputSha256 = Convert.ToHexString(SHA256.HashData((await File.ReadAllBytesAsync(outputPath,TestContext.Current.CancellationToken).ConfigureAwait(true))));
-            string metricsPath = Path.Combine(
-                resultsDirectory,
-                $"slow-writer-seed-123456-{timestamp}.metrics.json");
-            await File.WriteAllTextAsync(
-                metricsPath,
-                JsonSerializer.Serialize(
-                    new
-                    {
-                        outputPath,
-                        outputSha256,
-                        result.PeakWorkingSetBytes,
-                        QueueCapacity = root.GetProperty("recordQueueCapacity").GetInt32(),
-                        PeakRetainedRecordCount = summary
-                            .GetProperty("peakRetainedRecordCount")
-                            .GetInt32(),
-                        PeakRetainedRecordPayloadBytes = peakRetainedPayloadBytes,
-                        StreamRecordCount = summary.GetProperty("streamRecordCount").GetInt64(),
-                        CompletionSequence = summary.GetProperty("completionSequence").GetInt64(),
-                        SilentRecordLossAllowed = summary
-                            .GetProperty("silentRecordLossAllowed")
-                            .GetBoolean()
-                    },
-                    EvidenceJsonOptions0), TestContext.Current.CancellationToken).ConfigureAwait(true);
-            Console.WriteLine($"Slow writer result: {outputPath}");
-            Console.WriteLine($"Slow writer metrics: {metricsPath}");
+            await ValidateSlowWriterKeepsBoundedOrderedRecordsWithoutLossAsyncEvidenceAsync(resultsDirectory, timestamp, outputPath, startInfo).ConfigureAwait(true);
         }
 
         [Fact(Timeout = 150_000)]
@@ -139,59 +87,7 @@ namespace MVoxelEngine1.Tests
                 SimulatedGpuUploadTestSupport.Tail(result.StandardOutput));
 
             var transparentUploadCounts = new Dictionary<long, int>();
-            foreach (JsonElement upload in transparentUploads)
-            {
-                long renderDataId = upload.GetProperty("renderDataId").GetInt64();
-                int expectedCount = upload.GetProperty("transparentFaceCount").GetInt32();
-                JsonElement[] faces = upload.GetProperty("transparentFaces").EnumerateArray().ToArray();
-                Assert.Equal(expectedCount, faces.Length);
-                transparentUploadCounts[renderDataId] = expectedCount;
-                Assert.All(faces, AssertCompleteTransparentFace);
-                Assert.All(faces, face =>
-                {
-                    if (face.GetProperty("blockId").GetUInt16() == 11 &&
-                        face.GetProperty("faceDirection").GetByte() == 3)
-                        Assert.Equal(551, face.GetProperty("voxelWorld")[1].GetInt32());
-                });
-            }
-
-            var activeUploads = new HashSet<long>();
-            bool transparentDrawObserved = false;
-            foreach (JsonElement streamEvent in events)
-            {
-                string type = streamEvent.GetProperty("type").GetString()!;
-                if (string.Equals(type, "simulatedGpuUpload", StringComparison.Ordinal))
-                {
-                    activeUploads.Add(streamEvent.GetProperty("renderDataId").GetInt64());
-                }
-                else if (string.Equals(type, "simulatedGpuDeletion", StringComparison.Ordinal))
-                {
-                    activeUploads.Remove(streamEvent.GetProperty("renderDataId").GetInt64());
-                }
-                else if (string.Equals(type, "renderFrame", StringComparison.Ordinal))
-                {
-                    foreach (JsonElement idElement in streamEvent
-                        .GetProperty("transparentDrawRenderDataIds")
-                        .EnumerateArray())
-                    {
-                        long renderDataId = idElement.GetInt64();
-                        Assert.Contains(renderDataId, activeUploads);
-                        Assert.True(transparentUploadCounts.TryGetValue(renderDataId, out int faceCount));
-                        Assert.True(faceCount > 0);
-                        transparentDrawObserved = true;
-                    }
-                }
-            }
-
-            Assert.True(transparentDrawObserved);
-            Assert.Contains(
-                transparentUploads,
-                upload => upload.GetProperty("transparentFaces")
-                    .EnumerateArray()
-                    .Any(face => face.GetProperty("blockId").GetUInt16() == 11 &&
-                        face.GetProperty("faceDirection").GetByte() == 3 &&
-                        face.GetProperty("voxelWorld")[1].GetInt32() == 551));
-            Console.WriteLine($"Transparent render result: {outputPath}");
+            ValidateWaterFixtureStreamsCompleteTransparentFacesAndDrawIdentityAsyncEvidence(outputPath, events, transparentUploads, transparentUploadCounts);
         }
 
         [Fact(Timeout = 45_000)]
@@ -292,6 +188,123 @@ namespace MVoxelEngine1.Tests
             Assert.True(face.TryGetProperty("blockName", out _));
             Assert.True(face.TryGetProperty("neighborBlockIdAtUpload", out _));
             Assert.True(face.TryGetProperty("neighborBlockNameAtUpload", out _));
+        }
+
+        private static async global::System.Threading.Tasks.Task ValidateSlowWriterKeepsBoundedOrderedRecordsWithoutLossAsyncEvidenceAsync(string resultsDirectory, string timestamp, string outputPath, global::System.Diagnostics.ProcessStartInfo startInfo)
+        {
+
+            SimulatedGpuProcessResult result = await SimulatedGpuUploadTestSupport.RunAsync(
+                startInfo,
+                TimeSpan.FromSeconds(75),
+                TestContext.Current.CancellationToken).ConfigureAwait(true);
+            Assert.True(
+                result.ExitCode == 0,
+                $"Application exited with code {result.ExitCode}. " +
+                $"Output: {SimulatedGpuUploadTestSupport.Tail(result.StandardOutput)} " +
+                $"Error: {SimulatedGpuUploadTestSupport.Tail(result.StandardError)}");
+            Assert.False(result.WindowObserved);
+            Assert.True(File.Exists(outputPath));
+            Assert.Empty(SimulatedGpuUploadTestSupport.FindIncompleteFiles(outputPath));
+
+            using JsonDocument document = JsonDocument.Parse(await File.ReadAllTextAsync(outputPath, TestContext.Current.CancellationToken).ConfigureAwait(true));
+            JsonElement root = document.RootElement;
+            SimulatedGpuUploadTestSupport.AssertCompleteOrderedStream(root);
+            Assert.Equal(4, root.GetProperty("recordQueueCapacity").GetInt32());
+            Assert.Equal("wait", root.GetProperty("recordQueueFullPolicy").GetString());
+            Assert.Equal(25, root.GetProperty("writerDelayMilliseconds").GetInt32());
+            JsonElement summary = root.GetProperty("summary");
+            Assert.Equal(4, summary.GetProperty("peakRetainedRecordCount").GetInt32());
+            long peakRetainedPayloadBytes = summary
+                .GetProperty("peakRetainedRecordPayloadBytes")
+                .GetInt64();
+            Assert.True(peakRetainedPayloadBytes > 0);
+            Assert.InRange(result.PeakWorkingSetBytes, 1, 1_073_741_824);
+
+            string outputSha256 = Convert.ToHexString(SHA256.HashData((await File.ReadAllBytesAsync(outputPath,TestContext.Current.CancellationToken).ConfigureAwait(true))));
+            string metricsPath = Path.Combine(
+                resultsDirectory,
+                $"slow-writer-seed-123456-{timestamp}.metrics.json");
+            await File.WriteAllTextAsync(
+                metricsPath,
+                JsonSerializer.Serialize(
+                    new
+                    {
+                        outputPath,
+                        outputSha256,
+                        result.PeakWorkingSetBytes,
+                        QueueCapacity = root.GetProperty("recordQueueCapacity").GetInt32(),
+                        PeakRetainedRecordCount = summary
+                            .GetProperty("peakRetainedRecordCount")
+                            .GetInt32(),
+                        PeakRetainedRecordPayloadBytes = peakRetainedPayloadBytes,
+                        StreamRecordCount = summary.GetProperty("streamRecordCount").GetInt64(),
+                        CompletionSequence = summary.GetProperty("completionSequence").GetInt64(),
+                        SilentRecordLossAllowed = summary
+                            .GetProperty("silentRecordLossAllowed")
+                            .GetBoolean()
+                    },
+                    EvidenceJsonOptions0), TestContext.Current.CancellationToken).ConfigureAwait(true);
+            Console.WriteLine($"Slow writer result: {outputPath}");
+            Console.WriteLine($"Slow writer metrics: {metricsPath}");
+
+        }
+
+        private static void ValidateWaterFixtureStreamsCompleteTransparentFacesAndDrawIdentityAsyncEvidence(string outputPath, global::System.Text.Json.JsonElement[] events, global::System.Text.Json.JsonElement[] transparentUploads, global::System.Collections.Generic.Dictionary<long, int> transparentUploadCounts)
+        {
+            foreach (JsonElement upload in transparentUploads)
+            {
+                long renderDataId = upload.GetProperty("renderDataId").GetInt64();
+                int expectedCount = upload.GetProperty("transparentFaceCount").GetInt32();
+                JsonElement[] faces = upload.GetProperty("transparentFaces").EnumerateArray().ToArray();
+                Assert.Equal(expectedCount, faces.Length);
+                transparentUploadCounts[renderDataId] = expectedCount;
+                Assert.All(faces, AssertCompleteTransparentFace);
+                Assert.All(faces, face =>
+                {
+                    if (face.GetProperty("blockId").GetUInt16() == 11 &&
+                        face.GetProperty("faceDirection").GetByte() == 3)
+                        Assert.Equal(551, face.GetProperty("voxelWorld")[1].GetInt32());
+                });
+            }
+
+            var activeUploads = new HashSet<long>();
+            bool transparentDrawObserved = false;
+            foreach (JsonElement streamEvent in events)
+            {
+                string type = streamEvent.GetProperty("type").GetString()!;
+                if (string.Equals(type, "simulatedGpuUpload", StringComparison.Ordinal))
+                {
+                    activeUploads.Add(streamEvent.GetProperty("renderDataId").GetInt64());
+                }
+                else if (string.Equals(type, "simulatedGpuDeletion", StringComparison.Ordinal))
+                {
+                    activeUploads.Remove(streamEvent.GetProperty("renderDataId").GetInt64());
+                }
+                else if (string.Equals(type, "renderFrame", StringComparison.Ordinal))
+                {
+                    foreach (JsonElement idElement in streamEvent
+                        .GetProperty("transparentDrawRenderDataIds")
+                        .EnumerateArray())
+                    {
+                        long renderDataId = idElement.GetInt64();
+                        Assert.Contains(renderDataId, activeUploads);
+                        Assert.True(transparentUploadCounts.TryGetValue(renderDataId, out int faceCount));
+                        Assert.True(faceCount > 0);
+                        transparentDrawObserved = true;
+                    }
+                }
+            }
+
+            Assert.True(transparentDrawObserved);
+            Assert.Contains(
+                transparentUploads,
+                upload => upload.GetProperty("transparentFaces")
+                    .EnumerateArray()
+                    .Any(face => face.GetProperty("blockId").GetUInt16() == 11 &&
+                        face.GetProperty("faceDirection").GetByte() == 3 &&
+                        face.GetProperty("voxelWorld")[1].GetInt32() == 551));
+            Console.WriteLine($"Transparent render result: {outputPath}");
+
         }
     }
 }

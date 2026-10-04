@@ -150,59 +150,7 @@ namespace MVoxelEngine1.Tests
             Assert.Equal(
                 result.SimulatedUploadBoundary.TransparentRectangleCount * 2,
                 result.SimulatedUploadBoundary.TransparentWordCount);
-            Assert.InRange(result.WorkingSetBytes, 1, 16L * 1024 * 1024 * 1024);
-            Assert.InRange(result.PeakWorkingSetBytes, 1, 16L * 1024 * 1024 * 1024);
-            Assert.True(result.PeakWorkingSetBytes >= result.WorkingSetBytes);
-            Assert.True(result.ManagedHeapBytes > 0);
-            Assert.True(result.TotalAllocatedBytes >= result.ManagedHeapBytes);
-            AssertPositiveFinite(
-                result.ProcessorTimeMilliseconds,
-                nameof(result.ProcessorTimeMilliseconds));
-            AssertGenerationDiagnostics(result.GenerationDiagnostics);
-            AssertMeshDiagnostics(result.MeshDiagnostics);
-            Assert.True(
-                result.SeedAcceptedMilliseconds >= result.GameLoadMilliseconds);
-            Assert.True(
-                result.InitialGenerationStartMilliseconds >=
-                result.SeedAcceptedMilliseconds);
-            Assert.True(
-                result.InitialGenerationCompleteMilliseconds >=
-                result.InitialGenerationStartMilliseconds +
-                result.InitialGenerationMilliseconds);
-            Assert.True(
-                result.InitialChunkMeshBuildStartMilliseconds >=
-                result.InitialGenerationCompleteMilliseconds);
-            Assert.True(
-                result.InitialChunkMeshBuildCompleteMilliseconds >=
-                result.InitialChunkMeshBuildStartMilliseconds +
-                result.InitialChunkMeshBuildMilliseconds);
-            Assert.True(
-                result.GenerationToRenderCompleteMilliseconds >=
-                result.InitialChunkMeshBuildCompleteMilliseconds);
-            Assert.InRange(
-                Math.Abs(
-                    result.GenerationToRenderCompleteMilliseconds -
-                    result.SeedAcceptedMilliseconds -
-                    result.GenerationToRenderMilliseconds),
-                0,
-                0.0001);
-            Assert.Equal(
-                ReadConsoleTiming(standardOutput, "[World] Initial generation complete in "),
-                result.InitialGenerationMilliseconds);
-            Assert.Equal(
-                ReadConsoleTiming(standardOutput, "[World] Chunk mesh build complete in "),
-                result.InitialChunkMeshBuildMilliseconds);
-            Assert.Equal(
-                ReadConsoleDoubleTiming(
-                    standardOutput,
-                    "Generation to Render time (GTRT): "),
-                result.GenerationToRenderMilliseconds);
-
-            string worldsDirectory = Path.Combine(workspace.GameDataRoot, "Default", "Saves", "Worlds");
-            string worldFile = Assert.Single(Directory.GetFiles(worldsDirectory, "world.txt", SearchOption.AllDirectories));
-            Assert.Equal("123456", (await File.ReadAllLinesAsync(worldFile,TestContext.Current.CancellationToken).ConfigureAwait(true))[3]);
-
-            Console.WriteLine($"Benchmark result: {resultPath}");
+            await ValidateDefaultGameSeed123456RecordsStartupPerformanceAsyncEvidenceAsync(workspace, resultPath, standardOutput, result).ConfigureAwait(true);
         }
 
         [Fact(Explicit = true, Timeout = 150_000)]
@@ -365,60 +313,7 @@ namespace MVoxelEngine1.Tests
             Assert.True(diagnostics.Chunks > 0);
             Assert.True(diagnostics.AllAirChunks > 0);
             Assert.True(diagnostics.AllStoneChunks > 0);
-            Assert.True(diagnostics.NonUniformChunks > 0);
-            Assert.Equal(
-                diagnostics.Chunks,
-                diagnostics.AllAirChunks +
-                diagnostics.AllStoneChunks +
-                diagnostics.AllSoilChunks +
-                diagnostics.AllWaterChunks +
-                diagnostics.NonUniformChunks);
-            AssertNonNegativeFinite(
-                diagnostics.AggregatedProfileMilliseconds,
-                nameof(diagnostics.AggregatedProfileMilliseconds));
-            AssertPositiveFinite(
-                diagnostics.HeightMapMilliseconds,
-                nameof(diagnostics.HeightMapMilliseconds));
-            AssertPositiveFinite(
-                diagnostics.SmoothValueNoiseMilliseconds,
-                nameof(diagnostics.SmoothValueNoiseMilliseconds));
-            AssertPositiveFinite(
-                diagnostics.ProfileDerivationMilliseconds,
-                nameof(diagnostics.ProfileDerivationMilliseconds));
-            AssertPositiveFinite(
-                diagnostics.VerticalClassificationMilliseconds,
-                nameof(diagnostics.VerticalClassificationMilliseconds));
-            AssertPositiveFinite(
-                diagnostics.SpanMapMilliseconds,
-                nameof(diagnostics.SpanMapMilliseconds));
-            AssertPositiveFinite(
-                diagnostics.ChunkConstructionMilliseconds,
-                nameof(diagnostics.ChunkConstructionMilliseconds));
-            AssertPositiveFinite(
-                diagnostics.UniformSectionMilliseconds,
-                nameof(diagnostics.UniformSectionMilliseconds));
-            AssertPositiveFinite(
-                diagnostics.NonUniformGenerationMilliseconds,
-                nameof(diagnostics.NonUniformGenerationMilliseconds));
-            Assert.Equal(0, diagnostics.NonUniformColumnScanMilliseconds);
-            Assert.Equal(0, diagnostics.NonUniformUniformSectionMilliseconds);
-            Assert.Equal(0, diagnostics.NonUniformTerrainEmissionMilliseconds);
-            Assert.Equal(0, diagnostics.NonUniformWaterEmissionMilliseconds);
-            Assert.Equal(0, diagnostics.NonUniformCollapseMilliseconds);
-            Assert.Equal(0, diagnostics.NonUniformFinalizeMilliseconds);
-            Assert.Equal(0, diagnostics.FinalizedSections);
-            Assert.Equal(0, diagnostics.ScratchSections);
-            Assert.Equal(0, diagnostics.EscalatedScratchSections);
-            Assert.Equal(0, diagnostics.EmptySections);
-            Assert.Equal(0, diagnostics.PackedSections);
-            Assert.Equal(0, diagnostics.MultiPackedSections);
-            Assert.Equal(0, diagnostics.ExpandedSections);
-            AssertPositiveFinite(
-                diagnostics.BoundaryPlaneMilliseconds,
-                nameof(diagnostics.BoundaryPlaneMilliseconds));
-            AssertPositiveFinite(
-                diagnostics.RegistrarMilliseconds,
-                nameof(diagnostics.RegistrarMilliseconds));
+            ValidateAssertGenerationDiagnosticsEvidence(diagnostics);
         }
 
         private static void AssertMeshDiagnostics(
@@ -498,6 +393,123 @@ namespace MVoxelEngine1.Tests
         {
             const int maximumLength = 8_000;
             return value.Length <= maximumLength ? value : value[^maximumLength..];
+        }
+
+        private static async global::System.Threading.Tasks.Task ValidateDefaultGameSeed123456RecordsStartupPerformanceAsyncEvidenceAsync(global::MVoxelEngine1.Tests.TestWorkspace workspace, string resultPath, string standardOutput, global::MVoxelEngine1.Infrastructure.Diagnostics.HeadlessGtrtPerformanceSnapshot result)
+        {
+            Assert.InRange(result.WorkingSetBytes, 1, 16L * 1024 * 1024 * 1024);
+            Assert.InRange(result.PeakWorkingSetBytes, 1, 16L * 1024 * 1024 * 1024);
+            Assert.True(result.PeakWorkingSetBytes >= result.WorkingSetBytes);
+            Assert.True(result.ManagedHeapBytes > 0);
+            Assert.True(result.TotalAllocatedBytes >= result.ManagedHeapBytes);
+            AssertPositiveFinite(
+                result.ProcessorTimeMilliseconds,
+                nameof(result.ProcessorTimeMilliseconds));
+            AssertGenerationDiagnostics(result.GenerationDiagnostics);
+            AssertMeshDiagnostics(result.MeshDiagnostics);
+            Assert.True(
+                result.SeedAcceptedMilliseconds >= result.GameLoadMilliseconds);
+            Assert.True(
+                result.InitialGenerationStartMilliseconds >=
+                result.SeedAcceptedMilliseconds);
+            Assert.True(
+                result.InitialGenerationCompleteMilliseconds >=
+                result.InitialGenerationStartMilliseconds +
+                result.InitialGenerationMilliseconds);
+            Assert.True(
+                result.InitialChunkMeshBuildStartMilliseconds >=
+                result.InitialGenerationCompleteMilliseconds);
+            Assert.True(
+                result.InitialChunkMeshBuildCompleteMilliseconds >=
+                result.InitialChunkMeshBuildStartMilliseconds +
+                result.InitialChunkMeshBuildMilliseconds);
+            Assert.True(
+                result.GenerationToRenderCompleteMilliseconds >=
+                result.InitialChunkMeshBuildCompleteMilliseconds);
+            Assert.InRange(
+                Math.Abs(
+                    result.GenerationToRenderCompleteMilliseconds -
+                    result.SeedAcceptedMilliseconds -
+                    result.GenerationToRenderMilliseconds),
+                0,
+                0.0001);
+            Assert.Equal(
+                ReadConsoleTiming(standardOutput, "[World] Initial generation complete in "),
+                result.InitialGenerationMilliseconds);
+            Assert.Equal(
+                ReadConsoleTiming(standardOutput, "[World] Chunk mesh build complete in "),
+                result.InitialChunkMeshBuildMilliseconds);
+            Assert.Equal(
+                ReadConsoleDoubleTiming(
+                    standardOutput,
+                    "Generation to Render time (GTRT): "),
+                result.GenerationToRenderMilliseconds);
+
+            string worldsDirectory = Path.Combine(workspace.GameDataRoot, "Default", "Saves", "Worlds");
+            string worldFile = Assert.Single(Directory.GetFiles(worldsDirectory, "world.txt", SearchOption.AllDirectories));
+            Assert.Equal("123456", (await File.ReadAllLinesAsync(worldFile,TestContext.Current.CancellationToken).ConfigureAwait(true))[3]);
+
+            Console.WriteLine($"Benchmark result: {resultPath}");
+
+        }
+
+        private static void ValidateAssertGenerationDiagnosticsEvidence(global::MVoxelEngine1.Infrastructure.Diagnostics.GenerationPerformanceSnapshot diagnostics)
+        {
+            Assert.True(diagnostics.NonUniformChunks > 0);
+            Assert.Equal(
+                diagnostics.Chunks,
+                diagnostics.AllAirChunks +
+                diagnostics.AllStoneChunks +
+                diagnostics.AllSoilChunks +
+                diagnostics.AllWaterChunks +
+                diagnostics.NonUniformChunks);
+            AssertNonNegativeFinite(
+                diagnostics.AggregatedProfileMilliseconds,
+                nameof(diagnostics.AggregatedProfileMilliseconds));
+            AssertPositiveFinite(
+                diagnostics.HeightMapMilliseconds,
+                nameof(diagnostics.HeightMapMilliseconds));
+            AssertPositiveFinite(
+                diagnostics.SmoothValueNoiseMilliseconds,
+                nameof(diagnostics.SmoothValueNoiseMilliseconds));
+            AssertPositiveFinite(
+                diagnostics.ProfileDerivationMilliseconds,
+                nameof(diagnostics.ProfileDerivationMilliseconds));
+            AssertPositiveFinite(
+                diagnostics.VerticalClassificationMilliseconds,
+                nameof(diagnostics.VerticalClassificationMilliseconds));
+            AssertPositiveFinite(
+                diagnostics.SpanMapMilliseconds,
+                nameof(diagnostics.SpanMapMilliseconds));
+            AssertPositiveFinite(
+                diagnostics.ChunkConstructionMilliseconds,
+                nameof(diagnostics.ChunkConstructionMilliseconds));
+            AssertPositiveFinite(
+                diagnostics.UniformSectionMilliseconds,
+                nameof(diagnostics.UniformSectionMilliseconds));
+            AssertPositiveFinite(
+                diagnostics.NonUniformGenerationMilliseconds,
+                nameof(diagnostics.NonUniformGenerationMilliseconds));
+            Assert.Equal(0, diagnostics.NonUniformColumnScanMilliseconds);
+            Assert.Equal(0, diagnostics.NonUniformUniformSectionMilliseconds);
+            Assert.Equal(0, diagnostics.NonUniformTerrainEmissionMilliseconds);
+            Assert.Equal(0, diagnostics.NonUniformWaterEmissionMilliseconds);
+            Assert.Equal(0, diagnostics.NonUniformCollapseMilliseconds);
+            Assert.Equal(0, diagnostics.NonUniformFinalizeMilliseconds);
+            Assert.Equal(0, diagnostics.FinalizedSections);
+            Assert.Equal(0, diagnostics.ScratchSections);
+            Assert.Equal(0, diagnostics.EscalatedScratchSections);
+            Assert.Equal(0, diagnostics.EmptySections);
+            Assert.Equal(0, diagnostics.PackedSections);
+            Assert.Equal(0, diagnostics.MultiPackedSections);
+            Assert.Equal(0, diagnostics.ExpandedSections);
+            AssertPositiveFinite(
+                diagnostics.BoundaryPlaneMilliseconds,
+                nameof(diagnostics.BoundaryPlaneMilliseconds));
+            AssertPositiveFinite(
+                diagnostics.RegistrarMilliseconds,
+                nameof(diagnostics.RegistrarMilliseconds));
+
         }
     }
 }
