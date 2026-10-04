@@ -636,7 +636,7 @@ internal static class NativeGeneratedMesh
                 }
 
                 int anchorZ = direction == 3 ? z + extentZ - 1 : z;
-                writer.EmitRectangle(direction, x, y, anchorZ, extentX, extentZ);
+                writer.EmitClippedProfileRectangle(direction, x, y, anchorZ, extentX, extentZ);
             }
         }
     }

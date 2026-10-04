@@ -74,6 +74,7 @@ internal struct NativeColumnSummary
         FinishAddPhase(profile, hasSoil, hasWater);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void FinishAddPhase(global::MVoxelEngine1.Infrastructure.Models.Generation.BlockColumnProfile profile, bool hasSoil, bool hasWater)
     {
 

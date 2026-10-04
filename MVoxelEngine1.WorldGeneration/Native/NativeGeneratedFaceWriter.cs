@@ -71,12 +71,20 @@ internal ref struct NativeGeneratedFaceWriter
     internal void EmitRectangle(byte direction, int x, int y, int z, int extentU, int extentV) => Emit(currentMaterial, currentOpaque, direction, x, y, z, extentU, extentV);
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void EmitYRange(byte direction, int x, int startY, int endY, int z) => EmitRectangle(direction, x, startY, z, extentU: 1, extentV: endY - startY + 1);
+    // Profile callers establish byte-sized coordinates and positive extents by
+    // clipping to validated chunk dimensions before reaching these entry points.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void EmitClippedProfileRectangle(byte direction, int x, int y, int z, int extentU, int extentV) =>
+        Emit(currentMaterial, currentOpaque, direction, x, y, z, extentU, extentV, clippedProfile: true);
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void EmitClippedProfileYRange(int material, bool opaque, byte direction, int x, int startY, int endY, int z) =>
+        Emit(material, opaque, direction, x, startY, z, 1, endY - startY + 1, clippedProfile: true);
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void EmitBlockRectangle(scoped in NativeBlockDescriptor descriptor, byte direction, int x, int y, int z, int extentU, int extentV) => EmitDescriptor(in descriptor, descriptor.HasFlag(NativeBlockFlags.Opaque), direction, x, y, z, extentU, extentV);
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void Emit(int material, bool opaque, byte direction, int x, int y, int z, int extentU, int extentV)
+    private void Emit(int material, bool opaque, byte direction, int x, int y, int z, int extentU, int extentV, bool clippedProfile = false)
     {
-        if ((uint)material >= 3 || (definedMaterials & (1u << material)) == 0)
+        if (!Valid || (uint)material >= 3 || (definedMaterials & (1u << material)) == 0)
         {
             Valid = false;
             return;
@@ -89,7 +97,10 @@ internal ref struct NativeGeneratedFaceWriter
             2 => materials.Water,
             _ => default
         };
-        EmitDefinedDescriptor(in descriptor, opaque, direction, x, y, z, extentU, extentV);
+        if (clippedProfile)
+            WriteRectangle(in descriptor, opaque, direction, x, y, z, extentU, extentV);
+        else
+            EmitDefinedDescriptor(in descriptor, opaque, direction, x, y, z, extentU, extentV);
     }
 
     private static uint GetDefinedMaterials(scoped in NativeTerrainMaterialSet materials)
@@ -124,7 +135,13 @@ internal ref struct NativeGeneratedFaceWriter
             Valid = false;
             return;
         }
+        WriteRectangle(in descriptor, opaque, direction, x, y, z, extentU, extentV);
+    }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void WriteRectangle(scoped in NativeBlockDescriptor descriptor, bool opaque, byte direction,
+        int x, int y, int z, int extentU, int extentV)
+    {
         uint position = (uint)x | ((uint)y << 8) | ((uint)z << 16) | ((uint)direction << 24);
         uint attributes = (uint)(extentU - 1) | ((uint)(extentV - 1) << 8) | ((uint)descriptor.GetTile(direction) << 16);
         int faceCount = extentU * extentV;

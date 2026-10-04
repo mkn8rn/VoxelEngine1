@@ -69,14 +69,14 @@ internal static class NativeTransparentProfileMesh
         // With distinct transparent IDs, only the same material hides a face.
         if (neighborStart < 0 || neighborEnd < neighborStart || neighborEnd < start || neighborStart > end)
         {
-            writer.EmitMaterialYRange(material, false, direction, x, start - chunkStart, end - chunkStart, z);
+            writer.EmitClippedProfileYRange(material, false, direction, x, start - chunkStart, end - chunkStart, z);
             return;
         }
         if (start < neighborStart)
-            writer.EmitMaterialYRange(material, false, direction, x, start - chunkStart,
+            writer.EmitClippedProfileYRange(material, false, direction, x, start - chunkStart,
                 neighborStart - chunkStart - 1, z);
         if (end > neighborEnd)
-            writer.EmitMaterialYRange(material, false, direction, x, neighborEnd - chunkStart + 1,
+            writer.EmitClippedProfileYRange(material, false, direction, x, neighborEnd - chunkStart + 1,
                 end - chunkStart, z);
     }
 }
