@@ -171,7 +171,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             }
             else if (emitInteriorSides)
             {
-                EmitGeneratedColumnRange(source, materials, source.Columns[(x - 1) * source.Depth + z], blockId, blockOpaque, 0, x, z, worldStart, worldEnd, ref writer);
+                EmitGeneratedColumnRange(source, materials, in source.Columns[(x - 1) * source.Depth + z], blockId, blockOpaque, 0, x, z, worldStart, worldEnd, ref writer);
             }
 
             if (x == source.Width - 1)
@@ -180,7 +180,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             }
             else if (emitInteriorSides)
             {
-                EmitGeneratedColumnRange(source, materials, source.Columns[(x + 1) * source.Depth + z], blockId, blockOpaque, 1, x, z, worldStart, worldEnd, ref writer);
+                EmitGeneratedColumnRange(source, materials, in source.Columns[(x + 1) * source.Depth + z], blockId, blockOpaque, 1, x, z, worldStart, worldEnd, ref writer);
             }
 
             if (z == 0)
@@ -189,7 +189,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             }
             else if (emitInteriorSides)
             {
-                EmitGeneratedColumnRange(source, materials, source.Columns[x * source.Depth + z - 1], blockId, blockOpaque, 4, x, z, worldStart, worldEnd, ref writer);
+                EmitGeneratedColumnRange(source, materials, in source.Columns[x * source.Depth + z - 1], blockId, blockOpaque, 4, x, z, worldStart, worldEnd, ref writer);
             }
 
             if (z == source.Depth - 1)
@@ -198,7 +198,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             }
             else if (emitInteriorSides)
             {
-                EmitGeneratedColumnRange(source, materials, source.Columns[x * source.Depth + z + 1], blockId, blockOpaque, 5, x, z, worldStart, worldEnd, ref writer);
+                EmitGeneratedColumnRange(source, materials, in source.Columns[x * source.Depth + z + 1], blockId, blockOpaque, 5, x, z, worldStart, worldEnd, ref writer);
             }
         }
 
@@ -455,7 +455,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             }
         }
 
-        private static void EmitGeneratedBoundaryRange(ushort blockId, bool blockOpaque, byte direction, int x, int z, int localStart, int localEnd, ulong[] opaquePlane, ushort[] transparentPlane, int planeBaseIndex, ref GeneratedFaceRectangleWriter writer)
+        private static void EmitGeneratedBoundaryRange(ushort blockId, bool blockOpaque, byte direction, int x, int z, int localStart, int localEnd, ulong[]? opaquePlane, ushort[]? transparentPlane, int planeBaseIndex, ref GeneratedFaceRectangleWriter writer)
         {
             int visibleStart = -1;
             for (int y = localStart; y <= localEnd; y++)
@@ -544,7 +544,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             blockOpaque = false;
         }
 
-        private static void GetBoundaryNeighbor(ulong[] opaquePlane, ushort[] transparentPlane, int index, out bool opaque, out ushort blockId)
+        private static void GetBoundaryNeighbor(ulong[]? opaquePlane, ushort[]? transparentPlane, int index, out bool opaque, out ushort blockId)
         {
             opaque = PlaneBit(opaquePlane, index);
             blockId = !opaque && transparentPlane is not null && (uint)index < (uint)transparentPlane.Length ? transparentPlane[index] : (ushort)0;

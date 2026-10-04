@@ -109,7 +109,6 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
         public bool NeighborNegZFaceSolidPosZ { get; internal set; }
         public bool NeighborPosZFaceSolidNegZ { get; internal set; }
 
-        private bool candidateFullyBuried; // heightmap suggested burial; confirmed after face solidity scan
 
         // autogenerate = true for new chunks, false when loading from disk
         internal Chunk(Vector3 chunkPosition,
@@ -117,7 +116,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                        string chunkDataDirectory,
                        bool autoGenerate,
                        UniformOverride uniformOverride = UniformOverride.None,
-                       BlockColumnProfile[] columnSpanMap = null,
+                       BlockColumnProfile[]? columnSpanMap = null,
                        byte generatedMaterialMask = 0b111)
         {
             if ((generatedMaterialMask & ~0b111) != 0)
@@ -213,7 +212,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             return grid;
         }
 
-        internal void InitializeChunkData(BlockColumnProfile[] columnSpanMap)
+        internal void InitializeChunkData(BlockColumnProfile[]? columnSpanMap)
         {
             // Uniform override short‑circuit path built from batch classification.
             if (_uniformOverride != UniformOverride.None)
@@ -256,6 +255,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                 return;
             }
             long generationStart = StartupPerformanceRecorder.IsRunning ? Stopwatch.GetTimestamp() : 0;
+            ArgumentNullException.ThrowIfNull(columnSpanMap);
             generatedSpans = new GeneratedChunkSpanData(
                 columnSpanMap,
                 dimX,

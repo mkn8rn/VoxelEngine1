@@ -1,6 +1,5 @@
 using MVoxelEngine1.Graphics.Terrain;
 using MVoxelEngine1.Infrastructure.Models.Generation;
-using MVoxelEngine1.Infrastructure.Models.Generation;
 using MVoxelEngine1.Infrastructure.Models.Terrain;
 using MVoxelEngine1.Infrastructure.Models;
 using System;
@@ -23,40 +22,40 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
         //  Neg/Pos X: YZ plane (index = z * dimY + y)
         //  Neg/Pos Y: XZ plane (index = x * dimZ + z)
         //  Neg/Pos Z: XY plane (index = x * dimY + y)
-        internal ulong[] PlaneNegX; // this chunk's -X face (opaque occupancy bits)
-        internal ulong[] PlanePosX; // +X face (opaque occupancy bits)
-        internal ulong[] PlaneNegY; // -Y face (opaque occupancy bits)
-        internal ulong[] PlanePosY; // +Y face (opaque occupancy bits)
-        internal ulong[] PlaneNegZ; // -Z face (opaque occupancy bits)
-        internal ulong[] PlanePosZ; // +Z face (opaque occupancy bits)
+        internal ulong[]? PlaneNegX; // this chunk's -X face (opaque occupancy bits)
+        internal ulong[]? PlanePosX; // +X face (opaque occupancy bits)
+        internal ulong[]? PlaneNegY; // -Y face (opaque occupancy bits)
+        internal ulong[]? PlanePosY; // +Y face (opaque occupancy bits)
+        internal ulong[]? PlaneNegZ; // -Z face (opaque occupancy bits)
+        internal ulong[]? PlanePosZ; // +Z face (opaque occupancy bits)
         // Transparent boundary id maps. Each array stores per-boundary-cell transparent block ids (ushort) or 0 when absent.
         // Allocated only when at least one transparent (non-air, non-opaque) voxel exists on that face.
         // Layouts mirror the opaque plane layouts above for direct index reuse:
         //  Neg/Pos X: size dimY * dimZ (index = z * dimY + y)
         //  Neg/Pos Y: size dimX * dimZ (index = x * dimZ + z)
         //  Neg/Pos Z: size dimX * dimY (index = x * dimY + y)
-        internal ushort[] TransparentPlaneNegX; // transparent ids along -X boundary
-        internal ushort[] TransparentPlanePosX; // transparent ids along +X boundary
-        internal ushort[] TransparentPlaneNegY; // transparent ids along -Y boundary
-        internal ushort[] TransparentPlanePosY; // transparent ids along +Y boundary
-        internal ushort[] TransparentPlaneNegZ; // transparent ids along -Z boundary
-        internal ushort[] TransparentPlanePosZ; // transparent ids along +Z boundary
+        internal ushort[]? TransparentPlaneNegX; // transparent ids along -X boundary
+        internal ushort[]? TransparentPlanePosX; // transparent ids along +X boundary
+        internal ushort[]? TransparentPlaneNegY; // transparent ids along -Y boundary
+        internal ushort[]? TransparentPlanePosY; // transparent ids along +Y boundary
+        internal ushort[]? TransparentPlaneNegZ; // transparent ids along -Z boundary
+        internal ushort[]? TransparentPlanePosZ; // transparent ids along +Z boundary
         // Neighbor plane caches (populated by WorldResources just before BuildRender)
-        internal ulong[] NeighborPlaneNegXFace; // neighbor at -X (+X face of neighbor)
-        internal ulong[] NeighborPlanePosXFace; // neighbor at +X (-X face of neighbor)
-        internal ulong[] NeighborPlaneNegYFace; // neighbor at -Y (+Y face)
-        internal ulong[] NeighborPlanePosYFace; // neighbor at +Y (-Y face)
-        internal ulong[] NeighborPlaneNegZFace; // neighbor at -Z (+Z face)
-        internal ulong[] NeighborPlanePosZFace; // neighbor at +Z (-Z face)
+        internal ulong[]? NeighborPlaneNegXFace = null; // neighbor at -X (+X face of neighbor)
+        internal ulong[]? NeighborPlanePosXFace = null; // neighbor at +X (-X face of neighbor)
+        internal ulong[]? NeighborPlaneNegYFace = null; // neighbor at -Y (+Y face)
+        internal ulong[]? NeighborPlanePosYFace = null; // neighbor at +Y (-Y face)
+        internal ulong[]? NeighborPlaneNegZFace = null; // neighbor at -Z (+Z face)
+        internal ulong[]? NeighborPlanePosZFace = null; // neighbor at +Z (-Z face)
         // Neighbor transparent boundary id maps (mirroring opaque neighbor plane conventions)
-        internal ushort[] NeighborTransparentPlaneNegXFace; // neighbor -X +X transparent ids
-        internal ushort[] NeighborTransparentPlanePosXFace; // neighbor +X -X transparent ids
-        internal ushort[] NeighborTransparentPlaneNegYFace; // neighbor -Y +Y transparent ids
-        internal ushort[] NeighborTransparentPlanePosYFace; // neighbor +Y -Y transparent ids
-        internal ushort[] NeighborTransparentPlaneNegZFace; // neighbor -Z +Z transparent ids
-        internal ushort[] NeighborTransparentPlanePosZFace; // neighbor +Z -Z transparent ids
+        internal ushort[]? NeighborTransparentPlaneNegXFace = null; // neighbor -X +X transparent ids
+        internal ushort[]? NeighborTransparentPlanePosXFace = null; // neighbor +X -X transparent ids
+        internal ushort[]? NeighborTransparentPlaneNegYFace = null; // neighbor -Y +Y transparent ids
+        internal ushort[]? NeighborTransparentPlanePosYFace = null; // neighbor +Y -Y transparent ids
+        internal ushort[]? NeighborTransparentPlaneNegZFace = null; // neighbor -Z +Z transparent ids
+        internal ushort[]? NeighborTransparentPlanePosZFace = null; // neighbor +Z -Z transparent ids
         const int S = Section.SECTION_SIZE;
-        static void SetPlaneBit(ulong[] plane, int index)
+        static void SetPlaneBit(ulong[]? plane, int index)
         {
             if (plane == null)
                 return;
@@ -65,6 +64,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             plane[w] |= 1UL << b;
         }
 
+        [System.Diagnostics.CodeAnalysis.MemberNotNull(nameof(PlaneNegX), nameof(PlanePosX), nameof(PlaneNegY), nameof(PlanePosY), nameof(PlaneNegZ), nameof(PlanePosZ))]
         private void EnsurePlaneArrays()
         {
             // allocate only once; lengths fixed by dimensions
@@ -83,6 +83,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
         }
 
         // Allocate transparent boundary ID arrays with proper per-cell sizes (not bit-word counts).
+        [System.Diagnostics.CodeAnalysis.MemberNotNull(nameof(TransparentPlaneNegX), nameof(TransparentPlanePosX), nameof(TransparentPlaneNegY), nameof(TransparentPlanePosY), nameof(TransparentPlaneNegZ), nameof(TransparentPlanePosZ))]
         private void EnsureTransparentPlaneArrays()
         {
             int yzCells = dimY * dimZ;
@@ -233,10 +234,6 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             }
         }
 
-        private int sliceStampVersion;
-        private int[] xSliceStamp;
-        private int[] ySliceStamp;
-        private int[] zSliceStamp;
         internal ChunkMeshPrepassStats MeshPrepassStats; // changed to field to allow direct mutation
         // Mesh prepass stats generated during flattening to avoid extra scans in ReferenceChunkRender
         internal struct ChunkMeshPrepassStats
@@ -272,7 +269,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             }
         }
 
-        internal ChunkPrerenderData BuildPrerenderData(SectionPrerenderDesc[] sectionDescs)
+        internal ChunkPrerenderData BuildPrerenderData(SectionPrerenderDesc[]? sectionDescs)
         {
             return new ChunkPrerenderData
             {
@@ -351,10 +348,10 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                         }
 
                         // Build transparent palette index list (fast classification set for renderer). Only when palette present.
-                        int[] transparentPaletteIndices = null;
+                        int[]? transparentPaletteIndices = null;
                         if (sec.Palette != null && sec.Palette.Count > 0)
                         {
-                            List<int> tpi = null;
+                            List<int>? tpi = null;
                             for (int pi = 1; pi < sec.Palette.Count; pi++) // skip air index 0
                             {
                                 ushort bid = sec.Palette[pi];
@@ -369,7 +366,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                         }
 
                         // For uniform transparent sections ensure TransparentBits allocated (all 4096 bits set) for direct bit iteration.
-                        ulong[] uniformTransparentBits = null;
+                        ulong[]? uniformTransparentBits = null;
                         if (sec.Kind == Section.RepresentationKind.Uniform && sec.UniformBlockId != Section.AIR && !TerrainLoader.IsOpaque(sec.UniformBlockId))
                         {
                             uniformTransparentBits = new ulong[64];
@@ -381,8 +378,8 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                         // Dominant transparent id detection (simple heuristic >=90% of transparent voxels) for multi-packed / packed representations.
                         ushort dominantId = 0;
                         int dominantCount = 0;
-                        ulong[] dominantBits = null;
-                        ulong[] residualBits = sec.TransparentBits;
+                        ulong[]? dominantBits = null;
+                        ulong[]? residualBits = sec.TransparentBits;
                         int residualCount = sec.TransparentCount;
                         if (sec.TransparentCount > 0 && sec.Palette != null && transparentPaletteIndices != null && transparentPaletteIndices.Length > 1)
                         {
@@ -446,7 +443,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                                 ulong[] res = new ulong[64];
                                 for (int w = 0; w < 64; w++)
                                 {
-                                    ulong word = sec.TransparentBits[w];
+                                    ulong word = sec.RequireTransparentBits()[w];
                                     ulong maskWord = 0UL;
                                     if (word != 0)
                                     {
@@ -476,7 +473,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                         }
 
                         // Precompute per-face tile indices for transparent palette ids (6 each) for fast emission.
-                        uint[] transparentFaceTiles = null;
+                        uint[]? transparentFaceTiles = null;
                         if (transparentPaletteIndices != null && transparentPaletteIndices.Length > 0 && sec.Palette != null)
                         {
                             transparentFaceTiles = new uint[transparentPaletteIndices.Length * 6];

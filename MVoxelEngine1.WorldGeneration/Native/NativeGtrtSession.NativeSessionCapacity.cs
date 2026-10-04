@@ -46,6 +46,7 @@ internal sealed partial class NativeGtrtSession
 
     private void ReplaceStorage(NativeGtrtSessionHeader previous, NativeGtrtSessionLayout layout)
     {
+        ObjectDisposedException.ThrowIf(storage is null, this);
         pendingGrowthHeader = previous;
         pendingGrowthLayout = layout;
         try

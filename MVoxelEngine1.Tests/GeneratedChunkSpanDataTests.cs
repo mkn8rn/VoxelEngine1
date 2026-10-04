@@ -918,7 +918,7 @@ namespace MVoxelEngine1.Tests
                 BlockTextureAtlas atlas)
         {
             ChunkPrerenderData data = CreatePrerenderData(source);
-            ulong[] neighbor = data.NeighborPlaneNegX;
+            ulong[] neighbor = data.NeighborPlaneNegX ?? throw new InvalidOperationException("The fixture neighbor plane is missing.");
             var weakNeighbor = new WeakReference<ulong[]>(neighbor);
             ReferenceChunkRender.terrainTextureAtlas = atlas;
             var pool = new PackedFaceNativePool();

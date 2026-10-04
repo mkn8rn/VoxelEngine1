@@ -93,7 +93,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             {
                 var residualBits = desc.TransparentBits; // residual transparent occupancy (multiple ids)
                 var opaqueBits = desc.OpaqueBits; // opaque occupancy for occlusion
-                var palette = desc.Palette;
+                var palette = desc.Palette ?? throw new InvalidOperationException("The packed section has no palette.");
                 var transparentPaletteIndices = desc.TransparentPaletteIndices; // indices referencing palette positions that are transparent overall
                 if (residualBits != null && transparentPaletteIndices != null && transparentPaletteIndices.Length > 0)
                 {

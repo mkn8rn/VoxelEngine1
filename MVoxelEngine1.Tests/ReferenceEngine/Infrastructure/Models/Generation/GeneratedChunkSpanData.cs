@@ -66,7 +66,7 @@ namespace MVoxelEngine1.Infrastructure.Models.Generation
                 return 0;
             }
 
-            return GetBlockWorld(Columns[x * Depth + z], ChunkBaseY + y);
+            return GetBlockWorld(in Columns[x * Depth + z], ChunkBaseY + y);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

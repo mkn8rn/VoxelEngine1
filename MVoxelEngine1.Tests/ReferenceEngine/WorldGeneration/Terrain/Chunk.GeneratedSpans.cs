@@ -23,14 +23,14 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             TransparentPlanePosZ = null;
             for (int z = 0; z < dimZ; z++)
             {
-                WriteGeneratedBoundaryColumn(source, source.Columns[z], PlaneNegX, ref TransparentPlaneNegX, z * dimY);
-                WriteGeneratedBoundaryColumn(source, source.Columns[(dimX - 1) * dimZ + z], PlanePosX, ref TransparentPlanePosX, z * dimY);
+                WriteGeneratedBoundaryColumn(source, in source.Columns[z], PlaneNegX, ref TransparentPlaneNegX, z * dimY);
+                WriteGeneratedBoundaryColumn(source, in source.Columns[(dimX - 1) * dimZ + z], PlanePosX, ref TransparentPlanePosX, z * dimY);
             }
 
             for (int x = 0; x < dimX; x++)
             {
-                WriteGeneratedBoundaryColumn(source, source.Columns[x * dimZ], PlaneNegZ, ref TransparentPlaneNegZ, x * dimY);
-                WriteGeneratedBoundaryColumn(source, source.Columns[x * dimZ + dimZ - 1], PlanePosZ, ref TransparentPlanePosZ, x * dimY);
+                WriteGeneratedBoundaryColumn(source, in source.Columns[x * dimZ], PlaneNegZ, ref TransparentPlaneNegZ, x * dimY);
+                WriteGeneratedBoundaryColumn(source, in source.Columns[x * dimZ + dimZ - 1], PlanePosZ, ref TransparentPlanePosZ, x * dimY);
                 for (int z = 0; z < dimZ; z++)
                 {
                     ref readonly BlockColumnProfile column = ref source.Columns[x * dimZ + z];
@@ -43,14 +43,14 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             SetFaceSolidFromPlanes();
         }
 
-        private void WriteGeneratedBoundaryColumn(GeneratedChunkSpanData source, ref readonly BlockColumnProfile column, ulong[] opaquePlane, ref ushort[] transparentPlane, int localBaseIndex)
+        private void WriteGeneratedBoundaryColumn(GeneratedChunkSpanData source, ref readonly BlockColumnProfile column, ulong[] opaquePlane, ref ushort[]? transparentPlane, int localBaseIndex)
         {
             WriteGeneratedBoundaryRange(source, column.StoneStart, column.StoneEnd, source.StoneBlockId, opaquePlane, ref transparentPlane, localBaseIndex);
             WriteGeneratedBoundaryRange(source, column.SoilStart, column.SoilEnd, source.SoilBlockId, opaquePlane, ref transparentPlane, localBaseIndex);
             WriteGeneratedBoundaryRange(source, column.WaterStart, column.WaterEnd, source.WaterBlockId, opaquePlane, ref transparentPlane, localBaseIndex);
         }
 
-        private void WriteGeneratedBoundaryRange(GeneratedChunkSpanData source, int worldStart, int worldEnd, ushort blockId, ulong[] opaquePlane, ref ushort[] transparentPlane, int localBaseIndex)
+        private void WriteGeneratedBoundaryRange(GeneratedChunkSpanData source, int worldStart, int worldEnd, ushort blockId, ulong[] opaquePlane, ref ushort[]? transparentPlane, int localBaseIndex)
         {
             if (worldStart < 0 || worldEnd < worldStart)
                 return;
@@ -68,10 +68,10 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             }
 
             EnsureTransparentPlaneArrays();
-            Array.Fill(transparentPlane, blockId, startIndex, length);
+            Array.Fill(transparentPlane ?? throw new InvalidOperationException("The transparent boundary plane has not been initialized."), blockId, startIndex, length);
         }
 
-        private void WriteGeneratedBoundaryCell(ushort blockId, ulong[] opaquePlane, ref ushort[] transparentPlane, int index)
+        private void WriteGeneratedBoundaryCell(ushort blockId, ulong[] opaquePlane, ref ushort[]? transparentPlane, int index)
         {
             if (blockId == 0)
                 return;
@@ -82,7 +82,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             }
 
             EnsureTransparentPlaneArrays();
-            transparentPlane[index] = blockId;
+            (transparentPlane ?? throw new InvalidOperationException("The transparent boundary plane has not been initialized."))[index] = blockId;
         }
 
         private static void SetPlaneBitRange(ulong[] plane, int startIndex, int length)

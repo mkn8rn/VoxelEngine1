@@ -12,7 +12,7 @@ namespace MVoxelEngine1.WorldGeneration.Utils
     internal static partial class SectionUtils
     {
         private static uint[] RentBitData(int uintCount) => ArrayPool<uint>.Shared.Rent(uintCount);
-        private static void ReturnBitData(uint[] data) { if (data != null) ArrayPool<uint>.Shared.Return(data, clearArray: false); }
+        private static void ReturnBitData(uint[]? data) { if (data != null) ArrayPool<uint>.Shared.Return(data, clearArray: false); }
 
         private const int SECTION_SIZE = Section.SECTION_SIZE;
         private const int VOXELS_PER_SECTION = SECTION_SIZE * SECTION_SIZE * SECTION_SIZE; // 4096
@@ -29,11 +29,11 @@ namespace MVoxelEngine1.WorldGeneration.Utils
                 case Section.RepresentationKind.Uniform:
                     return sec.UniformBlockId;
                 case Section.RepresentationKind.Expanded:
-                    return sec.ExpandedDense[linear];
+                    return sec.RequireDenseStorage()[linear];
                 case Section.RepresentationKind.Packed:
                 case Section.RepresentationKind.MultiPacked:
                 default:
-                    int paletteIndex = ReadBits(sec, linear); return sec.Palette[paletteIndex];
+                    int paletteIndex = ReadBits(sec, linear); return sec.RequirePalette()[paletteIndex];
             }
         }
 
@@ -58,7 +58,7 @@ namespace MVoxelEngine1.WorldGeneration.Utils
             {
                 if (sec.IsAllAir) return;
                 int oldIdxAir = ReadBits(sec, linear);
-                ushort oldBlockIdAir = sec.Palette[oldIdxAir];
+                ushort oldBlockIdAir = sec.RequirePalette()[oldIdxAir];
                 bool oldOpaqueAir = oldBlockIdAir != Section.AIR && TerrainLoader.IsOpaque(oldBlockIdAir);
                 if (oldIdxAir == 0) return; // already air
                 WriteBits(sec, linear, 0);
@@ -92,7 +92,7 @@ namespace MVoxelEngine1.WorldGeneration.Utils
             }
 
             int existingPaletteIndex = ReadBits(sec, linear);
-            ushort existingBlock = sec.Palette[existingPaletteIndex];
+            ushort existingBlock = sec.RequirePalette()[existingPaletteIndex];
             if (existingBlock == blockId) return;
 
             bool existingOpaque = existingBlock != Section.AIR && TerrainLoader.IsOpaque(existingBlock);
@@ -130,18 +130,18 @@ namespace MVoxelEngine1.WorldGeneration.Utils
             if (total == 0) total = VOXELS_PER_SECTION;
 
             // Uniform (full volume single id) – still based on palette fullness, independent of opacity tracking.
-            if (sec.CompletelyFull && sec.Palette != null && sec.Palette.Count == 2 && sec.Palette[0] == Section.AIR)
+            if (sec.CompletelyFull && sec.Palette != null && sec.RequirePalette().Count == 2 && sec.RequirePalette()[0] == Section.AIR)
             {
                 sec.Kind = Section.RepresentationKind.Uniform;
-                sec.UniformBlockId = sec.Palette[1];
+                sec.UniformBlockId = sec.RequirePalette()[1];
                 BuildMetadataUniform(sec);
                 return;
             }
-            if (sec.Palette != null && sec.Palette.Count == 2 && sec.Palette[0] == Section.AIR && sec.OpaqueVoxelCount == total)
+            if (sec.Palette != null && sec.RequirePalette().Count == 2 && sec.RequirePalette()[0] == Section.AIR && sec.OpaqueVoxelCount == total)
             {
                 sec.CompletelyFull = true;
                 sec.Kind = Section.RepresentationKind.Uniform;
-                sec.UniformBlockId = sec.Palette[1];
+                sec.UniformBlockId = sec.RequirePalette()[1];
                 BuildMetadataUniform(sec);
                 return;
             }
@@ -180,7 +180,7 @@ namespace MVoxelEngine1.WorldGeneration.Utils
                     {
                         int li = LinearIndex(x, y, z);
                         int pi = ReadBits(sec, li);
-                        if (pi != 0) arr[li] = sec.Palette[pi];
+                        if (pi != 0) arr[li] = sec.RequirePalette()[pi];
                     }
             sec.ExpandedDense = arr;
             sec.Kind = Section.RepresentationKind.Expanded;
@@ -211,10 +211,10 @@ namespace MVoxelEngine1.WorldGeneration.Utils
         private static void BuildMetadataDense(Section sec)
         {
             // Split classification into opaque and transparent bitsets. Internal exposure only considers opaque.
-            ulong[] opaqueBits = null; // allocate lazily
-            ulong[] transparentBits = null;
+            ulong[]? opaqueBits = null; // allocate lazily
+            ulong[]? transparentBits = null;
             byte minx = 255, miny = 255, minz = 255, maxx = 0, maxy = 0, maxz = 0;
-            var arr = sec.ExpandedDense;
+            var arr = sec.RequireDenseStorage();
             int transparentCount = 0; int opaqueCount = 0;
             for (int li = 0; li < VOXELS_PER_SECTION; li++)
             {
@@ -257,15 +257,15 @@ namespace MVoxelEngine1.WorldGeneration.Utils
         private static void BuildMetadataPacked(Section sec)
         {
             // Packed / MultiPacked classification: decode palette indices, split into opaque vs transparent bitsets.
-            ulong[] opaqueBits = null;
-            ulong[] transparentBits = null;
+            ulong[]? opaqueBits = null;
+            ulong[]? transparentBits = null;
             byte minx = 255, miny = 255, minz = 255, maxx = 0, maxy = 0, maxz = 0;
             int transparentCount = 0; int opaqueCount = 0;
             for (int li = 0; li < VOXELS_PER_SECTION; li++)
             {
                 int pi = ReadBits(sec, li);
                 if (pi == 0) continue; // air
-                ushort id = sec.Palette[pi];
+                ushort id = sec.RequirePalette()[pi];
                 DecodeLinear(li, out int x, out int y, out int z);
                 if (x < minx) minx = (byte)x; if (x > maxx) maxx = (byte)x;
                 if (y < miny) miny = (byte)y; if (y > maxy) maxy = (byte)y;
@@ -344,12 +344,12 @@ namespace MVoxelEngine1.WorldGeneration.Utils
         //  Neg/Pos Y: XZ plane  index = x*16 + z
         //  Neg/Pos Z: XY plane  index = x*16 + y
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void BuildFaceMasks(Section sec, ulong[] occ)
+        private static void BuildFaceMasks(Section sec, ulong[]? occ)
         {
             const int S = 16;
             if (occ == null) return;
 
-            static void EnsureAndClear(ref ulong[] arr)
+            static void EnsureAndClear([System.Diagnostics.CodeAnalysis.NotNull] ref ulong[]? arr)
             {
                 if (arr == null) arr = new ulong[4];
                 else Array.Clear(arr);
@@ -426,7 +426,7 @@ namespace MVoxelEngine1.WorldGeneration.Utils
             // Builds transparent boundary face masks (one 256-bit mask per face) using the transparent occupancy bitset.
             // Layout matches opaque face masks: indices map to 16x16 planes as documented in BuildFaceMasks.
             const int S = 16; if (occ == null) return;
-            static void EnsureAndClear(ref ulong[] arr) { if (arr == null) arr = new ulong[4]; else Array.Clear(arr); }
+            static void EnsureAndClear([System.Diagnostics.CodeAnalysis.NotNull] ref ulong[]? arr) { if (arr == null) arr = new ulong[4]; else Array.Clear(arr); }
             EnsureAndClear(ref sec.TransparentFaceNegXBits);
             EnsureAndClear(ref sec.TransparentFacePosXBits);
             EnsureAndClear(ref sec.TransparentFaceNegYBits);
@@ -484,16 +484,16 @@ namespace MVoxelEngine1.WorldGeneration.Utils
         }
 
         private static int ReadBits(Section sec, int voxelIndex)
-            => ReadBits(sec.BitData, sec.BitsPerIndex, voxelIndex);
+            => ReadBits(sec.RequireBitData(), sec.BitsPerIndex, voxelIndex);
 
         private static void GrowBits(Section sec)
         {
-            int paletteCountMinusOne = sec.Palette.Count - 1;
+            int paletteCountMinusOne = sec.RequirePalette().Count - 1;
             int needed = paletteCountMinusOne <= 0 ? 1 : (int)BitOperations.Log2((uint)paletteCountMinusOne) + 1;
             if (needed <= sec.BitsPerIndex) return;
 
             int oldBits = sec.BitsPerIndex;
-            var oldData = sec.BitData;
+            var oldData = sec.RequireBitData();
             sec.BitsPerIndex = needed;
             AllocateBitData(sec);
 
@@ -540,16 +540,16 @@ namespace MVoxelEngine1.WorldGeneration.Utils
             int bitOffset = (int)(bitPos & 31);
             uint mask = (uint)((1 << sec.BitsPerIndex) - 1);
 
-            sec.BitData[dataIndex] &= ~(mask << bitOffset);
-            sec.BitData[dataIndex] |= (uint)paletteIndex << bitOffset;
+            sec.RequireBitData()[dataIndex] &= ~(mask << bitOffset);
+            sec.RequireBitData()[dataIndex] |= (uint)paletteIndex << bitOffset;
 
             int remaining = 32 - bitOffset;
             if (remaining < sec.BitsPerIndex)
             {
                 int bitsInNext = sec.BitsPerIndex - remaining;
                 uint nextMask = (uint)((1 << bitsInNext) - 1);
-                sec.BitData[dataIndex + 1] &= ~nextMask;
-                sec.BitData[dataIndex + 1] |= (uint)paletteIndex >> remaining;
+                sec.RequireBitData()[dataIndex + 1] &= ~nextMask;
+                sec.RequireBitData()[dataIndex + 1] |= (uint)paletteIndex >> remaining;
             }
         }
 
@@ -572,15 +572,15 @@ namespace MVoxelEngine1.WorldGeneration.Utils
                 sec.Palette = sec.Palette == null
                     ? new List<ushort> { Section.AIR }
                     : new List<ushort>(sec.Palette);
-                sec.PaletteLookup = new Dictionary<ushort, int>(sec.Palette.Count);
-                for (int i = 0; i < sec.Palette.Count; i++)
-                    sec.PaletteLookup[sec.Palette[i]] = i;
+                sec.PaletteLookup = new Dictionary<ushort, int>(sec.RequirePalette().Count);
+                for (int i = 0; i < sec.RequirePalette().Count; i++)
+                    sec.PaletteLookup[sec.RequirePalette()[i]] = i;
             }
 
             if (sec.PaletteLookup.TryGetValue(blockId, out int idx))
                 return idx;
-            idx = sec.Palette.Count;
-            sec.Palette.Add(blockId);
+            idx = sec.RequirePalette().Count;
+            sec.RequirePalette().Add(blockId);
             sec.PaletteLookup[blockId] = idx;
             return idx;
         }
@@ -616,7 +616,7 @@ namespace MVoxelEngine1.WorldGeneration.Utils
                 long totalBits = (long)sec.VoxelCount * sec.BitsPerIndex;
                 int uintCount = (int)((totalBits + 31) / 32);
                 sec.BitData = ArrayPool<uint>.Shared.Rent(uintCount);
-                for (int i = 0; i < uintCount; i++) sec.BitData[i] = 0xFFFFFFFFu;
+                for (int i = 0; i < uintCount; i++) sec.RequireBitData()[i] = 0xFFFFFFFFu;
                 sec.OpaqueVoxelCount = TerrainLoader.IsOpaque(blockId) ? sec.VoxelCount : 0; // opaque voxel count
                 sec.CompletelyFull = TerrainLoader.IsOpaque(blockId);
                 sec.Kind = Section.RepresentationKind.Packed;
@@ -627,7 +627,7 @@ namespace MVoxelEngine1.WorldGeneration.Utils
             if (sec.Kind == Section.RepresentationKind.Expanded)
             {
                 // Repack dense expanded
-                ushort[] dense = sec.ExpandedDense;
+                ushort[] dense = sec.RequireDenseStorage();
                 // Build palette anew
                 var palette = new List<ushort> { Section.AIR };
                 var lookup = new Dictionary<ushort, int> { { Section.AIR, 0 } };

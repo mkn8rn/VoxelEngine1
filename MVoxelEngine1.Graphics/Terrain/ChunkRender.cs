@@ -34,12 +34,12 @@ namespace MVoxelEngine1.Graphics.Terrain
         private int transparentRectangleCount;
         private int deletionScheduled;
 
-        private VAO opaqueVAO;                // opaque pass VAO
-        private VAO transparentVAO;           // transparent pass VAO
-        private VBO quadPosVBO;               // shared static quad positions (attrib 0)
-        private VBO opaqueRectangleVBO;
-        private VBO transparentRectangleVBO;
-        private IBO quadIndexIBO; // index buffer for the shared quad
+        private VAO? opaqueVAO;                // opaque pass VAO
+        private VAO? transparentVAO;           // transparent pass VAO
+        private VBO? quadPosVBO;               // shared static quad positions (attrib 0)
+        private VBO? opaqueRectangleVBO;
+        private VBO? transparentRectangleVBO;
+        private IBO? quadIndexIBO; // index buffer for the shared quad
 
         // Built flags for each buffer object; ensure deletion only when created.
         private bool opaqueVaoBuilt;
@@ -49,7 +49,13 @@ namespace MVoxelEngine1.Graphics.Terrain
         private bool transparentRectangleBuilt;
         private bool quadIndexBuilt;
 
-        public static BlockTextureAtlas terrainTextureAtlas { get; set; }
+        private static BlockTextureAtlas? sharedTerrainTextureAtlas;
+
+        public static BlockTextureAtlas terrainTextureAtlas
+        {
+            get => sharedTerrainTextureAtlas ?? throw new InvalidOperationException("The terrain texture atlas has not been initialized.");
+            set => sharedTerrainTextureAtlas = value ?? throw new ArgumentNullException(nameof(value));
+        }
 
         private bool fullyOccluded;
 
@@ -196,7 +202,7 @@ namespace MVoxelEngine1.Graphics.Terrain
             if (opaqueVAO != null)
             {
                 opaqueVAO.Bind();
-                quadIndexIBO.Bind(); // ensure IBO bound to this VAO if driver disassociates
+                (quadIndexIBO ?? throw new InvalidOperationException("The shared quad index buffer has not been uploaded.")).Bind(); // ensure IBO bound to this VAO if driver disassociates
 
                 program.SetUniform("useTransparentList", 0f);
                 GL.DrawElementsInstanced(
@@ -228,7 +234,7 @@ namespace MVoxelEngine1.Graphics.Terrain
             if (transparentVAO != null)
             {
                 transparentVAO.Bind();
-                quadIndexIBO.Bind(); // ensure IBO bound to this VAO
+                (quadIndexIBO ?? throw new InvalidOperationException("The shared quad index buffer has not been uploaded.")).Bind(); // ensure IBO bound to this VAO
 
                 GL.Enable(EnableCap.Blend);
                 GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
@@ -261,12 +267,12 @@ namespace MVoxelEngine1.Graphics.Terrain
 
         private void DeleteGL()
         {
-            if (opaqueVaoBuilt) { opaqueVAO.Delete(); opaqueVAO = null; opaqueVaoBuilt = false; }
-            if (transparentVaoBuilt) { transparentVAO.Delete(); transparentVAO = null; transparentVaoBuilt = false; }
-            if (quadPosBuilt) { quadPosVBO.Delete(); quadPosVBO = null; quadPosBuilt = false; }
-            if (opaqueRectangleBuilt) { opaqueRectangleVBO.Delete(); opaqueRectangleVBO = null; opaqueRectangleBuilt = false; }
-            if (transparentRectangleBuilt) { transparentRectangleVBO.Delete(); transparentRectangleVBO = null; transparentRectangleBuilt = false; }
-            if (quadIndexBuilt) { quadIndexIBO.Delete(); quadIndexIBO = null; quadIndexBuilt = false; }
+            if (opaqueVaoBuilt) { opaqueVAO?.Delete(); opaqueVAO = null; opaqueVaoBuilt = false; }
+            if (transparentVaoBuilt) { transparentVAO?.Delete(); transparentVAO = null; transparentVaoBuilt = false; }
+            if (quadPosBuilt) { quadPosVBO?.Delete(); quadPosVBO = null; quadPosBuilt = false; }
+            if (opaqueRectangleBuilt) { opaqueRectangleVBO?.Delete(); opaqueRectangleVBO = null; opaqueRectangleBuilt = false; }
+            if (transparentRectangleBuilt) { transparentRectangleVBO?.Delete(); transparentRectangleVBO = null; transparentRectangleBuilt = false; }
+            if (quadIndexBuilt) { quadIndexIBO?.Delete(); quadIndexIBO = null; quadIndexBuilt = false; }
 
             isBuilt = false;
         }

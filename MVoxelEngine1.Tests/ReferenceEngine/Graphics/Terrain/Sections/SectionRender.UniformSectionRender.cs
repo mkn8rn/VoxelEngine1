@@ -85,7 +85,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             {
                 // Precompute same-id uniform neighbor presence per direction to skip entire planes (avoids per-cell sampling & ensures no faces between identical transparent uniform sections).
                 bool skipNX = false, skipPX = false, skipNY = false, skipPY = false, skipNZ = false, skipPZ = false;
-                var secs = data.SectionDescs;
+                var secs = data.RequireSectionDescriptions();
                 int syCount = data.sectionsY;
                 int szCount = data.sectionsZ;
                 int sxCount = data.sectionsX;
@@ -378,7 +378,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             if (sx > 0 && sx < data.sectionsX - 1 && sy > 0 && sy < data.sectionsY - 1 && sz > 0 && sz < data.sectionsZ - 1)
             {
                 // indices of neighbors
-                var secs = data.SectionDescs;
+                var secs = data.RequireSectionDescriptions();
                 ref var nL = ref secs[((sx - 1) * data.sectionsY + sy) * data.sectionsZ + sz];
                 ref var nR = ref secs[((sx + 1) * data.sectionsY + sy) * data.sectionsZ + sz];
                 ref var nD = ref secs[(sx * data.sectionsY + (sy - 1)) * data.sectionsZ + sz];
@@ -492,7 +492,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             // ---------------- FAST-PATH STRATIFICATION PRE-PASS ----------------
             Span<FaceState> faceStates = stackalloc FaceState[6];
             int[] fixedCoords = new int[6];
-            ulong[][] worldPlanes = new ulong[6][]; // only valid for WorldBoundary states
+            ulong[]?[] worldPlanes = new ulong[6][]; // only valid for WorldBoundary states
             // World boundary indexing parameters per face
             int[] wb_startA = new int[6];
             int[] wb_startB = new int[6];
@@ -517,7 +517,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             {
                 int faceDir = meta.FaceDir;
                 bool atWorldBoundary = false;
-                ulong[] worldPlane = null;
+                ulong[]? worldPlane = null;
                 int startA = 0, startB = 0, countA = 0, countB = 0, strideB = 0;
                 int fixedCoord = 0;
                 switch (faceDir)
@@ -645,7 +645,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                 }
 
                 // Determine neighbor mask (if any) matching original switch
-                ulong[] neighborMask = faceDir switch
+                ulong[]? neighborMask = faceDir switch
                 {
                     0 => nDesc.FacePosXBits,
                     1 => nDesc.FaceNegXBits,
@@ -727,7 +727,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
 
                 if (state == FaceState.WorldBoundary)
                 {
-                    ulong[] worldPlane = worldPlanes[faceDir];
+                    ulong[]? worldPlane = worldPlanes[faceDir];
                     int startA = wb_startA[faceDir];
                     int startB = wb_startB[faceDir];
                     int countA = wb_countA[faceDir];

@@ -41,10 +41,10 @@ namespace MVoxelEngine1.Graphics.Textures
             public int Height { get; set; }
         }
 
-        private static Task<List<RawImage>> preloadTask; // file IO + decode (no GL)
+        private static Task<List<RawImage>>? preloadTask; // file IO + decode (no GL)
         private static readonly object preloadLock = new();
         private static volatile bool atlasBuilt = false;
-        private static BlockTextureAtlas instance; // lazy-built when GL upload occurs
+        private static BlockTextureAtlas? instance; // lazy-built when GL upload occurs
         public static void BeginAsyncIOPreload()
         {
             if (preloadTask != null)
@@ -90,17 +90,17 @@ namespace MVoxelEngine1.Graphics.Textures
         public static BlockTextureAtlas GetOrCreate()
         {
             if (atlasBuilt)
-                return instance;
+                return instance ?? throw new InvalidOperationException("The texture atlas has not been published.");
             lock (preloadLock)
             {
                 if (atlasBuilt)
-                    return instance;
+                    return instance ?? throw new InvalidOperationException("The texture atlas has not been published.");
                 // Ensure preload started
                 BeginAsyncIOPreload();
-                List<RawImage> images = null;
+                List<RawImage> images;
                 try
                 {
-                    images = preloadTask?.GetAwaiter().GetResult();
+                    images = preloadTask?.GetAwaiter().GetResult() ?? [];
                 }
                 catch
                 {
@@ -109,7 +109,7 @@ namespace MVoxelEngine1.Graphics.Textures
 
                 instance = new BlockTextureAtlas(images);
                 atlasBuilt = true;
-                return instance;
+                return instance ?? throw new InvalidOperationException("The texture atlas has not been published.");
             }
         }
 

@@ -108,7 +108,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     for (int sz = 0; sz < data.sectionsZ; sz++)
                     {
                         int si = ((sx * data.sectionsY) + sy) * data.sectionsZ + sz;
-                        ref var desc = ref data.SectionDescs[si];
+                        ref var desc = ref data.RequireSectionDescriptions()[si];
 
                         bool fallbackOnly = false; // only set true for debug purposes
                         bool specializedHandled = false;
@@ -363,7 +363,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             int S2 = data.sectionSize; int sx = x / S2; int sy = y / S2; int sz = z / S2;
             if ((uint)sx >= (uint)data.sectionsX || (uint)sy >= (uint)data.sectionsY || (uint)sz >= (uint)data.sectionsZ) return 0;
             int localX = x - sx * S2; int localY = y - sy * S2; int localZ = z - sz * S2;
-            int index = ((sx * data.sectionsY) + sy) * data.sectionsZ + sz; ref var desc = ref data.SectionDescs[index];
+            int index = ((sx * data.sectionsY) + sy) * data.sectionsZ + sz; ref var desc = ref data.RequireSectionDescriptions()[index];
             switch (desc.Kind)
             {
                 case 0: return 0;                           // Empty
@@ -380,7 +380,22 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
 
         private static ushort DecodePacked(ref SectionPrerenderDesc desc, int lx, int ly, int lz)
         {
-            int S3 = 16; int li = ((lz * S3 + lx) << 4) + ly; int bpi = desc.BitsPerIndex; if (bpi <= 0) return 0; long bitPos = (long)li * bpi; int word = (int)(bitPos >> 5); int bitOffset = (int)(bitPos & 31); uint value = desc.PackedBitData[word] >> bitOffset; int rem = 32 - bitOffset; if (rem < bpi) value |= desc.PackedBitData[word + 1] << rem; int mask = (1 << bpi) - 1; int paletteIndex = (int)(value & mask); if (paletteIndex < 0 || paletteIndex >= desc.Palette.Count) return 0; return desc.Palette[paletteIndex];
+            int bpi = desc.BitsPerIndex;
+            if (bpi <= 0)
+                return 0;
+            uint[] bitData = desc.PackedBitData ?? throw new InvalidOperationException("The packed render description has no bit storage.");
+            List<ushort> palette = desc.Palette ?? throw new InvalidOperationException("The packed render description has no palette.");
+            int li = ((lz * 16 + lx) << 4) + ly;
+            long bitPos = (long)li * bpi;
+            int word = (int)(bitPos >> 5);
+            int bitOffset = (int)(bitPos & 31);
+            uint value = bitData[word] >> bitOffset;
+            int remaining = 32 - bitOffset;
+            if (remaining < bpi)
+                value |= bitData[word + 1] << remaining;
+            int mask = (1 << bpi) - 1;
+            int paletteIndex = (int)(value & mask);
+            return paletteIndex < 0 || paletteIndex >= palette.Count ? (ushort)0 : palette[paletteIndex];
         }
     }
 }

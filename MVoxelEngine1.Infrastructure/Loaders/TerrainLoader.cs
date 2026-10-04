@@ -18,8 +18,8 @@ namespace MVoxelEngine1.Infrastructure.Loaders
         private const ushort FIRST_CUSTOM_BLOCK_ID = 256; // IDs <256 reserved for base / special
 
         // Non-opaque (transparent or translucent) blocks.
-        public static HashSet<BlockType> NonOpaqueBlocks { get; private set; }
-        public static HashSet<ushort> NonOpaqueBlockIds { get; private set; }
+        public static HashSet<BlockType> NonOpaqueBlocks { get; private set; } = [];
+        public static HashSet<ushort> NonOpaqueBlockIds { get; private set; } = [];
 
         // Fast O(1) classification table (index = block id)
         // Always length 65536 (full ushort domain) to avoid bounds checks.
@@ -29,8 +29,8 @@ namespace MVoxelEngine1.Infrastructure.Loaders
         private static readonly bool[] GasLut = new bool[65536];
 
         // Liquid blocks.
-        public static HashSet<BlockType> LiquidBlocks { get; private set; }
-        public static HashSet<ushort> LiquidBlockIds { get; private set; }
+        public static HashSet<BlockType> LiquidBlocks { get; private set; } = [];
+        public static HashSet<ushort> LiquidBlockIds { get; private set; } = [];
 
         // Hardcoded list of base block types that are non-opaque.
         public List<BaseBlockType> NonOpaqueBaseBlocks = new List<BaseBlockType> {

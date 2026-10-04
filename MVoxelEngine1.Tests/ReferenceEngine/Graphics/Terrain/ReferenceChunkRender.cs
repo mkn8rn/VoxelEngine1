@@ -163,7 +163,7 @@ internal sealed class ReferenceChunkRender : IDisposable
                     getLocalBlock,
                     referenceNeighbors,
                     TerrainLoader.IsOpaque,
-                    prerenderData.SectionDescs);
+                    prerenderData.RequireSectionDescriptions());
 
             uint[] opaqueTileIndices = BuildReferenceTileIndices(
                 faces.OpaqueBlockIds,

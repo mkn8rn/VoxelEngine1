@@ -114,13 +114,13 @@ namespace MVoxelEngine1.WorldGeneration.Utils
 
         private static void BuildFaceMasksFromColumns(Section sec, ReadOnlySpan<ushort> columnMasks, bool transparent)
         {
-            ulong[] negX = null;
-            ulong[] posX = null;
-            ulong[] negY = null;
-            ulong[] posY = null;
-            ulong[] negZ = null;
-            ulong[] posZ = null;
-            static void OrVerticalMask(ref ulong[] plane, int row, ushort mask)
+            ulong[]? negX = null;
+            ulong[]? posX = null;
+            ulong[]? negY = null;
+            ulong[]? posY = null;
+            ulong[]? negZ = null;
+            ulong[]? posZ = null;
+            static void OrVerticalMask(ref ulong[]? plane, int row, ushort mask)
             {
                 if (mask == 0)
                     return;
@@ -128,7 +128,7 @@ namespace MVoxelEngine1.WorldGeneration.Utils
                 plane[row >> 2] |= (ulong)mask << ((row & 3) << 4);
             }
 
-            static void SetBit(ref ulong[] plane, int index)
+            static void SetBit(ref ulong[]? plane, int index)
             {
                 plane ??= new ulong[4];
                 plane[index >> 6] |= 1UL << (index & 63);
@@ -624,8 +624,8 @@ namespace MVoxelEngine1.WorldGeneration.Utils
                 sec.BitsPerIndex = 1;
                 sec.BitData = RentBitData(128);
                 Array.Clear(sec.BitData, 0, sec.BitData.Length);
-                ulong[] opaqueBits = op ? new ulong[64] : null;
-                ulong[] transparentBitsMask = !op ? new ulong[64] : null;
+                ulong[]? opaqueBits = op ? new ulong[64] : null;
+                ulong[]? transparentBitsMask = !op ? new ulong[64] : null;
                 for (int i = 0; i < COLUMN_COUNT; i++)
                 {
                     ushort mask = op ? columnOpaqueMask[i] : columnTransparentMask[i];
@@ -633,9 +633,9 @@ namespace MVoxelEngine1.WorldGeneration.Utils
                         continue;
                     WriteColumnMaskToBitData(sec.BitData, i, mask);
                     if (op)
-                        WriteColumnMask(opaqueBits, i, mask);
+                        WriteColumnMask(opaqueBits ?? throw new InvalidOperationException("The opaque column mask has not been initialized."), i, mask);
                     else
-                        WriteColumnMask(transparentBitsMask, i, mask);
+                        WriteColumnMask(transparentBitsMask ?? throw new InvalidOperationException("The transparent column mask has not been initialized."), i, mask);
                 }
 
                 sec.OpaqueBits = opaqueBits;
@@ -676,17 +676,17 @@ namespace MVoxelEngine1.WorldGeneration.Utils
                 int uintCount = (int)((totalBits + 31) / 32);
                 sec.BitData = RentBitData(uintCount);
                 Array.Clear(sec.BitData, 0, uintCount);
-                ulong[] opaqueBits = opaqueCount > 0 ? new ulong[64] : null;
-                ulong[] transparentBitsMask = transparentCount > 0 ? new ulong[64] : null;
+                ulong[]? opaqueBits = opaqueCount > 0 ? new ulong[64] : null;
+                ulong[]? transparentBitsMask = transparentCount > 0 ? new ulong[64] : null;
                 for (int i = 0; i < activeColumnCount; i++)
                 {
                     int ci = activeColumns[i];
                     ref readonly var col = ref scratch.GetReadonlyColumn(ci);
                     int baseLi = ci << 4;
                     if (opaqueBits != null)
-                        WriteColumnMask(opaqueBits, ci, columnOpaqueMask[ci]);
+                        WriteColumnMask(opaqueBits ?? throw new InvalidOperationException("The opaque column mask has not been initialized."), ci, columnOpaqueMask[ci]);
                     if (transparentBitsMask != null)
-                        WriteColumnMask(transparentBitsMask, ci, columnTransparentMask[ci]);
+                        WriteColumnMask(transparentBitsMask ?? throw new InvalidOperationException("The transparent column mask has not been initialized."), ci, columnTransparentMask[ci]);
                     if (sec.BitsPerIndex == 2)
                     {
                         uint packedColumn = 0;
@@ -740,8 +740,8 @@ namespace MVoxelEngine1.WorldGeneration.Utils
                 // DenseExpanded fallback: store ALL ids (opaque + transparent)
                 sec.Kind = Section.RepresentationKind.Expanded;
                 var denseArr = RentDense();
-                ulong[] opaqueBits = opaqueCount > 0 ? new ulong[64] : null;
-                ulong[] transparentBitsMask = transparentCount > 0 ? new ulong[64] : null;
+                ulong[]? opaqueBits = opaqueCount > 0 ? new ulong[64] : null;
+                ulong[]? transparentBitsMask = transparentCount > 0 ? new ulong[64] : null;
                 for (int i = 0; i < activeColumnCount; i++)
                 {
                     int ci = activeColumns[i];
@@ -803,7 +803,7 @@ namespace MVoxelEngine1.WorldGeneration.Utils
             sec.VoxelCount = S * S * S;
             var dense = RentDense();
             var occOpaque = RentOccupancy(); // opaque occupancy (unchanged semantics)
-            ulong[] occTransparent = null; // allocated lazily when first transparent voxel encountered
+            ulong[]? occTransparent = null; // allocated lazily when first transparent voxel encountered
             int opaqueCount = 0;
             int transparentCount = 0; // count of transparent (non-opaque, non-air) voxels
             byte minX = 255, minY = 255, minZ = 255, maxX = 0, maxY = 0, maxZ = 0;
@@ -866,7 +866,7 @@ namespace MVoxelEngine1.WorldGeneration.Utils
                 int z = ci / S;
                 if (rc == 255)
                 {
-                    var arr = col.Escalated;
+                    var arr = col.Escalated ?? throw new InvalidOperationException("The escalated column has no voxel storage.");
                     ushort prevOpaque = 0; // track previous opaque id for vertical opaque adjacency
                     for (int y = 0; y < S; y++)
                     {

@@ -7,7 +7,6 @@ using System.Numerics;
 using System.Runtime.Intrinsics.X86;
 using System.Buffers;
 using MVoxelEngine1.Infrastructure.Models.Generation;
-using MVoxelEngine1.Infrastructure.Models.Generation;
 using MVoxelEngine1.Infrastructure.Loaders;
 
 namespace MVoxelEngine1.WorldGeneration.Utils

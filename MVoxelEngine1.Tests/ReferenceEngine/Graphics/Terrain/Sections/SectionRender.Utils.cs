@@ -22,12 +22,12 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
         private static readonly ulong[] _maskZ15 = new ulong[64];
         private static bool _boundaryMasksInit;
         // li -> local coordinate decode tables
-        private static byte[] _lxFromLi; // length 4096
-        private static byte[] _lyFromLi;
-        private static byte[] _lzFromLi;
+        private static byte[] _lxFromLi = []; // length 4096
+        private static byte[] _lyFromLi = [];
+        private static byte[] _lzFromLi = [];
         private static bool _liDecodeInit;
         // Optional prebuilt vertex patterns (currently unused in this method)
-        private static byte[][] _faceVertexBytes; // index by (int)Faces
+        private static byte[][] _faceVertexBytes = []; // index by (int)Faces
         private static bool _faceVertexInit;
         // Shared constants for 16x16x16 sections
         // Note: linear index li = ((z * 16 + x) * 16) + y (column-major in Y)
@@ -308,7 +308,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
 
         // Plane bit helper (used by boundary reintroduction logic across paths).
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static bool PlaneBit(ulong[] plane, int index)
+        internal static bool PlaneBit(ulong[]? plane, int index)
         {
             if (plane == null)
                 return false;

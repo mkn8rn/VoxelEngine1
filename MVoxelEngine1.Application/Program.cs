@@ -76,8 +76,8 @@ namespace MVoxelEngine1.Application
             {
                 ValidateBenchmarkFlags(headless: true);
                 StartupPerformanceRecorder.Begin(
-                    FlagManager.flags.game,
-                    FlagManager.flags.seed.Value,
+                    FlagManager.flags.game ?? throw new InvalidOperationException("The benchmark game is not set."),
+                    FlagManager.flags.seed ?? throw new InvalidOperationException("The benchmark seed is not set."),
                     openGlCallsAllowed: false);
                 HeadlessGtrtBenchmarkRunner.Run(
                     FlagManager.flags.benchmarkOutput);
@@ -89,8 +89,8 @@ namespace MVoxelEngine1.Application
             {
                 ValidateBenchmarkFlags(headless: false);
                 StartupPerformanceRecorder.Begin(
-                    FlagManager.flags.game,
-                    FlagManager.flags.seed.Value,
+                    FlagManager.flags.game ?? throw new InvalidOperationException("The benchmark game is not set."),
+                    FlagManager.flags.seed ?? throw new InvalidOperationException("The benchmark seed is not set."),
                     openGlCallsAllowed: true);
             }
 

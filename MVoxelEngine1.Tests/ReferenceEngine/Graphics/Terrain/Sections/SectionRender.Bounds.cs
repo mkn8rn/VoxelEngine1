@@ -440,7 +440,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                         continue;
                 }
 
-                ulong[] faceBits = meta.FaceDir switch
+                ulong[]? faceBits = meta.FaceDir switch
                 {
                     0 => desc.FaceNegXBits,
                     1 => desc.FacePosXBits,
@@ -453,7 +453,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                 if (faceBits == null)
                     continue; // null means no opaque voxels on that boundary
                 // World boundary plane & neighbor selection
-                ulong[] plane = null;
+                ulong[]? plane = null;
                 bool hasNeighbor = false;
                 SectionPrerenderDesc neighbor = default;
                 switch (meta.FaceDir)
@@ -604,7 +604,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static bool NeighborBoundarySolid(ref SectionPrerenderDesc n, int faceDir, int x, int y, int z)
         {
-            ulong[] mask = null;
+            ulong[]? mask = null;
             int localIndex = 0;
             int lx = x, ly = y, lz = z;
             switch (faceDir)
@@ -657,7 +657,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
         ref SectionPrerenderDesc Neighbor(int nsx, int nsy, int nsz)
         {
             int idx = ((nsx * data.sectionsY) + nsy) * data.sectionsZ + nsz;
-            return ref data.SectionDescs[idx];
+            return ref data.RequireSectionDescriptions()[idx];
         }
 
         // Helper: treat neighbor as fully solid only if every voxel is opaque. Uniform transparent sections are NOT treated as solid.
@@ -688,7 +688,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
 
         // Helper for world-edge plane quick skip if fully occluded in the SxS window. Plane bits represent opaque voxels only.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        bool IsWorldPlaneFullySet(ulong[] plane, int startA, int startB, int countA, int countB, int strideB)
+        bool IsWorldPlaneFullySet(ulong[]? plane, int startA, int startB, int countA, int countB, int strideB)
         {
             if (plane == null)
                 return false;
@@ -713,7 +713,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
         }
 
         // Count visible cells for world boundary face (used for capacity prediction). Plane bits represent opaque voxels only.
-        int CountVisibleWorldBoundary(ulong[] plane, int startA, int startB, int countA, int countB, int strideB)
+        int CountVisibleWorldBoundary(ulong[]? plane, int startA, int startB, int countA, int countB, int strideB)
         {
             int total = countA * countB;
             if (total <= 0)

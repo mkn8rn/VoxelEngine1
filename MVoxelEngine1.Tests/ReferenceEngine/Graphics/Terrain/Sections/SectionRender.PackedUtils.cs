@@ -69,48 +69,48 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             // Neighbor full-solid classification -> boundary skip flags.
             if (sx > 0)
             {
-                ref var n = ref data.SectionDescs[SecIndex(sx - 1, sy, sz, data.sectionsY, data.sectionsZ)];
+                ref var n = ref data.RequireSectionDescriptions()[SecIndex(sx - 1, sy, sz, data.sectionsY, data.sectionsZ)];
                 if (NeighborFullySolid(ref n))
                     skipDir[0] = true;
             }
 
             if (sx + 1 < data.sectionsX)
             {
-                ref var n = ref data.SectionDescs[SecIndex(sx + 1, sy, sz, data.sectionsY, data.sectionsZ)];
+                ref var n = ref data.RequireSectionDescriptions()[SecIndex(sx + 1, sy, sz, data.sectionsY, data.sectionsZ)];
                 if (NeighborFullySolid(ref n))
                     skipDir[1] = true;
             }
 
             if (sy > 0)
             {
-                ref var n = ref data.SectionDescs[SecIndex(sx, sy - 1, sz, data.sectionsY, data.sectionsZ)];
+                ref var n = ref data.RequireSectionDescriptions()[SecIndex(sx, sy - 1, sz, data.sectionsY, data.sectionsZ)];
                 if (NeighborFullySolid(ref n))
                     skipDir[2] = true;
             }
 
             if (sy + 1 < data.sectionsY)
             {
-                ref var n = ref data.SectionDescs[SecIndex(sx, sy + 1, sz, data.sectionsY, data.sectionsZ)];
+                ref var n = ref data.RequireSectionDescriptions()[SecIndex(sx, sy + 1, sz, data.sectionsY, data.sectionsZ)];
                 if (NeighborFullySolid(ref n))
                     skipDir[3] = true;
             }
 
             if (sz > 0)
             {
-                ref var n = ref data.SectionDescs[SecIndex(sx, sy, sz - 1, data.sectionsY, data.sectionsZ)];
+                ref var n = ref data.RequireSectionDescriptions()[SecIndex(sx, sy, sz - 1, data.sectionsY, data.sectionsZ)];
                 if (NeighborFullySolid(ref n))
                     skipDir[4] = true;
             }
 
             if (sz + 1 < data.sectionsZ)
             {
-                ref var n = ref data.SectionDescs[SecIndex(sx, sy, sz + 1, data.sectionsY, data.sectionsZ)];
+                ref var n = ref data.RequireSectionDescriptions()[SecIndex(sx, sy, sz + 1, data.sectionsY, data.sectionsZ)];
                 if (NeighborFullySolid(ref n))
                     skipDir[5] = true;
             }
 
             // Reinsert boundary faces (respect skip flags). Uses existing utility that handles world-edge/neighbor checks.
-            AddVisibleBoundaryFacesSelective(ref desc, sx * S, sy * S, sz * S, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, data.SectionDescs, sx, sy, sz, data.sectionsX, data.sectionsY, data.sectionsZ, skipDir, faceNX, facePX, faceNY, facePY, faceNZ, facePZ, data);
+            AddVisibleBoundaryFacesSelective(ref desc, sx * S, sy * S, sz * S, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, data.RequireSectionDescriptions(), sx, sy, sz, data.sectionsX, data.sectionsY, data.sectionsZ, skipDir, faceNX, facePX, faceNY, facePY, faceNZ, facePZ, data);
             // Bounds trimming to remove out-of-range bits so emission can skip bounds checks.
             ApplyBoundsMask(lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, faceNX, facePX, faceNY, facePY, faceNZ, facePZ);
         }
@@ -122,7 +122,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
         //  - uniformId == 0 : use decodeVoxel to decode per-voxel id; skip non-opaque or zero ids.
         // decodeVoxel is only used when per-voxel decode is required.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void EmitOpaqueMasks(ref SectionPrerenderDesc localDesc, int baseX, int baseY, int baseZ, ReadOnlySpan<ulong> faceMask, byte faceDir, ushort uniformId, Func<int, int, int, ushort> decodeVoxel, Func<ushort, byte, uint> tileProvider, List<byte> offsets, List<uint> tilesOut, List<byte> faceDirs)
+        private void EmitOpaqueMasks(ref SectionPrerenderDesc localDesc, int baseX, int baseY, int baseZ, ReadOnlySpan<ulong> faceMask, byte faceDir, ushort uniformId, Func<int, int, int, ushort>? decodeVoxel, Func<ushort, byte, uint> tileProvider, List<byte> offsets, List<uint> tilesOut, List<byte> faceDirs)
         {
             EnsureLiDecode();
             for (int w = 0; w < 64; w++)
@@ -140,6 +140,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     if (uniformId == 0)
                     {
                         // per-voxel decode
+                        ArgumentNullException.ThrowIfNull(decodeVoxel);
                         id = decodeVoxel(lx, ly, lz);
                         if (id == 0 || !TerrainLoader.IsOpaque(id))
                             continue;
