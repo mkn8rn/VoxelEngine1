@@ -573,28 +573,7 @@ public sealed class NativeGeneratedMeshTests
             int center = view.GetChunkIndex(0, 0, 0);
             if (mode == NativeMaterializedMeshMode.FullBorder)
             {
-                int right = view.GetChunkIndex(1, 0, 0);
-                Succeeded =
-                    NativeMaterializedTerrain.TryMakeChunkMaterialized(
-                        ref view,
-                        center) &&
-                    NativeMaterializedTerrain.TryMakeChunkMaterialized(
-                        ref view,
-                        right) &&
-                    NativeMaterializedTerrain.TrySetBlock(
-                        ref view,
-                        center,
-                        15,
-                        8,
-                        1,
-                        CustomTransparentBlockId) &&
-                    NativeMaterializedTerrain.TrySetBlock(
-                        ref view,
-                        right,
-                        0,
-                        8,
-                        1,
-                        neighborBlockId);
+            InitializeTestProfilesAndSummaries(ref view, center);
             }
             else if (mode == NativeMaterializedMeshMode.HybridEdit)
             {
@@ -642,6 +621,33 @@ public sealed class NativeGeneratedMeshTests
                 ref view,
                 in claimedMesh,
                 workerIndex: 0);
+        }
+
+        private void InitializeTestProfilesAndSummaries(ref global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionView view, int center)
+        {
+                int right = view.GetChunkIndex(1, 0, 0);
+                Succeeded =
+                    NativeMaterializedTerrain.TryMakeChunkMaterialized(
+                        ref view,
+                        center) &&
+                    NativeMaterializedTerrain.TryMakeChunkMaterialized(
+                        ref view,
+                        right) &&
+                    NativeMaterializedTerrain.TrySetBlock(
+                        ref view,
+                        center,
+                        15,
+                        8,
+                        1,
+                        CustomTransparentBlockId) &&
+                    NativeMaterializedTerrain.TrySetBlock(
+                        ref view,
+                        right,
+                        0,
+                        8,
+                        1,
+                        neighborBlockId);
+
         }
     }
 

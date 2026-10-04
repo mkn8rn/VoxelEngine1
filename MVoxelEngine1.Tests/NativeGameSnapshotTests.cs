@@ -70,46 +70,7 @@ public sealed class NativeGameSnapshotTests
                     Assert.Equal(expected, descriptor.GetTile(direction));
                 }
             }
-
-            NativeTerrainMaterialSet materials =
-                native.GetGeneratedMaterials();
-            AssertDescriptorEqual(
-                native.Blocks[(byte)BaseBlockType.Stone],
-                materials.Stone);
-            AssertDescriptorEqual(
-                native.Blocks[(byte)BaseBlockType.Soil],
-                materials.Soil);
-            AssertDescriptorEqual(
-                native.Blocks[(byte)BaseBlockType.Water],
-                materials.Water);
-
-            KeyValuePair<string, Biome>[] orderedBiomes = BiomeManager.Biomes
-                .OrderBy(static pair => pair.Key, StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            Assert.Equal(orderedBiomes.Length, native.Biomes.Length);
-            for (int index = 0; index < orderedBiomes.Length; index++)
-            {
-                Biome source = orderedBiomes[index].Value;
-                NativeBiomeDescriptor descriptor = native.Biomes[index];
-                Assert.Equal(source.id, descriptor.Id);
-                Assert.Equal(source.stoneMinYLevel, descriptor.StoneMinY);
-                Assert.Equal(source.stoneMaxYLevel, descriptor.StoneMaxY);
-                Assert.Equal(source.stoneMinDepth, descriptor.StoneMinDepth);
-                Assert.Equal(source.stoneMaxDepth, descriptor.StoneMaxDepth);
-                Assert.Equal(source.soilMinYLevel, descriptor.SoilMinY);
-                Assert.Equal(source.soilMaxYLevel, descriptor.SoilMaxY);
-                Assert.Equal(source.soilMinDepth, descriptor.SoilMinDepth);
-                Assert.Equal(source.soilMaxDepth, descriptor.SoilMaxDepth);
-                Assert.Equal(source.waterLevel, descriptor.WaterLevel);
-                Assert.Equal(
-                    source.compiledSimpleReplacementRules.Count,
-                    descriptor.ReplacementRuleCount);
-            }
-
-            Assert.Equal(
-                BiomeManager.SelectBiomeForChunk(123456, -160, 320).id,
-                native.Biomes[
-                    native.SelectBiomeIndex(123456, -160, 320)].Id);
+        ExtractNativeSnapshotPreservesRuntimeBlocksBiomesAndTilesRegion(native);
         });
     }
 
@@ -137,5 +98,33 @@ public sealed class NativeGameSnapshotTests
         TerrainLoader.allBlockTypeObjects.Clear();
         _ = new TerrainLoader();
         BiomeManager.LoadAllBiomes();
+    }
+
+    private static void ExtractNativeSnapshotPreservesRuntimeBlocksBiomesAndTilesRegion(global::MVoxelEngine1.WorldGeneration.Native.NativeGameSnapshotView native)
+    {
+        NativeTerrainMaterialSet materials = native.GetGeneratedMaterials();
+        AssertDescriptorEqual(native.Blocks[(byte)BaseBlockType.Stone], materials.Stone);
+        AssertDescriptorEqual(native.Blocks[(byte)BaseBlockType.Soil], materials.Soil);
+        AssertDescriptorEqual(native.Blocks[(byte)BaseBlockType.Water], materials.Water);
+        KeyValuePair<string, Biome>[] orderedBiomes = BiomeManager.Biomes.OrderBy(static pair => pair.Key, StringComparer.OrdinalIgnoreCase).ToArray();
+        Assert.Equal(orderedBiomes.Length, native.Biomes.Length);
+        for (int index = 0; index < orderedBiomes.Length; index++)
+        {
+            Biome source = orderedBiomes[index].Value;
+            NativeBiomeDescriptor descriptor = native.Biomes[index];
+            Assert.Equal(source.id, descriptor.Id);
+            Assert.Equal(source.stoneMinYLevel, descriptor.StoneMinY);
+            Assert.Equal(source.stoneMaxYLevel, descriptor.StoneMaxY);
+            Assert.Equal(source.stoneMinDepth, descriptor.StoneMinDepth);
+            Assert.Equal(source.stoneMaxDepth, descriptor.StoneMaxDepth);
+            Assert.Equal(source.soilMinYLevel, descriptor.SoilMinY);
+            Assert.Equal(source.soilMaxYLevel, descriptor.SoilMaxY);
+            Assert.Equal(source.soilMinDepth, descriptor.SoilMinDepth);
+            Assert.Equal(source.soilMaxDepth, descriptor.SoilMaxDepth);
+            Assert.Equal(source.waterLevel, descriptor.WaterLevel);
+            Assert.Equal(source.compiledSimpleReplacementRules.Count, descriptor.ReplacementRuleCount);
+        }
+
+        Assert.Equal(BiomeManager.SelectBiomeForChunk(123456, -160, 320).id, native.Biomes[native.SelectBiomeIndex(123456, -160, 320)].Id);
     }
 }

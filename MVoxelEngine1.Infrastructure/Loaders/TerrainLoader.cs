@@ -273,22 +273,87 @@ namespace MVoxelEngine1.Infrastructure.Loaders
                     skippedFiles.Add((Path.GetFileName(txtFile), "Exception: " + ex.Message));
                 }
             }
+            ReportCustomBlockAssignments(explicitIdList, autoIdList, skippedFiles, explicitAssigned, autoAssigned);
+        }
 
-            // Track taken IDs (include base + reserved)
-            var takenIds = new HashSet<ushort>(allBlockTypeObjects.Select(b => b.ID));
-            for (ushort r = 0; r < FIRST_CUSTOM_BLOCK_ID; r++) takenIds.Add(r);
+        private static void RegisterRuntimeBlock(BlockType rt, string filePath)
+        {
+            allBlockTypes.Add(rt.Name);
+            allBlockTypesByBaseType[rt.Name] = rt.BaseType;
+            allBlockTypesByIds[rt.ID] = rt.Name;
+            allBlockTypeObjects.Add(rt);
+            Console.WriteLine($"Block type JSON loaded: {rt.Name} (unique '{rt.UniqueName}'), base type: {rt.BaseType}, id: {rt.ID}/65535 (file: {Path.GetFileName(filePath)})");
+        }
 
-            void RegisterRuntimeBlock(BlockType rt, string filePath)
+        public static IList<string> allBlockTypes { get; } = new List<string>();
+        public static IDictionary<string, BaseBlockType> allBlockTypesByBaseType { get; } = new Dictionary<string, BaseBlockType>(StringComparer.Ordinal);
+        public static IDictionary<ushort, string> allBlockTypesByIds { get; } = new Dictionary<ushort, string>();
+        public static IList<BlockType> allBlockTypeObjects { get; } = new List<BlockType>();
+
+        private static void AssignAutomaticBlockIds(global::System.Collections.Generic.List<(global::MVoxelEngine1.Infrastructure.Models.Terrain.BlockTypeJSON json, string file)> explicitIdList, global::System.Collections.Generic.List<(global::MVoxelEngine1.Infrastructure.Models.Terrain.BlockTypeJSON json, string file)> autoIdList, global::System.Collections.Generic.List<(string file, string reason)> skippedFiles, global::System.Collections.Generic.List<(string name, ushort id)> explicitAssigned, global::System.Collections.Generic.List<(string name, ushort id)> autoAssigned, global::System.Collections.Generic.HashSet<ushort> takenIds)
+        {
+            // Auto IDs
+            ushort nextId = FIRST_CUSTOM_BLOCK_ID;
+            foreach (var(json, file)in autoIdList)
             {
-                allBlockTypes.Add(rt.Name);
-                allBlockTypesByBaseType[rt.Name] = rt.BaseType;
-                allBlockTypesByIds[rt.ID] = rt.Name;
-                allBlockTypeObjects.Add(rt);
-                Console.WriteLine($"Block type JSON loaded: {rt.Name} (unique '{rt.UniqueName}'), base type: {rt.BaseType}, id: {rt.ID}/65535 (file: {Path.GetFileName(filePath)})");
+                try
+                {
+                    while (takenIds.Contains(nextId))
+                    {
+                        if (nextId == ushort.MaxValue)
+                            throw new InvalidOperationException("Ran out of block IDs");
+                        nextId++;
+                    }
+
+                    ushort assignedId = nextId;
+                    takenIds.Add(assignedId);
+                    nextId++;
+                    string fileBaseName = Path.GetFileNameWithoutExtension(file);
+                    var rt = new BlockType
+                    {
+                        ID = assignedId,
+                        UniqueName = fileBaseName,
+                        Name = json.Name,
+                        BaseType = json.BaseType,
+                        TextureFaceBase = json.TextureFaceBase,
+                        TextureFaceTop = json.TextureFaceTop ?? json.TextureFaceBase,
+                        TextureFaceFront = json.TextureFaceFront ?? json.TextureFaceBase,
+                        TextureFaceBack = json.TextureFaceBack ?? json.TextureFaceBase,
+                        TextureFaceLeft = json.TextureFaceLeft ?? json.TextureFaceBase,
+                        TextureFaceRight = json.TextureFaceRight ?? json.TextureFaceBase,
+                        TextureFaceBottom = json.TextureFaceBottom ?? json.TextureFaceBase,
+                        IsTransparent = json.IsTransparent,
+                        StateOfMatter = json.StateOfMatter
+                    };
+                    RegisterRuntimeBlock(rt, file);
+                    autoAssigned.Add((rt.Name, rt.ID));
+                }
+                catch (Exception ex)when (ex is IOException or UnauthorizedAccessException or JsonException or ArgumentException or InvalidOperationException)
+                {
+                    skippedFiles.Add((Path.GetFileName(file), "Auto ID failed: " + ex.Message));
+                }
             }
 
+            // Summary report
+            Console.WriteLine($"Explicit ID requests processed: {explicitIdList.Count}, successful: {explicitAssigned.Count}, failed: {explicitIdList.Count - explicitAssigned.Count}");
+            if (explicitAssigned.Count > 0)
+                Console.WriteLine("Explicit assignments: " + string.Join(", ", explicitAssigned.Select(e => e.name + "->" + e.id)));
+            Console.WriteLine($"Auto-ID blocks processed: {autoIdList.Count}, assigned: {autoAssigned.Count}, failed: {autoIdList.Count - autoAssigned.Count}");
+            if (autoAssigned.Count > 0)
+                Console.WriteLine("Auto assignments: " + string.Join(", ", autoAssigned.Select(a => a.name + "->" + a.id)));
+            Console.WriteLine($"Skipped files: {skippedFiles.Count}");
+            foreach (var(f, r)in skippedFiles)
+                Console.WriteLine("  Skipped " + f + ": " + r);
+        }
+
+        private static void ReportCustomBlockAssignments(global::System.Collections.Generic.List<(global::MVoxelEngine1.Infrastructure.Models.Terrain.BlockTypeJSON json, string file)> explicitIdList, global::System.Collections.Generic.List<(global::MVoxelEngine1.Infrastructure.Models.Terrain.BlockTypeJSON json, string file)> autoIdList, global::System.Collections.Generic.List<(string file, string reason)> skippedFiles, global::System.Collections.Generic.List<(string name, ushort id)> explicitAssigned, global::System.Collections.Generic.List<(string name, ushort id)> autoAssigned)
+        {
+            // Track taken IDs (include base + reserved)
+            var takenIds = new HashSet<ushort>(allBlockTypeObjects.Select(b => b.ID));
+            for (ushort r = 0; r < FIRST_CUSTOM_BLOCK_ID; r++)
+                takenIds.Add(r);
             // Explicit IDs first
-            foreach (var (json, file) in explicitIdList)
+            foreach (var(json, file)in explicitIdList)
             {
                 try
                 {
@@ -297,7 +362,6 @@ namespace MVoxelEngine1.Infrastructure.Loaders
                         throw new InvalidOperationException($"Requested reserved ID {requestedId}");
                     if (takenIds.Contains(requestedId))
                         throw new InvalidOperationException($"Requested ID {requestedId} already taken");
-
                     takenIds.Add(requestedId);
                     string fileBaseName = Path.GetFileNameWithoutExtension(file);
                     var rt = new BlockType
@@ -319,69 +383,13 @@ namespace MVoxelEngine1.Infrastructure.Loaders
                     RegisterRuntimeBlock(rt, file);
                     explicitAssigned.Add((rt.Name, rt.ID));
                 }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or ArgumentException or InvalidOperationException)
+                catch (Exception ex)when (ex is IOException or UnauthorizedAccessException or JsonException or ArgumentException or InvalidOperationException)
                 {
                     skippedFiles.Add((Path.GetFileName(file), "Explicit ID failed: " + ex.Message));
                 }
             }
 
-            // Auto IDs
-            ushort nextId = FIRST_CUSTOM_BLOCK_ID;
-            foreach (var (json, file) in autoIdList)
-            {
-                try
-                {
-                    while (takenIds.Contains(nextId))
-                    {
-                        if (nextId == ushort.MaxValue)
-                            throw new InvalidOperationException("Ran out of block IDs");
-                        nextId++;
-                    }
-                    ushort assignedId = nextId;
-                    takenIds.Add(assignedId);
-                    nextId++;
-
-                    string fileBaseName = Path.GetFileNameWithoutExtension(file);
-                    var rt = new BlockType
-                    {
-                        ID = assignedId,
-                        UniqueName = fileBaseName,
-                        Name = json.Name,
-                        BaseType = json.BaseType,
-                        TextureFaceBase = json.TextureFaceBase,
-                        TextureFaceTop = json.TextureFaceTop ?? json.TextureFaceBase,
-                        TextureFaceFront = json.TextureFaceFront ?? json.TextureFaceBase,
-                        TextureFaceBack = json.TextureFaceBack ?? json.TextureFaceBase,
-                        TextureFaceLeft = json.TextureFaceLeft ?? json.TextureFaceBase,
-                        TextureFaceRight = json.TextureFaceRight ?? json.TextureFaceBase,
-                        TextureFaceBottom = json.TextureFaceBottom ?? json.TextureFaceBase,
-                        IsTransparent = json.IsTransparent,
-                        StateOfMatter = json.StateOfMatter
-                    };
-                    RegisterRuntimeBlock(rt, file);
-                    autoAssigned.Add((rt.Name, rt.ID));
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or ArgumentException or InvalidOperationException)
-                {
-                    skippedFiles.Add((Path.GetFileName(file), "Auto ID failed: " + ex.Message));
-                }
-            }
-
-            // Summary report
-            Console.WriteLine($"Explicit ID requests processed: {explicitIdList.Count}, successful: {explicitAssigned.Count}, failed: {explicitIdList.Count - explicitAssigned.Count}");
-            if (explicitAssigned.Count > 0)
-                Console.WriteLine("Explicit assignments: " + string.Join(", ", explicitAssigned.Select(e => e.name + "->" + e.id)));
-            Console.WriteLine($"Auto-ID blocks processed: {autoIdList.Count}, assigned: {autoAssigned.Count}, failed: {autoIdList.Count - autoAssigned.Count}");
-            if (autoAssigned.Count > 0)
-                Console.WriteLine("Auto assignments: " + string.Join(", ", autoAssigned.Select(a => a.name + "->" + a.id)));
-            Console.WriteLine($"Skipped files: {skippedFiles.Count}");
-            foreach (var (f, r) in skippedFiles)
-                Console.WriteLine("  Skipped " + f + ": " + r);
+            AssignAutomaticBlockIds(explicitIdList, autoIdList, skippedFiles, explicitAssigned, autoAssigned, takenIds);
         }
-
-        public static IList<string> allBlockTypes { get; } = new List<string>();
-        public static IDictionary<string, BaseBlockType> allBlockTypesByBaseType { get; } = new Dictionary<string, BaseBlockType>(StringComparer.Ordinal);
-        public static IDictionary<ushort, string> allBlockTypesByIds { get; } = new Dictionary<ushort, string>();
-        public static IList<BlockType> allBlockTypeObjects { get; } = new List<BlockType>();
     }
 }

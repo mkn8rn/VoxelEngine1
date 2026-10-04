@@ -110,6 +110,20 @@ namespace MVoxelEngine1.WorldGeneration.Utils
             throw new InvalidOperationException("The generated section palette does not contain the block ID.");
         }
 
+        private static void OrVerticalBoundaryMask(ref ulong[]? plane, int row, ushort mask)
+        {
+            if (mask == 0)
+                return;
+            plane ??= new ulong[4];
+            plane[row >> 2] |= (ulong)mask << ((row & 3) << 4);
+        }
+
+        private static void SetBoundaryPlaneBit(ref ulong[]? plane, int index)
+        {
+            plane ??= new ulong[4];
+            plane[index >> 6] |= 1UL << (index & 63);
+        }
+
         private static void BuildFaceMasksFromColumns(Section sec, ReadOnlySpan<ushort> columnMasks, bool transparent)
         {
             ulong[]? negX = null;
@@ -118,19 +132,7 @@ namespace MVoxelEngine1.WorldGeneration.Utils
             ulong[]? posY = null;
             ulong[]? negZ = null;
             ulong[]? posZ = null;
-            static void OrVerticalMask(ref ulong[]? plane, int row, ushort mask)
-            {
-                if (mask == 0)
-                    return;
-                plane ??= new ulong[4];
-                plane[row >> 2] |= (ulong)mask << ((row & 3) << 4);
-            }
 
-            static void SetBit(ref ulong[]? plane, int index)
-            {
-                plane ??= new ulong[4];
-                plane[index >> 6] |= 1UL << (index & 63);
-            }
 
             for (int z = 0; z < Section.SECTION_SIZE; z++)
                 for (int x = 0; x < Section.SECTION_SIZE; x++)
@@ -139,18 +141,18 @@ namespace MVoxelEngine1.WorldGeneration.Utils
                     if (mask == 0)
                         continue;
                     if (x == 0)
-                        OrVerticalMask(ref negX, z, mask);
+                        OrVerticalBoundaryMask(ref negX, z, mask);
                     if (x == Section.SECTION_SIZE - 1)
-                        OrVerticalMask(ref posX, z, mask);
+                        OrVerticalBoundaryMask(ref posX, z, mask);
                     if (z == 0)
-                        OrVerticalMask(ref negZ, x, mask);
+                        OrVerticalBoundaryMask(ref negZ, x, mask);
                     if (z == Section.SECTION_SIZE - 1)
-                        OrVerticalMask(ref posZ, x, mask);
+                        OrVerticalBoundaryMask(ref posZ, x, mask);
                     int horizontalIndex = (x << 4) | z;
                     if ((mask & 1) != 0)
-                        SetBit(ref negY, horizontalIndex);
+                        SetBoundaryPlaneBit(ref negY, horizontalIndex);
                     if ((mask & 0x8000) != 0)
-                        SetBit(ref posY, horizontalIndex);
+                        SetBoundaryPlaneBit(ref posY, horizontalIndex);
                 }
 
             if (transparent)
@@ -796,6 +798,54 @@ namespace MVoxelEngine1.WorldGeneration.Utils
         // rebuild a dense array (ushort[4096]) while computing adjacency, bounds and occupancy in a
         // straightforward O(4096) pass.
         // -------------------------------------------------------------------------------------------------
+        private static void SetDenseVoxel(ushort[] dense, ulong[] occOpaque, ref ulong[]? occTransparent,
+            ref int opaqueCount, ref int transparentCount, ref bool bounds,
+            ref byte minX, ref byte minY, ref byte minZ, ref byte maxX, ref byte maxY, ref byte maxZ,
+            int ci, int x, int z, int y, ushort id)
+        {
+            if (id == AIR)
+                return;
+            int li = (ci << 4) + y;
+            if (dense[li] != 0)
+                return; // already set from another run path
+            dense[li] = id;
+            bool op = TerrainLoader.IsOpaque(id);
+            if (op)
+            {
+                opaqueCount++;
+                occOpaque[li >> 6] |= 1UL << (li & 63);
+            }
+            else
+            {
+                occTransparent ??= new ulong[64];
+                transparentCount++;
+                occTransparent[li >> 6] |= 1UL << (li & 63);
+            }
+
+            if (!bounds)
+            {
+                bounds = true;
+                minX = maxX = (byte)x;
+                minY = maxY = (byte)y;
+                minZ = maxZ = (byte)z;
+            }
+            else
+            {
+                if (x < minX)
+                    minX = (byte)x;
+                else if (x > maxX)
+                    maxX = (byte)x;
+                if (y < minY)
+                    minY = (byte)y;
+                else if (y > maxY)
+                    maxY = (byte)y;
+                if (z < minZ)
+                    minZ = (byte)z;
+                else if (z > maxZ)
+                    maxZ = (byte)z;
+            }
+        }
+
         private static void DenseExpandedFinaliseSection(Section sec, SectionBuildScratch scratch)
         {
             sec.VoxelCount = S * S * S;
@@ -808,50 +858,7 @@ namespace MVoxelEngine1.WorldGeneration.Utils
             bool bounds = false;
             int adjX = 0, adjY = 0, adjZ = 0; // opaque adjacency only
             // Local helper: set one voxel (skip duplicates) and update bounds / per-class occupancy.
-            void SetVoxel(int ci, int x, int z, int y, ushort id)
-            {
-                if (id == AIR)
-                    return;
-                int li = (ci << 4) + y;
-                if (dense[li] != 0)
-                    return; // already set from another run path
-                dense[li] = id;
-                bool op = TerrainLoader.IsOpaque(id);
-                if (op)
-                {
-                    opaqueCount++;
-                    occOpaque[li >> 6] |= 1UL << (li & 63);
-                }
-                else
-                {
-                    occTransparent ??= new ulong[64];
-                    transparentCount++;
-                    occTransparent[li >> 6] |= 1UL << (li & 63);
-                }
 
-                if (!bounds)
-                {
-                    bounds = true;
-                    minX = maxX = (byte)x;
-                    minY = maxY = (byte)y;
-                    minZ = maxZ = (byte)z;
-                }
-                else
-                {
-                    if (x < minX)
-                        minX = (byte)x;
-                    else if (x > maxX)
-                        maxX = (byte)x;
-                    if (y < minY)
-                        minY = (byte)y;
-                    else if (y > maxY)
-                        maxY = (byte)y;
-                    if (z < minZ)
-                        minZ = (byte)z;
-                    else if (z > maxZ)
-                        maxZ = (byte)z;
-                }
-            }
 
             // Decode each column and accumulate vertical adjacency (AdjY) for opaque voxels only.
             for (int ci = 0; ci < COLUMN_COUNT; ci++)
@@ -871,7 +878,7 @@ namespace MVoxelEngine1.WorldGeneration.Utils
                         ushort id = arr[y];
                         if (id != AIR)
                         {
-                            SetVoxel(ci, x, z, y, id);
+                            SetDenseVoxel(dense, occOpaque, ref occTransparent, ref opaqueCount, ref transparentCount, ref bounds, ref minX, ref minY, ref minZ, ref maxX, ref maxY, ref maxZ, ci, x, z, y, id);
                             if (TerrainLoader.IsOpaque(id))
                             {
                                 if (prevOpaque != 0)
@@ -887,41 +894,14 @@ namespace MVoxelEngine1.WorldGeneration.Utils
                 }
                 else
                 {
-                    if (rc >= 1)
-                    {
-                        ushort id0 = col.Id0;
-                        if (id0 != AIR)
-                        {
-                            bool op0 = TerrainLoader.IsOpaque(id0);
-                            for (int y = col.Y0Start; y <= col.Y0End; y++)
-                            {
-                                SetVoxel(ci, x, z, y, id0);
-                                if (op0 && y > col.Y0Start)
-                                    adjY++; // opaque internal adjacency inside run
-                            }
-                        }
-                    }
-
-                    if (rc == 2)
-                    {
-                        ushort id1 = col.Id1;
-                        if (id1 != AIR)
-                        {
-                            bool op1 = TerrainLoader.IsOpaque(id1);
-                            for (int y = col.Y1Start; y <= col.Y1End; y++)
-                            {
-                                SetVoxel(ci, x, z, y, id1);
-                                if (op1 && y > col.Y1Start)
-                                    adjY++;
-                            }
-
-                            // cross-run vertical opaque adjacency (only if runs touch and both opaque)
-                            if (col.Id0 != AIR && TerrainLoader.IsOpaque(col.Id0) && op1 && col.Y1Start == col.Y0End + 1)
-                                adjY++;
-                        }
-                    }
+            ExtractDenseExpandedFinaliseSectionRegion3(dense, occOpaque, ref occTransparent, ref opaqueCount, ref transparentCount, ref minX, ref minY, ref minZ, ref maxX, ref maxY, ref maxZ, ref bounds, ref adjY, ci, ref col, rc, x, z);
                 }
             }
+            ExtractDenseExpandedFinaliseSectionRegion2(sec, scratch, dense, occOpaque, occTransparent, opaqueCount, transparentCount, minX, minY, minZ, maxX, maxY, maxZ, bounds, ref adjX, adjY, ref adjZ);
+        }
+
+        private static void CountHorizontalOpaqueAdjacencies(global::MVoxelEngine1.Infrastructure.Models.Generation.Section sec, ushort[] dense, ulong[] occOpaque, int opaqueCount, int transparentCount, ref int adjX, ref int adjZ)
+        {
 
             // Horizontal adjacency (opaque only) across X/Z dimensions.
             const int DeltaX = 16; // adding 16 moves to next column in X inside same Z row
@@ -959,17 +939,11 @@ namespace MVoxelEngine1.WorldGeneration.Utils
             sec.OpaqueVoxelCount = opaqueCount; // opaque voxel count only
             sec.TransparentCount = transparentCount; // transparent voxel count
             sec.HasTransparent = transparentCount > 0;
-            if (bounds)
-            {
-                sec.HasBounds = true;
-                sec.MinLX = minX;
-                sec.MaxLX = maxX;
-                sec.MinLY = minY;
-                sec.MaxLY = maxY;
-                sec.MinLZ = minZ;
-                sec.MaxLZ = maxZ;
-            }
 
+        }
+
+        private static void ExtractDenseExpandedFinaliseSectionRegion(global::MVoxelEngine1.Infrastructure.Models.Generation.Section sec, global::MVoxelEngine1.Infrastructure.Models.Generation.SectionBuildScratch scratch, ulong[] occOpaque, ulong[]? occTransparent, int opaqueCount, int transparentCount, int adjX, int adjY, int adjZ)
+        {
             long internalAdj = (long)adjX + adjY + adjZ;
             sec.InternalExposure = (int)(6L * opaqueCount - 2L * internalAdj); // exposure from opaque only
             sec.IsAllAir = opaqueCount == 0 && transparentCount == 0; // true only if entirely air
@@ -990,6 +964,60 @@ namespace MVoxelEngine1.WorldGeneration.Utils
             sec.BuildScratch = null;
             FinalizeTransparentAndEmptyMasks(sec);
             ReturnScratch(scratch);
+        }
+
+        private static void ExtractDenseExpandedFinaliseSectionRegion2(global::MVoxelEngine1.Infrastructure.Models.Generation.Section sec, global::MVoxelEngine1.Infrastructure.Models.Generation.SectionBuildScratch scratch, ushort[] dense, ulong[] occOpaque, ulong[]? occTransparent, int opaqueCount, int transparentCount, byte minX, byte minY, byte minZ, byte maxX, byte maxY, byte maxZ, bool bounds, ref int adjX, int adjY, ref int adjZ)
+        {
+            CountHorizontalOpaqueAdjacencies(sec, dense, occOpaque, opaqueCount, transparentCount, ref adjX, ref adjZ);
+            if (bounds)
+            {
+                sec.HasBounds = true;
+                sec.MinLX = minX;
+                sec.MaxLX = maxX;
+                sec.MinLY = minY;
+                sec.MaxLY = maxY;
+                sec.MinLZ = minZ;
+                sec.MaxLZ = maxZ;
+            }
+
+            ExtractDenseExpandedFinaliseSectionRegion(sec, scratch, occOpaque, occTransparent, opaqueCount, transparentCount, adjX, adjY, adjZ);
+        }
+
+        private static void ExtractDenseExpandedFinaliseSectionRegion3(ushort[] dense, ulong[] occOpaque, ref ulong[]? occTransparent, ref int opaqueCount, ref int transparentCount, ref byte minX, ref byte minY, ref byte minZ, ref byte maxX, ref byte maxY, ref byte maxZ, ref bool bounds, ref int adjY, int ci, ref global::MVoxelEngine1.Infrastructure.Models.Generation.ColumnData col, byte rc, int x, int z)
+        {
+            if (rc >= 1)
+            {
+                ushort id0 = col.Id0;
+                if (id0 != AIR)
+                {
+                    bool op0 = TerrainLoader.IsOpaque(id0);
+                    for (int y = col.Y0Start; y <= col.Y0End; y++)
+                    {
+                        SetDenseVoxel(dense, occOpaque, ref occTransparent, ref opaqueCount, ref transparentCount, ref bounds, ref minX, ref minY, ref minZ, ref maxX, ref maxY, ref maxZ, ci, x, z, y, id0);
+                        if (op0 && y > col.Y0Start)
+                            adjY++; // opaque internal adjacency inside run
+                    }
+                }
+            }
+
+            if (rc == 2)
+            {
+                ushort id1 = col.Id1;
+                if (id1 != AIR)
+                {
+                    bool op1 = TerrainLoader.IsOpaque(id1);
+                    for (int y = col.Y1Start; y <= col.Y1End; y++)
+                    {
+                        SetDenseVoxel(dense, occOpaque, ref occTransparent, ref opaqueCount, ref transparentCount, ref bounds, ref minX, ref minY, ref minZ, ref maxX, ref maxY, ref maxZ, ci, x, z, y, id1);
+                        if (op1 && y > col.Y1Start)
+                            adjY++;
+                    }
+
+                    // cross-run vertical opaque adjacency (only if runs touch and both opaque)
+                    if (col.Id0 != AIR && TerrainLoader.IsOpaque(col.Id0) && op1 && col.Y1Start == col.Y0End + 1)
+                        adjY++;
+                }
+            }
         }
     }
 }

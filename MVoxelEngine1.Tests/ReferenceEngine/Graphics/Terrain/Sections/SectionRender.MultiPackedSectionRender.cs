@@ -35,9 +35,13 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             if (!hasOpaque && !hasResidualTransparent && !hasDominantTransparent)
                 return true; // nothing
             ResolveLocalBounds(in desc, S, out int lxMin, out int lxMax, out int lyMin, out int lyMax, out int lzMin, out int lzMax);
-            int baseX = sx * S;
-            int baseY = sy * S;
-            int baseZ = sz * S;
+            ExtractEmitMultiPackedSectionInstancesRegion3(ref desc, sx, sy, sz, S, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList, transparentOffsetList, transparentTileIndexList, transparentFaceDirList, hasOpaque, hasResidualTransparent, hasDominantTransparent, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax);
+
+            return true;
+        }
+
+        private void ExtractEmitMultiPackedSectionInstancesRegion(ref global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc desc, int sx, int sy, int sz, int S, global::System.Collections.Generic.List<byte> opaqueOffsetList, global::System.Collections.Generic.List<uint> opaqueTileIndexList, global::System.Collections.Generic.List<byte> opaqueFaceDirList, global::System.Collections.Generic.List<byte> transparentOffsetList, global::System.Collections.Generic.List<uint> transparentTileIndexList, global::System.Collections.Generic.List<byte> transparentFaceDirList, bool hasOpaque, bool hasDominantTransparent, int lxMin, int lxMax, int lyMin, int lyMax, int lzMin, int lzMax, int baseX, int baseY, int baseZ)
+        {
             EnsureLiDecode();
             // ---------------- OPAQUE PATH ----------------
             if (hasOpaque)
@@ -87,7 +91,47 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     EmitTransparentMasks(desc.DominantTransparentId, baseX, baseY, baseZ, desc.TransparentFaceNegXBits.AsSpan(), desc.TransparentFacePosXBits.AsSpan(), desc.TransparentFaceNegYBits.AsSpan(), desc.TransparentFacePosYBits.AsSpan(), desc.TransparentFaceNegZBits.AsSpan(), desc.TransparentFacePosZBits.AsSpan(), dom, transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
                 }
             }
+        }
 
+        private void ExtractEmitMultiPackedSectionInstancesRegion2(global::System.Collections.Generic.List<byte> transparentOffsetList, global::System.Collections.Generic.List<uint> transparentTileIndexList, global::System.Collections.Generic.List<byte> transparentFaceDirList, int lxMin, int lxMax, int lyMin, int lyMax, int lzMin, int lzMax, int baseX, int baseY, int baseZ, ulong[]? opaqueBits, global::System.Collections.Generic.List<ushort> palette, int[] transparentPaletteIndices, int tCount, ulong[][] perIdMasks)
+        {
+            // For each per-id mask build directional face masks & emit.
+            Span<ulong> fNX = stackalloc ulong[64];
+            Span<ulong> fPX = stackalloc ulong[64];
+            Span<ulong> fNY = stackalloc ulong[64];
+            Span<ulong> fPY = stackalloc ulong[64];
+            Span<ulong> fNZ = stackalloc ulong[64];
+            Span<ulong> fPZ = stackalloc ulong[64];
+            for (int i = 0; i < tCount; i++)
+            {
+                var voxelMask = perIdMasks[i];
+                if (voxelMask == null)
+                    continue;
+                // Clear face masks
+                for (int j = 0; j < 64; j++)
+                    fNX[j] = fPX[j] = fNY[j] = fPY[j] = fNZ[j] = fPZ[j] = 0UL;
+                // Use unified transparent builder. supply opaqueBits (or zero mask) as ReadOnlySpan.
+                BuildTransparentFaceMasks(voxelMask.AsSpan(), (opaqueBits != null) ? opaqueBits.AsSpan() : _zeroMask64.AsSpan(), fNX, fPX, fNY, fPY, fNZ, fPZ);
+                ApplyBoundsMask(lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, fNX, fPX, fNY, fPY, fNZ, fPZ);
+                int add = PopCountMask(fNX) + PopCountMask(fPX) + PopCountMask(fNY) + PopCountMask(fPY) + PopCountMask(fNZ) + PopCountMask(fPZ);
+                if (add == 0)
+                    continue;
+                transparentOffsetList.EnsureCapacity(transparentOffsetList.Count + add * 3);
+                transparentTileIndexList.EnsureCapacity(transparentTileIndexList.Count + add);
+                transparentFaceDirList.EnsureCapacity(transparentFaceDirList.Count + add);
+                ushort id = palette[transparentPaletteIndices[i]];
+                // directional masks already restricted to this id so pass an empty voxelMask.
+                EmitTransparentMasks(id, baseX, baseY, baseZ, fNX, fPX, fNY, fPY, fNZ, fPZ, default, // no extra &-mask needed
+         transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
+            }
+        }
+
+        private void ExtractEmitMultiPackedSectionInstancesRegion3(ref global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc desc, int sx, int sy, int sz, int S, global::System.Collections.Generic.List<byte> opaqueOffsetList, global::System.Collections.Generic.List<uint> opaqueTileIndexList, global::System.Collections.Generic.List<byte> opaqueFaceDirList, global::System.Collections.Generic.List<byte> transparentOffsetList, global::System.Collections.Generic.List<uint> transparentTileIndexList, global::System.Collections.Generic.List<byte> transparentFaceDirList, bool hasOpaque, bool hasResidualTransparent, bool hasDominantTransparent, int lxMin, int lxMax, int lyMin, int lyMax, int lzMin, int lzMax)
+        {
+            int baseX = sx * S;
+            int baseY = sy * S;
+            int baseZ = sz * S;
+            ExtractEmitMultiPackedSectionInstancesRegion(ref desc, sx, sy, sz, S, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList, transparentOffsetList, transparentTileIndexList, transparentFaceDirList, hasOpaque, hasDominantTransparent, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, baseX, baseY, baseZ);
             // --------------- RESIDUAL TRANSPARENT MULTI-ID BITSET PATH ---------------
             if (hasResidualTransparent)
             {
@@ -134,39 +178,9 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                         }
                     }
 
-                    // For each per-id mask build directional face masks & emit.
-                    Span<ulong> fNX = stackalloc ulong[64];
-                    Span<ulong> fPX = stackalloc ulong[64];
-                    Span<ulong> fNY = stackalloc ulong[64];
-                    Span<ulong> fPY = stackalloc ulong[64];
-                    Span<ulong> fNZ = stackalloc ulong[64];
-                    Span<ulong> fPZ = stackalloc ulong[64];
-                    for (int i = 0; i < tCount; i++)
-                    {
-                        var voxelMask = perIdMasks[i];
-                        if (voxelMask == null)
-                            continue;
-                        // Clear face masks
-                        for (int j = 0; j < 64; j++)
-                            fNX[j] = fPX[j] = fNY[j] = fPY[j] = fNZ[j] = fPZ[j] = 0UL;
-                        // Use unified transparent builder. supply opaqueBits (or zero mask) as ReadOnlySpan.
-                        BuildTransparentFaceMasks(voxelMask.AsSpan(), (opaqueBits != null) ? opaqueBits.AsSpan() : _zeroMask64.AsSpan(), fNX, fPX, fNY, fPY, fNZ, fPZ);
-                        ApplyBoundsMask(lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, fNX, fPX, fNY, fPY, fNZ, fPZ);
-                        int add = PopCountMask(fNX) + PopCountMask(fPX) + PopCountMask(fNY) + PopCountMask(fPY) + PopCountMask(fNZ) + PopCountMask(fPZ);
-                        if (add == 0)
-                            continue;
-                        transparentOffsetList.EnsureCapacity(transparentOffsetList.Count + add * 3);
-                        transparentTileIndexList.EnsureCapacity(transparentTileIndexList.Count + add);
-                        transparentFaceDirList.EnsureCapacity(transparentFaceDirList.Count + add);
-                        ushort id = palette[transparentPaletteIndices[i]];
-                        // directional masks already restricted to this id so pass an empty voxelMask.
-                        EmitTransparentMasks(id, baseX, baseY, baseZ, fNX, fPX, fNY, fPY, fNZ, fPZ, default, // no extra &-mask needed
- transparentOffsetList, transparentTileIndexList, transparentFaceDirList);
-                    }
+                    ExtractEmitMultiPackedSectionInstancesRegion2(transparentOffsetList, transparentTileIndexList, transparentFaceDirList, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, baseX, baseY, baseZ, opaqueBits, palette, transparentPaletteIndices, tCount, perIdMasks);
                 }
             }
-
-            return true;
         }
     }
 }

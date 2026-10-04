@@ -68,41 +68,11 @@ internal static class NativeVoxelMesh
             int rowOffset = checked(v * uSize);
             for (int u = 0; u < uSize; u++)
             {
-                GetPairCoordinates(
-                    axis,
-                    boundary,
-                    u,
-                    v,
-                    out int lowerX,
-                    out int lowerY,
-                    out int lowerZ,
-                    out int upperX,
-                    out int upperY,
-                    out int upperZ);
-                if (!NativeGeneratedTerrain.TryGetBlock(
-                        ref session,
-                        chunkIndex,
-                        lowerX,
-                        lowerY,
-                        lowerZ,
-                        out ushort lowerId) ||
-                    !NativeGeneratedTerrain.TryGetBlock(
-                        ref session,
-                        chunkIndex,
-                        upperX,
-                        upperY,
-                        upperZ,
-                        out ushort upperId) ||
-                    !session.TryIsBlockOpaque(
-                        lowerId,
-                        out bool lowerOpaque) ||
-                    !session.TryIsBlockOpaque(
-                        upperId,
+                if (!TryReadBoundaryBlocks(ref session, chunkIndex,
+                        axis, boundary, u, v, out ushort lowerId,
+                        out ushort upperId, out bool lowerOpaque,
                         out bool upperOpaque))
-                {
-                    session.Fail(NativeGtrtFailureCode.InvalidGeneratedMesh);
                     return false;
-                }
 
                 int index = rowOffset + u;
                 negativeFaces[index] = boundary < normalSize &&
@@ -147,34 +117,8 @@ internal static class NativeVoxelMesh
                 if (blockId == 0)
                     continue;
 
-                int extentU = 1;
-                while (u + extentU < uSize &&
-                       faces[index + extentU] == blockId)
-                {
-                    extentU++;
-                }
-
-                int extentV = 1;
-                while (v + extentV < vSize &&
-                       RowMatches(
-                           faces,
-                           uSize,
-                           u,
-                           v + extentV,
-                           extentU,
-                           blockId))
-                {
-                    extentV++;
-                }
-
-                for (int offsetV = 0;
-                     offsetV < extentV;
-                     offsetV++)
-                {
-                    faces.Slice(
-                        checked((v + offsetV) * uSize + u),
-                        extentU).Clear();
-                }
+                GrowAndClearRectangle(faces, uSize, vSize, u, v,
+                    index, blockId, out int extentU, out int extentV);
 
                 if (!session.TryGetBlockDescriptor(
                         checked((ushort)blockId),
@@ -210,6 +154,86 @@ internal static class NativeVoxelMesh
         }
 
         return true;
+    }
+
+    private static bool TryReadBoundaryBlocks(
+        scoped ref NativeGtrtSessionView session, int chunkIndex,
+        int axis, int boundary, int u, int v,
+        out ushort lowerId, out ushort upperId,
+        out bool lowerOpaque, out bool upperOpaque)
+    {
+        lowerId = upperId = 0;
+        lowerOpaque = upperOpaque = false;
+        GetPairCoordinates(
+            axis,
+            boundary,
+            u,
+            v,
+            out int lowerX,
+            out int lowerY,
+            out int lowerZ,
+            out int upperX,
+            out int upperY,
+            out int upperZ);
+        if (!NativeGeneratedTerrain.TryGetBlock(
+                ref session,
+                chunkIndex,
+                lowerX,
+                lowerY,
+                lowerZ,
+                out lowerId) ||
+            !NativeGeneratedTerrain.TryGetBlock(
+                ref session,
+                chunkIndex,
+                upperX,
+                upperY,
+                upperZ,
+                out upperId) ||
+            !session.TryIsBlockOpaque(
+                lowerId,
+                out lowerOpaque) ||
+            !session.TryIsBlockOpaque(
+                upperId,
+                out upperOpaque))
+        {
+            session.Fail(NativeGtrtFailureCode.InvalidGeneratedMesh);
+            return false;
+        }
+        return true;
+    }
+
+    private static void GrowAndClearRectangle(Span<int> faces,
+        int uSize, int vSize, int u, int v, int index, int blockId,
+        out int extentU, out int extentV)
+    {
+        extentU = 1;
+        while (u + extentU < uSize &&
+               faces[index + extentU] == blockId)
+        {
+            extentU++;
+        }
+
+        extentV = 1;
+        while (v + extentV < vSize &&
+               RowMatches(
+                   faces,
+                   uSize,
+                   u,
+                   v + extentV,
+                   extentU,
+                   blockId))
+        {
+            extentV++;
+        }
+
+        for (int offsetV = 0;
+             offsetV < extentV;
+             offsetV++)
+        {
+            faces.Slice(
+                checked((v + offsetV) * uSize + u),
+                extentU).Clear();
+        }
     }
 
     private static bool RowMatches(

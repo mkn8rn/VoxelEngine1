@@ -204,17 +204,7 @@ namespace MVoxelEngine1.Tests
 #pragma warning disable CA1814 // The independent oracle retains the original dense matrix and coordinate indexing; this test-only layout is compared with native representations.
             var blocks = new ushort[maxX, maxY, maxZ];
 #pragma warning restore CA1814
-            for (int x = 0; x < 16; x++)
-            {
-                for (int y = 0; y < maxY; y++)
-                {
-                    for (int z = 0; z < maxZ; z++)
-                        blocks[x, y, z] = Water;
-                }
-            }
-
-            blocks[16, 8, 8] = Stone;
-            blocks[20, 9, 9] = Glass;
+            ExtractSectionAwareScanMatchesCompleteVoxelScanRegion(maxY, maxZ, blocks);
             var sections = new[]
             {
                 new SectionPrerenderDesc
@@ -452,6 +442,23 @@ namespace MVoxelEngine1.Tests
                         directions[index]);
                 }
             }
+        }
+
+#pragma warning disable CA1814 // Retain the same dense oracle matrix and coordinate indexing when passing it to the extracted fixture initializer; parity tests use this data.
+        private static void ExtractSectionAwareScanMatchesCompleteVoxelScanRegion(int maxY, int maxZ, ushort[,, ] blocks)
+#pragma warning restore CA1814
+        {
+            for (int x = 0; x < 16; x++)
+            {
+                for (int y = 0; y < maxY; y++)
+                {
+                    for (int z = 0; z < maxZ; z++)
+                        blocks[x, y, z] = Water;
+                }
+            }
+
+            blocks[16, 8, 8] = Stone;
+            blocks[20, 9, 9] = Glass;
         }
     }
 }

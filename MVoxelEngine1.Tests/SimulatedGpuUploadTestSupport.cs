@@ -123,17 +123,8 @@ namespace MVoxelEngine1.Tests
             {
                 while (!process.HasExited)
                 {
-                    try
-                    {
-                        process.Refresh();
-                        peakWorkingSetBytes = Math.Max(peakWorkingSetBytes, process.WorkingSet64);
-                        if (OperatingSystem.IsWindows())
-                            windowObserved |= process.MainWindowHandle != IntPtr.Zero;
-                    }
-                    catch (InvalidOperationException)when (process.HasExited)
-                    {
+                    if (!TrySampleProcessState(process, ref peakWorkingSetBytes, ref windowObserved))
                         break;
-                    }
 
                     if (maximumWorkingSetBytes.HasValue && peakWorkingSetBytes > maximumWorkingSetBytes.Value)
                     {
@@ -167,6 +158,22 @@ namespace MVoxelEngine1.Tests
             }
 
             return new SimulatedGpuProcessResult(process.ExitCode, await standardOutputTask.ConfigureAwait(true), await standardErrorTask.ConfigureAwait(true), windowObserved, peakWorkingSetBytes);
+        }
+
+        private static bool TrySampleProcessState(Process process, ref long peakWorkingSetBytes, ref bool windowObserved)
+        {
+            try
+            {
+                process.Refresh();
+                peakWorkingSetBytes = Math.Max(peakWorkingSetBytes, process.WorkingSet64);
+                if (OperatingSystem.IsWindows())
+                    windowObserved |= process.MainWindowHandle != IntPtr.Zero;
+                return true;
+            }
+            catch (InvalidOperationException) when (process.HasExited)
+            {
+                return false;
+            }
         }
 
         public static string[] FindIncompleteFiles(string outputPath)

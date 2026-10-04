@@ -113,6 +113,15 @@ internal static class NativeMaterializedTerrain
             return false;
         }
 
+        return TryReadMaterializedSection(ref session, in section, localX, localY, localZ, out blockId, out handled);
+    }
+
+    private static bool TryReadMaterializedSection(scoped ref NativeGtrtSessionView session,
+        scoped ref readonly NativeMaterializedSectionRecord section,
+        int localX, int localY, int localZ, out ushort blockId, out bool handled)
+    {
+        blockId = 0;
+        handled = false;
         switch (section.StorageKind)
         {
             case NativeSectionStorageKind.Uniform:
@@ -203,99 +212,8 @@ internal static class NativeMaterializedTerrain
 
         bool allocateRaw = newSection || existingSection.StorageKind != NativeSectionStorageKind.Raw;
         int rawVoxelOffset = allocateRaw ? TryAllocateRawSection(ref session) : existingSection.RawVoxelOffset;
-        if (rawVoxelOffset < 0)
-            return false;
-        Span<ushort> raw = session.MaterializedRawVoxels.Slice(rawVoxelOffset, VoxelSection.VoxelCount);
-        if (newSection)
-        {
-            if (newChunk || existingChunk.StorageKind == NativeChunkStorageKind.HybridSections)
-            {
-                if (!CopyGeneratedSection(ref session, chunkIndex, sectionIndex, raw))
-                {
-                    return false;
-                }
-            }
-            else
-            {
-                if (existingChunk.StorageKind == NativeChunkStorageKind.UniformSections)
-                {
-                    raw.Fill(existingChunk.UniformBlockId);
-                }
-                else
-                {
-                    raw.Clear();
-                }
-            }
-        }
-        else
-        {
-            if (existingSection.StorageKind == NativeSectionStorageKind.Uniform)
-            {
-                raw.Fill(existingSection.UniformBlockId);
-            }
-            else if (existingSection.StorageKind == NativeSectionStorageKind.Packed)
-            {
-                if (!TryDecodePackedSection(ref session, in existingSection, raw))
-                {
-                    return false;
-                }
-            }
-            else if (existingSection.StorageKind != NativeSectionStorageKind.Raw)
-            {
-                session.Fail(NativeGtrtFailureCode.InvalidMaterializedTerrain);
-                return false;
-            }
-        }
-
-        raw[GetSectionLocalIndex(localX, localY, localZ)] = blockId;
-        if (newChunk)
-        {
-            session.MaterializedChunks[materializedChunkIndex] = new NativeMaterializedChunkRecord
-            {
-                ChunkX = activeChunk.ChunkX,
-                ChunkY = activeChunk.ChunkY,
-                ChunkZ = activeChunk.ChunkZ,
-                StorageKind = NativeChunkStorageKind.HybridSections,
-                SectionMapOffset = sectionMapOffset,
-                State = ActiveRecord,
-                Revision = 1
-            };
-            session.State.MaterializedChunkCount++;
-        }
-
-        ref NativeMaterializedChunkRecord materialized = ref session.MaterializedChunks[materializedChunkIndex];
-        if (newSection)
-        {
-            session.MaterializedSections[sectionRecordIndex] = new NativeMaterializedSectionRecord
-            {
-                OwnerChunkIndex = materializedChunkIndex,
-                SectionIndex = sectionIndex,
-                RawVoxelOffset = rawVoxelOffset,
-                PaletteOffset = -1,
-                PackedWordOffset = -1,
-                Revision = 1,
-                StorageKind = NativeSectionStorageKind.Raw
-            };
-            session.MaterializedSectionMaps[mapIndex] = sectionRecordIndex;
-            session.State.MaterializedSectionCount++;
-        }
-        else
-        {
-            ref NativeMaterializedSectionRecord section = ref session.MaterializedSections[sectionRecordIndex];
-            section.StorageKind = NativeSectionStorageKind.Raw;
-            section.RawVoxelOffset = rawVoxelOffset;
-            section.PaletteOffset = -1;
-            section.PackedWordOffset = -1;
-            section.PackedWordCount = 0;
-            section.PaletteCount = 0;
-            section.BitsPerIndex = 0;
-            section.UniformBlockId = 0;
-            section.Revision = checked(section.Revision + 1);
-        }
-
-        if (!newChunk)
-            materialized.Revision = checked(materialized.Revision + 1);
-        Attach(ref session, ref activeChunk, materializedChunkIndex, in materialized);
+        if (!InitializeRawSectionVoxels(ref session, chunkIndex, localX, localY, localZ, blockId, sectionIndex, newChunk, existingChunk, newSection, existingSection, rawVoxelOffset)) return false;
+        PublishRawMaterializedSection(ref session, ref activeChunk, sectionIndex, materializedChunkIndex, newChunk, sectionMapOffset, mapIndex, sectionRecordIndex, newSection, rawVoxelOffset);
         return true;
     }
 
@@ -416,60 +334,7 @@ internal static class NativeMaterializedTerrain
         }
 
         int missingSectionCount = 0;
-        int missingRawSectionCount = 0;
-        Span<ushort> scratch = stackalloc ushort[VoxelSection.VoxelCount];
-        for (int sectionIndex = 0; sectionIndex < session.SectionsPerChunk; sectionIndex++)
-        {
-            int mapIndex = checked(materialized.SectionMapOffset + sectionIndex);
-            if (session.MaterializedSectionMaps[mapIndex] >= 0)
-                continue;
-            missingSectionCount++;
-            if (!CopyGeneratedSection(ref session, chunkIndex, sectionIndex, scratch))
-                return false;
-            if (scratch.IndexOfAnyExcept(scratch[0]) >= 0)
-                missingRawSectionCount++;
-        }
-
-        if (missingSectionCount > session.MaterializedSectionCapacity - session.State.MaterializedSectionCount || missingRawSectionCount > session.MaterializedRawSectionCapacity - session.State.MaterializedRawSectionCount)
-        {
-            session.Fail(NativeGtrtFailureCode.MaterializedSectionStorageExhausted);
-            return false;
-        }
-
-        for (int sectionIndex = 0; sectionIndex < session.SectionsPerChunk; sectionIndex++)
-        {
-            int mapIndex = checked(materialized.SectionMapOffset + sectionIndex);
-            if (session.MaterializedSectionMaps[mapIndex] >= 0)
-                continue;
-            if (!CopyGeneratedSection(ref session, chunkIndex, sectionIndex, scratch))
-            {
-                return false;
-            }
-
-            bool uniform = scratch.IndexOfAnyExcept(scratch[0]) < 0;
-            int rawVoxelOffset = -1;
-            if (!uniform)
-            {
-                rawVoxelOffset = TryAllocateRawSection(ref session);
-                if (rawVoxelOffset < 0)
-                    return false;
-                scratch.CopyTo(session.MaterializedRawVoxels.Slice(rawVoxelOffset, VoxelSection.VoxelCount));
-            }
-
-            int sectionRecordIndex = session.State.MaterializedSectionCount++;
-            session.MaterializedSections[sectionRecordIndex] = new NativeMaterializedSectionRecord
-            {
-                OwnerChunkIndex = materializedChunkIndex,
-                SectionIndex = sectionIndex,
-                RawVoxelOffset = rawVoxelOffset,
-                PaletteOffset = -1,
-                PackedWordOffset = -1,
-                Revision = 1,
-                UniformBlockId = uniform ? scratch[0] : (ushort)0,
-                StorageKind = uniform ? NativeSectionStorageKind.Uniform : NativeSectionStorageKind.Raw
-            };
-            session.MaterializedSectionMaps[mapIndex] = sectionRecordIndex;
-        }
+        if (!MaterializeMissingSections(ref session, chunkIndex, materializedChunkIndex, materialized, ref missingSectionCount)) return false;
 
         ref NativeMaterializedChunkRecord completed = ref session.MaterializedChunks[materializedChunkIndex];
         completed.StorageKind = NativeChunkStorageKind.MaterializedSections;
@@ -531,46 +396,7 @@ internal static class NativeMaterializedTerrain
             };
             session.State.MaterializedChunkCount++;
         }
-
-        ref NativeMaterializedChunkRecord materialized = ref session.MaterializedChunks[materializedChunkIndex];
-        if (materialized.StorageKind == NativeChunkStorageKind.HybridSections && storageKind == NativeChunkStorageKind.MaterializedSections)
-        {
-            materialized.StorageKind = storageKind;
-        }
-
-        if (newSection)
-        {
-            sectionRecordIndex = session.State.MaterializedSectionCount++;
-            session.MaterializedSectionMaps[mapIndex] = sectionRecordIndex;
-            session.MaterializedSections[sectionRecordIndex] = new NativeMaterializedSectionRecord
-            {
-                OwnerChunkIndex = materializedChunkIndex,
-                SectionIndex = sectionIndex,
-                RawVoxelOffset = -1,
-                PaletteOffset = -1,
-                PackedWordOffset = -1,
-                Revision = 1,
-                UniformBlockId = blockId,
-                StorageKind = NativeSectionStorageKind.Uniform
-            };
-        }
-        else
-        {
-            ref NativeMaterializedSectionRecord section = ref session.MaterializedSections[sectionRecordIndex];
-            section.StorageKind = NativeSectionStorageKind.Uniform;
-            section.RawVoxelOffset = -1;
-            section.PaletteOffset = -1;
-            section.PackedWordOffset = -1;
-            section.PackedWordCount = 0;
-            section.PaletteCount = 0;
-            section.BitsPerIndex = 0;
-            section.UniformBlockId = blockId;
-            section.Revision = checked(section.Revision + 1);
-        }
-
-        if (!newChunk)
-            materialized.Revision = checked(materialized.Revision + 1);
-        Attach(ref session, ref activeChunk, materializedChunkIndex, in materialized);
+        PublishUniformMaterializedSection(ref session, blockId, storageKind, ref activeChunk, materializedChunkIndex, newChunk, sectionIndex, mapIndex, ref sectionRecordIndex, newSection);
         return true;
     }
 
@@ -985,5 +811,213 @@ internal static class NativeMaterializedTerrain
         chunk.MaterializedChunkIndex = materializedChunkIndex;
         chunk.StorageKind = materialized.StorageKind;
         chunk.DirtyRevision = materialized.Revision;
+    }
+
+    private static void PublishRawMaterializedSection(scoped ref global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionView session, ref global::MVoxelEngine1.WorldGeneration.Native.NativeChunkRecord activeChunk, int sectionIndex, int materializedChunkIndex, bool newChunk, int sectionMapOffset, int mapIndex, int sectionRecordIndex, bool newSection, int rawVoxelOffset)
+    {
+        if (newChunk)
+        {
+            session.MaterializedChunks[materializedChunkIndex] = new NativeMaterializedChunkRecord
+            {
+                ChunkX = activeChunk.ChunkX,
+                ChunkY = activeChunk.ChunkY,
+                ChunkZ = activeChunk.ChunkZ,
+                StorageKind = NativeChunkStorageKind.HybridSections,
+                SectionMapOffset = sectionMapOffset,
+                State = ActiveRecord,
+                Revision = 1
+            };
+            session.State.MaterializedChunkCount++;
+        }
+
+        ref NativeMaterializedChunkRecord materialized = ref session.MaterializedChunks[materializedChunkIndex];
+        if (newSection)
+        {
+            session.MaterializedSections[sectionRecordIndex] = new NativeMaterializedSectionRecord
+            {
+                OwnerChunkIndex = materializedChunkIndex,
+                SectionIndex = sectionIndex,
+                RawVoxelOffset = rawVoxelOffset,
+                PaletteOffset = -1,
+                PackedWordOffset = -1,
+                Revision = 1,
+                StorageKind = NativeSectionStorageKind.Raw
+            };
+            session.MaterializedSectionMaps[mapIndex] = sectionRecordIndex;
+            session.State.MaterializedSectionCount++;
+        }
+        else
+        {
+            ref NativeMaterializedSectionRecord section = ref session.MaterializedSections[sectionRecordIndex];
+            section.StorageKind = NativeSectionStorageKind.Raw;
+            section.RawVoxelOffset = rawVoxelOffset;
+            section.PaletteOffset = -1;
+            section.PackedWordOffset = -1;
+            section.PackedWordCount = 0;
+            section.PaletteCount = 0;
+            section.BitsPerIndex = 0;
+            section.UniformBlockId = 0;
+            section.Revision = checked(section.Revision + 1);
+        }
+
+        if (!newChunk)
+            materialized.Revision = checked(materialized.Revision + 1);
+        Attach(ref session, ref activeChunk, materializedChunkIndex, in materialized);
+
+    }
+
+    private static void PublishUniformMaterializedSection(scoped ref global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionView session, ushort blockId, global::MVoxelEngine1.WorldGeneration.Native.NativeChunkStorageKind storageKind, ref global::MVoxelEngine1.WorldGeneration.Native.NativeChunkRecord activeChunk, int materializedChunkIndex, bool newChunk, int sectionIndex, int mapIndex, ref int sectionRecordIndex, bool newSection)
+    {
+
+        ref NativeMaterializedChunkRecord materialized = ref session.MaterializedChunks[materializedChunkIndex];
+        if (materialized.StorageKind == NativeChunkStorageKind.HybridSections && storageKind == NativeChunkStorageKind.MaterializedSections)
+        {
+            materialized.StorageKind = storageKind;
+        }
+
+        if (newSection)
+        {
+            sectionRecordIndex = session.State.MaterializedSectionCount++;
+            session.MaterializedSectionMaps[mapIndex] = sectionRecordIndex;
+            session.MaterializedSections[sectionRecordIndex] = new NativeMaterializedSectionRecord
+            {
+                OwnerChunkIndex = materializedChunkIndex,
+                SectionIndex = sectionIndex,
+                RawVoxelOffset = -1,
+                PaletteOffset = -1,
+                PackedWordOffset = -1,
+                Revision = 1,
+                UniformBlockId = blockId,
+                StorageKind = NativeSectionStorageKind.Uniform
+            };
+        }
+        else
+        {
+            ref NativeMaterializedSectionRecord section = ref session.MaterializedSections[sectionRecordIndex];
+            section.StorageKind = NativeSectionStorageKind.Uniform;
+            section.RawVoxelOffset = -1;
+            section.PaletteOffset = -1;
+            section.PackedWordOffset = -1;
+            section.PackedWordCount = 0;
+            section.PaletteCount = 0;
+            section.BitsPerIndex = 0;
+            section.UniformBlockId = blockId;
+            section.Revision = checked(section.Revision + 1);
+        }
+
+        if (!newChunk)
+            materialized.Revision = checked(materialized.Revision + 1);
+        Attach(ref session, ref activeChunk, materializedChunkIndex, in materialized);
+
+    }
+
+    private static bool InitializeRawSectionVoxels(scoped ref global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionView session, int chunkIndex, int localX, int localY, int localZ, ushort blockId, int sectionIndex, bool newChunk, global::MVoxelEngine1.WorldGeneration.Native.NativeMaterializedChunkRecord existingChunk, bool newSection, global::MVoxelEngine1.WorldGeneration.Native.NativeMaterializedSectionRecord existingSection, int rawVoxelOffset)
+    {
+        if (rawVoxelOffset < 0)
+            return false;
+        Span<ushort> raw = session.MaterializedRawVoxels.Slice(rawVoxelOffset, VoxelSection.VoxelCount);
+        if (newSection)
+        {
+            if (newChunk || existingChunk.StorageKind == NativeChunkStorageKind.HybridSections)
+            {
+                if (!CopyGeneratedSection(ref session, chunkIndex, sectionIndex, raw))
+                {
+                    return false;
+                }
+            }
+            else
+            {
+                if (existingChunk.StorageKind == NativeChunkStorageKind.UniformSections)
+                {
+                    raw.Fill(existingChunk.UniformBlockId);
+                }
+                else
+                {
+                    raw.Clear();
+                }
+            }
+        }
+        else
+        {
+            if (existingSection.StorageKind == NativeSectionStorageKind.Uniform)
+            {
+                raw.Fill(existingSection.UniformBlockId);
+            }
+            else if (existingSection.StorageKind == NativeSectionStorageKind.Packed)
+            {
+                if (!TryDecodePackedSection(ref session, in existingSection, raw))
+                {
+                    return false;
+                }
+            }
+            else if (existingSection.StorageKind != NativeSectionStorageKind.Raw)
+            {
+                session.Fail(NativeGtrtFailureCode.InvalidMaterializedTerrain);
+                return false;
+            }
+        }
+
+        raw[GetSectionLocalIndex(localX, localY, localZ)] = blockId;
+        return true;
+    }
+
+    private static bool MaterializeMissingSections(scoped ref global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionView session, int chunkIndex, int materializedChunkIndex, global::MVoxelEngine1.WorldGeneration.Native.NativeMaterializedChunkRecord materialized, ref int missingSectionCount)
+    {
+        int missingRawSectionCount = 0;
+        Span<ushort> scratch = stackalloc ushort[VoxelSection.VoxelCount];
+        for (int sectionIndex = 0; sectionIndex < session.SectionsPerChunk; sectionIndex++)
+        {
+            int mapIndex = checked(materialized.SectionMapOffset + sectionIndex);
+            if (session.MaterializedSectionMaps[mapIndex] >= 0)
+                continue;
+            missingSectionCount++;
+            if (!CopyGeneratedSection(ref session, chunkIndex, sectionIndex, scratch))
+                return false;
+            if (scratch.IndexOfAnyExcept(scratch[0]) >= 0)
+                missingRawSectionCount++;
+        }
+
+        if (missingSectionCount > session.MaterializedSectionCapacity - session.State.MaterializedSectionCount || missingRawSectionCount > session.MaterializedRawSectionCapacity - session.State.MaterializedRawSectionCount)
+        {
+            session.Fail(NativeGtrtFailureCode.MaterializedSectionStorageExhausted);
+            return false;
+        }
+
+        for (int sectionIndex = 0; sectionIndex < session.SectionsPerChunk; sectionIndex++)
+        {
+            int mapIndex = checked(materialized.SectionMapOffset + sectionIndex);
+            if (session.MaterializedSectionMaps[mapIndex] >= 0)
+                continue;
+            if (!CopyGeneratedSection(ref session, chunkIndex, sectionIndex, scratch))
+            {
+                return false;
+            }
+
+            bool uniform = scratch.IndexOfAnyExcept(scratch[0]) < 0;
+            int rawVoxelOffset = -1;
+            if (!uniform)
+            {
+                rawVoxelOffset = TryAllocateRawSection(ref session);
+                if (rawVoxelOffset < 0)
+                    return false;
+                scratch.CopyTo(session.MaterializedRawVoxels.Slice(rawVoxelOffset, VoxelSection.VoxelCount));
+            }
+
+            int sectionRecordIndex = session.State.MaterializedSectionCount++;
+            session.MaterializedSections[sectionRecordIndex] = new NativeMaterializedSectionRecord
+            {
+                OwnerChunkIndex = materializedChunkIndex,
+                SectionIndex = sectionIndex,
+                RawVoxelOffset = rawVoxelOffset,
+                PaletteOffset = -1,
+                PackedWordOffset = -1,
+                Revision = 1,
+                UniformBlockId = uniform ? scratch[0] : (ushort)0,
+                StorageKind = uniform ? NativeSectionStorageKind.Uniform : NativeSectionStorageKind.Raw
+            };
+            session.MaterializedSectionMaps[mapIndex] = sectionRecordIndex;
+        }
+
+        return true;
     }
 }

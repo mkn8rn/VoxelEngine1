@@ -128,62 +128,11 @@ namespace MVoxelEngine1.Graphics.Textures
             missingTexture = LoadImage(Path.Combine(baseDir, missingTextureName + ext));
             if (preloaded == null || preloaded.Count == 0)
             {
-                // Re-execute blocking path inline (same as original ctor without duplication)
-                var baseTextureFiles = Directory.GetFiles(GameManager.settings.assetsBaseBlockTexturesDirectory, "*" + ext);
-                var textureFiles = Directory.GetFiles(GameManager.settings.assetsBlockTexturesDirectory, "*" + ext);
-                int textureCountAll = baseTextureFiles.Length + textureFiles.Length;
-                tilesX = (int)Math.Ceiling(Math.Sqrt(textureCountAll));
-                tilesY = (int)Math.Ceiling((double)textureCountAll / tilesX);
-                atlasWidth = tilesX * GameManager.settings.blockTileWidth;
-                atlasHeight = tilesY * GameManager.settings.blockTileHeight;
-                ID = GL.GenTexture();
-                GL.BindTexture(TextureTarget.Texture2D, ID);
-                GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba, atlasWidth, atlasHeight, 0, PixelFormat.Rgba, PixelType.UnsignedByte, nint.Zero);
-                GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
-                GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.Repeat);
-                GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
-                GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
-                currentX = 0;
-                currentY = 0;
-                textureCoordinates.Clear();
-                LoadTextureIntoAtlas(baseTextureFiles);
-                LoadTextureIntoAtlas(textureFiles);
-                InitializeBlockTypeUVCoordinates();
-                MapTextureCoordinates();
-                GL.BindTexture(TextureTarget.Texture2D, 0);
+                LoadBlockingAtlas(ext);
                 return;
             }
 
-            // Build tile set (include fallback/missing if not already)
-            var byName = new Dictionary<string, RawImage>(StringComparer.OrdinalIgnoreCase);
-            foreach (ref readonly var ri in System.Runtime.InteropServices.CollectionsMarshal.AsSpan(preloaded))
-            {
-                if (ri.Width != GameManager.settings.blockTileWidth || ri.Height != GameManager.settings.blockTileHeight || ri.Data == null)
-                    continue; // skip invalid; we will supply fallback later if requested
-                byName[ri.Name] = ri;
-            }
-
-            if (!byName.ContainsKey(fallbackTextureName))
-            {
-                byName[fallbackTextureName] = new RawImage
-                {
-                    Name = fallbackTextureName,
-                    Data = fallbackTexture.Data,
-                    Width = fallbackTexture.Width,
-                    Height = fallbackTexture.Height
-                };
-            }
-
-            if (!byName.ContainsKey(missingTextureName))
-            {
-                byName[missingTextureName] = new RawImage
-                {
-                    Name = missingTextureName,
-                    Data = missingTexture.Data,
-                    Width = missingTexture.Width,
-                    Height = missingTexture.Height
-                };
-            }
+            var byName = BuildPreloadedTextureSet(preloaded);
 
             // Determine final list order (stable order for determinism)
             var textureNames = byName.Keys.Order(StringComparer.Ordinal).ToList();
@@ -192,13 +141,7 @@ namespace MVoxelEngine1.Graphics.Textures
             tilesY = (int)Math.Ceiling((double)textureCount / tilesX);
             atlasWidth = tilesX * GameManager.settings.blockTileWidth;
             atlasHeight = tilesY * GameManager.settings.blockTileHeight;
-            ID = GL.GenTexture();
-            GL.BindTexture(TextureTarget.Texture2D, ID);
-            GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba, atlasWidth, atlasHeight, 0, PixelFormat.Rgba, PixelType.UnsignedByte, nint.Zero);
-            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
-            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.Repeat);
-            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
-            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
+            InitializeOpenGlTextureStorage();
             currentX = 0;
             currentY = 0;
             textureCoordinates.Clear();
@@ -243,13 +186,7 @@ namespace MVoxelEngine1.Graphics.Textures
             atlasHeight = tilesY * GameManager.settings.blockTileHeight;
             if (uploadMode == BlockTextureAtlasUploadMode.OpenGl)
             {
-                ID = GL.GenTexture();
-                GL.BindTexture(TextureTarget.Texture2D, ID);
-                GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba, atlasWidth, atlasHeight, 0, PixelFormat.Rgba, PixelType.UnsignedByte, nint.Zero);
-                GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
-                GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.Repeat);
-                GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
-                GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
+                InitializeOpenGlTextureStorage();
             }
 
             StbImage.stbi_set_flip_vertically_on_load(1);
@@ -276,6 +213,74 @@ namespace MVoxelEngine1.Graphics.Textures
                 if (error != ErrorCode.NoError)
                     Console.WriteLine($"OpenGL error: {error}");
             }
+        }
+
+        private void LoadBlockingAtlas(string ext)
+        {
+            // Re-execute blocking path inline (same as original ctor without duplication)
+            var baseTextureFiles = Directory.GetFiles(GameManager.settings.assetsBaseBlockTexturesDirectory, "*" + ext);
+            var textureFiles = Directory.GetFiles(GameManager.settings.assetsBlockTexturesDirectory, "*" + ext);
+            int textureCountAll = baseTextureFiles.Length + textureFiles.Length;
+            tilesX = (int)Math.Ceiling(Math.Sqrt(textureCountAll));
+            tilesY = (int)Math.Ceiling((double)textureCountAll / tilesX);
+            atlasWidth = tilesX * GameManager.settings.blockTileWidth;
+            atlasHeight = tilesY * GameManager.settings.blockTileHeight;
+            InitializeOpenGlTextureStorage();
+            currentX = 0;
+            currentY = 0;
+            textureCoordinates.Clear();
+            LoadTextureIntoAtlas(baseTextureFiles);
+            LoadTextureIntoAtlas(textureFiles);
+            InitializeBlockTypeUVCoordinates();
+            MapTextureCoordinates();
+            GL.BindTexture(TextureTarget.Texture2D, 0);
+        }
+
+        private Dictionary<string, RawImage> BuildPreloadedTextureSet(List<RawImage> preloaded)
+        {
+            // Build tile set (include fallback/missing if not already)
+            var byName = new Dictionary<string, RawImage>(StringComparer.OrdinalIgnoreCase);
+            foreach (ref readonly var ri in System.Runtime.InteropServices.CollectionsMarshal.AsSpan(preloaded))
+            {
+                if (ri.Width != GameManager.settings.blockTileWidth || ri.Height != GameManager.settings.blockTileHeight || ri.Data == null)
+                    continue; // skip invalid; we will supply fallback later if requested
+                byName[ri.Name] = ri;
+            }
+
+            if (!byName.ContainsKey(fallbackTextureName))
+            {
+                byName[fallbackTextureName] = new RawImage
+                {
+                    Name = fallbackTextureName,
+                    Data = fallbackTexture.Data,
+                    Width = fallbackTexture.Width,
+                    Height = fallbackTexture.Height
+                };
+            }
+
+            if (!byName.ContainsKey(missingTextureName))
+            {
+                byName[missingTextureName] = new RawImage
+                {
+                    Name = missingTextureName,
+                    Data = missingTexture.Data,
+                    Width = missingTexture.Width,
+                    Height = missingTexture.Height
+                };
+            }
+
+            return byName;
+        }
+
+        private void InitializeOpenGlTextureStorage()
+        {
+            ID = GL.GenTexture();
+            GL.BindTexture(TextureTarget.Texture2D, ID);
+            GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba, atlasWidth, atlasHeight, 0, PixelFormat.Rgba, PixelType.UnsignedByte, nint.Zero);
+            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
+            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.Repeat);
+            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
+            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
         }
 
         private static ImageResult LoadImage(string path)

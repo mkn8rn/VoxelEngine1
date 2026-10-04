@@ -24,34 +24,12 @@ namespace MVoxelEngine1.Tests
             object pendingValue = new();
             object staleValue = new();
             object replacementValue = new();
-            unbuilt[Key] = value;
-            unbuilt[PendingKey] = pendingValue;
-            unbuilt[ReplacedKey] = replacementValue;
-            dirty[Key] = 7;
-            dirty[PendingKey] = 8;
-            dirty[ReplacedKey] = 9;
+            InitializeStateMoveFixture(unbuilt, dirty, Key, PendingKey, ReplacedKey, value, pendingValue, replacementValue);
             int movedCount = 0;
 
             Task<bool> reader = Task.Run(() =>
             {
-                gate.EnterRead();
-                try
-                {
-                    bool found = active.ContainsKey(Key);
-                    activeCheckCompleted.Set();
-                    if (!releaseReader.Wait(
-                        TimeSpan.FromSeconds(1),
-                        cancellationToken))
-                    {
-                        throw new TimeoutException("The state reader was not released.");
-                    }
-
-                    return found || unbuilt.ContainsKey(Key);
-                }
-                finally
-                {
-                    gate.ExitRead();
-                }
+                return ReadWhileWriterIsBlocked(gate, active, unbuilt, activeCheckCompleted, releaseReader, Key, cancellationToken);
             }, cancellationToken);
 
             Assert.True(activeCheckCompleted.Wait(
@@ -87,7 +65,48 @@ namespace MVoxelEngine1.Tests
             {
                 releaseReader.Set();
             }
+            ExtractReaderCannotMissChunkDuringStateMoveRegion(gate, unbuilt, active, dirty, Key, PendingKey, ReplacedKey, value, pendingValue, replacementValue, ref movedCount);
+        }
 
+        private static void InitializeStateMoveFixture(ConcurrentDictionary<string, object> unbuilt,
+            ConcurrentDictionary<string, long> dirty, string Key, string PendingKey, string ReplacedKey,
+            object value, object pendingValue, object replacementValue)
+        {
+            unbuilt[Key] = value;
+            unbuilt[PendingKey] = pendingValue;
+            unbuilt[ReplacedKey] = replacementValue;
+            dirty[Key] = 7;
+            dirty[PendingKey] = 8;
+            dirty[ReplacedKey] = 9;
+        }
+
+        private static bool ReadWhileWriterIsBlocked(RenderStateGate gate,
+            ConcurrentDictionary<string, object> active, ConcurrentDictionary<string, object> unbuilt,
+            ManualResetEventSlim activeCheckCompleted, ManualResetEventSlim releaseReader,
+            string Key, CancellationToken cancellationToken)
+        {
+            gate.EnterRead();
+            try
+            {
+                bool found = active.ContainsKey(Key);
+                activeCheckCompleted.Set();
+                if (!releaseReader.Wait(
+                    TimeSpan.FromSeconds(1),
+                    cancellationToken))
+                {
+                    throw new TimeoutException("The state reader was not released.");
+                }
+
+                return found || unbuilt.ContainsKey(Key);
+            }
+            finally
+            {
+                gate.ExitRead();
+            }
+        }
+
+        private static void ExtractReaderCannotMissChunkDuringStateMoveRegion(global::MVoxelEngine1.WorldGeneration.RenderStateGate gate, global::System.Collections.Concurrent.ConcurrentDictionary<string, object> unbuilt, global::System.Collections.Concurrent.ConcurrentDictionary<string, object> active, global::System.Collections.Concurrent.ConcurrentDictionary<string, long> dirty, string Key, string PendingKey, string ReplacedKey, object value, object pendingValue, object replacementValue, ref int movedCount)
+        {
             using IDisposable finalStateScope = gate.AcquireReadScope();
             Assert.Same(value, active[Key]);
             Assert.False(unbuilt.ContainsKey(Key));

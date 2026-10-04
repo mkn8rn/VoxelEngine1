@@ -30,60 +30,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             bool directInteriorSides = source.OrderedContiguousSpans && materials.SupportsContiguousTerrainFastPath;
             long preparationTicks = recordPerformance ? MeshPerformanceRecorder.GetElapsedTicks(phaseStart) : 0;
             FaceRectangleMeshData result;
-            phaseStart = recordPerformance ? Stopwatch.GetTimestamp() : 0;
-            try
-            {
-                if (directInteriorSides)
-                {
-                    EmitContiguousInteriorSideRectangles(source, ref writer);
-                }
-
-                for (int material = 0; material < 3; material++)
-                {
-                    if ((source.MaterialMask & (1 << material)) == 0)
-                        continue;
-                    Array.Fill(bottomFaces, -1, 0, horizontalCellCount);
-                    Array.Fill(topFaces, -1, 0, horizontalCellCount);
-                    ushort blockId = materials.GetBlockId(material);
-                    bool blockOpaque = materials.IsOpaque(material);
-                    writer.SelectMaterial(material, blockOpaque);
-                    GenerateGeneratedMaterial(source, materials, material, blockId, blockOpaque, !directInteriorSides, bottomFaces, topFaces, ref writer);
-                    EmitGeneratedHorizontalRectangles(2, bottomFaces, source.Width, source.Depth, ref writer);
-                    EmitGeneratedHorizontalRectangles(3, topFaces, source.Width, source.Depth, ref writer);
-                }
-
-                writer.CommitBuffers();
-                using NativeBuilder<uint> opaqueRectangles = new(preLease: writer.OpaqueWordCount);
-                using NativeBuilder<uint> transparentRectangles = new(preLease: writer.TransparentWordCount);
-                if (writer.OpaqueWordCount != 0)
-                    opaqueRectangles.Append(writer.OpaqueWords, Xunit.TestContext.Current.CancellationToken);
-                if (writer.TransparentWordCount != 0)
-                    transparentRectangles.Append(writer.TransparentWords, Xunit.TestContext.Current.CancellationToken);
-                NativeTransfer<uint>? opaque = null;
-                NativeTransfer<uint>? transparent = null;
-                try
-                {
-                    opaque = opaqueRectangles.Complete(Xunit.TestContext.Current.CancellationToken);
-                    transparent = transparentRectangles.Complete(Xunit.TestContext.Current.CancellationToken);
-                    result = new FaceRectangleMeshData(writer.OpaqueFaceCount, NativeTransfer<uint>.Move(ref opaque), writer.TransparentFaceCount, NativeTransfer<uint>.Move(ref transparent));
-                }
-                finally
-                {
-                    opaque?.Dispose();
-                    transparent?.Dispose();
-                }
-            }
-            finally
-            {
-                ArrayPool<int>.Shared.Return(bottomFaces);
-                ArrayPool<int>.Shared.Return(topFaces);
-            }
-
-            long writePassTicks = recordPerformance ? MeshPerformanceRecorder.GetElapsedTicks(phaseStart) : 0;
-            if (recordPerformance)
-            {
-                MeshPerformanceRecorder.RecordGeneratedSpanPhases(countPassTicks: 0, preparationTicks, writePassTicks, result.OpaqueFaceCount, result.TransparentFaceCount, result.OpaqueRectangleCount, result.TransparentRectangleCount);
-            }
+            BuildGeneratedRectanglePasses(source, recordPerformance, out phaseStart, horizontalCellCount, bottomFaces, topFaces, materials, ref writer, directInteriorSides, preparationTicks, out result);
 
             return result;
         }
@@ -164,42 +111,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     topFaces[horizontalIndex] = localEnd;
                 }
             }
-
-            if (x == 0)
-            {
-                EmitGeneratedBoundaryRange(blockId, blockOpaque, 0, x, z, localStart, localEnd, data.NeighborPlaneNegX, data.NeighborTransparentPlaneNegX, z * source.Height, ref writer);
-            }
-            else if (emitInteriorSides)
-            {
-                EmitGeneratedColumnRange(source, materials, in source.Columns[(x - 1) * source.Depth + z], blockId, blockOpaque, 0, x, z, worldStart, worldEnd, ref writer);
-            }
-
-            if (x == source.Width - 1)
-            {
-                EmitGeneratedBoundaryRange(blockId, blockOpaque, 1, x, z, localStart, localEnd, data.NeighborPlanePosX, data.NeighborTransparentPlanePosX, z * source.Height, ref writer);
-            }
-            else if (emitInteriorSides)
-            {
-                EmitGeneratedColumnRange(source, materials, in source.Columns[(x + 1) * source.Depth + z], blockId, blockOpaque, 1, x, z, worldStart, worldEnd, ref writer);
-            }
-
-            if (z == 0)
-            {
-                EmitGeneratedBoundaryRange(blockId, blockOpaque, 4, x, z, localStart, localEnd, data.NeighborPlaneNegZ, data.NeighborTransparentPlaneNegZ, x * source.Height, ref writer);
-            }
-            else if (emitInteriorSides)
-            {
-                EmitGeneratedColumnRange(source, materials, in source.Columns[x * source.Depth + z - 1], blockId, blockOpaque, 4, x, z, worldStart, worldEnd, ref writer);
-            }
-
-            if (z == source.Depth - 1)
-            {
-                EmitGeneratedBoundaryRange(blockId, blockOpaque, 5, x, z, localStart, localEnd, data.NeighborPlanePosZ, data.NeighborTransparentPlanePosZ, x * source.Height, ref writer);
-            }
-            else if (emitInteriorSides)
-            {
-                EmitGeneratedColumnRange(source, materials, in source.Columns[x * source.Depth + z + 1], blockId, blockOpaque, 5, x, z, worldStart, worldEnd, ref writer);
-            }
+            EmitGeneratedIntervalSides(source, in materials, blockId, blockOpaque, emitInteriorSides, x, z, ref writer, worldStart, worldEnd, localStart, localEnd);
         }
 
         private static void EmitContiguousInteriorSideRectangles(GeneratedChunkSpanData source, ref GeneratedFaceRectangleWriter writer)
@@ -260,25 +172,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                 }
                 else
                 {
-                    if (firstHasGround)
-                    {
-                        int firstStart = Math.Max(firstGroundStart, chunkStart);
-                        int firstEnd = Math.Min(firstGroundEnd, chunkEnd);
-                        if (firstStart <= firstEnd)
-                        {
-                            EmitGroundDifference(source, in firstColumn, firstStart, firstEnd, secondHasGround, secondGroundStart, secondGroundEnd, firstDirection, firstX, firstZ, ref writer);
-                        }
-                    }
-
-                    if (secondHasGround)
-                    {
-                        int secondStart = Math.Max(secondGroundStart, chunkStart);
-                        int secondEnd = Math.Min(secondGroundEnd, chunkEnd);
-                        if (secondStart <= secondEnd)
-                        {
-                            EmitGroundDifference(source, in secondColumn, secondStart, secondEnd, firstHasGround, firstGroundStart, firstGroundEnd, secondDirection, secondX, secondZ, ref writer);
-                        }
-                    }
+            ExtractEmitContiguousColumnPairRegion(source, in firstColumn, in secondColumn, firstDirection, firstX, firstZ, secondDirection, secondX, secondZ, ref writer, chunkStart, chunkEnd, firstHasGround, firstGroundStart, firstGroundEnd, secondHasGround, secondGroundStart, secondGroundEnd);
                 }
             }
 
@@ -290,18 +184,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             bool secondOccupied = secondHasGround || secondHasWater;
             int firstOccupiedStart = firstHasGround ? firstGroundStart : firstColumn.WaterStart;
             int firstOccupiedEnd = firstHasWater ? firstColumn.WaterEnd : firstGroundEnd;
-            int secondOccupiedStart = secondHasGround ? secondGroundStart : secondColumn.WaterStart;
-            int secondOccupiedEnd = secondHasWater ? secondColumn.WaterEnd : secondGroundEnd;
-            if (firstHasWater)
-            {
-                int firstStart = Math.Max(firstColumn.WaterStart, chunkStart);
-                int firstEnd = Math.Min(firstColumn.WaterEnd, chunkEnd);
-                bool fullyCovered = secondOccupied && secondOccupiedStart <= firstStart && secondOccupiedEnd >= firstEnd;
-                if (firstStart <= firstEnd && !fullyCovered)
-                {
-                    EmitMaterialDifference(firstStart, firstEnd, secondOccupied, secondOccupiedStart, secondOccupiedEnd, 2, false, source, firstDirection, firstX, firstZ, ref writer);
-                }
-            }
+            ExtractEmitContiguousColumnPairRegion2(source, in firstColumn, in secondColumn, firstDirection, firstX, firstZ, ref writer, chunkStart, chunkEnd, secondHasGround, secondGroundStart, secondGroundEnd, firstHasWater, secondHasWater, secondOccupied);
 
             if (!secondHasWater)
                 return;
@@ -750,6 +633,145 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                 }
 
                 return result;
+            }
+        }
+
+        private void BuildGeneratedRectanglePasses(global::MVoxelEngine1.Infrastructure.Models.Generation.GeneratedChunkSpanData source, bool recordPerformance, out long phaseStart, int horizontalCellCount, int[] bottomFaces, int[] topFaces, global::MVoxelEngine1.Graphics.Terrain.Sections.SectionRender.GeneratedMaterialRuntime materials, ref global::MVoxelEngine1.Graphics.Terrain.Sections.SectionRender.GeneratedFaceRectangleWriter writer, bool directInteriorSides, long preparationTicks, out global::MVoxelEngine1.Graphics.Terrain.FaceRectangleMeshData result)
+        {
+            phaseStart = recordPerformance ? Stopwatch.GetTimestamp() : 0;
+            try
+            {
+                if (directInteriorSides)
+                {
+                    EmitContiguousInteriorSideRectangles(source, ref writer);
+                }
+
+                for (int material = 0; material < 3; material++)
+                {
+                    if ((source.MaterialMask & (1 << material)) == 0)
+                        continue;
+                    Array.Fill(bottomFaces, -1, 0, horizontalCellCount);
+                    Array.Fill(topFaces, -1, 0, horizontalCellCount);
+                    ushort blockId = materials.GetBlockId(material);
+                    bool blockOpaque = materials.IsOpaque(material);
+                    writer.SelectMaterial(material, blockOpaque);
+                    GenerateGeneratedMaterial(source, materials, material, blockId, blockOpaque, !directInteriorSides, bottomFaces, topFaces, ref writer);
+                    EmitGeneratedHorizontalRectangles(2, bottomFaces, source.Width, source.Depth, ref writer);
+                    EmitGeneratedHorizontalRectangles(3, topFaces, source.Width, source.Depth, ref writer);
+                }
+
+                writer.CommitBuffers();
+                using NativeBuilder<uint> opaqueRectangles = new(preLease: writer.OpaqueWordCount);
+                using NativeBuilder<uint> transparentRectangles = new(preLease: writer.TransparentWordCount);
+                if (writer.OpaqueWordCount != 0)
+                    opaqueRectangles.Append(writer.OpaqueWords, Xunit.TestContext.Current.CancellationToken);
+                if (writer.TransparentWordCount != 0)
+                    transparentRectangles.Append(writer.TransparentWords, Xunit.TestContext.Current.CancellationToken);
+                NativeTransfer<uint>? opaque = null;
+                NativeTransfer<uint>? transparent = null;
+                try
+                {
+                    opaque = opaqueRectangles.Complete(Xunit.TestContext.Current.CancellationToken);
+                    transparent = transparentRectangles.Complete(Xunit.TestContext.Current.CancellationToken);
+                    result = new FaceRectangleMeshData(writer.OpaqueFaceCount, NativeTransfer<uint>.Move(ref opaque), writer.TransparentFaceCount, NativeTransfer<uint>.Move(ref transparent));
+                }
+                finally
+                {
+                    opaque?.Dispose();
+                    transparent?.Dispose();
+                }
+            }
+            finally
+            {
+                ArrayPool<int>.Shared.Return(bottomFaces);
+                ArrayPool<int>.Shared.Return(topFaces);
+            }
+
+            long writePassTicks = recordPerformance ? MeshPerformanceRecorder.GetElapsedTicks(phaseStart) : 0;
+            if (recordPerformance)
+            {
+                MeshPerformanceRecorder.RecordGeneratedSpanPhases(countPassTicks: 0, preparationTicks, writePassTicks, result.OpaqueFaceCount, result.TransparentFaceCount, result.OpaqueRectangleCount, result.TransparentRectangleCount);
+            }
+
+        }
+
+        private void EmitGeneratedIntervalSides(global::MVoxelEngine1.Infrastructure.Models.Generation.GeneratedChunkSpanData source, in global::MVoxelEngine1.Graphics.Terrain.Sections.SectionRender.GeneratedMaterialRuntime materials, ushort blockId, bool blockOpaque, bool emitInteriorSides, int x, int z, ref global::MVoxelEngine1.Graphics.Terrain.Sections.SectionRender.GeneratedFaceRectangleWriter writer, int worldStart, int worldEnd, int localStart, int localEnd)
+        {
+
+            if (x == 0)
+            {
+                EmitGeneratedBoundaryRange(blockId, blockOpaque, 0, x, z, localStart, localEnd, data.NeighborPlaneNegX, data.NeighborTransparentPlaneNegX, z * source.Height, ref writer);
+            }
+            else if (emitInteriorSides)
+            {
+                EmitGeneratedColumnRange(source, materials, in source.Columns[(x - 1) * source.Depth + z], blockId, blockOpaque, 0, x, z, worldStart, worldEnd, ref writer);
+            }
+
+            if (x == source.Width - 1)
+            {
+                EmitGeneratedBoundaryRange(blockId, blockOpaque, 1, x, z, localStart, localEnd, data.NeighborPlanePosX, data.NeighborTransparentPlanePosX, z * source.Height, ref writer);
+            }
+            else if (emitInteriorSides)
+            {
+                EmitGeneratedColumnRange(source, materials, in source.Columns[(x + 1) * source.Depth + z], blockId, blockOpaque, 1, x, z, worldStart, worldEnd, ref writer);
+            }
+
+            if (z == 0)
+            {
+                EmitGeneratedBoundaryRange(blockId, blockOpaque, 4, x, z, localStart, localEnd, data.NeighborPlaneNegZ, data.NeighborTransparentPlaneNegZ, x * source.Height, ref writer);
+            }
+            else if (emitInteriorSides)
+            {
+                EmitGeneratedColumnRange(source, materials, in source.Columns[x * source.Depth + z - 1], blockId, blockOpaque, 4, x, z, worldStart, worldEnd, ref writer);
+            }
+
+            if (z == source.Depth - 1)
+            {
+                EmitGeneratedBoundaryRange(blockId, blockOpaque, 5, x, z, localStart, localEnd, data.NeighborPlanePosZ, data.NeighborTransparentPlanePosZ, x * source.Height, ref writer);
+            }
+            else if (emitInteriorSides)
+            {
+                EmitGeneratedColumnRange(source, materials, in source.Columns[x * source.Depth + z + 1], blockId, blockOpaque, 5, x, z, worldStart, worldEnd, ref writer);
+            }
+
+        }
+
+        private static void ExtractEmitContiguousColumnPairRegion(global::MVoxelEngine1.Infrastructure.Models.Generation.GeneratedChunkSpanData source, ref readonly global::MVoxelEngine1.Infrastructure.Models.Generation.BlockColumnProfile firstColumn, ref readonly global::MVoxelEngine1.Infrastructure.Models.Generation.BlockColumnProfile secondColumn, byte firstDirection, int firstX, int firstZ, byte secondDirection, int secondX, int secondZ, ref global::MVoxelEngine1.Graphics.Terrain.Sections.SectionRender.GeneratedFaceRectangleWriter writer, int chunkStart, int chunkEnd, bool firstHasGround, int firstGroundStart, int firstGroundEnd, bool secondHasGround, int secondGroundStart, int secondGroundEnd)
+        {
+            if (firstHasGround)
+            {
+                int firstStart = Math.Max(firstGroundStart, chunkStart);
+                int firstEnd = Math.Min(firstGroundEnd, chunkEnd);
+                if (firstStart <= firstEnd)
+                {
+                    EmitGroundDifference(source, in firstColumn, firstStart, firstEnd, secondHasGround, secondGroundStart, secondGroundEnd, firstDirection, firstX, firstZ, ref writer);
+                }
+            }
+
+            if (secondHasGround)
+            {
+                int secondStart = Math.Max(secondGroundStart, chunkStart);
+                int secondEnd = Math.Min(secondGroundEnd, chunkEnd);
+                if (secondStart <= secondEnd)
+                {
+                    EmitGroundDifference(source, in secondColumn, secondStart, secondEnd, firstHasGround, firstGroundStart, firstGroundEnd, secondDirection, secondX, secondZ, ref writer);
+                }
+            }
+        }
+
+        private static void ExtractEmitContiguousColumnPairRegion2(global::MVoxelEngine1.Infrastructure.Models.Generation.GeneratedChunkSpanData source, ref readonly global::MVoxelEngine1.Infrastructure.Models.Generation.BlockColumnProfile firstColumn, ref readonly global::MVoxelEngine1.Infrastructure.Models.Generation.BlockColumnProfile secondColumn, byte firstDirection, int firstX, int firstZ, ref global::MVoxelEngine1.Graphics.Terrain.Sections.SectionRender.GeneratedFaceRectangleWriter writer, int chunkStart, int chunkEnd, bool secondHasGround, int secondGroundStart, int secondGroundEnd, bool firstHasWater, bool secondHasWater, bool secondOccupied)
+        {
+            int secondOccupiedStart = secondHasGround ? secondGroundStart : secondColumn.WaterStart;
+            int secondOccupiedEnd = secondHasWater ? secondColumn.WaterEnd : secondGroundEnd;
+            if (firstHasWater)
+            {
+                int firstStart = Math.Max(firstColumn.WaterStart, chunkStart);
+                int firstEnd = Math.Min(firstColumn.WaterEnd, chunkEnd);
+                bool fullyCovered = secondOccupied && secondOccupiedStart <= firstStart && secondOccupiedEnd >= firstEnd;
+                if (firstStart <= firstEnd && !fullyCovered)
+                {
+                    EmitMaterialDifference(firstStart, firstEnd, secondOccupied, secondOccupiedStart, secondOccupiedEnd, 2, false, source, firstDirection, firstX, firstZ, ref writer);
+                }
             }
         }
     }

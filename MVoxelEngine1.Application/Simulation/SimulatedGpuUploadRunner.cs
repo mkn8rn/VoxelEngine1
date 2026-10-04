@@ -52,43 +52,7 @@ namespace MVoxelEngine1.Application.Simulation
 
             try
             {
-
-            Console.WriteLine(EngineMessages.SimulatedUploadStarted);
-            long frameIndex = 0;
-            double simulationElapsedSeconds = 0;
-            SimulatedRenderFrameState frame = output.RenderFrame(
-                frameIndex,
-                simulationElapsedSeconds,
-                wallElapsedSeconds: 0,
-                deltaSeconds: 0,
-                PlayerInputKeys.None);
-            output.WriteSnapshot("initial", simulationElapsedSeconds, frame);
-
-            TimedPlayerMovementResult movement = TimedPlayerMovementRunner.Run(
-                player,
-                steps,
-                frameRate,
-                boundary => output.WriteInputBoundary(
-                    boundary.Started ? "inputStarted" : "inputEnded",
-                    boundary.StepIndex,
-                    boundary.Step,
-                    boundary.SimulationElapsedSeconds),
-                current => frame = output.RenderFrame(
-                    current.FrameIndex,
-                    current.SimulationElapsedSeconds,
-                    current.WallElapsedSeconds,
-                    current.DeltaSeconds,
-                    current.Keys));
-            frameIndex = movement.FrameIndex;
-            simulationElapsedSeconds = movement.SimulationElapsedSeconds;
-
-            output.WriteSnapshot("final", simulationElapsedSeconds, frame);
-            output.CompleteAsync(
-                simulationElapsedSeconds,
-#pragma warning disable VSTHRD002 // Keep the NativeWorld owner thread while its independent writer drains; that writer captures no synchronization context and never accesses world state.
-                movement.WallElapsedSeconds).GetAwaiter().GetResult();
-#pragma warning restore VSTHRD002
-            Console.WriteLine($"Simulated GPU upload data written to {Path.GetFullPath(outputPath)}");
+            RunMovementAndCompleteOutput(outputPath, steps, frameRate, player, output);
             }
             finally
             {
@@ -112,6 +76,24 @@ namespace MVoxelEngine1.Application.Simulation
             {
                 FlagManager.flags.faceGenerationMode = requested;
             }
+        }
+
+        private static void RunMovementAndCompleteOutput(string outputPath, global::System.Collections.Generic.IReadOnlyList<global::MVoxelEngine1.Infrastructure.Models.Simulation.TimedPlayerInputStep> steps, int frameRate, global::MVoxelEngine1.Application.Gameplay.Player player, global::MVoxelEngine1.Application.Simulation.SimulatedGpuUploadStream output)
+        {
+            Console.WriteLine(EngineMessages.SimulatedUploadStarted);
+            long frameIndex = 0;
+            double simulationElapsedSeconds = 0;
+            SimulatedRenderFrameState frame = output.RenderFrame(frameIndex, simulationElapsedSeconds, wallElapsedSeconds: 0, deltaSeconds: 0, PlayerInputKeys.None);
+            output.WriteSnapshot("initial", simulationElapsedSeconds, frame);
+            TimedPlayerMovementResult movement = TimedPlayerMovementRunner.Run(player, steps, frameRate, boundary => output.WriteInputBoundary(boundary.Started ? "inputStarted" : "inputEnded", boundary.StepIndex, boundary.Step, boundary.SimulationElapsedSeconds), current => frame = output.RenderFrame(current.FrameIndex, current.SimulationElapsedSeconds, current.WallElapsedSeconds, current.DeltaSeconds, current.Keys));
+            frameIndex = movement.FrameIndex;
+            simulationElapsedSeconds = movement.SimulationElapsedSeconds;
+            output.WriteSnapshot("final", simulationElapsedSeconds, frame);
+            output.CompleteAsync(simulationElapsedSeconds,
+        #pragma warning disable VSTHRD002 // Keep the NativeWorld owner thread while its independent writer drains; that writer captures no synchronization context and never accesses world state.
+            movement.WallElapsedSeconds).GetAwaiter().GetResult();
+        #pragma warning restore VSTHRD002
+            Console.WriteLine($"Simulated GPU upload data written to {Path.GetFullPath(outputPath)}");
         }
     }
 }

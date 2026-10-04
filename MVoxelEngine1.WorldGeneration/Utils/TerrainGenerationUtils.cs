@@ -80,16 +80,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             int effectiveReserve = 0;
             if (availableStoneBand > 0 && soilMinDepthSpec > 0)
             {
-                float reserveF = soilMinDepthSpec * (1f - ReserveSlopeFactor * slope01) * (1f + ReserveNoiseAmp * noiseSigned);
-                if (reserveF < 0f)
-                    reserveF = 0f;
-                if (reserveF > soilMinDepthSpec)
-                    reserveF = soilMinDepthSpec;
-                effectiveReserve = (int)MathF.Floor(reserveF);
-                if (effectiveReserve > availableStoneBand)
-                    effectiveReserve = availableStoneBand;
-                if (effectiveReserve < 0)
-                    effectiveReserve = 0;
+            CalculateEffectiveSoilReserve(slope01, soilMinDepthSpec, noiseSigned, availableStoneBand, out effectiveReserve);
             }
 
             int stoneDepth = 0;
@@ -116,32 +107,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             int soilStart = -1, soilEnd = -1;
             if (soilStartWorld <= soilMaxY && soilStartWorld <= surfaceY)
             {
-                int soilBandCapWorld = soilMaxY < surfaceY ? soilMaxY : surfaceY;
-                if (soilBandCapWorld >= soilStartWorld)
-                {
-                    int soilAvailable = soilBandCapWorld - soilStartWorld + 1;
-                    if (soilAvailable > 0)
-                    {
-                        int baseSoilDepth = Math.Min(soilMaxDepthSpec, soilAvailable);
-                        // Smooth, small lowering to create coherent exposed-stone patches
-                        float exposure = MathF.Max(0f, ExposureSlopeWeight * slope01 + ExposureNoiseWeight * (-noiseSigned));
-                        int lowering = (int)MathF.Floor(MaxLowering * exposure);
-                        if (lowering < 0)
-                            lowering = 0;
-                        if (lowering > MaxLowering)
-                            lowering = MaxLowering;
-                        int soilDepth = baseSoilDepth - lowering;
-                        if (soilDepth < 0)
-                            soilDepth = 0;
-                        if (soilDepth > soilAvailable)
-                            soilDepth = soilAvailable;
-                        if (soilDepth > 0)
-                        {
-                            soilStart = soilStartWorld;
-                            soilEnd = soilStartWorld + soilDepth - 1;
-                        }
-                    }
-                }
+            CalculateSoilDepth(surfaceY, slope01, soilMaxY, soilMaxDepthSpec, noiseSigned, soilStartWorld, ref soilStart, ref soilEnd);
             }
             return FinishDeriveWorldStoneSoilSpansFromNoisePhase(surfaceY, in parameters, stoneStart, stoneEnd, soilStart, soilEnd);
         }
@@ -372,6 +338,50 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
 
             return (stoneStart, stoneEnd, soilStart, soilEnd, waterStart, waterEnd);
 
+        }
+
+        private static void CalculateSoilDepth(int surfaceY, float slope01, int soilMaxY, int soilMaxDepthSpec, float noiseSigned, int soilStartWorld, ref int soilStart, ref int soilEnd)
+        {
+            int soilBandCapWorld = soilMaxY < surfaceY ? soilMaxY : surfaceY;
+            if (soilBandCapWorld >= soilStartWorld)
+            {
+                int soilAvailable = soilBandCapWorld - soilStartWorld + 1;
+                if (soilAvailable > 0)
+                {
+                    int baseSoilDepth = Math.Min(soilMaxDepthSpec, soilAvailable);
+                    // Smooth, small lowering to create coherent exposed-stone patches
+                    float exposure = MathF.Max(0f, ExposureSlopeWeight * slope01 + ExposureNoiseWeight * (-noiseSigned));
+                    int lowering = (int)MathF.Floor(MaxLowering * exposure);
+                    if (lowering < 0)
+                        lowering = 0;
+                    if (lowering > MaxLowering)
+                        lowering = MaxLowering;
+                    int soilDepth = baseSoilDepth - lowering;
+                    if (soilDepth < 0)
+                        soilDepth = 0;
+                    if (soilDepth > soilAvailable)
+                        soilDepth = soilAvailable;
+                    if (soilDepth > 0)
+                    {
+                        soilStart = soilStartWorld;
+                        soilEnd = soilStartWorld + soilDepth - 1;
+                    }
+                }
+            }
+        }
+
+        private static void CalculateEffectiveSoilReserve(float slope01, int soilMinDepthSpec, float noiseSigned, int availableStoneBand, out int effectiveReserve)
+        {
+            float reserveF = soilMinDepthSpec * (1f - ReserveSlopeFactor * slope01) * (1f + ReserveNoiseAmp * noiseSigned);
+            if (reserveF < 0f)
+                reserveF = 0f;
+            if (reserveF > soilMinDepthSpec)
+                reserveF = soilMinDepthSpec;
+            effectiveReserve = (int)MathF.Floor(reserveF);
+            if (effectiveReserve > availableStoneBand)
+                effectiveReserve = availableStoneBand;
+            if (effectiveReserve < 0)
+                effectiveReserve = 0;
         }
     }
 }

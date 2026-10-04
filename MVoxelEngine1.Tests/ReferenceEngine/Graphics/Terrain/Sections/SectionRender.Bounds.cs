@@ -159,223 +159,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             bool hasUp = sy + 1 < syCount;
             ref SectionPrerenderDesc upSec = ref hasUp ? ref allSecs[SecIndex(sx, sy + 1, sz, syCount, szCount)] : ref desc;
             bool hasBack = sz > 0;
-            ref SectionPrerenderDesc backSec = ref hasBack ? ref allSecs[SecIndex(sx, sy, sz - 1, syCount, szCount)] : ref desc;
-            bool hasFront = sz + 1 < szCount;
-            ref SectionPrerenderDesc frontSec = ref hasFront ? ref allSecs[SecIndex(sx, sy, sz + 1, syCount, szCount)] : ref desc;
-            // World boundary plane bitsets (holes suppress faces at world edge). Set bit == opaque neighbor voxel.
-            var planeNegX = data.NeighborPlaneNegX;
-            var planePosX = data.NeighborPlanePosX;
-            var planeNegY = data.NeighborPlaneNegY;
-            var planePosY = data.NeighborPlanePosY;
-            var planeNegZ = data.NeighborPlaneNegZ;
-            var planePosZ = data.NeighborPlanePosZ;
-            int maxX = data.maxX;
-            int maxY = data.maxY;
-            int maxZ = data.maxZ;
-            // LEFT boundary (x=0)
-            if (lxMin == 0 && desc.FaceNegXBits != null)
-            {
-                int worldX = baseX;
-                for (int z = lzMin; z <= lzMax; z++)
-                {
-                    for (int y = lyMin; y <= lyMax; y++)
-                    {
-                        int planeIndex = z * 16 + y;
-                        int w = planeIndex >> 6;
-                        int b = planeIndex & 63;
-                        ulong maskBit = 1UL << b;
-                        if ((desc.FaceNegXBits[w] & maskBit) == 0)
-                            continue; // boundary voxel not present (opaque)
-                        bool hidden = false;
-                        if (worldX == 0)
-                        {
-                            // World -X edge: consult world plane bitset (set bit means opaque neighbor outside chunk)
-                            int planeBitIndex = (baseZ + z) * maxY + (baseY + y);
-                            hidden = PlaneBit(planeNegX, planeBitIndex);
-                        }
-                        else if (hasLeft && NeighborBoundarySolid(ref leftSec, 0, 15, y, z))
-                        {
-                            hidden = true; // Occluded by neighbor +X boundary opaque voxel
-                        }
-
-                        if (!hidden)
-                        {
-                            int li = ((z * 16) + 0) * 16 + y; // local voxel linear index at x=0
-                            faceNX[li >> 6] |= 1UL << (li & 63);
-                        }
-                    }
-                }
-            }
-
-            // RIGHT boundary (x=15)
-            if (lxMax == 15 && desc.FacePosXBits != null)
-            {
-                int worldXRight = baseX + 15;
-                for (int z = lzMin; z <= lzMax; z++)
-                {
-                    for (int y = lyMin; y <= lyMax; y++)
-                    {
-                        int planeIndex = z * 16 + y;
-                        int w = planeIndex >> 6;
-                        int b = planeIndex & 63;
-                        ulong maskBit = 1UL << b;
-                        if ((desc.FacePosXBits[w] & maskBit) == 0)
-                            continue;
-                        bool hidden = false;
-                        if (worldXRight == maxX - 1)
-                        {
-                            int planeBitIndex = (baseZ + z) * maxY + (baseY + y);
-                            hidden = PlaneBit(planePosX, planeBitIndex);
-                        }
-                        else if (hasRight && NeighborBoundarySolid(ref rightSec, 1, 0, y, z))
-                        {
-                            hidden = true;
-                        }
-
-                        if (!hidden)
-                        {
-                            int li = ((z * 16 + 15) * 16) + y; // x=15
-                            facePX[li >> 6] |= 1UL << (li & 63);
-                        }
-                    }
-                }
-            }
-
-            // BOTTOM boundary (y=0)
-            if (lyMin == 0 && desc.FaceNegYBits != null)
-            {
-                int worldY = baseY;
-                for (int x = lxMin; x <= lxMax; x++)
-                {
-                    for (int z = lzMin; z <= lzMax; z++)
-                    {
-                        int planeIndex = x * 16 + z;
-                        int w = planeIndex >> 6;
-                        int b = planeIndex & 63;
-                        ulong maskBit = 1UL << b;
-                        if ((desc.FaceNegYBits[w] & maskBit) == 0)
-                            continue;
-                        bool hidden = false;
-                        if (worldY == 0)
-                        {
-                            int planeBitIndex = (baseX + x) * maxZ + (baseZ + z);
-                            hidden = PlaneBit(planeNegY, planeBitIndex);
-                        }
-                        else if (hasDown && NeighborBoundarySolid(ref downSec, 2, x, 15, z))
-                        {
-                            hidden = true;
-                        }
-
-                        if (!hidden)
-                        {
-                            int li = ((z * 16 + x) * 16) + 0; // y=0
-                            faceNY[li >> 6] |= 1UL << (li & 63);
-                        }
-                    }
-                }
-            }
-
-            // TOP boundary (y=15)
-            if (lyMax == 15 && desc.FacePosYBits != null)
-            {
-                int worldYTop = baseY + 15;
-                for (int x = lxMin; x <= lxMax; x++)
-                {
-                    for (int z = lzMin; z <= lzMax; z++)
-                    {
-                        int planeIndex = x * 16 + z;
-                        int w = planeIndex >> 6;
-                        int b = planeIndex & 63;
-                        ulong maskBit = 1UL << b;
-                        if ((desc.FacePosYBits[w] & maskBit) == 0)
-                            continue;
-                        bool hidden = false;
-                        if (worldYTop == maxY - 1)
-                        {
-                            int planeBitIndex = (baseX + x) * maxZ + (baseZ + z);
-                            hidden = PlaneBit(planePosY, planeBitIndex);
-                        }
-                        else if (hasUp && NeighborBoundarySolid(ref upSec, 3, x, 0, z))
-                        {
-                            hidden = true;
-                        }
-
-                        if (!hidden)
-                        {
-                            int li = ((z * 16 + x) * 16) + 15; // y=15
-                            facePY[li >> 6] |= 1UL << (li & 63);
-                        }
-                    }
-                }
-            }
-
-            // BACK boundary (z=0)
-            if (lzMin == 0 && desc.FaceNegZBits != null)
-            {
-                int worldZ = baseZ;
-                for (int x = lxMin; x <= lxMax; x++)
-                {
-                    for (int y = lyMin; y <= lyMax; y++)
-                    {
-                        int planeIndex = x * 16 + y;
-                        int w = planeIndex >> 6;
-                        int b = planeIndex & 63;
-                        ulong maskBit = 1UL << b;
-                        if ((desc.FaceNegZBits[w] & maskBit) == 0)
-                            continue;
-                        bool hidden = false;
-                        if (worldZ == 0)
-                        {
-                            int planeBitIndex = (baseX + x) * maxY + (baseY + y);
-                            hidden = PlaneBit(planeNegZ, planeBitIndex);
-                        }
-                        else if (hasBack && NeighborBoundarySolid(ref backSec, 4, x, y, 15))
-                        {
-                            hidden = true;
-                        }
-
-                        if (!hidden)
-                        {
-                            int li = ((0 * 16 + x) * 16) + y; // z=0
-                            faceNZ[li >> 6] |= 1UL << (li & 63);
-                        }
-                    }
-                }
-            }
-
-            // FRONT boundary (z=15)
-            if (lzMax == 15 && desc.FacePosZBits != null)
-            {
-                int worldZFront = baseZ + 15;
-                for (int x = lxMin; x <= lxMax; x++)
-                {
-                    for (int y = lyMin; y <= lyMax; y++)
-                    {
-                        int planeIndex = x * 16 + y;
-                        int w = planeIndex >> 6;
-                        int b = planeIndex & 63;
-                        ulong maskBit = 1UL << b;
-                        if ((desc.FacePosZBits[w] & maskBit) == 0)
-                            continue;
-                        bool hidden = false;
-                        if (worldZFront == maxZ - 1)
-                        {
-                            int planeBitIndex = (baseX + x) * maxY + (baseY + y);
-                            hidden = PlaneBit(planePosZ, planeBitIndex);
-                        }
-                        else if (hasFront && NeighborBoundarySolid(ref frontSec, 5, x, y, 0))
-                        {
-                            hidden = true;
-                        }
-
-                        if (!hidden)
-                        {
-                            int li = ((15 * 16 + x) * 16) + y; // z=15
-                            facePZ[li >> 6] |= 1UL << (li & 63);
-                        }
-                    }
-                }
-            }
+            ExtractAddVisibleBoundaryFacesRegion6(ref desc, baseX, baseY, baseZ, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, allSecs, sx, sy, sz, syCount, szCount, faceNX, facePX, faceNY, facePY, faceNZ, facePZ, data, hasLeft, ref leftSec, hasRight, ref rightSec, hasDown, ref downSec, hasUp, ref upSec, hasBack);
         }
 
         // Generalized boundary reinsertion (metadata-driven) with optional skip flags (used by packed selective path).
@@ -416,28 +200,8 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             {
                 if (skipDir[meta.FaceDir])
                     continue; // skip fully occluded face
-                // Check bounds gating for this axis
-                if (meta.Axis == 0)
-                {
-                    if (meta.Negative && lxMin != 0)
-                        continue;
-                    if (!meta.Negative && lxMax != 15)
-                        continue;
-                }
-                else if (meta.Axis == 1)
-                {
-                    if (meta.Negative && lyMin != 0)
-                        continue;
-                    if (!meta.Negative && lyMax != 15)
-                        continue;
-                }
-                else
-                {
-                    if (meta.Negative && lzMin != 0)
-                        continue;
-                    if (!meta.Negative && lzMax != 15)
-                        continue;
-                }
+                if (!BoundaryPassesBounds(in meta, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax))
+                    continue;
 
                 ulong[]? faceBits = meta.FaceDir switch
                 {
@@ -455,111 +219,38 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                 ulong[]? plane = null;
                 bool hasNeighbor = false;
                 SectionPrerenderDesc neighbor = default;
-                switch (meta.FaceDir)
-                {
-                    case 0:
-                        plane = baseX == 0 ? planeNegX : null;
-                        hasNeighbor = hasLeft;
-                        neighbor = hasLeft ? leftSec : desc;
-                        break;
-                    case 1:
-                        plane = (baseX + 15) == maxX - 1 ? planePosX : null;
-                        hasNeighbor = hasRight;
-                        neighbor = hasRight ? rightSec : desc;
-                        break;
-                    case 2:
-                        plane = baseY == 0 ? planeNegY : null;
-                        hasNeighbor = hasDown;
-                        neighbor = hasDown ? downSec : desc;
-                        break;
-                    case 3:
-                        plane = (baseY + 15) == maxY - 1 ? planePosY : null;
-                        hasNeighbor = hasUp;
-                        neighbor = hasUp ? upSec : desc;
-                        break;
-                    case 4:
-                        plane = baseZ == 0 ? planeNegZ : null;
-                        hasNeighbor = hasBack;
-                        neighbor = hasBack ? backSec : desc;
-                        break;
-                    case 5:
-                        plane = (baseZ + 15) == maxZ - 1 ? planePosZ : null;
-                        hasNeighbor = hasFront;
-                        neighbor = hasFront ? frontSec : desc;
-                        break;
-                }
-
-                // Iterate plane indices according to face orientation (faceBits store opaque voxel positions)
-                if (meta.FaceDir == 0 || meta.FaceDir == 1) // X faces iterate z,y
-                {
-                    for (int z = lzMin; z <= lzMax; z++)
-                        for (int y = lyMin; y <= lyMax; y++)
-                        {
-                            int idx = z * 16 + y;
-                            int w = idx >> 6;
-                            int b = idx & 63;
-                            if ((faceBits[w] & (1UL << b)) == 0)
-                                continue;
-                            bool hidden = false;
-                            if (plane != null)
-                                hidden = PlaneBit(plane, (baseZ + z) * maxY + (baseY + y));
-                            else if (hasNeighbor)
-                                hidden = NeighborBoundarySolid(ref neighbor, meta.FaceDir == 0 ? 0 : 1, meta.FaceDir == 0 ? 15 : 0, y, z);
-                            if (!hidden)
-                            {
-                                int li = ((z * 16 + (meta.FaceDir == 0 ? 0 : 15)) * 16) + y;
-                                (meta.FaceDir == 0 ? faceNX : facePX)[li >> 6] |= 1UL << (li & 63);
-                            }
-                        }
-                }
-                else if (meta.FaceDir == 2 || meta.FaceDir == 3) // Y faces iterate x,z
-                {
-                    for (int x = lxMin; x <= lxMax; x++)
-                        for (int z = lzMin; z <= lzMax; z++)
-                        {
-                            int idx = x * 16 + z;
-                            int w = idx >> 6;
-                            int b = idx & 63;
-                            if ((faceBits[w] & (1UL << b)) == 0)
-                                continue;
-                            bool hidden = false;
-                            if (plane != null)
-                                hidden = PlaneBit(plane, (baseX + x) * maxZ + (baseZ + z));
-                            else if (hasNeighbor)
-                                hidden = NeighborBoundarySolid(ref neighbor, meta.FaceDir == 2 ? 2 : 3, x, meta.FaceDir == 2 ? 15 : 0, z);
-                            if (!hidden)
-                            {
-                                int li = ((z * 16 + x) * 16) + (meta.FaceDir == 2 ? 0 : 15);
-                                (meta.FaceDir == 2 ? faceNY : facePY)[li >> 6] |= 1UL << (li & 63);
-                            }
-                        }
-                }
-                else // Z faces iterate x,y
-                {
-                    for (int x = lxMin; x <= lxMax; x++)
-                        for (int y = lyMin; y <= lyMax; y++)
-                        {
-                            int idx = x * 16 + y;
-                            int w = idx >> 6;
-                            int b = idx & 63;
-                            if ((faceBits[w] & (1UL << b)) == 0)
-                                continue;
-                            bool hidden = false;
-                            if (plane != null)
-                                hidden = PlaneBit(plane, (baseX + x) * maxY + (baseY + y));
-                            else if (hasNeighbor)
-                                hidden = NeighborBoundarySolid(ref neighbor, meta.FaceDir == 4 ? 4 : 5, x, y, meta.FaceDir == 4 ? 15 : 0);
-                            if (!hidden)
-                            {
-                                int li = (((meta.FaceDir == 4 ? 0 : 15) * 16 + x) * 16) + y;
-                                (meta.FaceDir == 4 ? faceNZ : facePZ)[li >> 6] |= 1UL << (li & 63);
-                            }
-                        }
-                }
+            ExtractAddVisibleBoundaryFacesSelectiveRegion5(ref desc, baseX, baseY, baseZ, planeNegX, planePosX, planeNegY, planePosY, planeNegZ, planePosZ, maxX, maxY, maxZ, hasLeft, ref leftSec, hasRight, ref rightSec, hasDown, ref downSec, hasUp, ref upSec, hasBack, ref backSec, hasFront, ref frontSec, in meta, ref plane, ref hasNeighbor, ref neighbor);
+            ExtractAddVisibleBoundaryFacesSelectiveRegion4(baseX, baseY, baseZ, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, faceNX, facePX, faceNY, facePY, faceNZ, facePZ, maxY, maxZ, in meta, faceBits, plane, hasNeighbor, ref neighbor);
             }
         }
 
         // ------------------------------------------------------------------------------------
+        private static bool BoundaryPassesBounds(in FaceDescriptor meta, int lxMin, int lxMax, int lyMin, int lyMax, int lzMin, int lzMax)
+        {
+            if (meta.Axis == 0)
+            {
+                if (meta.Negative && lxMin != 0)
+                    return false;
+                if (!meta.Negative && lxMax != 15)
+                    return false;
+            }
+            else if (meta.Axis == 1)
+            {
+                if (meta.Negative && lyMin != 0)
+                    return false;
+                if (!meta.Negative && lyMax != 15)
+                    return false;
+            }
+            else
+            {
+                if (meta.Negative && lzMin != 0)
+                    return false;
+                if (!meta.Negative && lzMax != 15)
+                    return false;
+            }
+            return true;
+        }
+
         // Neighbor section helpers
         // ------------------------------------------------------------------------------------
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -740,6 +431,372 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             }
 
             return visible;
+        }
+
+        private static void ExtractAddVisibleBoundaryFacesRegion(ref global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc desc, int baseX, int baseY, int baseZ, int lyMin, int lyMax, int lzMin, int lzMax, global::System.Span<ulong> faceNX, bool hasLeft, ref global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc leftSec, ulong[]? planeNegX, int maxY, ulong[] FaceNegXBits)
+        {
+            int worldX = baseX;
+            for (int z = lzMin; z <= lzMax; z++)
+            {
+                for (int y = lyMin; y <= lyMax; y++)
+                {
+                    int planeIndex = z * 16 + y;
+                    int w = planeIndex >> 6;
+                    int b = planeIndex & 63;
+                    ulong maskBit = 1UL << b;
+                    if ((FaceNegXBits[w] & maskBit) == 0)
+                        continue; // boundary voxel not present (opaque)
+                    bool hidden = false;
+                    if (worldX == 0)
+                    {
+                        // World -X edge: consult world plane bitset (set bit means opaque neighbor outside chunk)
+                        int planeBitIndex = (baseZ + z) * maxY + (baseY + y);
+                        hidden = PlaneBit(planeNegX, planeBitIndex);
+                    }
+                    else if (hasLeft && NeighborBoundarySolid(ref leftSec, 0, 15, y, z))
+                    {
+                        hidden = true; // Occluded by neighbor +X boundary opaque voxel
+                    }
+
+                    if (!hidden)
+                    {
+                        int li = ((z * 16) + 0) * 16 + y; // local voxel linear index at x=0
+                        faceNX[li >> 6] |= 1UL << (li & 63);
+                    }
+                }
+            }
+        }
+
+        private static void ExtractAddVisibleBoundaryFacesRegion2(ref global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc desc, int baseX, int baseY, int baseZ, int lxMin, int lxMax, int lyMin, int lyMax, int lzMin, int lzMax, global::System.Span<ulong> faceNX, global::System.Span<ulong> facePX, bool hasLeft, ref global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc leftSec, bool hasRight, ref global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc rightSec, ulong[]? planeNegX, ulong[]? planePosX, int maxX, int maxY)
+        {
+            // LEFT boundary (x=0)
+            if (lxMin == 0 && desc.FaceNegXBits != null)
+            {
+                ExtractAddVisibleBoundaryFacesRegion(ref desc, baseX, baseY, baseZ, lyMin, lyMax, lzMin, lzMax, faceNX, hasLeft, ref leftSec, planeNegX, maxY, desc.FaceNegXBits);
+            }
+
+            // RIGHT boundary (x=15)
+            if (lxMax == 15 && desc.FacePosXBits != null)
+            {
+                int worldXRight = baseX + 15;
+                for (int z = lzMin; z <= lzMax; z++)
+                {
+                    for (int y = lyMin; y <= lyMax; y++)
+                    {
+                        int planeIndex = z * 16 + y;
+                        int w = planeIndex >> 6;
+                        int b = planeIndex & 63;
+                        ulong maskBit = 1UL << b;
+                        if ((desc.FacePosXBits[w] & maskBit) == 0)
+                            continue;
+                        bool hidden = false;
+                        if (worldXRight == maxX - 1)
+                        {
+                            int planeBitIndex = (baseZ + z) * maxY + (baseY + y);
+                            hidden = PlaneBit(planePosX, planeBitIndex);
+                        }
+                        else if (hasRight && NeighborBoundarySolid(ref rightSec, 1, 0, y, z))
+                        {
+                            hidden = true;
+                        }
+
+                        if (!hidden)
+                        {
+                            int li = ((z * 16 + 15) * 16) + y; // x=15
+                            facePX[li >> 6] |= 1UL << (li & 63);
+                        }
+                    }
+                }
+            }
+        }
+
+        private static void ExtractAddVisibleBoundaryFacesRegion3(ref global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc desc, int baseX, int baseY, int baseZ, int lxMin, int lxMax, int lyMin, int lyMax, int lzMin, int lzMax, global::System.Span<ulong> faceNX, global::System.Span<ulong> facePX, global::System.Span<ulong> faceNY, bool hasLeft, ref global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc leftSec, bool hasRight, ref global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc rightSec, bool hasDown, ref global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc downSec, ulong[]? planeNegX, ulong[]? planePosX, ulong[]? planeNegY, int maxX, int maxY, int maxZ)
+        {
+            ExtractAddVisibleBoundaryFacesRegion2(ref desc, baseX, baseY, baseZ, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, faceNX, facePX, hasLeft, ref leftSec, hasRight, ref rightSec, planeNegX, planePosX, maxX, maxY);
+            // BOTTOM boundary (y=0)
+            if (lyMin == 0 && desc.FaceNegYBits != null)
+            {
+                int worldY = baseY;
+                for (int x = lxMin; x <= lxMax; x++)
+                {
+                    for (int z = lzMin; z <= lzMax; z++)
+                    {
+                        int planeIndex = x * 16 + z;
+                        int w = planeIndex >> 6;
+                        int b = planeIndex & 63;
+                        ulong maskBit = 1UL << b;
+                        if ((desc.FaceNegYBits[w] & maskBit) == 0)
+                            continue;
+                        bool hidden = false;
+                        if (worldY == 0)
+                        {
+                            int planeBitIndex = (baseX + x) * maxZ + (baseZ + z);
+                            hidden = PlaneBit(planeNegY, planeBitIndex);
+                        }
+                        else if (hasDown && NeighborBoundarySolid(ref downSec, 2, x, 15, z))
+                        {
+                            hidden = true;
+                        }
+
+                        if (!hidden)
+                        {
+                            int li = ((z * 16 + x) * 16) + 0; // y=0
+                            faceNY[li >> 6] |= 1UL << (li & 63);
+                        }
+                    }
+                }
+            }
+        }
+
+        private static void ExtractAddVisibleBoundaryFacesRegion4(ref global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc desc, int baseX, int baseY, int baseZ, int lxMin, int lxMax, int lyMin, int lyMax, int lzMin, int lzMax, global::System.Span<ulong> faceNX, global::System.Span<ulong> facePX, global::System.Span<ulong> faceNY, global::System.Span<ulong> facePY, bool hasLeft, ref global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc leftSec, bool hasRight, ref global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc rightSec, bool hasDown, ref global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc downSec, bool hasUp, ref global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc upSec, ulong[]? planeNegX, ulong[]? planePosX, ulong[]? planeNegY, ulong[]? planePosY, int maxX, int maxY, int maxZ)
+        {
+            ExtractAddVisibleBoundaryFacesRegion3(ref desc, baseX, baseY, baseZ, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, faceNX, facePX, faceNY, hasLeft, ref leftSec, hasRight, ref rightSec, hasDown, ref downSec, planeNegX, planePosX, planeNegY, maxX, maxY, maxZ);
+            // TOP boundary (y=15)
+            if (lyMax == 15 && desc.FacePosYBits != null)
+            {
+                int worldYTop = baseY + 15;
+                for (int x = lxMin; x <= lxMax; x++)
+                {
+                    for (int z = lzMin; z <= lzMax; z++)
+                    {
+                        int planeIndex = x * 16 + z;
+                        int w = planeIndex >> 6;
+                        int b = planeIndex & 63;
+                        ulong maskBit = 1UL << b;
+                        if ((desc.FacePosYBits[w] & maskBit) == 0)
+                            continue;
+                        bool hidden = false;
+                        if (worldYTop == maxY - 1)
+                        {
+                            int planeBitIndex = (baseX + x) * maxZ + (baseZ + z);
+                            hidden = PlaneBit(planePosY, planeBitIndex);
+                        }
+                        else if (hasUp && NeighborBoundarySolid(ref upSec, 3, x, 0, z))
+                        {
+                            hidden = true;
+                        }
+
+                        if (!hidden)
+                        {
+                            int li = ((z * 16 + x) * 16) + 15; // y=15
+                            facePY[li >> 6] |= 1UL << (li & 63);
+                        }
+                    }
+                }
+            }
+        }
+
+        private static void ExtractAddVisibleBoundaryFacesRegion5(ref global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc desc, int baseX, int baseY, int baseZ, int lxMin, int lxMax, int lyMin, int lyMax, global::System.Span<ulong> facePZ, bool hasFront, ref global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc frontSec, ulong[]? planePosZ, int maxY, int maxZ, ulong[] FacePosZBits)
+        {
+            int worldZFront = baseZ + 15;
+            for (int x = lxMin; x <= lxMax; x++)
+            {
+                for (int y = lyMin; y <= lyMax; y++)
+                {
+                    int planeIndex = x * 16 + y;
+                    int w = planeIndex >> 6;
+                    int b = planeIndex & 63;
+                    ulong maskBit = 1UL << b;
+                    if ((FacePosZBits[w] & maskBit) == 0)
+                        continue;
+                    bool hidden = false;
+                    if (worldZFront == maxZ - 1)
+                    {
+                        int planeBitIndex = (baseX + x) * maxY + (baseY + y);
+                        hidden = PlaneBit(planePosZ, planeBitIndex);
+                    }
+                    else if (hasFront && NeighborBoundarySolid(ref frontSec, 5, x, y, 0))
+                    {
+                        hidden = true;
+                    }
+
+                    if (!hidden)
+                    {
+                        int li = ((15 * 16 + x) * 16) + y; // z=15
+                        facePZ[li >> 6] |= 1UL << (li & 63);
+                    }
+                }
+            }
+        }
+
+        private static void ExtractAddVisibleBoundaryFacesSelectiveRegion(int baseY, int baseZ, global::System.Span<ulong> faceNX, global::System.Span<ulong> facePX, int maxY, in global::MVoxelEngine1.Graphics.Terrain.Sections.SectionRender.FaceDescriptor meta, ulong[]? plane, bool hasNeighbor, ref global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc neighbor, int z, int y)
+        {
+            bool hidden = false;
+            if (plane != null)
+                hidden = PlaneBit(plane, (baseZ + z) * maxY + (baseY + y));
+            else if (hasNeighbor)
+                hidden = NeighborBoundarySolid(ref neighbor, meta.FaceDir == 0 ? 0 : 1, meta.FaceDir == 0 ? 15 : 0, y, z);
+            if (!hidden)
+            {
+                int li = ((z * 16 + (meta.FaceDir == 0 ? 0 : 15)) * 16) + y;
+                (meta.FaceDir == 0 ? faceNX : facePX)[li >> 6] |= 1UL << (li & 63);
+            }
+        }
+
+        private static void ExtractAddVisibleBoundaryFacesRegion6(ref global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc desc, int baseX, int baseY, int baseZ, int lxMin, int lxMax, int lyMin, int lyMax, int lzMin, int lzMax, global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc[] allSecs, int sx, int sy, int sz, int syCount, int szCount, global::System.Span<ulong> faceNX, global::System.Span<ulong> facePX, global::System.Span<ulong> faceNY, global::System.Span<ulong> facePY, global::System.Span<ulong> faceNZ, global::System.Span<ulong> facePZ, global::MVoxelEngine1.Infrastructure.Models.Generation.ChunkPrerenderData data, bool hasLeft, ref global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc leftSec, bool hasRight, ref global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc rightSec, bool hasDown, ref global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc downSec, bool hasUp, ref global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc upSec, bool hasBack)
+        {
+            ref SectionPrerenderDesc backSec = ref hasBack ? ref allSecs[SecIndex(sx, sy, sz - 1, syCount, szCount)] : ref desc;
+            bool hasFront = sz + 1 < szCount;
+            ref SectionPrerenderDesc frontSec = ref hasFront ? ref allSecs[SecIndex(sx, sy, sz + 1, syCount, szCount)] : ref desc;
+            // World boundary plane bitsets (holes suppress faces at world edge). Set bit == opaque neighbor voxel.
+            var planeNegX = data.NeighborPlaneNegX;
+            var planePosX = data.NeighborPlanePosX;
+            var planeNegY = data.NeighborPlaneNegY;
+            var planePosY = data.NeighborPlanePosY;
+            var planeNegZ = data.NeighborPlaneNegZ;
+            var planePosZ = data.NeighborPlanePosZ;
+            int maxX = data.maxX;
+            int maxY = data.maxY;
+            int maxZ = data.maxZ;
+            ExtractAddVisibleBoundaryFacesRegion4(ref desc, baseX, baseY, baseZ, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, faceNX, facePX, faceNY, facePY, hasLeft, ref leftSec, hasRight, ref rightSec, hasDown, ref downSec, hasUp, ref upSec, planeNegX, planePosX, planeNegY, planePosY, maxX, maxY, maxZ);
+            // BACK boundary (z=0)
+            if (lzMin == 0 && desc.FaceNegZBits != null)
+            {
+                int worldZ = baseZ;
+                for (int x = lxMin; x <= lxMax; x++)
+                {
+                    for (int y = lyMin; y <= lyMax; y++)
+                    {
+                        int planeIndex = x * 16 + y;
+                        int w = planeIndex >> 6;
+                        int b = planeIndex & 63;
+                        ulong maskBit = 1UL << b;
+                        if ((desc.FaceNegZBits[w] & maskBit) == 0)
+                            continue;
+                        bool hidden = false;
+                        if (worldZ == 0)
+                        {
+                            int planeBitIndex = (baseX + x) * maxY + (baseY + y);
+                            hidden = PlaneBit(planeNegZ, planeBitIndex);
+                        }
+                        else if (hasBack && NeighborBoundarySolid(ref backSec, 4, x, y, 15))
+                        {
+                            hidden = true;
+                        }
+
+                        if (!hidden)
+                        {
+                            int li = ((0 * 16 + x) * 16) + y; // z=0
+                            faceNZ[li >> 6] |= 1UL << (li & 63);
+                        }
+                    }
+                }
+            }
+
+            // FRONT boundary (z=15)
+            if (lzMax == 15 && desc.FacePosZBits != null)
+            {
+                ExtractAddVisibleBoundaryFacesRegion5(ref desc, baseX, baseY, baseZ, lxMin, lxMax, lyMin, lyMax, facePZ, hasFront, ref frontSec, planePosZ, maxY, maxZ, desc.FacePosZBits);
+            }
+        }
+
+        private static void ExtractAddVisibleBoundaryFacesSelectiveRegion2(int baseX, int baseZ, global::System.Span<ulong> faceNY, global::System.Span<ulong> facePY, int maxZ, in global::MVoxelEngine1.Graphics.Terrain.Sections.SectionRender.FaceDescriptor meta, ulong[]? plane, bool hasNeighbor, ref global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc neighbor, int x, int z)
+        {
+            bool hidden = false;
+            if (plane != null)
+                hidden = PlaneBit(plane, (baseX + x) * maxZ + (baseZ + z));
+            else if (hasNeighbor)
+                hidden = NeighborBoundarySolid(ref neighbor, meta.FaceDir == 2 ? 2 : 3, x, meta.FaceDir == 2 ? 15 : 0, z);
+            if (!hidden)
+            {
+                int li = ((z * 16 + x) * 16) + (meta.FaceDir == 2 ? 0 : 15);
+                (meta.FaceDir == 2 ? faceNY : facePY)[li >> 6] |= 1UL << (li & 63);
+            }
+        }
+
+        private static void ExtractAddVisibleBoundaryFacesSelectiveRegion3(int baseX, int baseY, global::System.Span<ulong> faceNZ, global::System.Span<ulong> facePZ, int maxY, in global::MVoxelEngine1.Graphics.Terrain.Sections.SectionRender.FaceDescriptor meta, ulong[]? plane, bool hasNeighbor, ref global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc neighbor, int x, int y)
+        {
+            bool hidden = false;
+            if (plane != null)
+                hidden = PlaneBit(plane, (baseX + x) * maxY + (baseY + y));
+            else if (hasNeighbor)
+                hidden = NeighborBoundarySolid(ref neighbor, meta.FaceDir == 4 ? 4 : 5, x, y, meta.FaceDir == 4 ? 15 : 0);
+            if (!hidden)
+            {
+                int li = (((meta.FaceDir == 4 ? 0 : 15) * 16 + x) * 16) + y;
+                (meta.FaceDir == 4 ? faceNZ : facePZ)[li >> 6] |= 1UL << (li & 63);
+            }
+        }
+
+        private static void ExtractAddVisibleBoundaryFacesSelectiveRegion4(int baseX, int baseY, int baseZ, int lxMin, int lxMax, int lyMin, int lyMax, int lzMin, int lzMax, global::System.Span<ulong> faceNX, global::System.Span<ulong> facePX, global::System.Span<ulong> faceNY, global::System.Span<ulong> facePY, global::System.Span<ulong> faceNZ, global::System.Span<ulong> facePZ, int maxY, int maxZ, in global::MVoxelEngine1.Graphics.Terrain.Sections.SectionRender.FaceDescriptor meta, ulong[] faceBits, ulong[]? plane, bool hasNeighbor, ref global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc neighbor)
+        {
+            // Iterate plane indices according to face orientation (faceBits store opaque voxel positions)
+            if (meta.FaceDir == 0 || meta.FaceDir == 1) // X faces iterate z,y
+            {
+                for (int z = lzMin; z <= lzMax; z++)
+                    for (int y = lyMin; y <= lyMax; y++)
+                    {
+                        int idx = z * 16 + y;
+                        int w = idx >> 6;
+                        int b = idx & 63;
+                        if ((faceBits[w] & (1UL << b)) == 0)
+                            continue;
+                        ExtractAddVisibleBoundaryFacesSelectiveRegion(baseY, baseZ, faceNX, facePX, maxY, in meta, plane, hasNeighbor, ref neighbor, z, y);
+                    }
+            }
+            else if (meta.FaceDir == 2 || meta.FaceDir == 3) // Y faces iterate x,z
+            {
+                for (int x = lxMin; x <= lxMax; x++)
+                    for (int z = lzMin; z <= lzMax; z++)
+                    {
+                        int idx = x * 16 + z;
+                        int w = idx >> 6;
+                        int b = idx & 63;
+                        if ((faceBits[w] & (1UL << b)) == 0)
+                            continue;
+                        ExtractAddVisibleBoundaryFacesSelectiveRegion2(baseX, baseZ, faceNY, facePY, maxZ, in meta, plane, hasNeighbor, ref neighbor, x, z);
+                    }
+            }
+            else // Z faces iterate x,y
+            {
+                for (int x = lxMin; x <= lxMax; x++)
+                    for (int y = lyMin; y <= lyMax; y++)
+                    {
+                        int idx = x * 16 + y;
+                        int w = idx >> 6;
+                        int b = idx & 63;
+                        if ((faceBits[w] & (1UL << b)) == 0)
+                            continue;
+                        ExtractAddVisibleBoundaryFacesSelectiveRegion3(baseX, baseY, faceNZ, facePZ, maxY, in meta, plane, hasNeighbor, ref neighbor, x, y);
+                    }
+            }
+        }
+
+        private static void ExtractAddVisibleBoundaryFacesSelectiveRegion5(ref global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc desc, int baseX, int baseY, int baseZ, ulong[]? planeNegX, ulong[]? planePosX, ulong[]? planeNegY, ulong[]? planePosY, ulong[]? planeNegZ, ulong[]? planePosZ, int maxX, int maxY, int maxZ, bool hasLeft, ref global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc leftSec, bool hasRight, ref global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc rightSec, bool hasDown, ref global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc downSec, bool hasUp, ref global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc upSec, bool hasBack, ref global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc backSec, bool hasFront, ref global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc frontSec, in global::MVoxelEngine1.Graphics.Terrain.Sections.SectionRender.FaceDescriptor meta, ref ulong[]? plane, ref bool hasNeighbor, ref global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc neighbor)
+        {
+            switch (meta.FaceDir)
+            {
+                case 0:
+                    plane = baseX == 0 ? planeNegX : null;
+                    hasNeighbor = hasLeft;
+                    neighbor = hasLeft ? leftSec : desc;
+                    break;
+                case 1:
+                    plane = (baseX + 15) == maxX - 1 ? planePosX : null;
+                    hasNeighbor = hasRight;
+                    neighbor = hasRight ? rightSec : desc;
+                    break;
+                case 2:
+                    plane = baseY == 0 ? planeNegY : null;
+                    hasNeighbor = hasDown;
+                    neighbor = hasDown ? downSec : desc;
+                    break;
+                case 3:
+                    plane = (baseY + 15) == maxY - 1 ? planePosY : null;
+                    hasNeighbor = hasUp;
+                    neighbor = hasUp ? upSec : desc;
+                    break;
+                case 4:
+                    plane = baseZ == 0 ? planeNegZ : null;
+                    hasNeighbor = hasBack;
+                    neighbor = hasBack ? backSec : desc;
+                    break;
+                case 5:
+                    plane = (baseZ + 15) == maxZ - 1 ? planePosZ : null;
+                    hasNeighbor = hasFront;
+                    neighbor = hasFront ? frontSec : desc;
+                    break;
+            }
         }
     }
 }

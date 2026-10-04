@@ -40,60 +40,7 @@ internal readonly ref partial struct NativeGtrtSessionView
         state.RemainingChunks = 0;
         state.PlannedColumns = 0;
         state.PlannedMeshes = 0;
-        state.RetainedColumns = 0;
-        state.RetainedPackets = 0;
-        state.ReadyPacketCount = 0;
-        state.FailureCode = 0;
-        state.CancellationState = 0;
-        state.MeshEnqueuePosition = 0;
-        state.MeshDequeuePosition = 0;
-        GenerationWorkspaces.Clear();
-        MeshWorkspaces.Clear();
-        for (int index = 0; index < MeshReadySlots.Length; index++)
-            MeshReadySlots[index] = new NativeReadySlot
-            {
-                Sequence = index
-            };
-        Span<byte> changedColumns = ReadRange<byte>(header.Streaming.ChangedColumns, header.ColumnCount);
-        for (int relativeX = header.MinimumChunkX; relativeX <= header.MaximumChunkX; relativeX++)
-        {
-            int chunkX = checked(centerX + relativeX);
-            for (int relativeZ = header.MinimumChunkZ; relativeZ <= header.MaximumChunkZ; relativeZ++)
-            {
-                int chunkZ = checked(centerZ + relativeZ);
-                int index = GetColumnIndex(chunkX, chunkZ);
-                ref NativeColumnRecord column = ref Columns[index];
-                bool retained = column.ChunkX == chunkX && column.ChunkZ == chunkZ && column.State == NativeColumnState.Generated;
-                if (retained)
-                {
-                    column.GenerationEpoch = epoch;
-                    state.RetainedColumns++;
-                }
-                else
-                {
-                    int offset = checked(index * header.ProfilesPerColumn);
-                    Profiles.Slice(offset, header.ProfilesPerColumn).CopyTo(ReadRange<BlockColumnProfile>(header.Streaming.ProfilesBackup, header.ProfileCount).Slice(offset, header.ProfilesPerColumn));
-                    changedColumns[index] = 1;
-                    column = new NativeColumnRecord
-                    {
-                        ChunkX = chunkX,
-                        ChunkZ = chunkZ,
-                        ProfileOffset = offset,
-                        BiomeIndex = -1
-                    };
-                    ColumnSummaries[index] = default;
-                    state.PlannedColumns++;
-                }
-
-                GenerationJobs[index] = new NativeWorkItem
-                {
-                    RecordIndex = index,
-                    Epoch = epoch,
-                    Kind = NativeWorkKind.GenerateColumn,
-                    State = retained ? NativeWorkState.Completed : NativeWorkState.Scheduled
-                };
-            }
-        }
+        PrepareStreamingColumns(centerX, centerZ, ref state, epoch);
 
         // All columns must have their new coordinates before dependencies are counted.
         for (int relativeX = header.MinimumChunkX; relativeX <= header.MaximumChunkX; relativeX++)
@@ -101,58 +48,7 @@ internal readonly ref partial struct NativeGtrtSessionView
             int chunkX = checked(centerX + relativeX);
             for (int relativeZ = header.MinimumChunkZ; relativeZ <= header.MaximumChunkZ; relativeZ++)
             {
-                int chunkZ = checked(centerZ + relativeZ);
-                int columnIndex = GetColumnIndex(chunkX, chunkZ);
-                bool required = Math.Abs(relativeX) <= header.Lod1Radius && Math.Abs(relativeZ) <= header.Lod1Radius;
-                bool generated = Columns[columnIndex].State == NativeColumnState.Generated;
-                for (int relativeY = header.MinimumChunkY; relativeY <= header.MaximumChunkY; relativeY++)
-                {
-                    int chunkY = checked(centerY + relativeY);
-                    int index = GetChunkIndex(chunkX, chunkY, chunkZ);
-                    NativeChunkRecord previous = Chunks[index];
-                    ref NativeRenderPacketRecord packet = ref Packets[index];
-                    bool retained = required && generated && previous.ChunkX == chunkX && previous.ChunkY == chunkY && previous.ChunkZ == chunkZ && (previous.Flags & (int)NativeChunkFlags.MeshInvalidated) == 0 && previous.State == NativeChunkState.Retired && packet.State == NativeRenderPacketState.Retired;
-                    int materializedIndex = FindMaterializedChunkIndex(chunkX, chunkY, chunkZ);
-                    int dependencies = required && !retained ? CountPendingColumns(chunkX, chunkZ) : 0;
-                    Chunks[index] = new NativeChunkRecord
-                    {
-                        ChunkX = chunkX,
-                        ChunkY = chunkY,
-                        ChunkZ = chunkZ,
-                        ColumnIndex = columnIndex,
-                        ProfileOffset = columnIndex * header.ProfilesPerColumn,
-                        PacketIndex = index,
-                        MaterializedChunkIndex = materializedIndex,
-                        StorageKind = materializedIndex < 0 ? NativeChunkStorageKind.GeneratedProfile : MaterializedChunks[materializedIndex].StorageKind,
-                        DirtyRevision = materializedIndex < 0 ? 0 : MaterializedChunks[materializedIndex].Revision,
-                        Flags = required ? (int)NativeChunkFlags.InitialMeshRequired : 0,
-                        RemainingDependencies = dependencies,
-                        GenerationEpoch = generated ? epoch : 0,
-                        MeshEpoch = retained ? epoch : 0,
-                        State = retained ? NativeChunkState.Retired : generated ? NativeChunkState.Generated : NativeChunkState.Empty
-                    };
-                    MeshJobs[index] = new NativeWorkItem
-                    {
-                        RecordIndex = index,
-                        Epoch = epoch,
-                        Kind = NativeWorkKind.BuildChunkMesh,
-                        State = retained ? NativeWorkState.Completed : !required ? NativeWorkState.Canceled : dependencies == 0 ? NativeWorkState.Scheduled : NativeWorkState.Waiting
-                    };
-                    if (retained)
-                    {
-                        packet.PublicationEpoch = epoch;
-                        packet.RegistryEpoch = epoch;
-                        state.RetainedPackets++;
-                        continue;
-                    }
-
-                    packet = default;
-                    if (!required)
-                        continue;
-                    state.PlannedMeshes++;
-                    if (dependencies == 0 && !TryEnqueueMeshReady(index, epoch))
-                        return false;
-                }
+        if (!PrepareStreamingChunkJobs(centerY, centerZ, ref state, epoch, relativeX, chunkX, relativeZ)) return false;
             }
         }
         return FinishTryPrepareStreamingRunPhase(ref state);
@@ -325,5 +221,122 @@ internal readonly ref partial struct NativeGtrtSessionView
         state.RemainingChunks = state.PlannedMeshes;
         return true;
 
+    }
+
+    private void PrepareStreamingColumns(int centerX, int centerZ, ref global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionState state, int epoch)
+    {
+        state.RetainedColumns = 0;
+        state.RetainedPackets = 0;
+        state.ReadyPacketCount = 0;
+        state.FailureCode = 0;
+        state.CancellationState = 0;
+        state.MeshEnqueuePosition = 0;
+        state.MeshDequeuePosition = 0;
+        GenerationWorkspaces.Clear();
+        MeshWorkspaces.Clear();
+        for (int index = 0; index < MeshReadySlots.Length; index++)
+            MeshReadySlots[index] = new NativeReadySlot
+            {
+                Sequence = index
+            };
+        Span<byte> changedColumns = ReadRange<byte>(header.Streaming.ChangedColumns, header.ColumnCount);
+        for (int relativeX = header.MinimumChunkX; relativeX <= header.MaximumChunkX; relativeX++)
+        {
+            int chunkX = checked(centerX + relativeX);
+            for (int relativeZ = header.MinimumChunkZ; relativeZ <= header.MaximumChunkZ; relativeZ++)
+            {
+                int chunkZ = checked(centerZ + relativeZ);
+                int index = GetColumnIndex(chunkX, chunkZ);
+                ref NativeColumnRecord column = ref Columns[index];
+                bool retained = column.ChunkX == chunkX && column.ChunkZ == chunkZ && column.State == NativeColumnState.Generated;
+                if (retained)
+                {
+                    column.GenerationEpoch = epoch;
+                    state.RetainedColumns++;
+                }
+                else
+                {
+                    int offset = checked(index * header.ProfilesPerColumn);
+                    Profiles.Slice(offset, header.ProfilesPerColumn).CopyTo(ReadRange<BlockColumnProfile>(header.Streaming.ProfilesBackup, header.ProfileCount).Slice(offset, header.ProfilesPerColumn));
+                    changedColumns[index] = 1;
+                    column = new NativeColumnRecord
+                    {
+                        ChunkX = chunkX,
+                        ChunkZ = chunkZ,
+                        ProfileOffset = offset,
+                        BiomeIndex = -1
+                    };
+                    ColumnSummaries[index] = default;
+                    state.PlannedColumns++;
+                }
+
+                GenerationJobs[index] = new NativeWorkItem
+                {
+                    RecordIndex = index,
+                    Epoch = epoch,
+                    Kind = NativeWorkKind.GenerateColumn,
+                    State = retained ? NativeWorkState.Completed : NativeWorkState.Scheduled
+                };
+            }
+        }
+
+    }
+
+    private bool PrepareStreamingChunkJobs(int centerY, int centerZ, ref global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionState state, int epoch, int relativeX, int chunkX, int relativeZ)
+    {
+        int chunkZ = checked(centerZ + relativeZ);
+        int columnIndex = GetColumnIndex(chunkX, chunkZ);
+        bool required = Math.Abs(relativeX) <= header.Lod1Radius && Math.Abs(relativeZ) <= header.Lod1Radius;
+        bool generated = Columns[columnIndex].State == NativeColumnState.Generated;
+        for (int relativeY = header.MinimumChunkY; relativeY <= header.MaximumChunkY; relativeY++)
+        {
+            int chunkY = checked(centerY + relativeY);
+            int index = GetChunkIndex(chunkX, chunkY, chunkZ);
+            NativeChunkRecord previous = Chunks[index];
+            ref NativeRenderPacketRecord packet = ref Packets[index];
+            bool retained = required && generated && previous.ChunkX == chunkX && previous.ChunkY == chunkY && previous.ChunkZ == chunkZ && (previous.Flags & (int)NativeChunkFlags.MeshInvalidated) == 0 && previous.State == NativeChunkState.Retired && packet.State == NativeRenderPacketState.Retired;
+            int materializedIndex = FindMaterializedChunkIndex(chunkX, chunkY, chunkZ);
+            int dependencies = required && !retained ? CountPendingColumns(chunkX, chunkZ) : 0;
+            Chunks[index] = new NativeChunkRecord
+            {
+                ChunkX = chunkX,
+                ChunkY = chunkY,
+                ChunkZ = chunkZ,
+                ColumnIndex = columnIndex,
+                ProfileOffset = columnIndex * header.ProfilesPerColumn,
+                PacketIndex = index,
+                MaterializedChunkIndex = materializedIndex,
+                StorageKind = materializedIndex < 0 ? NativeChunkStorageKind.GeneratedProfile : MaterializedChunks[materializedIndex].StorageKind,
+                DirtyRevision = materializedIndex < 0 ? 0 : MaterializedChunks[materializedIndex].Revision,
+                Flags = required ? (int)NativeChunkFlags.InitialMeshRequired : 0,
+                RemainingDependencies = dependencies,
+                GenerationEpoch = generated ? epoch : 0,
+                MeshEpoch = retained ? epoch : 0,
+                State = retained ? NativeChunkState.Retired : generated ? NativeChunkState.Generated : NativeChunkState.Empty
+            };
+            MeshJobs[index] = new NativeWorkItem
+            {
+                RecordIndex = index,
+                Epoch = epoch,
+                Kind = NativeWorkKind.BuildChunkMesh,
+                State = retained ? NativeWorkState.Completed : !required ? NativeWorkState.Canceled : dependencies == 0 ? NativeWorkState.Scheduled : NativeWorkState.Waiting
+            };
+            if (retained)
+            {
+                packet.PublicationEpoch = epoch;
+                packet.RegistryEpoch = epoch;
+                state.RetainedPackets++;
+                continue;
+            }
+
+            packet = default;
+            if (!required)
+                continue;
+            state.PlannedMeshes++;
+            if (dependencies == 0 && !TryEnqueueMeshReady(index, epoch))
+                return false;
+        }
+
+        return true;
     }
 }

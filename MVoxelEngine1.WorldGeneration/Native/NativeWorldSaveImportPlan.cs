@@ -353,6 +353,17 @@ internal sealed partial class NativeWorldSaveImportPlan
             return;
         }
 
+        if (!TryImportSavedSections(ref session, payload, materializedChunkIndex))
+            return;
+
+        ref NativeMaterializedChunkRecord importedChunk =
+            ref session.MaterializedChunks[materializedChunkIndex];
+        importedChunk.PersistedRevision = importedChunk.Revision;
+        pendingImportSucceeded = true;
+    }
+
+    private bool TryImportSavedSections(scoped ref NativeGtrtSessionView session, byte[] payload, int materializedChunkIndex)
+    {
         int sectionCount = checked(
             sectionCountX * sectionCountY * sectionCountZ);
         int tableOffset = ChunkHeaderSize;
@@ -392,13 +403,10 @@ internal sealed partial class NativeWorldSaveImportPlan
                 _ => false
             };
             if (!imported)
-                return;
+                return false;
         }
 
-        ref NativeMaterializedChunkRecord importedChunk =
-            ref session.MaterializedChunks[materializedChunkIndex];
-        importedChunk.PersistedRevision = importedChunk.Revision;
-        pendingImportSucceeded = true;
+        return true;
     }
 
     private void ValidatePendingChunk(scoped NativeLeaseView<byte> owner)
@@ -625,74 +633,7 @@ internal sealed partial class NativeWorldSaveImportPlan
         bool uniformIdSet = false;
         int recordsStart = checked(ChunkHeaderSize + tableSize);
         int recordsEnd = recordsStart;
-        var usedOffsets = new HashSet<int>();
-        for (int sectionIndex = 0;
-             sectionIndex < expectedSectionCount;
-             sectionIndex++)
-        {
-            int tableOffset = checked(
-                ChunkHeaderSize + sectionIndex * sizeof(uint));
-            uint rawOffset = BinaryPrimitives.ReadUInt32LittleEndian(
-                payload.Slice(tableOffset, sizeof(uint)));
-            SavedSection section;
-            if (rawOffset == 0)
-            {
-                section = SavedSection.Empty;
-            }
-            else
-            {
-                int offset = checked((int)rawOffset);
-                if (offset < recordsStart || !usedOffsets.Add(offset))
-                {
-                    throw new InvalidDataException(
-                        $"The saved chunk ({chunkX},{chunkY},{chunkZ}) has an invalid section offset.");
-                }
-                section = ParseSection(payload, offset);
-                int payloadLength = BinaryPrimitives.ReadUInt16LittleEndian(payload.Slice(offset + 1, sizeof(ushort)));
-                recordsEnd = Math.Max(recordsEnd, checked(offset + 3 + payloadLength));
-            }
-
-            bool sectionIsUniform = section.Kind is
-                SavedSectionKind.Empty or SavedSectionKind.Uniform;
-            ushort sectionUniformId = section.Kind ==
-                SavedSectionKind.Uniform
-                ? section.UniformBlockId
-                : (ushort)0;
-            if (!sectionIsUniform)
-            {
-                shape.IsUniform = false;
-            }
-            else if (!uniformIdSet)
-            {
-                shape.UniformBlockId = sectionUniformId;
-                uniformIdSet = true;
-            }
-            else if (shape.UniformBlockId != sectionUniformId)
-            {
-                shape.IsUniform = false;
-            }
-
-            switch (section.Kind)
-            {
-                case SavedSectionKind.Empty:
-                    break;
-                case SavedSectionKind.Uniform:
-                    if (section.UniformBlockId != 0)
-                        shape.SectionCount++;
-                    break;
-                case SavedSectionKind.Raw:
-                    shape.SectionCount++;
-                    shape.RawSectionCount++;
-                    break;
-                case SavedSectionKind.Packed:
-                    shape.SectionCount++;
-                    shape.PaletteCount = checked(
-                        shape.PaletteCount + section.PaletteCount);
-                    shape.PackedWordCount = checked(
-                        shape.PackedWordCount + section.WordCount);
-                    break;
-            }
-        }
+        ValidateSavedSectionTable(payload, chunkX, chunkY, chunkZ, expectedSectionCount, ref shape, ref uniformIdSet, recordsStart, ref recordsEnd);
         return FinishAnalyzeChunkPhase(payload, ref shape, recordsEnd);
     }
 
@@ -717,25 +658,7 @@ internal sealed partial class NativeWorldSaveImportPlan
             payloadOffset,
             payloadLength);
         var reader = new SpanReader(payload);
-        _ = reader.ReadUInt16();
-        _ = reader.ReadUInt16();
-        _ = reader.ReadUInt16();
-        _ = reader.ReadInt32();
-        byte flags = reader.ReadByte();
-        if ((flags & 1) != 0)
-            reader.Skip(6);
-        if ((flags & 2) != 0)
-        {
-            for (int index = 0; index < 7; index++)
-                reader.SkipUlongArray();
-        }
-        if ((flags & 32) != 0)
-        {
-            for (int index = 0; index < 7; index++)
-                reader.SkipUlongArray();
-        }
-        if ((flags & 64) != 0)
-            reader.SkipUlongArray();
+        SkipSavedSectionMetadata(ref reader);
 
         SavedSectionKind kind = kindValue switch
         {
@@ -747,71 +670,41 @@ internal sealed partial class NativeWorldSaveImportPlan
                 $"The saved section kind {kindValue} is not supported.")
         };
         SavedSection section;
-        switch (kind)
-        {
-            case SavedSectionKind.Empty:
-                section = SavedSection.Empty;
-                break;
-            case SavedSectionKind.Uniform:
-                section = new SavedSection(
-                    kind,
-                    reader.ReadUInt16(),
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0);
-                break;
-            case SavedSectionKind.Raw:
-                int dataOffset = checked(payloadOffset + reader.Position);
-                reader.Skip(VoxelSection.VoxelCount * sizeof(ushort));
-                section = new SavedSection(
-                    kind,
-                    0,
-                    dataOffset,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0);
-                break;
-            case SavedSectionKind.Packed:
-                byte bitsPerIndex = reader.ReadByte();
-                int paletteCount = reader.ReadUInt16();
-                if (bitsPerIndex is 0 or > 16 ||
-                    paletteCount is <= 0 or > VoxelSection.VoxelCount)
-                {
-                    throw new InvalidDataException(
-                        "A saved packed section has invalid indexing metadata.");
-                }
-                int paletteOffset = checked(payloadOffset + reader.Position);
-                reader.Skip(checked(paletteCount * sizeof(ushort)));
-                int wordCount = reader.ReadInt32();
-                int minimumWordCount = checked(
-                    (VoxelSection.VoxelCount * bitsPerIndex + 31) / 32);
-                if (wordCount < minimumWordCount)
-                {
-                    throw new InvalidDataException(
-                        "A saved packed section has insufficient word data.");
-                }
-                int wordOffset = checked(payloadOffset + reader.Position);
-                reader.Skip(checked(wordCount * sizeof(uint)));
-                section = new SavedSection(
-                    kind,
-                    0,
-                    0,
-                    bitsPerIndex,
-                    paletteOffset,
-                    paletteCount,
-                    wordOffset,
-                    wordCount);
-                break;
-            default:
-                throw new InvalidDataException(
-                    "A saved section kind is invalid.");
-        }
+        ReadSavedSectionRepresentation(payloadOffset, ref reader, kind, out section);
         return FinishParseSectionPhase(ref reader, section);
+    }
+
+    private static SavedSection ReadSavedPackedSection(ref SpanReader reader, int payloadOffset, SavedSectionKind kind)
+    {
+        byte bitsPerIndex = reader.ReadByte();
+        int paletteCount = reader.ReadUInt16();
+        if (bitsPerIndex is 0 or > 16 ||
+            paletteCount is <= 0 or > VoxelSection.VoxelCount)
+        {
+            throw new InvalidDataException(
+                "A saved packed section has invalid indexing metadata.");
+        }
+        int paletteOffset = checked(payloadOffset + reader.Position);
+        reader.Skip(checked(paletteCount * sizeof(ushort)));
+        int wordCount = reader.ReadInt32();
+        int minimumWordCount = checked(
+            (VoxelSection.VoxelCount * bitsPerIndex + 31) / 32);
+        if (wordCount < minimumWordCount)
+        {
+            throw new InvalidDataException(
+                "A saved packed section has insufficient word data.");
+        }
+        int wordOffset = checked(payloadOffset + reader.Position);
+        reader.Skip(checked(wordCount * sizeof(uint)));
+        return new SavedSection(
+            kind,
+            0,
+            0,
+            bitsPerIndex,
+            paletteOffset,
+            paletteCount,
+            wordOffset,
+            wordCount);
     }
 
     private static int ReadQuadHeader(
@@ -1117,5 +1010,127 @@ internal sealed partial class NativeWorldSaveImportPlan
         reader.RequireEnd();
         return section;
 
+    }
+
+    private static void AccumulateSavedSectionShape(ref global::MVoxelEngine1.WorldGeneration.Native.NativeWorldSaveImportPlan.ChunkShape shape, ref bool uniformIdSet, global::MVoxelEngine1.WorldGeneration.Native.NativeWorldSaveImportPlan.SavedSection section)
+    {
+
+            bool sectionIsUniform = section.Kind is
+                SavedSectionKind.Empty or SavedSectionKind.Uniform;
+            ushort sectionUniformId = section.Kind ==
+                SavedSectionKind.Uniform
+                ? section.UniformBlockId
+                : (ushort)0;
+            if (!sectionIsUniform)
+            {
+                shape.IsUniform = false;
+            }
+            else if (!uniformIdSet)
+            {
+                shape.UniformBlockId = sectionUniformId;
+                uniformIdSet = true;
+            }
+            else if (shape.UniformBlockId != sectionUniformId)
+            {
+                shape.IsUniform = false;
+            }
+
+            switch (section.Kind)
+            {
+                case SavedSectionKind.Empty:
+                    break;
+                case SavedSectionKind.Uniform:
+                    if (section.UniformBlockId != 0)
+                        shape.SectionCount++;
+                    break;
+                case SavedSectionKind.Raw:
+                    shape.SectionCount++;
+                    shape.RawSectionCount++;
+                    break;
+                case SavedSectionKind.Packed:
+                    shape.SectionCount++;
+                    shape.PaletteCount = checked(
+                        shape.PaletteCount + section.PaletteCount);
+                    shape.PackedWordCount = checked(
+                        shape.PackedWordCount + section.WordCount);
+                    break;
+            }
+
+    }
+
+    private static void SkipSavedSectionMetadata(ref global::MVoxelEngine1.WorldGeneration.Native.NativeWorldSaveImportPlan.SpanReader reader)
+    {
+        _ = reader.ReadUInt16();
+        _ = reader.ReadUInt16();
+        _ = reader.ReadUInt16();
+        _ = reader.ReadInt32();
+        byte flags = reader.ReadByte();
+        if ((flags & 1) != 0)
+            reader.Skip(6);
+        if ((flags & 2) != 0)
+        {
+            for (int index = 0; index < 7; index++)
+                reader.SkipUlongArray();
+        }
+        if ((flags & 32) != 0)
+        {
+            for (int index = 0; index < 7; index++)
+                reader.SkipUlongArray();
+        }
+        if ((flags & 64) != 0)
+            reader.SkipUlongArray();
+
+    }
+
+    private static void ValidateSavedSectionTable(global::System.ReadOnlySpan<byte> payload, int chunkX, int chunkY, int chunkZ, int expectedSectionCount, ref global::MVoxelEngine1.WorldGeneration.Native.NativeWorldSaveImportPlan.ChunkShape shape, ref bool uniformIdSet, int recordsStart, ref int recordsEnd)
+    {
+        var usedOffsets = new HashSet<int>();
+        for (int sectionIndex = 0; sectionIndex < expectedSectionCount; sectionIndex++)
+        {
+            int tableOffset = checked(ChunkHeaderSize + sectionIndex * sizeof(uint));
+            uint rawOffset = BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(tableOffset, sizeof(uint)));
+            SavedSection section;
+            if (rawOffset == 0)
+            {
+                section = SavedSection.Empty;
+            }
+            else
+            {
+                int offset = checked((int)rawOffset);
+                if (offset < recordsStart || !usedOffsets.Add(offset))
+                {
+                    throw new InvalidDataException($"The saved chunk ({chunkX},{chunkY},{chunkZ}) has an invalid section offset.");
+                }
+
+                section = ParseSection(payload, offset);
+                int payloadLength = BinaryPrimitives.ReadUInt16LittleEndian(payload.Slice(offset + 1, sizeof(ushort)));
+                recordsEnd = Math.Max(recordsEnd, checked(offset + 3 + payloadLength));
+            }
+
+            AccumulateSavedSectionShape(ref shape, ref uniformIdSet, section);
+        }
+    }
+
+    private static void ReadSavedSectionRepresentation(int payloadOffset, ref global::MVoxelEngine1.WorldGeneration.Native.NativeWorldSaveImportPlan.SpanReader reader, global::MVoxelEngine1.WorldGeneration.Native.NativeWorldSaveImportPlan.SavedSectionKind kind, out global::MVoxelEngine1.WorldGeneration.Native.NativeWorldSaveImportPlan.SavedSection section)
+    {
+        switch (kind)
+        {
+            case SavedSectionKind.Empty:
+                section = SavedSection.Empty;
+                break;
+            case SavedSectionKind.Uniform:
+                section = new SavedSection(kind, reader.ReadUInt16(), 0, 0, 0, 0, 0, 0);
+                break;
+            case SavedSectionKind.Raw:
+                int dataOffset = checked(payloadOffset + reader.Position);
+                reader.Skip(VoxelSection.VoxelCount * sizeof(ushort));
+                section = new SavedSection(kind, 0, dataOffset, 0, 0, 0, 0, 0);
+                break;
+            case SavedSectionKind.Packed:
+                section = ReadSavedPackedSection(ref reader, payloadOffset, kind);
+                break;
+            default:
+                throw new InvalidDataException("A saved section kind is invalid.");
+        }
     }
 }

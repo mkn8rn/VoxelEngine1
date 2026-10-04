@@ -58,112 +58,7 @@ public sealed class NativeGtrtSessionTests
                 Assert.Equal(123456, view.State.Seed);
                 Assert.Equal(1, view.State.SessionEpoch);
                 Assert.Equal(1, view.State.PublicationState);
-                Assert.Equal(layout.ColumnCount, view.State.RemainingColumns);
-                Assert.Equal(
-                    layout.RequiredChunkCount,
-                    view.State.RemainingChunks);
-                Assert.Equal(layout.ColumnCount, view.Columns.Length);
-                Assert.Equal(layout.ProfileCount, view.Profiles.Length);
-                Assert.Equal(
-                    layout.ColumnCount,
-                    view.ColumnSummaries.Length);
-                Assert.Equal(
-                    layout.GenerationWorkerCount,
-                    view.GenerationWorkspaces.Length);
-                Assert.Equal(
-                    layout.GenerationFloatCountPerWorker,
-                    view.GetGenerationFloatScratch(0).Length);
-                Assert.Equal(
-                    layout.ChunkSizeX,
-                    view.GetGenerationXScratch(0).Length);
-                Assert.Equal(
-                    layout.ChunkSizeZ,
-                    view.GetGenerationZScratch(0).Length);
-                Assert.Equal(
-                    layout.GenerationLatticeCountPerWorker,
-                    view.GetGenerationLatticeScratch(0).Length);
-                Assert.Equal(layout.ChunkCount, view.Chunks.Length);
-                Assert.Equal(layout.ColumnCount, view.GenerationJobs.Length);
-                Assert.Equal(layout.ChunkCount, view.MeshJobs.Length);
-                Assert.Equal(
-                    layout.MeshWorkerCount,
-                    view.MeshWorkspaces.Length);
-                Assert.Equal(
-                    layout.ProfilesPerColumn,
-                    view.GetMeshBottomFaceScratch(0).Length);
-                Assert.Equal(
-                    layout.ProfilesPerColumn,
-                    view.GetMeshTopFaceScratch(0).Length);
-                Assert.Equal(layout.ChunkCount, view.Packets.Length);
-                Assert.Equal(
-                    layout.PacketWordCapacity,
-                    view.PacketWords.Length);
-                Assert.Equal(
-                    layout.RequiredChunkCount,
-                    view.MeshReadySlots.Length);
-
-                for (int index = 0; index < view.Columns.Length; index++)
-                {
-                    NativeColumnRecord column = view.Columns[index];
-                    Assert.Equal(index, view.GetColumnIndex(
-                        column.ChunkX,
-                        column.ChunkZ));
-                    Assert.Equal(index * layout.ProfilesPerColumn,
-                        column.ProfileOffset);
-                    Assert.Equal(-1, column.BiomeIndex);
-                    Assert.Equal(NativeColumnState.Empty, column.State);
-                    Assert.Equal(index, view.GenerationJobs[index].RecordIndex);
-                    Assert.Equal(
-                        NativeWorkKind.GenerateColumn,
-                        view.GenerationJobs[index].Kind);
-                    Assert.Equal(
-                        NativeWorkState.Scheduled,
-                        view.GenerationJobs[index].State);
-                }
-
-                for (int index = 0; index < view.Chunks.Length; index++)
-                {
-                    NativeChunkRecord chunk = view.Chunks[index];
-                    Assert.Equal(index, view.GetChunkIndex(
-                        chunk.ChunkX,
-                        chunk.ChunkY,
-                        chunk.ChunkZ));
-                    Assert.Equal(chunk.ColumnIndex * layout.ProfilesPerColumn,
-                        chunk.ProfileOffset);
-                    Assert.Equal(index, chunk.PacketIndex);
-                    Assert.Equal(NativeChunkState.Empty, chunk.State);
-                    Assert.Equal(index, view.MeshJobs[index].RecordIndex);
-                    Assert.Equal(
-                        NativeWorkKind.BuildChunkMesh,
-                        view.MeshJobs[index].Kind);
-
-                    bool required =
-                        Math.Abs(chunk.ChunkX) <= layout.Lod1Radius &&
-                        Math.Abs(chunk.ChunkZ) <= layout.Lod1Radius;
-                    Assert.Equal(
-                        required
-                            ? NativeChunkFlags.InitialMeshRequired
-                            : NativeChunkFlags.None,
-                        (NativeChunkFlags)chunk.Flags);
-                    Assert.Equal(
-                        required ? 5 : 0,
-                        chunk.RemainingDependencies);
-                    Assert.Equal(
-                        required
-                            ? NativeWorkState.Waiting
-                            : NativeWorkState.Canceled,
-                        view.MeshJobs[index].State);
-                }
-
-                foreach (ref readonly var profile in view.Profiles)
-                {
-                    Assert.Equal(-1, profile.StoneStart);
-                    Assert.Equal(-1, profile.StoneEnd);
-                    Assert.Equal(-1, profile.SoilStart);
-                    Assert.Equal(-1, profile.SoilEnd);
-                    Assert.Equal(-1, profile.WaterStart);
-                    Assert.Equal(-1, profile.WaterEnd);
-                }
+        ExtractNativeSessionOwnsInitializedGridJobsProfilesAndSeedRegion2(layout, view);
             });
 
             Assert.Throws<InvalidOperationException>(() =>
@@ -276,60 +171,7 @@ public sealed class NativeGtrtSessionTests
                 value => Assert.Equal(22, value));
             view.ReleaseMeshWorkspace(0);
             view.ReleaseMeshWorkspace(1);
-
-            while (view.TryClaimGeneration(out NativeWorkItem generation))
-                Assert.True(view.TryCompleteGeneration(in generation));
-
-            Assert.True(view.TryClaimMesh(out NativeWorkItem first));
-            Assert.True(view.TryBeginPacket(
-                in first,
-                opaqueWordCount: 4,
-                opaqueFaceCount: 2,
-                transparentWordCount: 2,
-                transparentFaceCount: 1,
-                out NativePacketWriteView firstPacket));
-            firstPacket.OpaqueWords.Fill(101);
-            firstPacket.TransparentWords.Fill(102);
-            Assert.True(view.TryCompleteMesh(in first));
-
-            Assert.True(view.TryClaimMesh(out NativeWorkItem second));
-            Assert.True(view.TryBeginPacket(
-                in second,
-                opaqueWordCount: 2,
-                opaqueFaceCount: 1,
-                transparentWordCount: 4,
-                transparentFaceCount: 2,
-                out NativePacketWriteView secondPacket));
-            secondPacket.OpaqueWords.Fill(201);
-            secondPacket.TransparentWords.Fill(202);
-            Assert.True(view.TryCompleteMesh(in second));
-
-            Assert.True(view.TryReadPacket(
-                first.RecordIndex,
-                out NativePacketReadView firstRead));
-            Assert.Equal(
-                first.Epoch,
-                view.Chunks[first.RecordIndex].MeshEpoch);
-            Assert.Equal(0, firstRead.Record.OpaqueWordOffset);
-            Assert.Equal(4, firstRead.Record.TransparentWordOffset);
-            Assert.True(firstRead.OpaqueWords.SequenceEqual(
-                stackalloc uint[] { 101, 101, 101, 101 }));
-            Assert.True(firstRead.TransparentWords.SequenceEqual(
-                stackalloc uint[] { 102, 102 }));
-
-            Assert.True(view.TryReadPacket(
-                second.RecordIndex,
-                out NativePacketReadView secondRead));
-            Assert.Equal(
-                second.Epoch,
-                view.Chunks[second.RecordIndex].MeshEpoch);
-            Assert.Equal(6, secondRead.Record.OpaqueWordOffset);
-            Assert.Equal(8, secondRead.Record.TransparentWordOffset);
-            Assert.True(secondRead.OpaqueWords.SequenceEqual(
-                stackalloc uint[] { 201, 201 }));
-            Assert.True(secondRead.TransparentWords.SequenceEqual(
-                stackalloc uint[] { 202, 202, 202, 202 }));
-            Assert.Equal(12, view.State.PacketWordCursor);
+        ExtractMeshWorkersOwnDisjointScratchAndExactPacketRangesRegion(view);
             Assert.Equal(0, view.State.FailureCode);
         });
     }
@@ -349,59 +191,7 @@ public sealed class NativeGtrtSessionTests
 
         session.Access(owner =>
         {
-            var view = new NativeGtrtSessionView(owner.AsSpan());
-            CompleteGeneration(ref view);
-
-            Assert.True(view.TryClaimMesh(out NativeWorkItem first));
-            Assert.True(view.TryBeginPacket(
-                in first,
-                opaqueWordCount: 4,
-                opaqueFaceCount: 2,
-                transparentWordCount: 2,
-                transparentFaceCount: 1,
-                out NativePacketWriteView firstWrite));
-            firstWrite.OpaqueWords.Fill(101);
-            firstWrite.TransparentWords.Fill(102);
-            Assert.True(view.TryCompleteMesh(in first));
-            Assert.Equal(1, view.State.ReadyPacketCount);
-
-            Assert.True(view.TryActivatePacket(
-                first.RecordIndex,
-                out NativePacketReadView firstRead));
-            Assert.True(firstRead.OpaqueWords.SequenceEqual(
-                stackalloc uint[] { 101, 101, 101, 101 }));
-            Assert.True(firstRead.TransparentWords.SequenceEqual(
-                stackalloc uint[] { 102, 102 }));
-            Assert.False(view.TryActivatePacket(first.RecordIndex, out _));
-            Assert.False(view.TryRecyclePacketStorage());
-            Assert.Equal(6, view.State.PacketWordCursor);
-
-            Assert.True(view.TryRetirePacket(first.RecordIndex));
-            Assert.False(view.TryRetirePacket(first.RecordIndex));
-            Assert.Equal(0, view.State.ReadyPacketCount);
-            Assert.True(view.TryRecyclePacketStorage());
-            Assert.Equal(0, view.State.PacketWordCursor);
-            Assert.Equal(
-                NativeRenderPacketState.Empty,
-                view.Packets[first.RecordIndex].State);
-
-            Assert.True(view.TryClaimMesh(out NativeWorkItem second));
-            Assert.True(view.TryBeginPacket(
-                in second,
-                opaqueWordCount: 2,
-                opaqueFaceCount: 1,
-                transparentWordCount: 0,
-                transparentFaceCount: 0,
-                out _));
-            Assert.Equal(
-                0,
-                view.Packets[second.RecordIndex].OpaqueWordOffset);
-            Assert.True(view.TryAbandonMesh(in second));
-            Assert.True(view.TryRecyclePacketStorage());
-            Assert.Equal(0, view.State.PacketWordCursor);
-            Assert.Equal(0, view.State.ClaimedMeshCount);
-            Assert.Equal(0, view.State.PacketConsumerCount);
-            Assert.Equal(0, view.State.FailureCode);
+        ExtractPacketStorageRecyclesOnlyAfterExclusiveRetirementRegion(owner);
         });
     }
 
@@ -1010,5 +800,130 @@ public sealed class NativeGtrtSessionTests
             }
         });
 
+    }
+
+    private static void ExtractNativeSessionOwnsInitializedGridJobsProfilesAndSeedRegion(global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionLayout layout, global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionView view)
+    {
+        Assert.Equal(layout.GenerationWorkerCount, view.GenerationWorkspaces.Length);
+        Assert.Equal(layout.GenerationFloatCountPerWorker, view.GetGenerationFloatScratch(0).Length);
+        Assert.Equal(layout.ChunkSizeX, view.GetGenerationXScratch(0).Length);
+        Assert.Equal(layout.ChunkSizeZ, view.GetGenerationZScratch(0).Length);
+        Assert.Equal(layout.GenerationLatticeCountPerWorker, view.GetGenerationLatticeScratch(0).Length);
+        Assert.Equal(layout.ChunkCount, view.Chunks.Length);
+        Assert.Equal(layout.ColumnCount, view.GenerationJobs.Length);
+        Assert.Equal(layout.ChunkCount, view.MeshJobs.Length);
+        Assert.Equal(layout.MeshWorkerCount, view.MeshWorkspaces.Length);
+        Assert.Equal(layout.ProfilesPerColumn, view.GetMeshBottomFaceScratch(0).Length);
+        Assert.Equal(layout.ProfilesPerColumn, view.GetMeshTopFaceScratch(0).Length);
+        Assert.Equal(layout.ChunkCount, view.Packets.Length);
+        Assert.Equal(layout.PacketWordCapacity, view.PacketWords.Length);
+        Assert.Equal(layout.RequiredChunkCount, view.MeshReadySlots.Length);
+        for (int index = 0; index < view.Columns.Length; index++)
+        {
+            NativeColumnRecord column = view.Columns[index];
+            Assert.Equal(index, view.GetColumnIndex(column.ChunkX, column.ChunkZ));
+            Assert.Equal(index * layout.ProfilesPerColumn, column.ProfileOffset);
+            Assert.Equal(-1, column.BiomeIndex);
+            Assert.Equal(NativeColumnState.Empty, column.State);
+            Assert.Equal(index, view.GenerationJobs[index].RecordIndex);
+            Assert.Equal(NativeWorkKind.GenerateColumn, view.GenerationJobs[index].Kind);
+            Assert.Equal(NativeWorkState.Scheduled, view.GenerationJobs[index].State);
+        }
+    }
+
+    private static void ExtractMeshWorkersOwnDisjointScratchAndExactPacketRangesRegion(global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionView view)
+    {
+        while (view.TryClaimGeneration(out NativeWorkItem generation))
+            Assert.True(view.TryCompleteGeneration(in generation));
+        Assert.True(view.TryClaimMesh(out NativeWorkItem first));
+        Assert.True(view.TryBeginPacket(in first, opaqueWordCount: 4, opaqueFaceCount: 2, transparentWordCount: 2, transparentFaceCount: 1, out NativePacketWriteView firstPacket));
+        firstPacket.OpaqueWords.Fill(101);
+        firstPacket.TransparentWords.Fill(102);
+        Assert.True(view.TryCompleteMesh(in first));
+        Assert.True(view.TryClaimMesh(out NativeWorkItem second));
+        Assert.True(view.TryBeginPacket(in second, opaqueWordCount: 2, opaqueFaceCount: 1, transparentWordCount: 4, transparentFaceCount: 2, out NativePacketWriteView secondPacket));
+        secondPacket.OpaqueWords.Fill(201);
+        secondPacket.TransparentWords.Fill(202);
+        Assert.True(view.TryCompleteMesh(in second));
+        Assert.True(view.TryReadPacket(first.RecordIndex, out NativePacketReadView firstRead));
+        Assert.Equal(first.Epoch, view.Chunks[first.RecordIndex].MeshEpoch);
+        Assert.Equal(0, firstRead.Record.OpaqueWordOffset);
+        Assert.Equal(4, firstRead.Record.TransparentWordOffset);
+        Assert.True(firstRead.OpaqueWords.SequenceEqual(stackalloc uint[] { 101, 101, 101, 101 }));
+        Assert.True(firstRead.TransparentWords.SequenceEqual(stackalloc uint[] { 102, 102 }));
+        Assert.True(view.TryReadPacket(second.RecordIndex, out NativePacketReadView secondRead));
+        Assert.Equal(second.Epoch, view.Chunks[second.RecordIndex].MeshEpoch);
+        Assert.Equal(6, secondRead.Record.OpaqueWordOffset);
+        Assert.Equal(8, secondRead.Record.TransparentWordOffset);
+        Assert.True(secondRead.OpaqueWords.SequenceEqual(stackalloc uint[] { 201, 201 }));
+        Assert.True(secondRead.TransparentWords.SequenceEqual(stackalloc uint[] { 202, 202, 202, 202 }));
+        Assert.Equal(12, view.State.PacketWordCursor);
+    }
+
+    private static void ExtractPacketStorageRecyclesOnlyAfterExclusiveRetirementRegion(global::Supprocom.NativeAllocationManagement.NativeLeaseView<byte> owner)
+    {
+        var view = new NativeGtrtSessionView(owner.AsSpan());
+        CompleteGeneration(ref view);
+        Assert.True(view.TryClaimMesh(out NativeWorkItem first));
+        Assert.True(view.TryBeginPacket(in first, opaqueWordCount: 4, opaqueFaceCount: 2, transparentWordCount: 2, transparentFaceCount: 1, out NativePacketWriteView firstWrite));
+        firstWrite.OpaqueWords.Fill(101);
+        firstWrite.TransparentWords.Fill(102);
+        Assert.True(view.TryCompleteMesh(in first));
+        Assert.Equal(1, view.State.ReadyPacketCount);
+        Assert.True(view.TryActivatePacket(first.RecordIndex, out NativePacketReadView firstRead));
+        Assert.True(firstRead.OpaqueWords.SequenceEqual(stackalloc uint[] { 101, 101, 101, 101 }));
+        Assert.True(firstRead.TransparentWords.SequenceEqual(stackalloc uint[] { 102, 102 }));
+        Assert.False(view.TryActivatePacket(first.RecordIndex, out _));
+        Assert.False(view.TryRecyclePacketStorage());
+        Assert.Equal(6, view.State.PacketWordCursor);
+        Assert.True(view.TryRetirePacket(first.RecordIndex));
+        Assert.False(view.TryRetirePacket(first.RecordIndex));
+        Assert.Equal(0, view.State.ReadyPacketCount);
+        Assert.True(view.TryRecyclePacketStorage());
+        Assert.Equal(0, view.State.PacketWordCursor);
+        Assert.Equal(NativeRenderPacketState.Empty, view.Packets[first.RecordIndex].State);
+        Assert.True(view.TryClaimMesh(out NativeWorkItem second));
+        Assert.True(view.TryBeginPacket(in second, opaqueWordCount: 2, opaqueFaceCount: 1, transparentWordCount: 0, transparentFaceCount: 0, out _));
+        Assert.Equal(0, view.Packets[second.RecordIndex].OpaqueWordOffset);
+        Assert.True(view.TryAbandonMesh(in second));
+        Assert.True(view.TryRecyclePacketStorage());
+        Assert.Equal(0, view.State.PacketWordCursor);
+        Assert.Equal(0, view.State.ClaimedMeshCount);
+        Assert.Equal(0, view.State.PacketConsumerCount);
+        Assert.Equal(0, view.State.FailureCode);
+    }
+
+    private static void ExtractNativeSessionOwnsInitializedGridJobsProfilesAndSeedRegion2(global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionLayout layout, global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionView view)
+    {
+        Assert.Equal(layout.ColumnCount, view.State.RemainingColumns);
+        Assert.Equal(layout.RequiredChunkCount, view.State.RemainingChunks);
+        Assert.Equal(layout.ColumnCount, view.Columns.Length);
+        Assert.Equal(layout.ProfileCount, view.Profiles.Length);
+        Assert.Equal(layout.ColumnCount, view.ColumnSummaries.Length);
+        ExtractNativeSessionOwnsInitializedGridJobsProfilesAndSeedRegion(layout, view);
+        for (int index = 0; index < view.Chunks.Length; index++)
+        {
+            NativeChunkRecord chunk = view.Chunks[index];
+            Assert.Equal(index, view.GetChunkIndex(chunk.ChunkX, chunk.ChunkY, chunk.ChunkZ));
+            Assert.Equal(chunk.ColumnIndex * layout.ProfilesPerColumn, chunk.ProfileOffset);
+            Assert.Equal(index, chunk.PacketIndex);
+            Assert.Equal(NativeChunkState.Empty, chunk.State);
+            Assert.Equal(index, view.MeshJobs[index].RecordIndex);
+            Assert.Equal(NativeWorkKind.BuildChunkMesh, view.MeshJobs[index].Kind);
+            bool required = Math.Abs(chunk.ChunkX) <= layout.Lod1Radius && Math.Abs(chunk.ChunkZ) <= layout.Lod1Radius;
+            Assert.Equal(required ? NativeChunkFlags.InitialMeshRequired : NativeChunkFlags.None, (NativeChunkFlags)chunk.Flags);
+            Assert.Equal(required ? 5 : 0, chunk.RemainingDependencies);
+            Assert.Equal(required ? NativeWorkState.Waiting : NativeWorkState.Canceled, view.MeshJobs[index].State);
+        }
+
+        foreach (ref readonly var profile in view.Profiles)
+        {
+            Assert.Equal(-1, profile.StoneStart);
+            Assert.Equal(-1, profile.StoneEnd);
+            Assert.Equal(-1, profile.SoilStart);
+            Assert.Equal(-1, profile.SoilEnd);
+            Assert.Equal(-1, profile.WaterStart);
+            Assert.Equal(-1, profile.WaterEnd);
+        }
     }
 }

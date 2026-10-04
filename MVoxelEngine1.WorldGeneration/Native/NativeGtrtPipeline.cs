@@ -377,25 +377,7 @@ public sealed class NativeGtrtPipeline : IDisposable
         pendingEditMutationStarted = false;
         try
         {
-            session.Access(planBlockEditAction);
-            if (!pendingEditPlanned)
-                throw new InvalidOperationException("The native block edit is not valid in the resident world.");
-            if (!pendingEditChanged)
-            {
-                Volatile.Write(ref completedRunCount, runCount);
-                return false;
-            }
-
-            session.EnsureMaterializedCapacity(pendingStorageRequirements);
-            session.Access(editBlockAction);
-            if (!pendingEditActionSucceeded)
-            {
-                Volatile.Write(ref completedRunCount, runCount);
-                throw new InvalidOperationException("The native block edit could not enter storage.");
-            }
-
-            pendingEdit = true;
-            RememberCurrentRun(runCount);
+        if (!RunBlockEditMeshes(runCount)) return false;
             try
             {
                 _ = RunStreamingCore(centerChunkX, centerChunkY, centerChunkZ);
@@ -414,24 +396,7 @@ public sealed class NativeGtrtPipeline : IDisposable
         }
         catch (Exception failure)
         {
-            if (!pendingEdit && pendingEditMutationStarted)
-            {
-                try
-                {
-                    session.Access(rollbackBlockAction);
-                    if (!pendingRollbackSucceeded)
-                        throw new InvalidOperationException("The native edit preparation could not roll back.",failure);
-                    pendingEditMutationStarted = false;
-                }
-                catch (Exception rollbackFailure)
-                {
-                    Volatile.Write(ref completedRunCount, int.MinValue);
-                    throw new AggregateException(failure, rollbackFailure);
-                }
-            }
-
-            if (Volatile.Read(ref completedRunCount) == -1)
-                Volatile.Write(ref completedRunCount, runCount);
+        RollbackFailedBlockEdit(runCount, failure);
             throw;
         }
         finally
@@ -964,4 +929,50 @@ public sealed class NativeGtrtPipeline : IDisposable
 
     private static int DivideRoundUp(int value, int divisor) => checked((value + divisor - 1) / divisor);
     private static Exception? Combine(Exception? first, Exception? second) => first is null ? second : second is null ? first : new AggregateException(first, second);
+
+    private bool RunBlockEditMeshes(int runCount)
+    {
+        session.Access(planBlockEditAction);
+        if (!pendingEditPlanned)
+            throw new InvalidOperationException("The native block edit is not valid in the resident world.");
+        if (!pendingEditChanged)
+        {
+            Volatile.Write(ref completedRunCount, runCount);
+            return false;
+        }
+
+        session.EnsureMaterializedCapacity(pendingStorageRequirements);
+        session.Access(editBlockAction);
+        if (!pendingEditActionSucceeded)
+        {
+            Volatile.Write(ref completedRunCount, runCount);
+            throw new InvalidOperationException("The native block edit could not enter storage.");
+        }
+
+        pendingEdit = true;
+        RememberCurrentRun(runCount);
+        return true;
+    }
+
+    private void RollbackFailedBlockEdit(int runCount, global::System.Exception failure)
+    {
+        if (!pendingEdit && pendingEditMutationStarted)
+        {
+            try
+            {
+                session.Access(rollbackBlockAction);
+                if (!pendingRollbackSucceeded)
+                    throw new InvalidOperationException("The native edit preparation could not roll back.", failure);
+                pendingEditMutationStarted = false;
+            }
+            catch (Exception rollbackFailure)
+            {
+                Volatile.Write(ref completedRunCount, int.MinValue);
+                throw new AggregateException(failure, rollbackFailure);
+            }
+        }
+
+        if (Volatile.Read(ref completedRunCount) == -1)
+            Volatile.Write(ref completedRunCount, runCount);
+    }
 }

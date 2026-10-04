@@ -216,6 +216,222 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             var planePosY = data.NeighborPlanePosY;
             var planeNegZ = data.NeighborPlaneNegZ;
             var planePosZ = data.NeighborPlanePosZ;
+            ExtractEmitTransparentMasksRegion6(uniformId, baseX, baseY, baseZ, faceNX, facePX, faceNY, facePY, faceNZ, facePZ, voxelMask, offsets, tilesOut, dirs, planeNegX, planePosX, planeNegY, planePosY, planeNegZ, planePosZ);
+        }
+
+        private void ExtractEmitTransparentMasksRegion(ushort uniformId, int baseX, int baseY, int baseZ, global::System.ReadOnlySpan<ulong> facePY, global::System.ReadOnlySpan<ulong> voxelMask, global::System.Collections.Generic.List<byte> offsets, global::System.Collections.Generic.List<uint> tilesOut, global::System.Collections.Generic.List<byte> dirs, ulong[]? planePosY, ushort[]? tPosY, int maxY, int maxZ, int w)
+        {
+            ulong bits = facePY[w];
+            if (!voxelMask.IsEmpty)
+                bits &= voxelMask[w];
+            while (bits != 0)
+            {
+                int bit = BitOperations.TrailingZeroCount(bits);
+                bits &= bits - 1;
+                int li = (w << 6) + bit;
+                int lx = _lxFromLi[li];
+                int ly = _lyFromLi[li];
+                int lz = _lzFromLi[li];
+                int wx = baseX + lx;
+                int wy = baseY + ly;
+                int wz = baseZ + lz;
+                bool culled = false;
+                if (wy == maxY - 1)
+                {
+                    int planeIndex = (baseX + lx) * maxZ + (baseZ + lz);
+                    if (PlaneBit(planePosY, planeIndex) || (tPosY != null && (uint)planeIndex < (uint)tPosY.Length && tPosY[planeIndex] == uniformId))
+                        culled = true;
+                }
+                else
+                {
+                    ushort nb = GetBlock(wx, wy + 1, wz);
+                    if (nb == uniformId || TerrainLoader.IsOpaque(nb))
+                        culled = true;
+                }
+
+                if (culled)
+                    continue;
+                uint tile = _fallbackTileCache.Get(atlas, uniformId, 3);
+                EmitOneInstance(wx, wy, wz, tile, 3, offsets, tilesOut, dirs);
+            }
+        }
+
+        private void ExtractEmitTransparentMasksRegion2(ushort uniformId, int baseX, int baseY, int baseZ, global::System.ReadOnlySpan<ulong> faceNY, global::System.ReadOnlySpan<ulong> facePY, global::System.ReadOnlySpan<ulong> voxelMask, global::System.Collections.Generic.List<byte> offsets, global::System.Collections.Generic.List<uint> tilesOut, global::System.Collections.Generic.List<byte> dirs, ulong[]? planeNegY, ulong[]? planePosY, ushort[]? tNegY, ushort[]? tPosY, int maxY, int maxZ)
+        {
+            // Direction 2: -Y
+            for (int w = 0; w < 64; w++)
+            {
+                ulong bits = faceNY[w];
+                if (!voxelMask.IsEmpty)
+                    bits &= voxelMask[w];
+                while (bits != 0)
+                {
+                    int bit = BitOperations.TrailingZeroCount(bits);
+                    bits &= bits - 1;
+                    int li = (w << 6) + bit;
+                    int lx = _lxFromLi[li];
+                    int ly = _lyFromLi[li];
+                    int lz = _lzFromLi[li];
+                    int wx = baseX + lx;
+                    int wy = baseY + ly;
+                    int wz = baseZ + lz;
+                    bool culled = false;
+                    if (wy == 0)
+                    {
+                        int planeIndex = (baseX + lx) * maxZ + (baseZ + lz);
+                        if (PlaneBit(planeNegY, planeIndex) || (tNegY != null && (uint)planeIndex < (uint)tNegY.Length && tNegY[planeIndex] == uniformId))
+                            culled = true;
+                    }
+                    else
+                    {
+                        ushort nb = GetBlock(wx, wy - 1, wz);
+                        if (nb == uniformId || TerrainLoader.IsOpaque(nb))
+                            culled = true;
+                    }
+
+                    if (culled)
+                        continue;
+                    uint tile = _fallbackTileCache.Get(atlas, uniformId, 2);
+                    EmitOneInstance(wx, wy, wz, tile, 2, offsets, tilesOut, dirs);
+                }
+            }
+
+            // Direction 3: +Y
+            for (int w = 0; w < 64; w++)
+            {
+                ExtractEmitTransparentMasksRegion(uniformId, baseX, baseY, baseZ, facePY, voxelMask, offsets, tilesOut, dirs, planePosY, tPosY, maxY, maxZ, w);
+            }
+        }
+
+        private void ExtractEmitTransparentMasksRegion3(ushort uniformId, int baseX, int baseY, int baseZ, global::System.ReadOnlySpan<ulong> faceNY, global::System.ReadOnlySpan<ulong> facePY, global::System.ReadOnlySpan<ulong> faceNZ, global::System.ReadOnlySpan<ulong> voxelMask, global::System.Collections.Generic.List<byte> offsets, global::System.Collections.Generic.List<uint> tilesOut, global::System.Collections.Generic.List<byte> dirs, ulong[]? planeNegY, ulong[]? planePosY, ulong[]? planeNegZ, ushort[]? tNegY, ushort[]? tPosY, ushort[]? tNegZ, int maxY, int maxZ)
+        {
+            ExtractEmitTransparentMasksRegion2(uniformId, baseX, baseY, baseZ, faceNY, facePY, voxelMask, offsets, tilesOut, dirs, planeNegY, planePosY, tNegY, tPosY, maxY, maxZ);
+            // Direction 4: -Z
+            for (int w = 0; w < 64; w++)
+            {
+                ulong bits = faceNZ[w];
+                if (!voxelMask.IsEmpty)
+                    bits &= voxelMask[w];
+                while (bits != 0)
+                {
+                    int bit = BitOperations.TrailingZeroCount(bits);
+                    bits &= bits - 1;
+                    int li = (w << 6) + bit;
+                    int lx = _lxFromLi[li];
+                    int ly = _lyFromLi[li];
+                    int lz = _lzFromLi[li];
+                    int wx = baseX + lx;
+                    int wy = baseY + ly;
+                    int wz = baseZ + lz;
+                    bool culled = false;
+                    if (wz == 0)
+                    {
+                        int planeIndex = (baseX + lx) * maxY + (baseY + ly);
+                        if (PlaneBit(planeNegZ, planeIndex) || (tNegZ != null && (uint)planeIndex < (uint)tNegZ.Length && tNegZ[planeIndex] == uniformId))
+                            culled = true;
+                    }
+                    else
+                    {
+                        ushort nb = GetBlock(wx, wy, wz - 1);
+                        if (nb == uniformId || TerrainLoader.IsOpaque(nb))
+                            culled = true;
+                    }
+
+                    if (culled)
+                        continue;
+                    uint tile = _fallbackTileCache.Get(atlas, uniformId, 4);
+                    EmitOneInstance(wx, wy, wz, tile, 4, offsets, tilesOut, dirs);
+                }
+            }
+        }
+
+        private void ExtractEmitTransparentMasksRegion4(ushort uniformId, int baseX, int baseY, int baseZ, global::System.ReadOnlySpan<ulong> faceNY, global::System.ReadOnlySpan<ulong> facePY, global::System.ReadOnlySpan<ulong> faceNZ, global::System.ReadOnlySpan<ulong> facePZ, global::System.ReadOnlySpan<ulong> voxelMask, global::System.Collections.Generic.List<byte> offsets, global::System.Collections.Generic.List<uint> tilesOut, global::System.Collections.Generic.List<byte> dirs, ulong[]? planeNegY, ulong[]? planePosY, ulong[]? planeNegZ, ulong[]? planePosZ, ushort[]? tNegY, ushort[]? tPosY, ushort[]? tNegZ, ushort[]? tPosZ, int maxY, int maxZ)
+        {
+            ExtractEmitTransparentMasksRegion3(uniformId, baseX, baseY, baseZ, faceNY, facePY, faceNZ, voxelMask, offsets, tilesOut, dirs, planeNegY, planePosY, planeNegZ, tNegY, tPosY, tNegZ, maxY, maxZ);
+            // Direction 5: +Z
+            for (int w = 0; w < 64; w++)
+            {
+                ulong bits = facePZ[w];
+                if (!voxelMask.IsEmpty)
+                    bits &= voxelMask[w];
+                while (bits != 0)
+                {
+                    int bit = BitOperations.TrailingZeroCount(bits);
+                    bits &= bits - 1;
+                    int li = (w << 6) + bit;
+                    int lx = _lxFromLi[li];
+                    int ly = _lyFromLi[li];
+                    int lz = _lzFromLi[li];
+                    int wx = baseX + lx;
+                    int wy = baseY + ly;
+                    int wz = baseZ + lz;
+                    bool culled = false;
+                    if (wz == maxZ - 1)
+                    {
+                        int planeIndex = (baseX + lx) * maxY + (baseY + ly);
+                        if (PlaneBit(planePosZ, planeIndex) || (tPosZ != null && (uint)planeIndex < (uint)tPosZ.Length && tPosZ[planeIndex] == uniformId))
+                            culled = true;
+                    }
+                    else
+                    {
+                        ushort nb = GetBlock(wx, wy, wz + 1);
+                        if (nb == uniformId || TerrainLoader.IsOpaque(nb))
+                            culled = true;
+                    }
+
+                    if (culled)
+                        continue;
+                    uint tile = _fallbackTileCache.Get(atlas, uniformId, 5);
+                    EmitOneInstance(wx, wy, wz, tile, 5, offsets, tilesOut, dirs);
+                }
+            }
+        }
+
+        private void ExtractEmitTransparentMasksRegion5(ushort uniformId, int baseX, int baseY, int baseZ, global::System.ReadOnlySpan<ulong> facePX, global::System.ReadOnlySpan<ulong> faceNY, global::System.ReadOnlySpan<ulong> facePY, global::System.ReadOnlySpan<ulong> faceNZ, global::System.ReadOnlySpan<ulong> facePZ, global::System.ReadOnlySpan<ulong> voxelMask, global::System.Collections.Generic.List<byte> offsets, global::System.Collections.Generic.List<uint> tilesOut, global::System.Collections.Generic.List<byte> dirs, ulong[]? planePosX, ulong[]? planeNegY, ulong[]? planePosY, ulong[]? planeNegZ, ulong[]? planePosZ, ushort[]? tPosX, ushort[]? tNegY, ushort[]? tPosY, ushort[]? tNegZ, ushort[]? tPosZ, int maxX, int maxY, int maxZ)
+        {
+            // Direction 1: +X
+            for (int w = 0; w < 64; w++)
+            {
+                ulong bits = facePX[w];
+                if (!voxelMask.IsEmpty)
+                    bits &= voxelMask[w];
+                while (bits != 0)
+                {
+                    int bit = BitOperations.TrailingZeroCount(bits);
+                    bits &= bits - 1;
+                    int li = (w << 6) + bit;
+                    int lx = _lxFromLi[li];
+                    int ly = _lyFromLi[li];
+                    int lz = _lzFromLi[li];
+                    int wx = baseX + lx;
+                    int wy = baseY + ly;
+                    int wz = baseZ + lz;
+                    bool culled = false;
+                    if (wx == maxX - 1)
+                    {
+                        int planeIndex = wz * maxY + wy;
+                        if (PlaneBit(planePosX, planeIndex) || (tPosX != null && (uint)planeIndex < (uint)tPosX.Length && tPosX[planeIndex] == uniformId))
+                            culled = true;
+                    }
+                    else
+                    {
+                        ushort nb = GetBlock(wx + 1, wy, wz);
+                        if (nb == uniformId || TerrainLoader.IsOpaque(nb))
+                            culled = true;
+                    }
+
+                    if (culled)
+                        continue;
+                    uint tile = _fallbackTileCache.Get(atlas, uniformId, 1);
+                    EmitOneInstance(wx, wy, wz, tile, 1, offsets, tilesOut, dirs);
+                }
+            }
+
+            ExtractEmitTransparentMasksRegion4(uniformId, baseX, baseY, baseZ, faceNY, facePY, faceNZ, facePZ, voxelMask, offsets, tilesOut, dirs, planeNegY, planePosY, planeNegZ, planePosZ, tNegY, tPosY, tNegZ, tPosZ, maxY, maxZ);
+        }
+
+        private void ExtractEmitTransparentMasksRegion6(ushort uniformId, int baseX, int baseY, int baseZ, global::System.ReadOnlySpan<ulong> faceNX, global::System.ReadOnlySpan<ulong> facePX, global::System.ReadOnlySpan<ulong> faceNY, global::System.ReadOnlySpan<ulong> facePY, global::System.ReadOnlySpan<ulong> faceNZ, global::System.ReadOnlySpan<ulong> facePZ, global::System.ReadOnlySpan<ulong> voxelMask, global::System.Collections.Generic.List<byte> offsets, global::System.Collections.Generic.List<uint> tilesOut, global::System.Collections.Generic.List<byte> dirs, ulong[]? planeNegX, ulong[]? planePosX, ulong[]? planeNegY, ulong[]? planePosY, ulong[]? planeNegZ, ulong[]? planePosZ)
+        {
             var tNegX = data.NeighborTransparentPlaneNegX;
             var tPosX = data.NeighborTransparentPlanePosX;
             var tNegY = data.NeighborTransparentPlaneNegY;
@@ -264,195 +480,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                 }
             }
 
-            // Direction 1: +X
-            for (int w = 0; w < 64; w++)
-            {
-                ulong bits = facePX[w];
-                if (!voxelMask.IsEmpty)
-                    bits &= voxelMask[w];
-                while (bits != 0)
-                {
-                    int bit = BitOperations.TrailingZeroCount(bits);
-                    bits &= bits - 1;
-                    int li = (w << 6) + bit;
-                    int lx = _lxFromLi[li];
-                    int ly = _lyFromLi[li];
-                    int lz = _lzFromLi[li];
-                    int wx = baseX + lx;
-                    int wy = baseY + ly;
-                    int wz = baseZ + lz;
-                    bool culled = false;
-                    if (wx == maxX - 1)
-                    {
-                        int planeIndex = wz * maxY + wy;
-                        if (PlaneBit(planePosX, planeIndex) || (tPosX != null && (uint)planeIndex < (uint)tPosX.Length && tPosX[planeIndex] == uniformId))
-                            culled = true;
-                    }
-                    else
-                    {
-                        ushort nb = GetBlock(wx + 1, wy, wz);
-                        if (nb == uniformId || TerrainLoader.IsOpaque(nb))
-                            culled = true;
-                    }
-
-                    if (culled)
-                        continue;
-                    uint tile = _fallbackTileCache.Get(atlas, uniformId, 1);
-                    EmitOneInstance(wx, wy, wz, tile, 1, offsets, tilesOut, dirs);
-                }
-            }
-
-            // Direction 2: -Y
-            for (int w = 0; w < 64; w++)
-            {
-                ulong bits = faceNY[w];
-                if (!voxelMask.IsEmpty)
-                    bits &= voxelMask[w];
-                while (bits != 0)
-                {
-                    int bit = BitOperations.TrailingZeroCount(bits);
-                    bits &= bits - 1;
-                    int li = (w << 6) + bit;
-                    int lx = _lxFromLi[li];
-                    int ly = _lyFromLi[li];
-                    int lz = _lzFromLi[li];
-                    int wx = baseX + lx;
-                    int wy = baseY + ly;
-                    int wz = baseZ + lz;
-                    bool culled = false;
-                    if (wy == 0)
-                    {
-                        int planeIndex = (baseX + lx) * maxZ + (baseZ + lz);
-                        if (PlaneBit(planeNegY, planeIndex) || (tNegY != null && (uint)planeIndex < (uint)tNegY.Length && tNegY[planeIndex] == uniformId))
-                            culled = true;
-                    }
-                    else
-                    {
-                        ushort nb = GetBlock(wx, wy - 1, wz);
-                        if (nb == uniformId || TerrainLoader.IsOpaque(nb))
-                            culled = true;
-                    }
-
-                    if (culled)
-                        continue;
-                    uint tile = _fallbackTileCache.Get(atlas, uniformId, 2);
-                    EmitOneInstance(wx, wy, wz, tile, 2, offsets, tilesOut, dirs);
-                }
-            }
-
-            // Direction 3: +Y
-            for (int w = 0; w < 64; w++)
-            {
-                ulong bits = facePY[w];
-                if (!voxelMask.IsEmpty)
-                    bits &= voxelMask[w];
-                while (bits != 0)
-                {
-                    int bit = BitOperations.TrailingZeroCount(bits);
-                    bits &= bits - 1;
-                    int li = (w << 6) + bit;
-                    int lx = _lxFromLi[li];
-                    int ly = _lyFromLi[li];
-                    int lz = _lzFromLi[li];
-                    int wx = baseX + lx;
-                    int wy = baseY + ly;
-                    int wz = baseZ + lz;
-                    bool culled = false;
-                    if (wy == maxY - 1)
-                    {
-                        int planeIndex = (baseX + lx) * maxZ + (baseZ + lz);
-                        if (PlaneBit(planePosY, planeIndex) || (tPosY != null && (uint)planeIndex < (uint)tPosY.Length && tPosY[planeIndex] == uniformId))
-                            culled = true;
-                    }
-                    else
-                    {
-                        ushort nb = GetBlock(wx, wy + 1, wz);
-                        if (nb == uniformId || TerrainLoader.IsOpaque(nb))
-                            culled = true;
-                    }
-
-                    if (culled)
-                        continue;
-                    uint tile = _fallbackTileCache.Get(atlas, uniformId, 3);
-                    EmitOneInstance(wx, wy, wz, tile, 3, offsets, tilesOut, dirs);
-                }
-            }
-
-            // Direction 4: -Z
-            for (int w = 0; w < 64; w++)
-            {
-                ulong bits = faceNZ[w];
-                if (!voxelMask.IsEmpty)
-                    bits &= voxelMask[w];
-                while (bits != 0)
-                {
-                    int bit = BitOperations.TrailingZeroCount(bits);
-                    bits &= bits - 1;
-                    int li = (w << 6) + bit;
-                    int lx = _lxFromLi[li];
-                    int ly = _lyFromLi[li];
-                    int lz = _lzFromLi[li];
-                    int wx = baseX + lx;
-                    int wy = baseY + ly;
-                    int wz = baseZ + lz;
-                    bool culled = false;
-                    if (wz == 0)
-                    {
-                        int planeIndex = (baseX + lx) * maxY + (baseY + ly);
-                        if (PlaneBit(planeNegZ, planeIndex) || (tNegZ != null && (uint)planeIndex < (uint)tNegZ.Length && tNegZ[planeIndex] == uniformId))
-                            culled = true;
-                    }
-                    else
-                    {
-                        ushort nb = GetBlock(wx, wy, wz - 1);
-                        if (nb == uniformId || TerrainLoader.IsOpaque(nb))
-                            culled = true;
-                    }
-
-                    if (culled)
-                        continue;
-                    uint tile = _fallbackTileCache.Get(atlas, uniformId, 4);
-                    EmitOneInstance(wx, wy, wz, tile, 4, offsets, tilesOut, dirs);
-                }
-            }
-
-            // Direction 5: +Z
-            for (int w = 0; w < 64; w++)
-            {
-                ulong bits = facePZ[w];
-                if (!voxelMask.IsEmpty)
-                    bits &= voxelMask[w];
-                while (bits != 0)
-                {
-                    int bit = BitOperations.TrailingZeroCount(bits);
-                    bits &= bits - 1;
-                    int li = (w << 6) + bit;
-                    int lx = _lxFromLi[li];
-                    int ly = _lyFromLi[li];
-                    int lz = _lzFromLi[li];
-                    int wx = baseX + lx;
-                    int wy = baseY + ly;
-                    int wz = baseZ + lz;
-                    bool culled = false;
-                    if (wz == maxZ - 1)
-                    {
-                        int planeIndex = (baseX + lx) * maxY + (baseY + ly);
-                        if (PlaneBit(planePosZ, planeIndex) || (tPosZ != null && (uint)planeIndex < (uint)tPosZ.Length && tPosZ[planeIndex] == uniformId))
-                            culled = true;
-                    }
-                    else
-                    {
-                        ushort nb = GetBlock(wx, wy, wz + 1);
-                        if (nb == uniformId || TerrainLoader.IsOpaque(nb))
-                            culled = true;
-                    }
-
-                    if (culled)
-                        continue;
-                    uint tile = _fallbackTileCache.Get(atlas, uniformId, 5);
-                    EmitOneInstance(wx, wy, wz, tile, 5, offsets, tilesOut, dirs);
-                }
-            }
+            ExtractEmitTransparentMasksRegion5(uniformId, baseX, baseY, baseZ, facePX, faceNY, facePY, faceNZ, facePZ, voxelMask, offsets, tilesOut, dirs, planePosX, planeNegY, planePosY, planeNegZ, planePosZ, tPosX, tNegY, tPosY, tNegZ, tPosZ, maxX, maxY, maxZ);
         }
     }
 }

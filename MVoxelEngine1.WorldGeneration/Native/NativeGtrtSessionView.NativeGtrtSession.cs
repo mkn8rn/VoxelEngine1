@@ -554,60 +554,7 @@ internal readonly ref partial struct NativeGtrtSessionView
             {
                 int chunkZ = checked(centerChunkZ + relativeZ);
                 int columnIndex = GetColumnIndex(chunkX, chunkZ);
-                int profileOffset = checked(columnIndex * header.ProfilesPerColumn);
-                columns[columnIndex] = new NativeColumnRecord
-                {
-                    ChunkX = chunkX,
-                    ChunkZ = chunkZ,
-                    ProfileOffset = profileOffset,
-                    BiomeIndex = -1,
-                    State = NativeColumnState.Empty
-                };
-                generationJobs[columnIndex] = new NativeWorkItem
-                {
-                    RecordIndex = columnIndex,
-                    Epoch = epoch,
-                    Kind = NativeWorkKind.GenerateColumn,
-                    State = NativeWorkState.Scheduled
-                };
-                bool initialMeshRequired = relativeX >= -header.Lod1Radius && relativeX <= header.Lod1Radius && relativeZ >= -header.Lod1Radius && relativeZ <= header.Lod1Radius;
-                for (int relativeY = header.MinimumChunkY; relativeY <= header.MaximumChunkY; relativeY++)
-                {
-                    int chunkY = checked(centerChunkY + relativeY);
-                    int chunkIndex = GetChunkIndex(chunkX, chunkY, chunkZ);
-                    int materializedChunkIndex = FindMaterializedChunkIndex(chunkX, chunkY, chunkZ);
-                    NativeChunkStorageKind storageKind = NativeChunkStorageKind.GeneratedProfile;
-                    long dirtyRevision = 0;
-                    if (materializedChunkIndex >= 0)
-                    {
-                        NativeMaterializedChunkRecord materialized = MaterializedChunks[materializedChunkIndex];
-                        storageKind = materialized.StorageKind;
-                        dirtyRevision = materialized.Revision;
-                    }
-
-                    chunks[chunkIndex] = new NativeChunkRecord
-                    {
-                        ChunkX = chunkX,
-                        ChunkY = chunkY,
-                        ChunkZ = chunkZ,
-                        ColumnIndex = columnIndex,
-                        ProfileOffset = profileOffset,
-                        PacketIndex = chunkIndex,
-                        DirtyRevision = dirtyRevision,
-                        Flags = initialMeshRequired ? (int)NativeChunkFlags.InitialMeshRequired : 0,
-                        RemainingDependencies = initialMeshRequired ? 5 : 0,
-                        StorageKind = storageKind,
-                        MaterializedChunkIndex = materializedChunkIndex,
-                        State = NativeChunkState.Empty
-                    };
-                    meshJobs[chunkIndex] = new NativeWorkItem
-                    {
-                        RecordIndex = chunkIndex,
-                        Epoch = epoch,
-                        Kind = NativeWorkKind.BuildChunkMesh,
-                        State = initialMeshRequired ? NativeWorkState.Waiting : NativeWorkState.Canceled
-                    };
-                }
+        ResetColumnAndMeshJobs(centerChunkY, epoch, columns, chunks, generationJobs, meshJobs, relativeX, chunkX, relativeZ, chunkZ, columnIndex);
             }
         }
         FinishResetRunRecordsPhase(epoch, ref state, readySlots);
@@ -1237,6 +1184,65 @@ internal readonly ref partial struct NativeGtrtSessionView
         state.PacketRecycleState = 0;
         state.ClaimedGenerationCount = 0;
         state.PacketConsumerCount = 0;
+
+    }
+
+    private void ResetColumnAndMeshJobs(int centerChunkY, int epoch, global::System.Span<global::MVoxelEngine1.WorldGeneration.Native.NativeColumnRecord> columns, global::System.Span<global::MVoxelEngine1.WorldGeneration.Native.NativeChunkRecord> chunks, global::System.Span<global::MVoxelEngine1.WorldGeneration.Native.NativeWorkItem> generationJobs, global::System.Span<global::MVoxelEngine1.WorldGeneration.Native.NativeWorkItem> meshJobs, int relativeX, int chunkX, int relativeZ, int chunkZ, int columnIndex)
+    {
+                int profileOffset = checked(columnIndex * header.ProfilesPerColumn);
+                columns[columnIndex] = new NativeColumnRecord
+                {
+                    ChunkX = chunkX,
+                    ChunkZ = chunkZ,
+                    ProfileOffset = profileOffset,
+                    BiomeIndex = -1,
+                    State = NativeColumnState.Empty
+                };
+                generationJobs[columnIndex] = new NativeWorkItem
+                {
+                    RecordIndex = columnIndex,
+                    Epoch = epoch,
+                    Kind = NativeWorkKind.GenerateColumn,
+                    State = NativeWorkState.Scheduled
+                };
+                bool initialMeshRequired = relativeX >= -header.Lod1Radius && relativeX <= header.Lod1Radius && relativeZ >= -header.Lod1Radius && relativeZ <= header.Lod1Radius;
+                for (int relativeY = header.MinimumChunkY; relativeY <= header.MaximumChunkY; relativeY++)
+                {
+                    int chunkY = checked(centerChunkY + relativeY);
+                    int chunkIndex = GetChunkIndex(chunkX, chunkY, chunkZ);
+                    int materializedChunkIndex = FindMaterializedChunkIndex(chunkX, chunkY, chunkZ);
+                    NativeChunkStorageKind storageKind = NativeChunkStorageKind.GeneratedProfile;
+                    long dirtyRevision = 0;
+                    if (materializedChunkIndex >= 0)
+                    {
+                        NativeMaterializedChunkRecord materialized = MaterializedChunks[materializedChunkIndex];
+                        storageKind = materialized.StorageKind;
+                        dirtyRevision = materialized.Revision;
+                    }
+
+                    chunks[chunkIndex] = new NativeChunkRecord
+                    {
+                        ChunkX = chunkX,
+                        ChunkY = chunkY,
+                        ChunkZ = chunkZ,
+                        ColumnIndex = columnIndex,
+                        ProfileOffset = profileOffset,
+                        PacketIndex = chunkIndex,
+                        DirtyRevision = dirtyRevision,
+                        Flags = initialMeshRequired ? (int)NativeChunkFlags.InitialMeshRequired : 0,
+                        RemainingDependencies = initialMeshRequired ? 5 : 0,
+                        StorageKind = storageKind,
+                        MaterializedChunkIndex = materializedChunkIndex,
+                        State = NativeChunkState.Empty
+                    };
+                    meshJobs[chunkIndex] = new NativeWorkItem
+                    {
+                        RecordIndex = chunkIndex,
+                        Epoch = epoch,
+                        Kind = NativeWorkKind.BuildChunkMesh,
+                        State = initialMeshRequired ? NativeWorkState.Waiting : NativeWorkState.Canceled
+                    };
+                }
 
     }
 }

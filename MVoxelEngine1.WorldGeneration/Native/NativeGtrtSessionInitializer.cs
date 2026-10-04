@@ -39,6 +39,32 @@ internal ref struct NativeGtrtSessionInitializer
         }
 
         int columnSize = Unsafe.SizeOf<NativeColumnRecord>();
+        InitializeColumnAndMeshJobs(in layout, columnSize);
+    }
+
+    private void FinishInitializePhase(scoped in global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionLayout layout)
+    {
+
+        int readySlotSize = Unsafe.SizeOf<NativeReadySlot>();
+        for (int index = 0; index < layout.RequiredChunkCount; index++)
+        {
+            var readySlot = new NativeReadySlot
+            {
+                Sequence = index
+            };
+            MemoryMarshal.Write(bytes.Slice(checked(layout.MeshReadyOffset + index * readySlotSize)), in readySlot);
+        }
+
+        var freeRange = new NativePacketWordRange
+        {
+            Count = layout.PacketWordCapacity
+        };
+        MemoryMarshal.Write(bytes.Slice(layout.Streaming.FreeRanges), in freeRange);
+
+    }
+
+    private void InitializeColumnAndMeshJobs(scoped in global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionLayout layout, int columnSize)
+    {
         int chunkSize = Unsafe.SizeOf<NativeChunkRecord>();
         int workItemSize = Unsafe.SizeOf<NativeWorkItem>();
         for (int chunkX = layout.MinimumChunkX; chunkX <= layout.MaximumChunkX; chunkX++)
@@ -93,26 +119,6 @@ internal ref struct NativeGtrtSessionInitializer
             }
         }
         FinishInitializePhase(in layout);
-    }
-
-    private void FinishInitializePhase(scoped in global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionLayout layout)
-    {
-
-        int readySlotSize = Unsafe.SizeOf<NativeReadySlot>();
-        for (int index = 0; index < layout.RequiredChunkCount; index++)
-        {
-            var readySlot = new NativeReadySlot
-            {
-                Sequence = index
-            };
-            MemoryMarshal.Write(bytes.Slice(checked(layout.MeshReadyOffset + index * readySlotSize)), in readySlot);
-        }
-
-        var freeRange = new NativePacketWordRange
-        {
-            Count = layout.PacketWordCapacity
-        };
-        MemoryMarshal.Write(bytes.Slice(layout.Streaming.FreeRanges), in freeRange);
 
     }
 }

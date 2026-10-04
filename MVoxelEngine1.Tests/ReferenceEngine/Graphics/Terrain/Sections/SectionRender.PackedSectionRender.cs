@@ -53,46 +53,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             {
                 if (occOpaque == null || desc.OpaqueCount == 0)
                     return true; // nothing opaque to emit
-                Span<ulong> faceNX = stackalloc ulong[64];
-                Span<ulong> facePX = stackalloc ulong[64];
-                Span<ulong> faceNY = stackalloc ulong[64];
-                Span<ulong> facePY = stackalloc ulong[64];
-                Span<ulong> faceNZ = stackalloc ulong[64];
-                Span<ulong> facePZ = stackalloc ulong[64];
-                Span<bool> skipDir = stackalloc bool[6]; // initialized false
-                // Build masks using unified builder
-                BuildPackedOpaqueFaceMasks(ref desc, sx, sy, sz, S, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, skipDir, occOpaque.AsSpan(), faceNX, facePX, faceNY, facePY, faceNZ, facePZ);
-                int addFaces = CountOpaqueFaces(faceNX, facePX, faceNY, facePY, faceNZ, facePZ);
-                if (addFaces > 0)
-                {
-                    opaqueOffsetList.EnsureCapacity(opaqueOffsetList.Count + addFaces * 3);
-                    opaqueTileIndexList.EnsureCapacity(opaqueTileIndexList.Count + addFaces);
-                    opaqueFaceDirList.EnsureCapacity(opaqueFaceDirList.Count + addFaces);
-                    // Provide a tileProvider that returns the precomputed per-face tile.
-                    uint TileProvider(ushort _id, byte faceDir) => faceDir switch
-                    {
-                        0 => tileNX,
-                        1 => tilePX,
-                        2 => tileNY,
-                        3 => tilePY,
-                        4 => tileNZ,
-                        5 => tilePZ,
-                        _ => tileNX
-                    };
-                    // Emit per direction
-                    if (PopCountMask(faceNX) > 0)
-                        EmitOpaqueMasks(ref desc, baseX, baseY, baseZ, faceNX, 0, id, null, TileProvider, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
-                    if (PopCountMask(facePX) > 0)
-                        EmitOpaqueMasks(ref desc, baseX, baseY, baseZ, facePX, 1, id, null, TileProvider, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
-                    if (PopCountMask(faceNY) > 0)
-                        EmitOpaqueMasks(ref desc, baseX, baseY, baseZ, faceNY, 2, id, null, TileProvider, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
-                    if (PopCountMask(facePY) > 0)
-                        EmitOpaqueMasks(ref desc, baseX, baseY, baseZ, facePY, 3, id, null, TileProvider, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
-                    if (PopCountMask(faceNZ) > 0)
-                        EmitOpaqueMasks(ref desc, baseX, baseY, baseZ, faceNZ, 4, id, null, TileProvider, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
-                    if (PopCountMask(facePZ) > 0)
-                        EmitOpaqueMasks(ref desc, baseX, baseY, baseZ, facePZ, 5, id, null, TileProvider, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
-                }
+            ExtractEmitPackedSectionInstancesRegion(ref desc, sx, sy, sz, S, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList, id, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, baseX, baseY, baseZ, tileNX, tilePX, tileNY, tilePY, tileNZ, tilePZ, occOpaque);
 
                 return true;
             }
@@ -120,6 +81,50 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                 }
 
                 return true;
+            }
+        }
+
+        private void ExtractEmitPackedSectionInstancesRegion(ref global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc desc, int sx, int sy, int sz, int S, global::System.Collections.Generic.List<byte> opaqueOffsetList, global::System.Collections.Generic.List<uint> opaqueTileIndexList, global::System.Collections.Generic.List<byte> opaqueFaceDirList, ushort id, int lxMin, int lxMax, int lyMin, int lyMax, int lzMin, int lzMax, int baseX, int baseY, int baseZ, uint tileNX, uint tilePX, uint tileNY, uint tilePY, uint tileNZ, uint tilePZ, ulong[] occOpaque)
+        {
+            Span<ulong> faceNX = stackalloc ulong[64];
+            Span<ulong> facePX = stackalloc ulong[64];
+            Span<ulong> faceNY = stackalloc ulong[64];
+            Span<ulong> facePY = stackalloc ulong[64];
+            Span<ulong> faceNZ = stackalloc ulong[64];
+            Span<ulong> facePZ = stackalloc ulong[64];
+            Span<bool> skipDir = stackalloc bool[6]; // initialized false
+            // Build masks using unified builder
+            BuildPackedOpaqueFaceMasks(ref desc, sx, sy, sz, S, lxMin, lxMax, lyMin, lyMax, lzMin, lzMax, skipDir, occOpaque.AsSpan(), faceNX, facePX, faceNY, facePY, faceNZ, facePZ);
+            int addFaces = CountOpaqueFaces(faceNX, facePX, faceNY, facePY, faceNZ, facePZ);
+            if (addFaces > 0)
+            {
+                opaqueOffsetList.EnsureCapacity(opaqueOffsetList.Count + addFaces * 3);
+                opaqueTileIndexList.EnsureCapacity(opaqueTileIndexList.Count + addFaces);
+                opaqueFaceDirList.EnsureCapacity(opaqueFaceDirList.Count + addFaces);
+                // Provide a tileProvider that returns the precomputed per-face tile.
+                uint TileProvider(ushort _id, byte faceDir) => faceDir switch
+                {
+                    0 => tileNX,
+                    1 => tilePX,
+                    2 => tileNY,
+                    3 => tilePY,
+                    4 => tileNZ,
+                    5 => tilePZ,
+                    _ => tileNX
+                };
+                // Emit per direction
+                if (PopCountMask(faceNX) > 0)
+                    EmitOpaqueMasks(ref desc, baseX, baseY, baseZ, faceNX, 0, id, null, TileProvider, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
+                if (PopCountMask(facePX) > 0)
+                    EmitOpaqueMasks(ref desc, baseX, baseY, baseZ, facePX, 1, id, null, TileProvider, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
+                if (PopCountMask(faceNY) > 0)
+                    EmitOpaqueMasks(ref desc, baseX, baseY, baseZ, faceNY, 2, id, null, TileProvider, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
+                if (PopCountMask(facePY) > 0)
+                    EmitOpaqueMasks(ref desc, baseX, baseY, baseZ, facePY, 3, id, null, TileProvider, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
+                if (PopCountMask(faceNZ) > 0)
+                    EmitOpaqueMasks(ref desc, baseX, baseY, baseZ, faceNZ, 4, id, null, TileProvider, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
+                if (PopCountMask(facePZ) > 0)
+                    EmitOpaqueMasks(ref desc, baseX, baseY, baseZ, facePZ, 5, id, null, TileProvider, opaqueOffsetList, opaqueTileIndexList, opaqueFaceDirList);
             }
         }
     }

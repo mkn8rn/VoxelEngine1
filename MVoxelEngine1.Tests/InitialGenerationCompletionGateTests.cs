@@ -124,20 +124,32 @@ namespace MVoxelEngine1.Tests
                     stateLock.ExitReadLock();
                 }
             }), cancellationToken);
-
             Assert.True(SpinWait.SpinUntil(
                 () => Volatile.Read(ref predicateCalls) >= 2,
                 TimeSpan.FromSeconds(1)));
-            predicateAttempted.Reset();
+            ExtractProtectedWorkTransferCannotAppearCompleteRegion(gate, stateLock, predicateAttempted, ref bufferWork, ref activeWork, waitTask, cancellationToken);
+            Assert.True(SpinWait.SpinUntil(
+                () => Volatile.Read(ref predicateCalls) >= 4,
+                TimeSpan.FromSeconds(1)));
+            Assert.False(waitTask.IsCompleted);
 
+            CompleteActiveWork(gate, stateLock, ref activeWork);
+
+
+            await waitTask.WaitAsync(
+                TimeSpan.FromSeconds(1),
+                cancellationToken).ConfigureAwait(true);
+        }
+
+        private static void ExtractProtectedWorkTransferCannotAppearCompleteRegion(global::MVoxelEngine1.WorldGeneration.InitialGenerationCompletionGate gate, global::System.Threading.ReaderWriterLockSlim stateLock, global::System.Threading.ManualResetEventSlim predicateAttempted, ref int bufferWork, ref int activeWork, global::System.Threading.Tasks.Task waitTask, global::System.Threading.CancellationToken cancellationToken)
+        {
+            predicateAttempted.Reset();
             stateLock.EnterWriteLock();
             try
             {
                 Volatile.Write(ref bufferWork, 0);
                 gate.NotifyCollectionBecameEmpty();
-                Assert.True(predicateAttempted.Wait(
-                    TimeSpan.FromSeconds(1),
-                    cancellationToken));
+                Assert.True(predicateAttempted.Wait(TimeSpan.FromSeconds(1), cancellationToken));
                 Assert.False(waitTask.IsCompleted);
                 Volatile.Write(ref activeWork, 1);
             }
@@ -145,12 +157,9 @@ namespace MVoxelEngine1.Tests
             {
                 stateLock.ExitWriteLock();
             }
-
-            Assert.True(SpinWait.SpinUntil(
-                () => Volatile.Read(ref predicateCalls) >= 4,
-                TimeSpan.FromSeconds(1)));
-            Assert.False(waitTask.IsCompleted);
-
+        }
+        private static void CompleteActiveWork(InitialGenerationCompletionGate gate, ReaderWriterLockSlim stateLock, ref int activeWork)
+        {
             stateLock.EnterWriteLock();
             try
             {
@@ -162,9 +171,7 @@ namespace MVoxelEngine1.Tests
                 stateLock.ExitWriteLock();
             }
 
-            await waitTask.WaitAsync(
-                TimeSpan.FromSeconds(1),
-                cancellationToken).ConfigureAwait(true);
         }
+
     }
 }

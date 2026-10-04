@@ -16,13 +16,7 @@ namespace MVoxelEngine1.Tests
             string application = TestPaths.ApplicationExecutable;
             Assert.True(File.Exists(application), $"Application executable was not found at {application}.");
 
-            string resultsDirectory = Path.Combine(
-                TestPaths.ResultsRoot,
-                "simulated-gpu-uploads");
-            Directory.CreateDirectory(resultsDirectory);
-            string outputPath = Path.Combine(
-                resultsDirectory,
-                $"default-seed-123456-{DateTime.UtcNow:yyyyMMddTHHmmssfffZ}.json");
+            string outputPath = CreateSimulatedUploadPath();
             var startInfo = new ProcessStartInfo
             {
                 FileName = application,
@@ -32,16 +26,7 @@ namespace MVoxelEngine1.Tests
                 RedirectStandardError = true,
                 CreateNoWindow = true
             };
-            AddArgument(startInfo, "gameDataDirectory", workspace.GameDataRoot);
-            AddArgument(startInfo, "game", "Default");
-            AddArgument(startInfo, "worldName", "SimulatedUploadWorld");
-            AddArgument(startInfo, "seed", "123456");
-            AddArgument(startInfo, "renderStreamingIfAllowed", "false");
-            AddArgument(startInfo, "windowWidth", "320");
-            AddArgument(startInfo, "windowHeight", "240");
-            AddArgument(startInfo, "simulatedGpuUploadOutput", outputPath);
-            AddArgument(startInfo, "simulatedInput", "W:2,Space:3");
-            AddArgument(startInfo, "simulatedFrameRate", "60");
+            ExtractSeed123456StreamsRenderDataDuringTimedMovementWithoutWindowAsyncRegion2(workspace, outputPath, startInfo);
 
             using var process = new Process { StartInfo = startInfo };
             Assert.True(process.Start(), "Application process did not start.");
@@ -54,25 +39,10 @@ namespace MVoxelEngine1.Tests
             using var combinedCancellation = CancellationTokenSource.CreateLinkedTokenSource(
                 timeout.Token,
                 testCancellation);
-            try
+            (windowObserved, OperationCanceledException? caughtFailure) = await ObserveProcessAsync(
+                process, timeout, combinedCancellation.Token, testCancellation).ConfigureAwait(true);
+            if (caughtFailure is not null)
             {
-                while (!process.HasExited)
-                {
-                    if (OperatingSystem.IsWindows())
-                    {
-                        process.Refresh();
-                        windowObserved |= process.MainWindowHandle != IntPtr.Zero;
-                    }
-
-                    await Task.Delay(20, combinedCancellation.Token).ConfigureAwait(true);
-                }
-            }
-            catch (OperationCanceledException caughtFailure) when (timeout.IsCancellationRequested)
-            {
-                if (!process.HasExited)
-                    process.Kill(entireProcessTree: true);
-
-                await process.WaitForExitAsync(testCancellation).ConfigureAwait(true);
                 string timeoutOutput = await standardOutputTask.ConfigureAwait(true);
                 string timeoutError = await standardErrorTask.ConfigureAwait(true);
                 throw new TimeoutException($"Simulated GPU upload exceeded 75 seconds. Output: {Tail(timeoutOutput)} Error: {Tail(timeoutError)}",caughtFailure);
@@ -89,30 +59,62 @@ namespace MVoxelEngine1.Tests
 
             using JsonDocument document = JsonDocument.Parse((await File.ReadAllTextAsync(outputPath,TestContext.Current.CancellationToken).ConfigureAwait(true)));
             JsonElement root = document.RootElement;
-            Assert.Equal("Native", root.GetProperty("worldImplementation").GetString());
-            Assert.Equal(0, root.GetProperty("windowConstructionCount").GetInt32());
-            Assert.Equal(2, root.GetProperty("schemaVersion").GetInt32());
-            Assert.Equal("simulatedGpuUpload", root.GetProperty("mode").GetString());
-            Assert.Equal(123456, root.GetProperty("seed").GetInt32());
-            Assert.False(root.GetProperty("windowCreated").GetBoolean());
-            Assert.False(root.GetProperty("openGlCallsAllowed").GetBoolean());
-            Assert.Equal(0, root.GetProperty("actualGpuUploadCount").GetInt32());
-            Assert.Equal(4, root.GetProperty("recordQueueCapacity").GetInt32());
-            Assert.Equal("wait", root.GetProperty("recordQueueFullPolicy").GetString());
-            Assert.False(root.GetProperty("silentRecordLossAllowed").GetBoolean());
-            Assert.True(root.GetProperty("atomicFinalPublication").GetBoolean());
+            ExtractSeed123456StreamsRenderDataDuringTimedMovementWithoutWindowAsyncRegion(root);
 
             JsonElement[] events = root.GetProperty("events").EnumerateArray().ToArray();
             SimulatedGpuUploadTestSupport.AssertCompleteOrderedStream(root);
             JsonElement[] snapshots = events
                 .Where(element => string.Equals(element.GetProperty("type").GetString(), "snapshot", StringComparison.Ordinal))
                 .ToArray();
+            AssertInitialAndFinalSnapshots(snapshots);
+            await ValidateSeed123456StreamsRenderDataDuringTimedMovementWithoutWindowAsyncEvidenceAsync(workspace, outputPath, root, events, snapshots).ConfigureAwait(true);
+        }
+
+        private static string CreateSimulatedUploadPath()
+        {
+            string resultsDirectory = Path.Combine(
+                TestPaths.ResultsRoot,
+                "simulated-gpu-uploads");
+            Directory.CreateDirectory(resultsDirectory);
+            return Path.Combine(
+                resultsDirectory,
+                $"default-seed-123456-{DateTime.UtcNow:yyyyMMddTHHmmssfffZ}.json");
+        }
+
+        private static void AssertInitialAndFinalSnapshots(JsonElement[] snapshots)
+        {
             Assert.Equal(2, snapshots.Length);
             Assert.Equal("initial", snapshots[0].GetProperty("name").GetString());
             Assert.Equal("final", snapshots[1].GetProperty("name").GetString());
             AssertVector(snapshots[0].GetProperty("camera").GetProperty("position"), 0, 0, 0);
             AssertVector(snapshots[1].GetProperty("camera").GetProperty("position"), 0, 180, -120, 0.2);
-            await ValidateSeed123456StreamsRenderDataDuringTimedMovementWithoutWindowAsyncEvidenceAsync(workspace, outputPath, root, events, snapshots).ConfigureAwait(true);
+        }
+
+        private static async Task<(bool WindowObserved, OperationCanceledException? Failure)> ObserveProcessAsync(
+            Process process, CancellationTokenSource timeout,
+            CancellationToken combinedCancellation, CancellationToken testCancellation)
+        {
+            bool windowObserved = false;
+            try
+            {
+                while (!process.HasExited)
+                {
+                    if (OperatingSystem.IsWindows())
+                    {
+                        process.Refresh();
+                        windowObserved |= process.MainWindowHandle != IntPtr.Zero;
+                    }
+                    await Task.Delay(20, combinedCancellation).ConfigureAwait(true);
+                }
+                return (windowObserved, null);
+            }
+            catch (OperationCanceledException caughtFailure) when (timeout.IsCancellationRequested)
+            {
+                if (!process.HasExited)
+                    process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync(testCancellation).ConfigureAwait(true);
+                return (windowObserved, caughtFailure);
+            }
         }
 
         private static void AddArgument(ProcessStartInfo startInfo, string name, string value)
@@ -219,6 +221,36 @@ namespace MVoxelEngine1.Tests
             Assert.Equal("123456", (await File.ReadAllLinesAsync(worldFile,TestContext.Current.CancellationToken).ConfigureAwait(true))[3]);
             Console.WriteLine($"Simulated GPU upload result: {outputPath}");
 
+        }
+
+        private static void ExtractSeed123456StreamsRenderDataDuringTimedMovementWithoutWindowAsyncRegion(global::System.Text.Json.JsonElement root)
+        {
+            Assert.Equal("Native", root.GetProperty("worldImplementation").GetString());
+            Assert.Equal(0, root.GetProperty("windowConstructionCount").GetInt32());
+            Assert.Equal(2, root.GetProperty("schemaVersion").GetInt32());
+            Assert.Equal("simulatedGpuUpload", root.GetProperty("mode").GetString());
+            Assert.Equal(123456, root.GetProperty("seed").GetInt32());
+            Assert.False(root.GetProperty("windowCreated").GetBoolean());
+            Assert.False(root.GetProperty("openGlCallsAllowed").GetBoolean());
+            Assert.Equal(0, root.GetProperty("actualGpuUploadCount").GetInt32());
+            Assert.Equal(4, root.GetProperty("recordQueueCapacity").GetInt32());
+            Assert.Equal("wait", root.GetProperty("recordQueueFullPolicy").GetString());
+            Assert.False(root.GetProperty("silentRecordLossAllowed").GetBoolean());
+            Assert.True(root.GetProperty("atomicFinalPublication").GetBoolean());
+        }
+
+        private static void ExtractSeed123456StreamsRenderDataDuringTimedMovementWithoutWindowAsyncRegion2(global::MVoxelEngine1.Tests.TestWorkspace workspace, string outputPath, global::System.Diagnostics.ProcessStartInfo startInfo)
+        {
+            AddArgument(startInfo, "gameDataDirectory", workspace.GameDataRoot);
+            AddArgument(startInfo, "game", "Default");
+            AddArgument(startInfo, "worldName", "SimulatedUploadWorld");
+            AddArgument(startInfo, "seed", "123456");
+            AddArgument(startInfo, "renderStreamingIfAllowed", "false");
+            AddArgument(startInfo, "windowWidth", "320");
+            AddArgument(startInfo, "windowHeight", "240");
+            AddArgument(startInfo, "simulatedGpuUploadOutput", outputPath);
+            AddArgument(startInfo, "simulatedInput", "W:2,Space:3");
+            AddArgument(startInfo, "simulatedFrameRate", "60");
         }
     }
 }

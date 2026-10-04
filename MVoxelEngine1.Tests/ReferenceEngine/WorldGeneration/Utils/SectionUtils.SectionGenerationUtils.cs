@@ -166,35 +166,7 @@ namespace MVoxelEngine1.WorldGeneration.Utils
                 DirectSetColumnRun1(scratch, ci, id0, y0s, y0e);
                 return;
             }
-
-            ushort occ0 = MaskRangeLutGet(y0s, y0e);
-            ushort occ1 = MaskRangeLutGet(y1s, y1e);
-            ushort occMask = (ushort)(occ0 | occ1);
-            int lenA = (y0e - y0s + 1);
-            int lenB = (y1e - y1s + 1);
-            byte nonAir = (byte)(lenA + lenB);
-            bool contiguous = y1s == (byte)(y0e + 1);
-            byte adjY = (byte)((lenA - 1) + (lenB - 1) + (contiguous ? 1 : 0));
-            ref var c = ref scratch.GetWritableColumn(ci);
-            c.RunCount = 2;
-            c.Id0 = id0;
-            c.Y0Start = y0s;
-            c.Y0End = y0e;
-            c.Id1 = id1;
-            c.Y1Start = y1s;
-            c.Y1End = y1e;
-            c.OccMask = occMask;
-            c.NonAir = nonAir;
-            c.AdjY = adjY;
-            c.Escalated = null;
-            int w = ci >> 6, b = ci & 63;
-            ulong bit = 1UL << b;
-            ulong prev = scratch.NonEmptyColumnBits[w];
-            if ((prev & bit) == 0)
-                scratch.NonEmptyCount++;
-            scratch.NonEmptyColumnBits[w] = prev | bit;
-            scratch.AnyNonAir = true;
-            scratch.DistinctDirty = true;
+            RecordColumnOccupancy(scratch, ci, id0, y0s, y0e, id1, y1s, y1e);
         }
 
         // -------------------------------------------------------------------------------------------------
@@ -565,6 +537,40 @@ namespace MVoxelEngine1.WorldGeneration.Utils
             // 5. Escalated fallback (dense reconstruction)
             DenseExpandedFinaliseSection(sec, scratch);
         // DenseExpandedFinaliseSection will perform mask finalization.
+        }
+
+        private static void RecordColumnOccupancy(global::MVoxelEngine1.Infrastructure.Models.Generation.SectionBuildScratch scratch, int ci, ushort id0, byte y0s, byte y0e, ushort id1, byte y1s, byte y1e)
+        {
+
+            ushort occ0 = MaskRangeLutGet(y0s, y0e);
+            ushort occ1 = MaskRangeLutGet(y1s, y1e);
+            ushort occMask = (ushort)(occ0 | occ1);
+            int lenA = (y0e - y0s + 1);
+            int lenB = (y1e - y1s + 1);
+            byte nonAir = (byte)(lenA + lenB);
+            bool contiguous = y1s == (byte)(y0e + 1);
+            byte adjY = (byte)((lenA - 1) + (lenB - 1) + (contiguous ? 1 : 0));
+            ref var c = ref scratch.GetWritableColumn(ci);
+            c.RunCount = 2;
+            c.Id0 = id0;
+            c.Y0Start = y0s;
+            c.Y0End = y0e;
+            c.Id1 = id1;
+            c.Y1Start = y1s;
+            c.Y1End = y1e;
+            c.OccMask = occMask;
+            c.NonAir = nonAir;
+            c.AdjY = adjY;
+            c.Escalated = null;
+            int w = ci >> 6, b = ci & 63;
+            ulong bit = 1UL << b;
+            ulong prev = scratch.NonEmptyColumnBits[w];
+            if ((prev & bit) == 0)
+                scratch.NonEmptyCount++;
+            scratch.NonEmptyColumnBits[w] = prev | bit;
+            scratch.AnyNonAir = true;
+            scratch.DistinctDirty = true;
+
         }
     }
 }

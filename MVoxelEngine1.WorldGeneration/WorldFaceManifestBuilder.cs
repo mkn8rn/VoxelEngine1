@@ -48,39 +48,7 @@ namespace MVoxelEngine1.WorldGeneration
                 var expectedTiles = new Dictionary<int, uint>();
                 var slab = new List<CanonicalRenderFace>();
                 using var all = new CanonicalRenderFaceHasher.CanonicalFaceDigestAccumulator();
-                int? slabX = null;
-                for (int i = 0; i < chunks.Count; i++)
-                {
-                    ManifestChunk chunk = chunks[i];
-                    if (slabX.HasValue && slabX.Value != chunk.X)
-                        AppendSlab(all, slab);
-                    slabX = chunk.X;
-                    List<CanonicalRenderFace> faces;
-                    if (faceGenerationMode == FaceGenerationMode.Reference)
-                        faces = reference.Generate(ref view, chunk.Index);
-                    else
-                    {
-                        if (!view.TryInspectRetiredPacket(chunk.Index, out NativePacketReadView packet))
-                            throw new InvalidDataException("Native render packet changed during capture.");
-                        faces = new List<CanonicalRenderFace>(checked(packet.Record.OpaqueFaceCount + packet.Record.TransparentFaceCount));
-                        CapturePass(ref view, reference, chunk.Index, packet.Record.OpaqueFaceCount, packet.OpaqueWords, CanonicalRenderPass.Opaque, faces, expectedTiles);
-                        CapturePass(ref view, reference, chunk.Index, packet.Record.TransparentFaceCount, packet.TransparentWords, CanonicalRenderPass.Transparent, faces, expectedTiles);
-                    }
-
-                    CanonicalRenderFaceHasher.Sort(faces);
-                    CanonicalFaceSetDigest digest = CanonicalRenderFaceHasher.HashSorted(faces);
-                    chunkManifests[i] = new ChunkFaceManifest
-                    {
-                        ChunkX = chunk.X,
-                        ChunkY = chunk.Y,
-                        ChunkZ = chunk.Z,
-                        FullyOccluded = digest.FaceCount == 0,
-                        Faces = digest
-                    };
-                    slab.AddRange(faces);
-                }
-
-                AppendSlab(all, slab);
+            CaptureChunkFaces(faceGenerationMode, ref view, reference, chunks, chunkManifests, expectedTiles, slab, all);
                 manifest = new WorldFaceManifest
                 {
                     SchemaVersion = 1,
@@ -170,6 +138,44 @@ namespace MVoxelEngine1.WorldGeneration
             }
 
             return CanonicalRenderFaceHasher.GetHex(hash);
+        }
+
+        private static void CaptureChunkFaces(global::MVoxelEngine1.Infrastructure.Models.FaceGenerationMode faceGenerationMode, ref global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionView view, global::MVoxelEngine1.WorldGeneration.Native.NativeReferenceFaceGenerator reference, global::System.Collections.Generic.List<global::MVoxelEngine1.WorldGeneration.WorldFaceManifestBuilder.ManifestChunk> chunks, global::MVoxelEngine1.WorldGeneration.ChunkFaceManifest[] chunkManifests, global::System.Collections.Generic.Dictionary<int, uint> expectedTiles, global::System.Collections.Generic.List<global::MVoxelEngine1.WorldGeneration.CanonicalRenderFace> slab, global::MVoxelEngine1.WorldGeneration.CanonicalRenderFaceHasher.CanonicalFaceDigestAccumulator all)
+        {
+                int? slabX = null;
+                for (int i = 0; i < chunks.Count; i++)
+                {
+                    ManifestChunk chunk = chunks[i];
+                    if (slabX.HasValue && slabX.Value != chunk.X)
+                        AppendSlab(all, slab);
+                    slabX = chunk.X;
+                    List<CanonicalRenderFace> faces;
+                    if (faceGenerationMode == FaceGenerationMode.Reference)
+                        faces = reference.Generate(ref view, chunk.Index);
+                    else
+                    {
+                        if (!view.TryInspectRetiredPacket(chunk.Index, out NativePacketReadView packet))
+                            throw new InvalidDataException("Native render packet changed during capture.");
+                        faces = new List<CanonicalRenderFace>(checked(packet.Record.OpaqueFaceCount + packet.Record.TransparentFaceCount));
+                        CapturePass(ref view, reference, chunk.Index, packet.Record.OpaqueFaceCount, packet.OpaqueWords, CanonicalRenderPass.Opaque, faces, expectedTiles);
+                        CapturePass(ref view, reference, chunk.Index, packet.Record.TransparentFaceCount, packet.TransparentWords, CanonicalRenderPass.Transparent, faces, expectedTiles);
+                    }
+
+                    CanonicalRenderFaceHasher.Sort(faces);
+                    CanonicalFaceSetDigest digest = CanonicalRenderFaceHasher.HashSorted(faces);
+                    chunkManifests[i] = new ChunkFaceManifest
+                    {
+                        ChunkX = chunk.X,
+                        ChunkY = chunk.Y,
+                        ChunkZ = chunk.Z,
+                        FullyOccluded = digest.FaceCount == 0,
+                        Faces = digest
+                    };
+                    slab.AddRange(faces);
+                }
+
+                AppendSlab(all, slab);
+
         }
     }
 }

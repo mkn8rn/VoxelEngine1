@@ -8,6 +8,12 @@ namespace MVoxelEngine1.Tests
     public class DefaultGameEndToEndTests
     {
 
+        private static readonly string[] RecordedDefaultInputHashes =
+        [
+            "EC1700462B7799D48E52AF43A86608FFB98BD9A19A213CBDA731D0708C0F8B8B",
+            "9FC9BC59776B239177FDA25241AB0CDB350328283AC72785A66853B84DB5A562"
+        ];
+
     private static readonly System.Text.Json.JsonSerializerOptions EvidenceJsonOptions0 = new JsonSerializerOptions
 {
     PropertyNameCaseInsensitive = true
@@ -37,18 +43,7 @@ namespace MVoxelEngine1.Tests
                 RedirectStandardError = true,
                 CreateNoWindow = true
             };
-            startInfo.ArgumentList.Add("--gameDataDirectory");
-            startInfo.ArgumentList.Add(workspace.GameDataRoot);
-            startInfo.ArgumentList.Add("--game");
-            startInfo.ArgumentList.Add("Default");
-            startInfo.ArgumentList.Add("--worldName");
-            startInfo.ArgumentList.Add("BenchmarkWorld");
-            startInfo.ArgumentList.Add("--seed");
-            startInfo.ArgumentList.Add("123456");
-            startInfo.ArgumentList.Add("--renderStreamingIfAllowed");
-            startInfo.ArgumentList.Add("false");
-            startInfo.ArgumentList.Add("--benchmarkOutput");
-            startInfo.ArgumentList.Add(resultPath);
+            ExtractDefaultGameSeed123456RecordsStartupPerformanceAsyncRegion2(workspace, resultPath, startInfo);
 
             using var process = new Process { StartInfo = startInfo };
             Assert.True(process.Start(), "Application process did not start.");
@@ -60,16 +55,10 @@ namespace MVoxelEngine1.Tests
             using var combinedCancellation = CancellationTokenSource.CreateLinkedTokenSource(
                 timeout.Token,
                 testCancellation);
-            try
+            OperationCanceledException? caughtFailure = await WaitForBenchmarkExitAsync(
+                process, timeout, combinedCancellation.Token, testCancellation).ConfigureAwait(true);
+            if (caughtFailure is not null)
             {
-                await process.WaitForExitAsync(combinedCancellation.Token).ConfigureAwait(true);
-            }
-            catch (OperationCanceledException caughtFailure) when (timeout.IsCancellationRequested)
-            {
-                if (!process.HasExited)
-                    process.Kill(entireProcessTree: true);
-
-                await process.WaitForExitAsync(testCancellation).ConfigureAwait(true);
                 string timeoutOutput = await standardOutputTask.ConfigureAwait(true);
                 string timeoutError = await standardErrorTask.ConfigureAwait(true);
                 throw new TimeoutException($"Application benchmark exceeded 120 seconds. Output: {Tail(timeoutOutput)} Error: {Tail(timeoutError)}",caughtFailure);
@@ -82,74 +71,9 @@ namespace MVoxelEngine1.Tests
                 $"Application exited with code {process.ExitCode}. Output: {Tail(standardOutput)} Error: {Tail(standardError)}");
             Assert.True(File.Exists(resultPath), $"Benchmark result was not written to {resultPath}.");
 
-            var jsonOptions = EvidenceJsonOptions0;
-            HeadlessGtrtPerformanceSnapshot? result =
-                JsonSerializer.Deserialize<HeadlessGtrtPerformanceSnapshot>(
-                    (await File.ReadAllTextAsync(resultPath,TestContext.Current.CancellationToken).ConfigureAwait(true)),
-                    jsonOptions);
-            Assert.NotNull(result);
-            Assert.Equal("headlessGtrt", result.Mode);
-            Assert.False(result.WindowCreated);
-            Assert.Equal(0, result.WindowConstructionCount);
-            Assert.False(result.OpenGlCallsAllowed);
-            Assert.Equal(0, result.ActualGpuUploadCount);
-            Assert.Equal("Default", result.Game);
-            Assert.Equal(123456, result.Seed);
-            Assert.Equal(
-                "9FC9BC59776B239177FDA25241AB0CDB350328283AC72785A66853B84DB5A562",
-                result.GameInputSha256);
-            Assert.Equal(
-                "CC5C57FE8EE451A52B36CA85081E2EEBD436BD751B1EDA2C8025CEF71211A414",
-                result.BlockRegistrySha256);
-            Assert.Equal(1_000, result.TargetGenerationToRenderMilliseconds);
-            Assert.Equal(
-                2_000,
-                result.MaximumGenerationToRenderMilliseconds);
-            Assert.Equal(
-                16L * 1024 * 1024 * 1024,
-                result.MaximumWorkingSetBytesLimit);
-            AssertBenchmarkParameters(result.Parameters);
-            AssertPositiveFinite(result.GameLoadMilliseconds, nameof(result.GameLoadMilliseconds));
-            AssertPositiveFinite(
-                result.SeedAcceptedMilliseconds,
-                nameof(result.SeedAcceptedMilliseconds));
-            AssertPositiveFinite(
-                result.InitialGenerationStartMilliseconds,
-                nameof(result.InitialGenerationStartMilliseconds));
-            Assert.True(result.InitialGenerationMilliseconds > 0);
-            AssertPositiveFinite(
-                result.InitialGenerationCompleteMilliseconds,
-                nameof(result.InitialGenerationCompleteMilliseconds));
-            AssertPositiveFinite(
-                result.InitialChunkMeshBuildStartMilliseconds,
-                nameof(result.InitialChunkMeshBuildStartMilliseconds));
-            Assert.True(result.InitialChunkMeshBuildMilliseconds > 0);
-            AssertPositiveFinite(
-                result.InitialChunkMeshBuildCompleteMilliseconds,
-                nameof(result.InitialChunkMeshBuildCompleteMilliseconds));
-            AssertPositiveFinite(
-                result.FirstChunkMeshBuildMilliseconds,
-                nameof(result.FirstChunkMeshBuildMilliseconds));
-            AssertPositiveFinite(
-                result.GenerationToRenderMilliseconds,
-                nameof(result.GenerationToRenderMilliseconds));
-            AssertPositiveFinite(
-                result.GenerationToRenderCompleteMilliseconds,
-                nameof(result.GenerationToRenderCompleteMilliseconds));
-            Assert.InRange(
-                result.GenerationToRenderMilliseconds,
-                double.Epsilon,
-                result.MaximumGenerationToRenderMilliseconds);
-            Assert.True(result.SimulatedUploadBoundary.RenderDataId > 0);
-            Assert.True(
-                result.SimulatedUploadBoundary.OpaqueFaceCount +
-                result.SimulatedUploadBoundary.TransparentFaceCount > 0);
-            Assert.Equal(
-                result.SimulatedUploadBoundary.OpaqueRectangleCount * 2,
-                result.SimulatedUploadBoundary.OpaqueWordCount);
-            Assert.Equal(
-                result.SimulatedUploadBoundary.TransparentRectangleCount * 2,
-                result.SimulatedUploadBoundary.TransparentWordCount);
+            HeadlessGtrtPerformanceSnapshot? result = await ReadBenchmarkEvidenceAsync<HeadlessGtrtPerformanceSnapshot>(
+                resultPath, testCancellation).ConfigureAwait(true);
+            ExtractDefaultGameSeed123456RecordsStartupPerformanceAsyncRegion3(result);
             await ValidateDefaultGameSeed123456RecordsStartupPerformanceAsyncEvidenceAsync(workspace, resultPath, standardOutput, result).ConfigureAwait(true);
         }
 
@@ -164,15 +88,7 @@ namespace MVoxelEngine1.Tests
                 File.Exists(application),
                 $"Application executable was not found at {application}.");
 
-            string resultsDirectory = Path.Combine(
-                TestPaths.ResultsRoot,
-                "benchmarks");
-            Directory.CreateDirectory(resultsDirectory);
-            string resultPath = Path.Combine(
-                resultsDirectory,
-                $"default-seed-123456-graphics-" +
-                $"{DateTime.UtcNow:yyyyMMddTHHmmssfffZ}.json");
-
+            string resultPath = CreateGraphicsBenchmarkPath();
             var startInfo = new ProcessStartInfo
             {
                 FileName = application,
@@ -182,22 +98,7 @@ namespace MVoxelEngine1.Tests
                 RedirectStandardError = true,
                 CreateNoWindow = false
             };
-            startInfo.ArgumentList.Add("--gameDataDirectory");
-            startInfo.ArgumentList.Add(workspace.GameDataRoot);
-            startInfo.ArgumentList.Add("--game");
-            startInfo.ArgumentList.Add("Default");
-            startInfo.ArgumentList.Add("--worldName");
-            startInfo.ArgumentList.Add("GraphicsBenchmarkWorld");
-            startInfo.ArgumentList.Add("--seed");
-            startInfo.ArgumentList.Add("123456");
-            startInfo.ArgumentList.Add("--renderStreamingIfAllowed");
-            startInfo.ArgumentList.Add("false");
-            startInfo.ArgumentList.Add("--windowWidth");
-            startInfo.ArgumentList.Add("320");
-            startInfo.ArgumentList.Add("--windowHeight");
-            startInfo.ArgumentList.Add("240");
-            startInfo.ArgumentList.Add("--graphicsBenchmarkOutput");
-            startInfo.ArgumentList.Add(resultPath);
+            ExtractDefaultGameSeed123456RecordsGraphicsStartupPerformanceAsyncRegion2(workspace, resultPath, startInfo);
 
             using var process = new Process { StartInfo = startInfo };
             Assert.True(process.Start(), "Application process did not start.");
@@ -214,17 +115,10 @@ namespace MVoxelEngine1.Tests
                 CancellationTokenSource.CreateLinkedTokenSource(
                     timeout.Token,
                     testCancellation);
-            try
+            OperationCanceledException? caughtFailure = await WaitForBenchmarkExitAsync(
+                process, timeout, combinedCancellation.Token, testCancellation).ConfigureAwait(true);
+            if (caughtFailure is not null)
             {
-                await process.WaitForExitAsync(combinedCancellation.Token).ConfigureAwait(true);
-            }
-            catch (OperationCanceledException caughtFailure)
-                when (timeout.IsCancellationRequested)
-            {
-                if (!process.HasExited)
-                    process.Kill(entireProcessTree: true);
-
-                await process.WaitForExitAsync(testCancellation).ConfigureAwait(true);
                 string timeoutOutput = await standardOutputTask.ConfigureAwait(true);
                 string timeoutError = await standardErrorTask.ConfigureAwait(true);
                 throw new TimeoutException(
@@ -235,40 +129,60 @@ namespace MVoxelEngine1.Tests
 
             string standardOutput = await standardOutputTask.ConfigureAwait(true);
             string standardError = await standardErrorTask.ConfigureAwait(true);
+            AssertGraphicsProcessSucceeded(process.ExitCode, standardOutput, standardError, resultPath);
+
+            StartupPerformanceSnapshot? result = await ReadBenchmarkEvidenceAsync<StartupPerformanceSnapshot>(
+                resultPath, testCancellation).ConfigureAwait(true);
+            ExtractDefaultGameSeed123456RecordsGraphicsStartupPerformanceAsyncRegion(standardOutput, result);
+        }
+
+        private static async Task<TReport?> ReadBenchmarkEvidenceAsync<TReport>(string resultPath, CancellationToken cancellationToken) where TReport : class
+        {
+            string json = await File.ReadAllTextAsync(resultPath, cancellationToken).ConfigureAwait(true);
+            return JsonSerializer.Deserialize<TReport>(json, EvidenceJsonOptions0);
+        }
+
+        private static string CreateGraphicsBenchmarkPath()
+        {
+            string resultsDirectory = Path.Combine(
+                TestPaths.ResultsRoot,
+                "benchmarks");
+            Directory.CreateDirectory(resultsDirectory);
+            return Path.Combine(
+                resultsDirectory,
+                $"default-seed-123456-graphics-" +
+                $"{DateTime.UtcNow:yyyyMMddTHHmmssfffZ}.json");
+
+        }
+
+        private static void AssertGraphicsProcessSucceeded(int exitCode, string standardOutput, string standardError, string resultPath)
+        {
             Assert.True(
-                process.ExitCode == 0,
-                $"Application exited with code {process.ExitCode}. " +
+                exitCode == 0,
+                $"Application exited with code {exitCode}. " +
                 $"Output: {Tail(standardOutput)} " +
                 $"Error: {Tail(standardError)}");
             Assert.True(
                 File.Exists(resultPath),
                 $"Graphics benchmark result was not written to {resultPath}.");
+        }
 
-            var jsonOptions = EvidenceJsonOptions0;
-            StartupPerformanceSnapshot? result =
-                JsonSerializer.Deserialize<StartupPerformanceSnapshot>(
-                    (await File.ReadAllTextAsync(resultPath,TestContext.Current.CancellationToken).ConfigureAwait(true)),
-                    jsonOptions);
-            Assert.NotNull(result);
-            Assert.Equal("Default", result.Game);
-            Assert.Equal(123456, result.Seed);
-            AssertPositiveFinite(
-                result.RenderMilliseconds,
-                nameof(result.RenderMilliseconds));
-            AssertPositiveFinite(
-                result.CameraAppearanceMilliseconds,
-                nameof(result.CameraAppearanceMilliseconds));
-            AssertPositiveFinite(
-                result.GpuStreamingStartMilliseconds,
-                nameof(result.GpuStreamingStartMilliseconds));
-            AssertPositiveFinite(
-                result.GenerationToRenderMilliseconds,
-                nameof(result.GenerationToRenderMilliseconds));
-            Assert.Equal(
-                ReadConsoleDoubleTiming(
-                    standardOutput,
-                    "Generation to Render time (GTRT): "),
-                result.GenerationToRenderMilliseconds);
+        private static async Task<OperationCanceledException?> WaitForBenchmarkExitAsync(
+            Process process, CancellationTokenSource timeout,
+            CancellationToken combinedCancellation, CancellationToken testCancellation)
+        {
+            try
+            {
+                await process.WaitForExitAsync(combinedCancellation).ConfigureAwait(true);
+                return null;
+            }
+            catch (OperationCanceledException caughtFailure) when (timeout.IsCancellationRequested)
+            {
+                if (!process.HasExited)
+                    process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync(testCancellation).ConfigureAwait(true);
+                return caughtFailure;
+            }
         }
 
         private static void AssertPositiveFinite(double value, string metricName)
@@ -512,6 +426,93 @@ namespace MVoxelEngine1.Tests
                 diagnostics.RegistrarMilliseconds,
                 nameof(diagnostics.RegistrarMilliseconds));
 
+        }
+
+        private static void ExtractDefaultGameSeed123456RecordsStartupPerformanceAsyncRegion(global::MVoxelEngine1.Infrastructure.Diagnostics.HeadlessGtrtPerformanceSnapshot result)
+        {
+            Assert.Equal(0, result.WindowConstructionCount);
+            Assert.False(result.OpenGlCallsAllowed);
+            Assert.Equal(0, result.ActualGpuUploadCount);
+            Assert.Equal("Default", result.Game);
+            Assert.Equal(123456, result.Seed);
+            Assert.Contains(result.GameInputSha256, RecordedDefaultInputHashes, StringComparer.Ordinal);
+            Assert.Equal("CC5C57FE8EE451A52B36CA85081E2EEBD436BD751B1EDA2C8025CEF71211A414", result.BlockRegistrySha256);
+            Assert.Equal(1_000, result.TargetGenerationToRenderMilliseconds);
+            Assert.Equal(2_000, result.MaximumGenerationToRenderMilliseconds);
+            Assert.Equal(16L * 1024 * 1024 * 1024, result.MaximumWorkingSetBytesLimit);
+            AssertBenchmarkParameters(result.Parameters);
+            AssertPositiveFinite(result.GameLoadMilliseconds, nameof(result.GameLoadMilliseconds));
+            AssertPositiveFinite(result.SeedAcceptedMilliseconds, nameof(result.SeedAcceptedMilliseconds));
+            AssertPositiveFinite(result.InitialGenerationStartMilliseconds, nameof(result.InitialGenerationStartMilliseconds));
+            Assert.True(result.InitialGenerationMilliseconds > 0);
+            AssertPositiveFinite(result.InitialGenerationCompleteMilliseconds, nameof(result.InitialGenerationCompleteMilliseconds));
+            AssertPositiveFinite(result.InitialChunkMeshBuildStartMilliseconds, nameof(result.InitialChunkMeshBuildStartMilliseconds));
+            Assert.True(result.InitialChunkMeshBuildMilliseconds > 0);
+            AssertPositiveFinite(result.InitialChunkMeshBuildCompleteMilliseconds, nameof(result.InitialChunkMeshBuildCompleteMilliseconds));
+            AssertPositiveFinite(result.FirstChunkMeshBuildMilliseconds, nameof(result.FirstChunkMeshBuildMilliseconds));
+            AssertPositiveFinite(result.GenerationToRenderMilliseconds, nameof(result.GenerationToRenderMilliseconds));
+            AssertPositiveFinite(result.GenerationToRenderCompleteMilliseconds, nameof(result.GenerationToRenderCompleteMilliseconds));
+            Assert.InRange(result.GenerationToRenderMilliseconds, double.Epsilon, result.MaximumGenerationToRenderMilliseconds);
+            Assert.True(result.SimulatedUploadBoundary.RenderDataId > 0);
+            Assert.True(result.SimulatedUploadBoundary.OpaqueFaceCount + result.SimulatedUploadBoundary.TransparentFaceCount > 0);
+        }
+
+        private static void ExtractDefaultGameSeed123456RecordsGraphicsStartupPerformanceAsyncRegion(string standardOutput, global::MVoxelEngine1.Infrastructure.Diagnostics.StartupPerformanceSnapshot? result)
+        {
+            Assert.NotNull(result);
+            Assert.Equal("Default", result.Game);
+            Assert.Equal(123456, result.Seed);
+            AssertPositiveFinite(result.RenderMilliseconds, nameof(result.RenderMilliseconds));
+            AssertPositiveFinite(result.CameraAppearanceMilliseconds, nameof(result.CameraAppearanceMilliseconds));
+            AssertPositiveFinite(result.GpuStreamingStartMilliseconds, nameof(result.GpuStreamingStartMilliseconds));
+            AssertPositiveFinite(result.GenerationToRenderMilliseconds, nameof(result.GenerationToRenderMilliseconds));
+            Assert.Equal(ReadConsoleDoubleTiming(standardOutput, "Generation to Render time (GTRT): "), result.GenerationToRenderMilliseconds);
+        }
+
+        private static void ExtractDefaultGameSeed123456RecordsStartupPerformanceAsyncRegion2(global::MVoxelEngine1.Tests.TestWorkspace workspace, string resultPath, global::System.Diagnostics.ProcessStartInfo startInfo)
+        {
+            startInfo.ArgumentList.Add("--gameDataDirectory");
+            startInfo.ArgumentList.Add(workspace.GameDataRoot);
+            startInfo.ArgumentList.Add("--game");
+            startInfo.ArgumentList.Add("Default");
+            startInfo.ArgumentList.Add("--worldName");
+            startInfo.ArgumentList.Add("BenchmarkWorld");
+            startInfo.ArgumentList.Add("--seed");
+            startInfo.ArgumentList.Add("123456");
+            startInfo.ArgumentList.Add("--renderStreamingIfAllowed");
+            startInfo.ArgumentList.Add("false");
+            startInfo.ArgumentList.Add("--benchmarkOutput");
+            startInfo.ArgumentList.Add(resultPath);
+        }
+
+        private static void ExtractDefaultGameSeed123456RecordsGraphicsStartupPerformanceAsyncRegion2(global::MVoxelEngine1.Tests.TestWorkspace workspace, string resultPath, global::System.Diagnostics.ProcessStartInfo startInfo)
+        {
+            startInfo.ArgumentList.Add("--gameDataDirectory");
+            startInfo.ArgumentList.Add(workspace.GameDataRoot);
+            startInfo.ArgumentList.Add("--game");
+            startInfo.ArgumentList.Add("Default");
+            startInfo.ArgumentList.Add("--worldName");
+            startInfo.ArgumentList.Add("GraphicsBenchmarkWorld");
+            startInfo.ArgumentList.Add("--seed");
+            startInfo.ArgumentList.Add("123456");
+            startInfo.ArgumentList.Add("--renderStreamingIfAllowed");
+            startInfo.ArgumentList.Add("false");
+            startInfo.ArgumentList.Add("--windowWidth");
+            startInfo.ArgumentList.Add("320");
+            startInfo.ArgumentList.Add("--windowHeight");
+            startInfo.ArgumentList.Add("240");
+            startInfo.ArgumentList.Add("--graphicsBenchmarkOutput");
+            startInfo.ArgumentList.Add(resultPath);
+        }
+
+        private static void ExtractDefaultGameSeed123456RecordsStartupPerformanceAsyncRegion3([System.Diagnostics.CodeAnalysis.NotNull] global::MVoxelEngine1.Infrastructure.Diagnostics.HeadlessGtrtPerformanceSnapshot? result)
+        {
+            Assert.NotNull(result);
+            Assert.Equal("headlessGtrt", result.Mode);
+            Assert.False(result.WindowCreated);
+            ExtractDefaultGameSeed123456RecordsStartupPerformanceAsyncRegion(result);
+            Assert.Equal(result.SimulatedUploadBoundary.OpaqueRectangleCount * 2, result.SimulatedUploadBoundary.OpaqueWordCount);
+            Assert.Equal(result.SimulatedUploadBoundary.TransparentRectangleCount * 2, result.SimulatedUploadBoundary.TransparentWordCount);
         }
     }
 }

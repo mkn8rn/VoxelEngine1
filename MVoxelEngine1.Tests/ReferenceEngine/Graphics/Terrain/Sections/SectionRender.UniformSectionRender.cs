@@ -246,61 +246,37 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     if (nx < 0)
                     {
                         int idx = curZ * maxY + curY;
-                        if (PlaneBit(planeNegX, idx))
-                            return false; // outside opaque
-                        if (tNegX != null && (uint)idx < (uint)tNegX.Length && tNegX[idx] == block)
-                            return false; // same-id outside
-                        return true;
+                        return TransparentBoundaryVisible(planeNegX, tNegX, idx, block);
                     }
 
                     if (nx >= maxX)
                     {
                         int idx = curZ * maxY + curY;
-                        if (PlaneBit(planePosX, idx))
-                            return false;
-                        if (tPosX != null && (uint)idx < (uint)tPosX.Length && tPosX[idx] == block)
-                            return false;
-                        return true;
+                        return TransparentBoundaryVisible(planePosX, tPosX, idx, block);
                     }
 
                     if (ny < 0)
                     {
                         int idx = curX * maxZ + curZ;
-                        if (PlaneBit(planeNegY, idx))
-                            return false;
-                        if (tNegY != null && (uint)idx < (uint)tNegY.Length && tNegY[idx] == block)
-                            return false;
-                        return true;
+                        return TransparentBoundaryVisible(planeNegY, tNegY, idx, block);
                     }
 
                     if (ny >= maxY)
                     {
                         int idx = curX * maxZ + curZ;
-                        if (PlaneBit(planePosY, idx))
-                            return false;
-                        if (tPosY != null && (uint)idx < (uint)tPosY.Length && tPosY[idx] == block)
-                            return false;
-                        return true;
+                        return TransparentBoundaryVisible(planePosY, tPosY, idx, block);
                     }
 
                     if (nz < 0)
                     {
                         int idx = curX * maxY + curY;
-                        if (PlaneBit(planeNegZ, idx))
-                            return false;
-                        if (tNegZ != null && (uint)idx < (uint)tNegZ.Length && tNegZ[idx] == block)
-                            return false;
-                        return true;
+                        return TransparentBoundaryVisible(planeNegZ, tNegZ, idx, block);
                     }
 
                     if (nz >= maxZ)
                     {
                         int idx = curX * maxY + curY;
-                        if (PlaneBit(planePosZ, idx))
-                            return false;
-                        if (tPosZ != null && (uint)idx < (uint)tPosZ.Length && tPosZ[idx] == block)
-                            return false;
-                        return true;
+                        return TransparentBoundaryVisible(planePosZ, tPosZ, idx, block);
                     }
 
                     // Inside chunk: sample neighbor block id.
@@ -830,5 +806,15 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
 
             return true;
         }
+        private static bool TransparentBoundaryVisible(ulong[]? plane, ushort[]? transparentIds, int index, ushort block)
+        {
+            if (PlaneBit(plane, index))
+                return false;
+            if (transparentIds != null && (uint)index < (uint)transparentIds.Length && transparentIds[index] == block)
+                return false;
+            return true;
+        }
+
+
     }
 }

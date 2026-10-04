@@ -127,27 +127,7 @@ internal static class NativeGeneratedMesh
             int neighborX = chunk.ChunkX;
             int neighborY = chunk.ChunkY;
             int neighborZ = chunk.ChunkZ;
-            switch (direction)
-            {
-                case 0:
-                    neighborX--;
-                    break;
-                case 1:
-                    neighborX++;
-                    break;
-                case 2:
-                    neighborY--;
-                    break;
-                case 3:
-                    neighborY++;
-                    break;
-                case 4:
-                    neighborZ--;
-                    break;
-                case 5:
-                    neighborZ++;
-                    break;
-            }
+            ApplyNeighborOffset(direction, ref neighborX, ref neighborY, ref neighborZ);
 
             int neighborColumnIndex = session.GetColumnIndex(neighborX, neighborZ);
             if (neighborColumnIndex >= 0)
@@ -160,29 +140,9 @@ internal static class NativeGeneratedMesh
                 }
             }
 
-            int neighborIndex = session.GetChunkIndex(neighborX, neighborY, neighborZ);
-            if (neighborIndex < 0)
-            {
-                int materializedNeighbor = session.FindMaterializedChunkIndex(neighborX, neighborY, neighborZ);
-                if (materializedNeighbor >= 0)
-                {
-                    required = true;
-                    return true;
-                }
-
-                if (session.State.FailureCode != 0)
-                    return false;
-                continue;
-            }
-
-            NativeChunkStorageKind neighborKind = session.Chunks[neighborIndex].StorageKind;
-            if (!IsStorageKindValid(neighborKind))
-            {
-                session.Fail(NativeGtrtFailureCode.InvalidGeneratedMesh);
+            if (!TryCheckNeighborStorage(ref session, neighborX, neighborY, neighborZ, out bool neighborRequires))
                 return false;
-            }
-
-            if (neighborKind != NativeChunkStorageKind.GeneratedProfile)
+            if (neighborRequires)
             {
                 required = true;
                 return true;
@@ -190,6 +150,65 @@ internal static class NativeGeneratedMesh
         }
 
         return true;
+    }
+
+    private static bool TryCheckNeighborStorage(scoped ref NativeGtrtSessionView session,
+        int neighborX, int neighborY, int neighborZ, out bool required)
+    {
+        required = false;
+        int neighborIndex = session.GetChunkIndex(neighborX, neighborY, neighborZ);
+        if (neighborIndex < 0)
+        {
+            int materializedNeighbor = session.FindMaterializedChunkIndex(neighborX, neighborY, neighborZ);
+            if (materializedNeighbor >= 0)
+            {
+                required = true;
+                return true;
+            }
+
+            if (session.State.FailureCode != 0)
+                return false;
+            return true;
+        }
+
+        NativeChunkStorageKind neighborKind = session.Chunks[neighborIndex].StorageKind;
+        if (!IsStorageKindValid(neighborKind))
+        {
+            session.Fail(NativeGtrtFailureCode.InvalidGeneratedMesh);
+            return false;
+        }
+
+        if (neighborKind != NativeChunkStorageKind.GeneratedProfile)
+        {
+            required = true;
+            return true;
+        }
+        return true;
+    }
+
+    private static void ApplyNeighborOffset(byte direction, ref int neighborX, ref int neighborY, ref int neighborZ)
+    {
+        switch (direction)
+        {
+            case 0:
+                neighborX--;
+                break;
+            case 1:
+                neighborX++;
+                break;
+            case 2:
+                neighborY--;
+                break;
+            case 3:
+                neighborY++;
+                break;
+            case 4:
+                neighborZ--;
+                break;
+            case 5:
+                neighborZ++;
+                break;
+        }
     }
 
     private static bool SameMaterials(scoped ref NativeGtrtSessionView session, scoped ref readonly NativeColumnRecord first, scoped ref readonly NativeColumnRecord second)
@@ -386,25 +405,7 @@ internal static class NativeGeneratedMesh
         }
         else
         {
-            if (firstHasGround)
-            {
-                int firstStart = Math.Max(firstGroundStart, chunkStart);
-                int firstEnd = Math.Min(firstGroundEnd, chunkEnd);
-                if (firstStart <= firstEnd)
-                {
-                    EmitGroundDifference(in firstColumn, firstStart, firstEnd, secondHasGround, secondGroundStart, secondGroundEnd, chunkStart, firstDirection, firstX, firstZ, ref writer);
-                }
-            }
-
-            if (secondHasGround)
-            {
-                int secondStart = Math.Max(secondGroundStart, chunkStart);
-                int secondEnd = Math.Min(secondGroundEnd, chunkEnd);
-                if (secondStart <= secondEnd)
-                {
-                    EmitGroundDifference(in secondColumn, secondStart, secondEnd, firstHasGround, firstGroundStart, firstGroundEnd, chunkStart, secondDirection, secondX, secondZ, ref writer);
-                }
-            }
+        EmitDisjointGroundDifferences(in firstColumn, in secondColumn, chunkStart, chunkEnd, firstDirection, firstX, firstZ, secondDirection, secondX, secondZ, ref writer, firstHasGround, firstGroundStart, firstGroundEnd, secondHasGround, secondGroundStart, secondGroundEnd);
         }
 
         bool firstHasWater = HasRange(firstColumn.WaterStart, firstColumn.WaterEnd);
@@ -624,4 +625,27 @@ internal static class NativeGeneratedMesh
     private static bool IsOpaque(NativeBlockDescriptor descriptor) => descriptor.HasFlag(NativeBlockFlags.Opaque);
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool HasRange(int start, int end) => start >= 0 && end >= start;
+
+    private static void EmitDisjointGroundDifferences(scoped ref readonly global::MVoxelEngine1.Infrastructure.Models.Generation.BlockColumnProfile firstColumn, scoped ref readonly global::MVoxelEngine1.Infrastructure.Models.Generation.BlockColumnProfile secondColumn, int chunkStart, int chunkEnd, byte firstDirection, int firstX, int firstZ, byte secondDirection, int secondX, int secondZ, scoped ref global::MVoxelEngine1.WorldGeneration.Native.NativeGeneratedFaceWriter writer, bool firstHasGround, int firstGroundStart, int firstGroundEnd, bool secondHasGround, int secondGroundStart, int secondGroundEnd)
+    {
+        if (firstHasGround)
+        {
+            int firstStart = Math.Max(firstGroundStart, chunkStart);
+            int firstEnd = Math.Min(firstGroundEnd, chunkEnd);
+            if (firstStart <= firstEnd)
+            {
+                EmitGroundDifference(in firstColumn, firstStart, firstEnd, secondHasGround, secondGroundStart, secondGroundEnd, chunkStart, firstDirection, firstX, firstZ, ref writer);
+            }
+        }
+
+        if (secondHasGround)
+        {
+            int secondStart = Math.Max(secondGroundStart, chunkStart);
+            int secondEnd = Math.Min(secondGroundEnd, chunkEnd);
+            if (secondStart <= secondEnd)
+            {
+                EmitGroundDifference(in secondColumn, secondStart, secondEnd, firstHasGround, firstGroundStart, firstGroundEnd, chunkStart, secondDirection, secondX, secondZ, ref writer);
+            }
+        }
+    }
 }

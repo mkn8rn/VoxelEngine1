@@ -109,83 +109,7 @@ internal sealed class NativeWorldSaveExporter
         bool published = false;
         try
         {
-            using (FileStream? existing = File.Exists(finalPath)
-                       ? new FileStream(finalPath, FileMode.Open, FileAccess.Read, FileShare.Read) : null)
-            {
-                if (existing is not null)
-                    chunkCount = checked(chunkCount + CopyUnloadedRecords(ref view, existing, null, batchX, batchZ));
-                using (var stream = new FileStream(
-                           temporaryPath,
-                           FileMode.CreateNew,
-                           FileAccess.ReadWrite,
-                           FileShare.None,
-                           bufferSize: 256 * 1024,
-                           FileOptions.WriteThrough))
-                using (var writer = new BinaryWriter(
-                           stream,
-                           System.Text.Encoding.UTF8,
-                           leaveOpen: true))
-                {
-                    writer.Write(QuadMagic);
-                    writer.Write(QuadVersion);
-                    writer.Write((ushort)0);
-                    writer.Write(batchX);
-                    writer.Write(batchZ);
-                    writer.Write(chunkCount);
-
-                    for (int index = 0; index < materializedCount; index++)
-                    {
-                        NativeMaterializedChunkRecord chunk =
-                            view.MaterializedChunks[index];
-                        if (chunk.State != ActiveRecord)
-                            continue;
-                        (int currentBatchX, int currentBatchZ) =
-                            NativeSavePartition.GetBatchIndices(
-                                chunk.ChunkX,
-                                chunk.ChunkZ);
-                        if (currentBatchX != batchX ||
-                            currentBatchZ != batchZ)
-                        {
-                            continue;
-                        }
-
-                        writer.Write(chunk.ChunkX);
-                        writer.Write(chunk.ChunkY);
-                        writer.Write(chunk.ChunkZ);
-                        long payloadLengthPosition = stream.Position;
-                        writer.Write(0);
-                        long payloadStart = stream.Position;
-                        WriteChunk(ref view, writer, index, in chunk);
-                        long payloadEnd = stream.Position;
-                        int payloadLength = checked((int)(payloadEnd - payloadStart));
-                        stream.Position = payloadLengthPosition;
-                        writer.Write(payloadLength);
-                        stream.Position = payloadEnd;
-                    }
-                    if (existing is not null)
-                        _ = CopyUnloadedRecords(ref view, existing, writer, batchX, batchZ);
-
-                    writer.Flush();
-                    stream.Flush(flushToDisk: true);
-                }
-            }
-
-            publishFile(temporaryPath, finalPath);
-            published = true;
-
-            for (int index = 0; index < materializedCount; index++)
-            {
-                ref NativeMaterializedChunkRecord chunk =
-                    ref view.MaterializedChunks[index];
-                if (chunk.State != ActiveRecord)
-                    continue;
-                (int currentBatchX, int currentBatchZ) =
-                    NativeSavePartition.GetBatchIndices(
-                        chunk.ChunkX,
-                        chunk.ChunkZ);
-                if (currentBatchX == batchX && currentBatchZ == batchZ)
-                    chunk.PersistedRevision = chunk.Revision;
-            }
+        PublishBatchFile(ref view, batchX, batchZ, ref chunkCount, materializedCount, finalPath, temporaryPath, out published);
         }
         catch (Exception failure)
         {
@@ -995,5 +919,77 @@ internal sealed class NativeWorldSaveExporter
                 direction);
         }
 
+    }
+
+    private static void WriteBatchRecordsAndFlush(scoped ref global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionView view, int batchX, int batchZ, int chunkCount, int materializedCount, global::System.IO.FileStream? existing, global::System.IO.FileStream stream, global::System.IO.BinaryWriter writer)
+    {
+                    writer.Write(QuadMagic);
+                    writer.Write(QuadVersion);
+                    writer.Write((ushort)0);
+                    writer.Write(batchX);
+                    writer.Write(batchZ);
+                    writer.Write(chunkCount);
+
+                    for (int index = 0; index < materializedCount; index++)
+                    {
+                        NativeMaterializedChunkRecord chunk =
+                            view.MaterializedChunks[index];
+                        if (chunk.State != ActiveRecord)
+                            continue;
+                        (int currentBatchX, int currentBatchZ) =
+                            NativeSavePartition.GetBatchIndices(
+                                chunk.ChunkX,
+                                chunk.ChunkZ);
+                        if (currentBatchX != batchX ||
+                            currentBatchZ != batchZ)
+                        {
+                            continue;
+                        }
+
+                        writer.Write(chunk.ChunkX);
+                        writer.Write(chunk.ChunkY);
+                        writer.Write(chunk.ChunkZ);
+                        long payloadLengthPosition = stream.Position;
+                        writer.Write(0);
+                        long payloadStart = stream.Position;
+                        WriteChunk(ref view, writer, index, in chunk);
+                        long payloadEnd = stream.Position;
+                        int payloadLength = checked((int)(payloadEnd - payloadStart));
+                        stream.Position = payloadLengthPosition;
+                        writer.Write(payloadLength);
+                        stream.Position = payloadEnd;
+                    }
+                    if (existing is not null)
+                        _ = CopyUnloadedRecords(ref view, existing, writer, batchX, batchZ);
+
+                    writer.Flush();
+                    stream.Flush(flushToDisk: true);
+
+    }
+
+    private void PublishBatchFile(scoped ref global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionView view, int batchX, int batchZ, ref int chunkCount, int materializedCount, string finalPath, string temporaryPath, out bool published)
+    {
+        using (FileStream? existing = File.Exists(finalPath) ? new FileStream(finalPath, FileMode.Open, FileAccess.Read, FileShare.Read) : null)
+        {
+            if (existing is not null)
+                chunkCount = checked(chunkCount + CopyUnloadedRecords(ref view, existing, null, batchX, batchZ));
+            using (var stream = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, bufferSize: 256 * 1024, FileOptions.WriteThrough))
+            using (var writer = new BinaryWriter(stream, System.Text.Encoding.UTF8, leaveOpen: true))
+            {
+                WriteBatchRecordsAndFlush(ref view, batchX, batchZ, chunkCount, materializedCount, existing, stream, writer);
+            }
+        }
+
+        publishFile(temporaryPath, finalPath);
+        published = true;
+        for (int index = 0; index < materializedCount; index++)
+        {
+            ref NativeMaterializedChunkRecord chunk = ref view.MaterializedChunks[index];
+            if (chunk.State != ActiveRecord)
+                continue;
+            (int currentBatchX, int currentBatchZ) = NativeSavePartition.GetBatchIndices(chunk.ChunkX, chunk.ChunkZ);
+            if (currentBatchX == batchX && currentBatchZ == batchZ)
+                chunk.PersistedRevision = chunk.Revision;
+        }
     }
 }

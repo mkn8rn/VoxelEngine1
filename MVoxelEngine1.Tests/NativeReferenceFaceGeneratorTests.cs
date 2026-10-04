@@ -24,34 +24,11 @@ public sealed class NativeReferenceFaceGeneratorTests
         TerrainLoader.allBlockTypeObjects.Clear();
         _ = new TerrainLoader();
         BiomeManager.LoadAllBiomes();
-        var atlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
-        using NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(atlas, GameManager.settings, 2, 2);
-        pipeline.Run(123456);
-        pipeline.ConsumeReadyPackets(static (in NativeChunkRenderPacketDescriptor descriptor,
-            ReadOnlySpan<uint> opaque, ReadOnlySpan<uint> transparent) => { });
-        pipeline.InspectState(owner =>
-        {
-            var view = new NativeGtrtSessionView(owner.AsSpan());
-            foreach (ref readonly NativeColumnRecord column in view.Columns)
-            {
-                Span<BlockColumnProfile> profiles = view.GetColumnProfiles(view.GetColumnIndex(column.ChunkX, column.ChunkZ));
-                for (int x = 0; x < view.ChunkSizeX; x++)
-                for (int z = 0; z < view.ChunkSizeZ; z++)
-                {
-                    int worldX = column.ChunkX * view.ChunkSizeX + x;
-                    int worldZ = column.ChunkZ * view.ChunkSizeZ + z;
-                    int stoneEnd = Math.Abs(worldX % 3) * 2 + 1;
-                    profiles[x * view.ChunkSizeZ + z] = new BlockColumnProfile
-                    {
-                        StoneStart = 0, StoneEnd = stoneEnd,
-                        SoilStart = (worldZ & 1) == 0 ? 1 : stoneEnd + 1, SoilEnd = stoneEnd + 3,
-                        WaterStart = stoneEnd + 4, WaterEnd = 14
-                    };
-                }
-            }
-            var reference = new NativeReferenceFaceGenerator(ref view);
-            var actual = new List<CanonicalRenderFace>();
-            var expected = new List<CanonicalRenderFace>();
+        ExtractReferenceFacesUseRawProfilesAndRulesDespiteCorruptedProductionSummariesAndMaterialsRegion();
+    }
+
+    private static void AssertReferenceFacesAcrossChunks(ref global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionView view, global::MVoxelEngine1.WorldGeneration.Native.NativeReferenceFaceGenerator reference, global::System.Collections.Generic.List<global::MVoxelEngine1.WorldGeneration.CanonicalRenderFace> actual, global::System.Collections.Generic.List<global::MVoxelEngine1.WorldGeneration.CanonicalRenderFace> expected)
+    {
             (int X, int Y, int Z)[] normals = [(-1, 0, 0), (1, 0, 0), (0, -1, 0), (0, 1, 0), (0, 0, -1), (0, 0, 1)];
             for (int index = 0; index < view.Chunks.Length; index++)
             {
@@ -80,6 +57,45 @@ public sealed class NativeReferenceFaceGeneratorTests
                     }
                 }
             }
+
+    }
+
+    private static void ExtractReferenceFacesUseRawProfilesAndRulesDespiteCorruptedProductionSummariesAndMaterialsRegion()
+    {
+        var atlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
+        using NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(atlas, GameManager.settings, 2, 2);
+        pipeline.Run(123456);
+        pipeline.ConsumeReadyPackets(static (in NativeChunkRenderPacketDescriptor descriptor, ReadOnlySpan<uint> opaque, ReadOnlySpan<uint> transparent) =>
+        {
+        });
+        pipeline.InspectState(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            foreach (ref readonly NativeColumnRecord column in view.Columns)
+            {
+                Span<BlockColumnProfile> profiles = view.GetColumnProfiles(view.GetColumnIndex(column.ChunkX, column.ChunkZ));
+                for (int x = 0; x < view.ChunkSizeX; x++)
+                    for (int z = 0; z < view.ChunkSizeZ; z++)
+                    {
+                        int worldX = column.ChunkX * view.ChunkSizeX + x;
+                        int worldZ = column.ChunkZ * view.ChunkSizeZ + z;
+                        int stoneEnd = Math.Abs(worldX % 3) * 2 + 1;
+                        profiles[x * view.ChunkSizeZ + z] = new BlockColumnProfile
+                        {
+                            StoneStart = 0,
+                            StoneEnd = stoneEnd,
+                            SoilStart = (worldZ & 1) == 0 ? 1 : stoneEnd + 1,
+                            SoilEnd = stoneEnd + 3,
+                            WaterStart = stoneEnd + 4,
+                            WaterEnd = 14
+                        };
+                    }
+            }
+
+            var reference = new NativeReferenceFaceGenerator(ref view);
+            var actual = new List<CanonicalRenderFace>();
+            var expected = new List<CanonicalRenderFace>();
+            AssertReferenceFacesAcrossChunks(ref view, reference, actual, expected);
             string expectedHash = CanonicalRenderFaceHasher.Hash(expected).Sha256;
             Assert.Equal(expectedHash, CanonicalRenderFaceHasher.Hash(actual).Sha256);
             Assert.NotEmpty(actual);
@@ -90,6 +106,7 @@ public sealed class NativeReferenceFaceGeneratorTests
                 column.ReplacementMode = 1;
                 column.ResolvedMaterials = view.Materials;
             }
+
             var afterCorruption = new NativeReferenceFaceGenerator(ref view);
             actual.Clear();
             for (int index = 0; index < view.Chunks.Length; index++)

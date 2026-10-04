@@ -61,27 +61,7 @@ namespace MVoxelEngine1.WorldGeneration.Utils
                 ushort oldBlockIdAir = sec.RequirePalette()[oldIdxAir];
                 bool oldOpaqueAir = oldBlockIdAir != Section.AIR && TerrainLoader.IsOpaque(oldBlockIdAir);
                 if (oldIdxAir == 0) return; // already air
-                WriteBits(sec, linear, 0);
-                if (oldOpaqueAir) sec.OpaqueVoxelCount--; // NonAirCount now tracks opaque voxels only
-                sec.CompletelyFull = false; // no longer full
-                if (sec.OpaqueVoxelCount == 0)
-                {
-                    // Collapse only if no opaque voxels AND all are air; transparent-only content not collapsed here (still represented)
-                    // We rely on IsAllAir flag for total emptiness; do not set IsAllAir unless palette reduces to just AIR.
-                    bool onlyAirLeft = true;
-                    if (sec.Kind == Section.RepresentationKind.Packed || sec.Kind == Section.RepresentationKind.MultiPacked)
-                    {
-                        for (int i = 0; i < sec.VoxelCount; i++)
-                        {
-                            if (ReadBits(sec, i) != 0) { onlyAirLeft = false; break; }
-                        }
-                    }
-                    if (onlyAirLeft)
-                    {
-                        Collapse(sec);
-                        sec.Kind = Section.RepresentationKind.Empty;
-                    }
-                }
+            RemoveVoxelMetadata(sec, linear, oldOpaqueAir);
                 return;
             }
 
@@ -216,34 +196,7 @@ namespace MVoxelEngine1.WorldGeneration.Utils
             byte minx = 255, miny = 255, minz = 255, maxx = 0, maxy = 0, maxz = 0;
             var arr = sec.RequireDenseStorage();
             int transparentCount = 0; int opaqueCount = 0;
-            for (int li = 0; li < VOXELS_PER_SECTION; li++)
-            {
-                ushort id = arr[li];
-                if (id == Section.AIR) continue; // skip air entirely
-                DecodeLinear(li, out int x, out int y, out int z);
-                if (x < minx) minx = (byte)x; if (x > maxx) maxx = (byte)x;
-                if (y < miny) miny = (byte)y; if (y > maxy) maxy = (byte)y;
-                if (z < minz) minz = (byte)z; if (z > maxz) maxz = (byte)z;
-                if (TerrainLoader.IsOpaque(id))
-                {
-                    opaqueBits ??= new ulong[64];
-                    opaqueBits[li >> 6] |= 1UL << (li & 63);
-                    opaqueCount++;
-                }
-                else
-                {
-                    transparentBits ??= new ulong[64];
-                    transparentBits[li >> 6] |= 1UL << (li & 63);
-                    transparentCount++;
-                }
-            }
-            if (opaqueBits != null)
-                ComputeInternalExposure(opaqueBits, out sec.InternalExposure);
-            else
-                sec.InternalExposure = 0;
-            sec.OpaqueBits = opaqueBits; if (opaqueBits != null) BuildFaceMasks(sec, opaqueBits);
-            sec.TransparentBits = transparentBits; sec.TransparentCount = transparentCount; sec.HasTransparent = transparentCount > 0; if (transparentBits != null) BuildTransparentFaceMasks(sec, transparentBits);
-            sec.OpaqueVoxelCount = opaqueCount; // opaque voxel count
+            ClassifyDenseVoxels(sec, ref opaqueBits, ref transparentBits, ref minx, ref miny, ref minz, ref maxx, ref maxy, ref maxz, arr, ref transparentCount, ref opaqueCount);
             sec.HasBounds = minx != 255; // if any non-air (including transparent)
             if (sec.HasBounds)
             {
@@ -261,34 +214,7 @@ namespace MVoxelEngine1.WorldGeneration.Utils
             ulong[]? transparentBits = null;
             byte minx = 255, miny = 255, minz = 255, maxx = 0, maxy = 0, maxz = 0;
             int transparentCount = 0; int opaqueCount = 0;
-            for (int li = 0; li < VOXELS_PER_SECTION; li++)
-            {
-                int pi = ReadBits(sec, li);
-                if (pi == 0) continue; // air
-                ushort id = sec.RequirePalette()[pi];
-                DecodeLinear(li, out int x, out int y, out int z);
-                if (x < minx) minx = (byte)x; if (x > maxx) maxx = (byte)x;
-                if (y < miny) miny = (byte)y; if (y > maxy) maxy = (byte)y;
-                if (z < minz) minz = (byte)z; if (z > maxz) maxz = (byte)z;
-                if (TerrainLoader.IsOpaque(id))
-                {
-                    opaqueBits ??= new ulong[64];
-                    opaqueBits[li >> 6] |= 1UL << (li & 63);
-                    opaqueCount++;
-                }
-                else
-                {
-                    transparentBits ??= new ulong[64];
-                    transparentBits[li >> 6] |= 1UL << (li & 63);
-                    transparentCount++;
-                }
-            }
-            if (opaqueBits != null)
-                ComputeInternalExposure(opaqueBits, out sec.InternalExposure);
-            else
-                sec.InternalExposure = 0;
-            sec.OpaqueBits = opaqueBits; if (opaqueBits != null) BuildFaceMasks(sec, opaqueBits);
-            sec.TransparentBits = transparentBits; sec.TransparentCount = transparentCount; sec.HasTransparent = transparentCount > 0; if (transparentBits != null) BuildTransparentFaceMasks(sec, transparentBits);
+            ClassifyPackedVoxels(sec, ref opaqueBits, ref transparentBits, ref minx, ref miny, ref minz, ref maxx, ref maxy, ref maxz, ref transparentCount, ref opaqueCount);
             sec.OpaqueVoxelCount = opaqueCount;
             sec.HasBounds = minx != 255; // if any non-air (including transparent)
             if (sec.HasBounds)
@@ -379,47 +305,7 @@ namespace MVoxelEngine1.WorldGeneration.Utils
                         sec.FacePosXBits[w] |= 1UL << b;
                 }
             }
-
-            // Y faces (y = 0 and y = 15) -> XZ plane (x,z)
-            for (int x = 0; x < localSectionSize; x++)
-            {
-                int xOffset16 = x * 16;
-                for (int z = 0; z < localSectionSize; z++)
-                {
-                    int ci = z * localSectionSize + x;          // (z,x) pair inside XZ iteration for convenience
-                    // Reconstruct li base for (z,x,y) ordering:
-                    // li = ((z*16 + x)*16)+y = (z*256) + (x*16) + y
-                    int baseZX = z * 256 + xOffset16;
-
-                    int liNeg = baseZX + 0;      // y=0
-                    int liPos = baseZX + 15;     // y=15
-                    int idxXZ = x * localSectionSize + z;       // plane index mapping (x,z)
-                    int w = idxXZ >> 6; int b = idxXZ & 63;
-
-                    if ((occ[liNeg >> 6] & (1UL << (liNeg & 63))) != 0UL)
-                        sec.FaceNegYBits[w] |= 1UL << b;
-                    if ((occ[liPos >> 6] & (1UL << (liPos & 63))) != 0UL)
-                        sec.FacePosYBits[w] |= 1UL << b;
-                }
-            }
-
-            // Z faces (z = 0 and z = 15) -> XY plane (x,y)
-            for (int x = 0; x < localSectionSize; x++)
-            {
-                int xOffset16 = x * 16;
-                for (int y = 0; y < localSectionSize; y++)
-                {
-                    int liNeg = xOffset16 + y;                 // z=0
-                    int liPos = 15 * 256 + xOffset16 + y;      // z=15 -> 15*256 = 3840
-                    int idxXY = x * localSectionSize + y;                     // plane index (x,y)
-                    int w = idxXY >> 6; int b = idxXY & 63;
-
-                    if ((occ[liNeg >> 6] & (1UL << (liNeg & 63))) != 0UL)
-                        sec.FaceNegZBits[w] |= 1UL << b;
-                    if ((occ[liPos >> 6] & (1UL << (liPos & 63))) != 0UL)
-                        sec.FacePosZBits[w] |= 1UL << b;
-                }
-            }
+            BuildOpaqueYAndZFaceMasks(sec.FaceNegYBits, sec.FacePosYBits, sec.FaceNegZBits, sec.FacePosZBits, occ, localSectionSize);
         }
         internal static void BuildTransparentFaceMasks(Section sec, ulong[] occ)
         {
@@ -433,31 +319,7 @@ namespace MVoxelEngine1.WorldGeneration.Utils
             EnsureAndClear(ref sec.TransparentFacePosYBits);
             EnsureAndClear(ref sec.TransparentFaceNegZBits);
             EnsureAndClear(ref sec.TransparentFacePosZBits);
-            // X faces
-            for (int z = 0; z < localSectionSize; z++)
-            {
-                int zBase256 = z * 256;
-                for (int y = 0; y < localSectionSize; y++)
-                {
-                    int liNeg = zBase256 + y;            // x=0
-                    int liPos = zBase256 + 240 + y;      // x=15
-                    int idxYZ = z * localSectionSize + y; int w = idxYZ >> 6; int b = idxYZ & 63;
-                    if ((occ[liNeg >> 6] & (1UL << (liNeg & 63))) != 0UL) sec.TransparentFaceNegXBits[w] |= 1UL << b;
-                    if ((occ[liPos >> 6] & (1UL << (liPos & 63))) != 0UL) sec.TransparentFacePosXBits[w] |= 1UL << b;
-                }
-            }
-            // Y faces
-            for (int x = 0; x < localSectionSize; x++)
-            {
-                int xOffset16 = x * 16;
-                for (int z = 0; z < localSectionSize; z++)
-                {
-                    int baseZX = z * 256 + xOffset16;
-                    int liNeg = baseZX + 0; int liPos = baseZX + 15; int idxXZ = x * localSectionSize + z; int w = idxXZ >> 6; int b = idxXZ & 63;
-                    if ((occ[liNeg >> 6] & (1UL << (liNeg & 63))) != 0UL) sec.TransparentFaceNegYBits[w] |= 1UL << b;
-                    if ((occ[liPos >> 6] & (1UL << (liPos & 63))) != 0UL) sec.TransparentFacePosYBits[w] |= 1UL << b;
-                }
-            }
+            BuildTransparentXAndYFaceMasks(sec.TransparentFaceNegXBits, sec.TransparentFacePosXBits, sec.TransparentFaceNegYBits, sec.TransparentFacePosYBits, occ, localSectionSize);
             // Z faces
             for (int x = 0; x < localSectionSize; x++)
             {
@@ -626,35 +488,229 @@ namespace MVoxelEngine1.WorldGeneration.Utils
             // For Sparse / DenseExpanded fallback: rebuild packed from existing data
             if (sec.Kind == Section.RepresentationKind.Expanded)
             {
-                // Repack dense expanded
-                ushort[] dense = sec.RequireDenseStorage();
-                // Build palette anew
-                var palette = new List<ushort> { Section.AIR };
-                var lookup = new Dictionary<ushort, int> { { Section.AIR, 0 } };
-                foreach (ushort id in dense)
-                {
-                    if (id == Section.AIR) continue;
-                    if (!lookup.ContainsKey(id)) { lookup[id] = palette.Count; palette.Add(id); }
-                }
-                sec.Palette = palette; sec.PaletteLookup = lookup;
-                int paletteCountMinusOne = palette.Count - 1;
-                int bpi = paletteCountMinusOne <= 0 ? 1 : (int)BitOperations.Log2((uint)paletteCountMinusOne) + 1;
-                sec.BitsPerIndex = bpi;
-                long totalBits2 = (long)sec.VoxelCount * bpi;
-                int uintCount2 = (int)((totalBits2 + 31) / 32);
-                sec.BitData = ArrayPool<uint>.Shared.Rent(uintCount2); Array.Clear(sec.BitData, 0, uintCount2);
-                sec.OpaqueVoxelCount = 0;
-                for (int i = 0; i < dense.Length; i++)
-                {
-                    ushort id = dense[i];
-                    if (id == Section.AIR) continue;
-                    int pi = lookup[id];
-                    WriteBits(sec, i, pi);
-                    if (TerrainLoader.IsOpaque(id)) sec.OpaqueVoxelCount++;
-                }
-                sec.Kind = Section.RepresentationKind.Packed; sec.MetadataBuilt = false;
+            ExtractEnsurePackedRegion(sec);
                 return;
             }
+        }
+
+        private static void RemoveVoxelMetadata(global::MVoxelEngine1.Infrastructure.Models.Generation.Section sec, int linear, bool oldOpaqueAir)
+        {
+                WriteBits(sec, linear, 0);
+                if (oldOpaqueAir) sec.OpaqueVoxelCount--; // NonAirCount now tracks opaque voxels only
+                sec.CompletelyFull = false; // no longer full
+                if (sec.OpaqueVoxelCount == 0)
+                {
+                    // Collapse only if no opaque voxels AND all are air; transparent-only content not collapsed here (still represented)
+                    // We rely on IsAllAir flag for total emptiness; do not set IsAllAir unless palette reduces to just AIR.
+                    bool onlyAirLeft = true;
+                    if (sec.Kind == Section.RepresentationKind.Packed || sec.Kind == Section.RepresentationKind.MultiPacked)
+                    {
+                        for (int i = 0; i < sec.VoxelCount; i++)
+                        {
+                            if (ReadBits(sec, i) != 0) { onlyAirLeft = false; break; }
+                        }
+                    }
+                    if (onlyAirLeft)
+                    {
+                        Collapse(sec);
+                        sec.Kind = Section.RepresentationKind.Empty;
+                    }
+                }
+
+        }
+
+        private static void ClassifyDenseVoxels(global::MVoxelEngine1.Infrastructure.Models.Generation.Section sec, ref ulong[]? opaqueBits, ref ulong[]? transparentBits, ref byte minx, ref byte miny, ref byte minz, ref byte maxx, ref byte maxy, ref byte maxz, ushort[] arr, ref int transparentCount, ref int opaqueCount)
+        {
+            for (int li = 0; li < VOXELS_PER_SECTION; li++)
+            {
+                ushort id = arr[li];
+                if (id == Section.AIR) continue; // skip air entirely
+                DecodeLinear(li, out int x, out int y, out int z);
+                if (x < minx) minx = (byte)x; if (x > maxx) maxx = (byte)x;
+                if (y < miny) miny = (byte)y; if (y > maxy) maxy = (byte)y;
+                if (z < minz) minz = (byte)z; if (z > maxz) maxz = (byte)z;
+                if (TerrainLoader.IsOpaque(id))
+                {
+                    opaqueBits ??= new ulong[64];
+                    opaqueBits[li >> 6] |= 1UL << (li & 63);
+                    opaqueCount++;
+                }
+                else
+                {
+                    transparentBits ??= new ulong[64];
+                    transparentBits[li >> 6] |= 1UL << (li & 63);
+                    transparentCount++;
+                }
+            }
+            if (opaqueBits != null)
+                ComputeInternalExposure(opaqueBits, out sec.InternalExposure);
+            else
+                sec.InternalExposure = 0;
+            sec.OpaqueBits = opaqueBits; if (opaqueBits != null) BuildFaceMasks(sec, opaqueBits);
+            sec.TransparentBits = transparentBits; sec.TransparentCount = transparentCount; sec.HasTransparent = transparentCount > 0; if (transparentBits != null) BuildTransparentFaceMasks(sec, transparentBits);
+            sec.OpaqueVoxelCount = opaqueCount; // opaque voxel count
+
+        }
+
+        private static void ClassifyPackedVoxels(global::MVoxelEngine1.Infrastructure.Models.Generation.Section sec, ref ulong[]? opaqueBits, ref ulong[]? transparentBits, ref byte minx, ref byte miny, ref byte minz, ref byte maxx, ref byte maxy, ref byte maxz, ref int transparentCount, ref int opaqueCount)
+        {
+            for (int li = 0; li < VOXELS_PER_SECTION; li++)
+            {
+                int pi = ReadBits(sec, li);
+                if (pi == 0) continue; // air
+                ushort id = sec.RequirePalette()[pi];
+                DecodeLinear(li, out int x, out int y, out int z);
+                if (x < minx) minx = (byte)x; if (x > maxx) maxx = (byte)x;
+                if (y < miny) miny = (byte)y; if (y > maxy) maxy = (byte)y;
+                if (z < minz) minz = (byte)z; if (z > maxz) maxz = (byte)z;
+                if (TerrainLoader.IsOpaque(id))
+                {
+                    opaqueBits ??= new ulong[64];
+                    opaqueBits[li >> 6] |= 1UL << (li & 63);
+                    opaqueCount++;
+                }
+                else
+                {
+                    transparentBits ??= new ulong[64];
+                    transparentBits[li >> 6] |= 1UL << (li & 63);
+                    transparentCount++;
+                }
+            }
+            if (opaqueBits != null)
+                ComputeInternalExposure(opaqueBits, out sec.InternalExposure);
+            else
+                sec.InternalExposure = 0;
+            sec.OpaqueBits = opaqueBits; if (opaqueBits != null) BuildFaceMasks(sec, opaqueBits);
+            sec.TransparentBits = transparentBits; sec.TransparentCount = transparentCount; sec.HasTransparent = transparentCount > 0; if (transparentBits != null) BuildTransparentFaceMasks(sec, transparentBits);
+
+        }
+
+        private static void BuildOpaqueYAndZFaceMasks(ulong[] FaceNegYBits, ulong[] FacePosYBits, ulong[] FaceNegZBits, ulong[] FacePosZBits, ulong[] occ, int localSectionSize)
+        {
+
+            // Y faces (y = 0 and y = 15) -> XZ plane (x,z)
+            for (int x = 0; x < localSectionSize; x++)
+            {
+                int xOffset16 = x * 16;
+                for (int z = 0; z < localSectionSize; z++)
+                {
+                    int ci = z * localSectionSize + x;          // (z,x) pair inside XZ iteration for convenience
+                    // Reconstruct li base for (z,x,y) ordering:
+                    // li = ((z*16 + x)*16)+y = (z*256) + (x*16) + y
+                    int baseZX = z * 256 + xOffset16;
+
+                    int liNeg = baseZX + 0;      // y=0
+                    int liPos = baseZX + 15;     // y=15
+                    int idxXZ = x * localSectionSize + z;       // plane index mapping (x,z)
+                    int w = idxXZ >> 6; int b = idxXZ & 63;
+
+                    if ((occ[liNeg >> 6] & (1UL << (liNeg & 63))) != 0UL)
+                        FaceNegYBits[w] |= 1UL << b;
+                    if ((occ[liPos >> 6] & (1UL << (liPos & 63))) != 0UL)
+                        FacePosYBits[w] |= 1UL << b;
+                }
+            }
+
+            // Z faces (z = 0 and z = 15) -> XY plane (x,y)
+            for (int x = 0; x < localSectionSize; x++)
+            {
+                int xOffset16 = x * 16;
+                for (int y = 0; y < localSectionSize; y++)
+                {
+                    int liNeg = xOffset16 + y;                 // z=0
+                    int liPos = 15 * 256 + xOffset16 + y;      // z=15 -> 15*256 = 3840
+                    int idxXY = x * localSectionSize + y;                     // plane index (x,y)
+                    int w = idxXY >> 6; int b = idxXY & 63;
+
+                    if ((occ[liNeg >> 6] & (1UL << (liNeg & 63))) != 0UL)
+                        FaceNegZBits[w] |= 1UL << b;
+                    if ((occ[liPos >> 6] & (1UL << (liPos & 63))) != 0UL)
+                        FacePosZBits[w] |= 1UL << b;
+                }
+            }
+
+        }
+
+        private static void BuildTransparentXAndYFaceMasks(ulong[] TransparentFaceNegXBits, ulong[] TransparentFacePosXBits, ulong[] TransparentFaceNegYBits, ulong[] TransparentFacePosYBits, ulong[] occ, int localSectionSize)
+        {
+            // X faces
+            for (int z = 0; z < localSectionSize; z++)
+            {
+                int zBase256 = z * 256;
+                for (int y = 0; y < localSectionSize; y++)
+                {
+                    int liNeg = zBase256 + y;            // x=0
+                    int liPos = zBase256 + 240 + y;      // x=15
+                    int idxYZ = z * localSectionSize + y; int w = idxYZ >> 6; int b = idxYZ & 63;
+                    if ((occ[liNeg >> 6] & (1UL << (liNeg & 63))) != 0UL) TransparentFaceNegXBits[w] |= 1UL << b;
+                    if ((occ[liPos >> 6] & (1UL << (liPos & 63))) != 0UL) TransparentFacePosXBits[w] |= 1UL << b;
+                }
+            }
+            // Y faces
+            for (int x = 0; x < localSectionSize; x++)
+            {
+                int xOffset16 = x * 16;
+                for (int z = 0; z < localSectionSize; z++)
+                {
+                    int baseZX = z * 256 + xOffset16;
+                    int liNeg = baseZX + 0; int liPos = baseZX + 15; int idxXZ = x * localSectionSize + z; int w = idxXZ >> 6; int b = idxXZ & 63;
+                    if ((occ[liNeg >> 6] & (1UL << (liNeg & 63))) != 0UL) TransparentFaceNegYBits[w] |= 1UL << b;
+                    if ((occ[liPos >> 6] & (1UL << (liPos & 63))) != 0UL) TransparentFacePosYBits[w] |= 1UL << b;
+                }
+            }
+
+        }
+
+        private static void ExtractEnsurePackedRegion(global::MVoxelEngine1.Infrastructure.Models.Generation.Section sec)
+        {
+            // Repack dense expanded
+            ushort[] dense = sec.RequireDenseStorage();
+            // Build palette anew
+            var palette = new List<ushort>
+            {
+                Section.AIR
+            };
+            var lookup = new Dictionary<ushort, int>
+            {
+                {
+                    Section.AIR,
+                    0
+                }
+            };
+            foreach (ushort id in dense)
+            {
+                if (id == Section.AIR)
+                    continue;
+                if (!lookup.ContainsKey(id))
+                {
+                    lookup[id] = palette.Count;
+                    palette.Add(id);
+                }
+            }
+
+            sec.Palette = palette;
+            sec.PaletteLookup = lookup;
+            int paletteCountMinusOne = palette.Count - 1;
+            int bpi = paletteCountMinusOne <= 0 ? 1 : (int)BitOperations.Log2((uint)paletteCountMinusOne) + 1;
+            sec.BitsPerIndex = bpi;
+            long totalBits2 = (long)sec.VoxelCount * bpi;
+            int uintCount2 = (int)((totalBits2 + 31) / 32);
+            sec.BitData = ArrayPool<uint>.Shared.Rent(uintCount2);
+            Array.Clear(sec.BitData, 0, uintCount2);
+            sec.OpaqueVoxelCount = 0;
+            for (int i = 0; i < dense.Length; i++)
+            {
+                ushort id = dense[i];
+                if (id == Section.AIR)
+                    continue;
+                int pi = lookup[id];
+                WriteBits(sec, i, pi);
+                if (TerrainLoader.IsOpaque(id))
+                    sec.OpaqueVoxelCount++;
+            }
+
+            sec.Kind = Section.RepresentationKind.Packed;
+            sec.MetadataBuilt = false;
         }
     }
 }

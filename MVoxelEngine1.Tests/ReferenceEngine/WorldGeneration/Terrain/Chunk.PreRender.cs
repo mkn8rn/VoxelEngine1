@@ -158,55 +158,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
         {
             // A voxel contributes to boundary plane solidity only if it is opaque (not air / not transparent).
             bool solid = TerrainLoader.IsOpaque(blockId);
-            // allocate if not present yet (late creation path after generation)
-            EnsurePlaneArrays();
-            if (lx == 0)
-            {
-                int yzIndex = lz * dimY + ly;
-                int w = yzIndex >> 6;
-                int b = yzIndex & 63;
-                ulong mask = 1UL << b;
-                if (solid)
-                    PlaneNegX[w] |= mask;
-                else
-                    PlaneNegX[w] &= ~mask;
-            }
-
-            if (lx == dimX - 1)
-            {
-                int yzIndex = lz * dimY + ly;
-                int w = yzIndex >> 6;
-                int b = yzIndex & 63;
-                ulong mask = 1UL << b;
-                if (solid)
-                    PlanePosX[w] |= mask;
-                else
-                    PlanePosX[w] &= ~mask;
-            }
-
-            if (ly == 0)
-            {
-                int xzIndex = lx * dimZ + lz;
-                int w = xzIndex >> 6;
-                int b = xzIndex & 63;
-                ulong mask = 1UL << b;
-                if (solid)
-                    PlaneNegY[w] |= mask;
-                else
-                    PlaneNegY[w] &= ~mask;
-            }
-
-            if (ly == dimY - 1)
-            {
-                int xzIndex = lx * dimZ + lz;
-                int w = xzIndex >> 6;
-                int b = xzIndex & 63;
-                ulong mask = 1UL << b;
-                if (solid)
-                    PlanePosY[w] |= mask;
-                else
-                    PlanePosY[w] &= ~mask;
-            }
+            UpdateXAndYBoundaryBits(lx, ly, lz, solid);
 
             if (lz == 0)
             {
@@ -348,12 +300,12 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
 
                         // Build transparent palette index list (fast classification set for renderer). Only when palette present.
                         int[]? transparentPaletteIndices = null;
-                        if (sec.Palette != null && sec.Palette.Count > 0)
+                        if (sec.Palette != null && sec.RequirePalette().Count > 0)
                         {
                             List<int>? tpi = null;
-                            for (int pi = 1; pi < sec.Palette.Count; pi++) // skip air index 0
+                            for (int pi = 1; pi < sec.RequirePalette().Count; pi++) // skip air index 0
                             {
-                                ushort bid = sec.Palette[pi];
+                                ushort bid = sec.RequirePalette()[pi];
                                 if (bid != Section.AIR && !TerrainLoader.IsOpaque(bid))
                                 {
                                     (tpi ??= new List<int>(4)).Add(pi);
@@ -379,155 +331,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                         ulong[]? dominantBits = null;
                         ulong[]? residualBits = sec.TransparentBits;
                         int residualCount = sec.TransparentCount;
-                        if (sec.TransparentCount > 0 && sec.Palette != null && transparentPaletteIndices != null && transparentPaletteIndices.Length > 1)
-                        {
-                            // Tally counts per transparent palette index using bit scans with on-demand decode (acceptable during prerender build).
-                            Span<int> perIdCounts = new int[transparentPaletteIndices.Length];
-                            perIdCounts.Clear();
-                            // Build perId bitset lazily only for the candidate; we just count first.
-                            for (int w = 0; w < 64; w++)
-                            {
-                                ulong word = sec.TransparentBits?[w] ?? 0UL;
-                                while (word != 0)
-                                {
-                                    int bit = BitOperations.TrailingZeroCount(word);
-                                    word &= word - 1;
-                                    int li = (w << 6) + bit;
-                                    int ly = li & 15;
-                                    int t = li >> 4;
-                                    int lx = t & 15;
-                                    int lz = t >> 4;
-                                    ushort id = SectionUtils.GetBlock(sec, lx, ly, lz);
-                                    if (id != 0 && !TerrainLoader.IsOpaque(id))
-                                    {
-                                        int pi = -1;
-                                        if (sec.PaletteLookup != null && sec.PaletteLookup.TryGetValue(id, out int pidx))
-                                            pi = pidx;
-                                        else
-                                            for (int paletteIndex = 1; paletteIndex < sec.Palette.Count; paletteIndex++)
-                                                if (sec.Palette[paletteIndex] == id)
-                                                {
-                                                    pi = paletteIndex;
-                                                    break;
-                                                }
-
-                                        if (pi >= 0)
-                                        {
-                                            int localListIndex = Array.IndexOf(transparentPaletteIndices, pi);
-                                            if (localListIndex >= 0)
-                                                perIdCounts[localListIndex]++;
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Find dominant
-                            int threshold = (int)(sec.TransparentCount * 0.9f);
-                            int bestIdx = -1;
-                            int best = 0;
-                            for (int i = 0; i < perIdCounts.Length; i++)
-                                if (perIdCounts[i] > best)
-                                {
-                                    best = perIdCounts[i];
-                                    bestIdx = i;
-                                }
-
-                            if (bestIdx >= 0 && best >= threshold)
-                            {
-                                int paletteIndex = transparentPaletteIndices[bestIdx];
-                                dominantId = sec.Palette[paletteIndex];
-                                dominantCount = best;
-                                dominantBits = new ulong[64];
-                                ulong[] res = new ulong[64];
-                                for (int w = 0; w < 64; w++)
-                                {
-                                    ulong word = sec.RequireTransparentBits()[w];
-                                    ulong maskWord = 0UL;
-                                    if (word != 0)
-                                    {
-                                        ulong tmp = word;
-                                        while (tmp != 0)
-                                        {
-                                            int bit = BitOperations.TrailingZeroCount(tmp);
-                                            tmp &= tmp - 1;
-                                            int li = (w << 6) + bit;
-                                            int ly = li & 15;
-                                            int t = li >> 4;
-                                            int lx = t & 15;
-                                            int lz = t >> 4;
-                                            ushort id = SectionUtils.GetBlock(sec, lx, ly, lz);
-                                            if (id == dominantId)
-                                                maskWord |= 1UL << bit;
-                                        }
-                                    }
-
-                                    dominantBits[w] = maskWord;
-                                    res[w] = word & ~maskWord;
-                                }
-
-                                residualBits = res;
-                                residualCount = sec.TransparentCount - dominantCount;
-                            }
-                        }
-
-                        // Precompute per-face tile indices for transparent palette ids (6 each) for fast emission.
-                        uint[]? transparentFaceTiles = null;
-                        if (transparentPaletteIndices != null && transparentPaletteIndices.Length > 0 && sec.Palette != null)
-                        {
-                            transparentFaceTiles = new uint[transparentPaletteIndices.Length * 6];
-                            for (int i = 0; i < transparentPaletteIndices.Length; i++)
-                            {
-                                ushort bid = sec.Palette[transparentPaletteIndices[i]];
-                                // Reuse texture atlas computation pattern used elsewhere via SectionRender.ComputeTileIndex in runtime phase.
-                                for (int face = 0; face < 6; face++)
-                                {
-                                    transparentFaceTiles[i * 6 + face] = 0; // placeholder; actual tile fill deferred to runtime SectionRender (atlas not accessible here)
-                                }
-                            }
-                        }
-
-                        arr[idx] = new SectionPrerenderDesc
-                        {
-                            Kind = (byte)sec.Kind,
-                            UniformBlockId = sec.UniformBlockId,
-                            OpaqueCount = sec.OpaqueVoxelCount,
-                            ExpandedDense = sec.ExpandedDense,
-                            PackedBitData = sec.BitData,
-                            Palette = sec.Palette,
-                            BitsPerIndex = sec.BitsPerIndex,
-                            OpaqueBits = sec.OpaqueBits,
-                            FaceNegXBits = sec.FaceNegXBits,
-                            FacePosXBits = sec.FacePosXBits,
-                            FaceNegYBits = sec.FaceNegYBits,
-                            FacePosYBits = sec.FacePosYBits,
-                            FaceNegZBits = sec.FaceNegZBits,
-                            FacePosZBits = sec.FacePosZBits,
-                            TransparentCount = residualCount,
-                            TransparentBits = uniformTransparentBits ?? residualBits,
-                            TransparentFaceNegXBits = sec.TransparentFaceNegXBits,
-                            TransparentFacePosXBits = sec.TransparentFacePosXBits,
-                            TransparentFaceNegYBits = sec.TransparentFaceNegYBits,
-                            TransparentFacePosYBits = sec.TransparentFacePosYBits,
-                            TransparentFaceNegZBits = sec.TransparentFaceNegZBits,
-                            TransparentFacePosZBits = sec.TransparentFacePosZBits,
-                            TransparentPaletteIndices = transparentPaletteIndices,
-                            DominantTransparentId = dominantId,
-                            DominantTransparentCount = dominantCount,
-                            DominantTransparentBits = dominantBits,
-                            TransparentPaletteFaceTiles = transparentFaceTiles,
-                            EmptyCount = sec.EmptyCount,
-                            EmptyBits = sec.EmptyBits,
-                            HasBounds = sec.HasBounds,
-                            MinLX = sec.MinLX,
-                            MinLY = sec.MinLY,
-                            MinLZ = sec.MinLZ,
-                            MaxLX = sec.MaxLX,
-                            MaxLY = sec.MaxLY,
-                            MaxLZ = sec.MaxLZ,
-                            SectionBaseX = sx * S,
-                            SectionBaseY = sy * S,
-                            SectionBaseZ = sz * S
-                        };
+            ExtractBuildSectionDescriptorsRegion3(arr, idx, S, sx, sy, sz, sec, transparentPaletteIndices, uniformTransparentBits, ref dominantId, ref dominantCount, ref dominantBits, ref residualBits, ref residualCount);
                     }
                 }
             }
@@ -579,20 +383,148 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             bool boundsInit = false;
             int gMinX = 0, gMinY = 0, gMinZ = 0, gMaxX = 0, gMaxY = 0, gMaxZ = 0;
             bool anyTransparent = false;
-            for (int sx = 0; sx < sectionsX; sx++)
+            ExtractCreateRenderRegion(ref internalExposureSum, ref totalOpaque, ref boundsInit, ref gMinX, ref gMinY, ref gMinZ, ref gMaxX, ref gMaxY, ref gMaxZ, ref anyTransparent);
+            if (totalOpaque == 0 && !anyTransparent)
+                return null;
+            var prerender = BuildPrerenderData(BuildSectionDescriptors());
+            return new ReferenceChunkRender(prerender, faceGenerationMode, GetBlockLocal, referenceNeighbors, packedFacePool);
+        }
+
+        internal void PublishRender(ReferenceChunkRender? renderer)
+        {
+            ReferenceChunkRender? previous = chunkRender;
+            chunkRender = renderer;
+            previous?.ScheduleDelete();
+        }
+
+        internal ReferenceFaceGenerationResult GenerateReferenceFaces(ReferenceNeighborBlockPlanes neighbors)
+        {
+            ArgumentNullException.ThrowIfNull(neighbors);
+            if (AllAirChunk)
+                return ReferenceFaceGenerator.Empty();
+            if (generatedSpans is not null)
             {
-                for (int sy = 0; sy < sectionsY; sy++)
-                {
-                    for (int sz = 0; sz < sectionsZ; sz++)
-                    {
-                        var sec = sectionGrid![sx, sy, sz];
-                        if (sec == null)
-                            continue;
-                        if (sec.OpaqueVoxelCount > 0)
-                        {
-                            totalOpaque += sec.OpaqueVoxelCount;
-                            internalExposureSum += sec.InternalExposure;
-                        }
+                return ReferenceFaceGenerator.Generate(dimX, dimY, dimZ, generatedSpans.GetBlockLocal, neighbors, TerrainLoader.IsOpaque);
+            }
+
+            if (AllOneBlockChunk)
+            {
+                return ReferenceFaceGenerator.GenerateUniform(dimX, dimY, dimZ, AllOneBlockBlockId, neighbors, TerrainLoader.IsOpaque);
+            }
+
+            return ReferenceFaceGenerator.GenerateSections(dimX, dimY, dimZ, GetBlockLocal, neighbors, TerrainLoader.IsOpaque, BuildSectionDescriptors());
+        }
+
+        [System.Diagnostics.CodeAnalysis.MemberNotNull(nameof(PlaneNegX), nameof(PlanePosX), nameof(PlaneNegY), nameof(PlanePosY), nameof(PlaneNegZ), nameof(PlanePosZ))]
+        private void UpdateXAndYBoundaryBits(int lx, int ly, int lz, bool solid)
+        {
+            // allocate if not present yet (late creation path after generation)
+            EnsurePlaneArrays();
+            if (lx == 0)
+            {
+                int yzIndex = lz * dimY + ly;
+                int w = yzIndex >> 6;
+                int b = yzIndex & 63;
+                ulong mask = 1UL << b;
+                if (solid)
+                    PlaneNegX[w] |= mask;
+                else
+                    PlaneNegX[w] &= ~mask;
+            }
+
+            if (lx == dimX - 1)
+            {
+                int yzIndex = lz * dimY + ly;
+                int w = yzIndex >> 6;
+                int b = yzIndex & 63;
+                ulong mask = 1UL << b;
+                if (solid)
+                    PlanePosX[w] |= mask;
+                else
+                    PlanePosX[w] &= ~mask;
+            }
+
+            if (ly == 0)
+            {
+                int xzIndex = lx * dimZ + lz;
+                int w = xzIndex >> 6;
+                int b = xzIndex & 63;
+                ulong mask = 1UL << b;
+                if (solid)
+                    PlaneNegY[w] |= mask;
+                else
+                    PlaneNegY[w] &= ~mask;
+            }
+
+            if (ly == dimY - 1)
+            {
+                int xzIndex = lx * dimZ + lz;
+                int w = xzIndex >> 6;
+                int b = xzIndex & 63;
+                ulong mask = 1UL << b;
+                if (solid)
+                    PlanePosY[w] |= mask;
+                else
+                    PlanePosY[w] &= ~mask;
+            }
+
+        }
+
+        private static void BuildDominantTransparentDescriptor(global::MVoxelEngine1.Infrastructure.Models.Generation.Section sec, int[] transparentPaletteIndices, ref ushort dominantId, ref int dominantCount, ref ulong[]? dominantBits, ref ulong[]? residualBits, ref int residualCount, global::System.Span<int> perIdCounts)
+        {
+
+                            // Find dominant
+                            int threshold = (int)(sec.TransparentCount * 0.9f);
+                            int bestIdx = -1;
+                            int best = 0;
+                            for (int i = 0; i < perIdCounts.Length; i++)
+                                if (perIdCounts[i] > best)
+                                {
+                                    best = perIdCounts[i];
+                                    bestIdx = i;
+                                }
+
+                            if (bestIdx >= 0 && best >= threshold)
+                            {
+                                int paletteIndex = transparentPaletteIndices[bestIdx];
+                                dominantId = sec.RequirePalette()[paletteIndex];
+                                dominantCount = best;
+                                dominantBits = new ulong[64];
+                                ulong[] res = new ulong[64];
+                                for (int w = 0; w < 64; w++)
+                                {
+                                    ulong word = sec.RequireTransparentBits()[w];
+                                    ulong maskWord = 0UL;
+                                    if (word != 0)
+                                    {
+                                        ulong tmp = word;
+                                        while (tmp != 0)
+                                        {
+                                            int bit = BitOperations.TrailingZeroCount(tmp);
+                                            tmp &= tmp - 1;
+                                            int li = (w << 6) + bit;
+                                            int ly = li & 15;
+                                            int t = li >> 4;
+                                            int lx = t & 15;
+                                            int lz = t >> 4;
+                                            ushort id = SectionUtils.GetBlock(sec, lx, ly, lz);
+                                            if (id == dominantId)
+                                                maskWord |= 1UL << bit;
+                                        }
+                                    }
+
+                                    dominantBits[w] = maskWord;
+                                    res[w] = word & ~maskWord;
+                                }
+
+                                residualBits = res;
+                                residualCount = sec.TransparentCount - dominantCount;
+                            }
+
+        }
+
+        private static void AccumulateSectionRenderBounds(ref bool boundsInit, ref int gMinX, ref int gMinY, ref int gMinZ, ref int gMaxX, ref int gMaxY, ref int gMaxZ, ref bool anyTransparent, int sx, int sy, int sz, global::MVoxelEngine1.Infrastructure.Models.Generation.Section sec)
+        {
 
                         if (!anyTransparent && sec.TransparentCount > 0)
                             anyTransparent = true;
@@ -633,6 +565,72 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                                     gMaxZ = sMaxZ;
                             }
                         }
+
+        }
+
+        private static void ExtractBuildSectionDescriptorsRegion(global::MVoxelEngine1.Infrastructure.Models.Generation.Section sec, int[] transparentPaletteIndices, ref ushort dominantId, ref int dominantCount, ref ulong[]? dominantBits, ref ulong[]? residualBits, ref int residualCount)
+        {
+            // Tally counts per transparent palette index using bit scans with on-demand decode (acceptable during prerender build).
+            Span<int> perIdCounts = new int[transparentPaletteIndices.Length];
+            perIdCounts.Clear();
+            // Build perId bitset lazily only for the candidate; we just count first.
+            for (int w = 0; w < 64; w++)
+            {
+                ulong word = sec.TransparentBits?[w] ?? 0UL;
+                while (word != 0)
+                {
+                    int bit = BitOperations.TrailingZeroCount(word);
+                    word &= word - 1;
+                    int li = (w << 6) + bit;
+                    int ly = li & 15;
+                    int t = li >> 4;
+                    int lx = t & 15;
+                    int lz = t >> 4;
+                    ushort id = SectionUtils.GetBlock(sec, lx, ly, lz);
+                    if (id != 0 && !TerrainLoader.IsOpaque(id))
+                    {
+                        int pi = -1;
+                        if (sec.PaletteLookup != null && sec.PaletteLookup.TryGetValue(id, out int pidx))
+                            pi = pidx;
+                        else
+                            for (int paletteIndex = 1; paletteIndex < sec.RequirePalette().Count; paletteIndex++)
+                                if (sec.RequirePalette()[paletteIndex] == id)
+                                {
+                                    pi = paletteIndex;
+                                    break;
+                                }
+
+                        if (pi >= 0)
+                        {
+                            int localListIndex = Array.IndexOf(transparentPaletteIndices, pi);
+                            if (localListIndex >= 0)
+                                perIdCounts[localListIndex]++;
+                        }
+                    }
+                }
+            }
+
+            BuildDominantTransparentDescriptor(sec, transparentPaletteIndices, ref dominantId, ref dominantCount, ref dominantBits, ref residualBits, ref residualCount, perIdCounts);
+        }
+
+        private void ExtractCreateRenderRegion(ref long internalExposureSum, ref int totalOpaque, ref bool boundsInit, ref int gMinX, ref int gMinY, ref int gMinZ, ref int gMaxX, ref int gMaxY, ref int gMaxZ, ref bool anyTransparent)
+        {
+            for (int sx = 0; sx < sectionsX; sx++)
+            {
+                for (int sy = 0; sy < sectionsY; sy++)
+                {
+                    for (int sz = 0; sz < sectionsZ; sz++)
+                    {
+                        var sec = sectionGrid![sx, sy, sz];
+                        if (sec == null)
+                            continue;
+                        if (sec.OpaqueVoxelCount > 0)
+                        {
+                            totalOpaque += sec.OpaqueVoxelCount;
+                            internalExposureSum += sec.InternalExposure;
+                        }
+
+                        AccumulateSectionRenderBounds(ref boundsInit, ref gMinX, ref gMinY, ref gMinZ, ref gMaxX, ref gMaxY, ref gMaxZ, ref anyTransparent, sx, sy, sz, sec);
                     }
                 }
             }
@@ -652,35 +650,78 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                 ZNonEmpty = totalOpaque > 0 ? dimZ : 0,
                 HasStats = boundsInit
             };
-            if (totalOpaque == 0 && !anyTransparent)
-                return null;
-            var prerender = BuildPrerenderData(BuildSectionDescriptors());
-            return new ReferenceChunkRender(prerender, faceGenerationMode, GetBlockLocal, referenceNeighbors, packedFacePool);
         }
 
-        internal void PublishRender(ReferenceChunkRender? renderer)
+        private static void ExtractBuildSectionDescriptorsRegion2(global::MVoxelEngine1.Infrastructure.Models.Generation.Section sec, int[] transparentPaletteIndices, out uint[]? transparentFaceTiles)
         {
-            ReferenceChunkRender? previous = chunkRender;
-            chunkRender = renderer;
-            previous?.ScheduleDelete();
+            transparentFaceTiles = new uint[transparentPaletteIndices.Length * 6];
+            for (int i = 0; i < transparentPaletteIndices.Length; i++)
+            {
+                ushort bid = sec.RequirePalette()[transparentPaletteIndices[i]];
+                // Reuse texture atlas computation pattern used elsewhere via SectionRender.ComputeTileIndex in runtime phase.
+                for (int face = 0; face < 6; face++)
+                {
+                    transparentFaceTiles[i * 6 + face] = 0; // placeholder; actual tile fill deferred to runtime SectionRender (atlas not accessible here)
+                }
+            }
         }
 
-        internal ReferenceFaceGenerationResult GenerateReferenceFaces(ReferenceNeighborBlockPlanes neighbors)
+        private static void ExtractBuildSectionDescriptorsRegion3(global::MVoxelEngine1.Infrastructure.Models.Generation.SectionPrerenderDesc[] arr, int idx, int S, int sx, int sy, int sz, global::MVoxelEngine1.Infrastructure.Models.Generation.Section sec, int[]? transparentPaletteIndices, ulong[]? uniformTransparentBits, ref ushort dominantId, ref int dominantCount, ref ulong[]? dominantBits, ref ulong[]? residualBits, ref int residualCount)
         {
-            ArgumentNullException.ThrowIfNull(neighbors);
-            if (AllAirChunk)
-                return ReferenceFaceGenerator.Empty();
-            if (generatedSpans is not null)
+            if (sec.TransparentCount > 0 && sec.Palette != null && transparentPaletteIndices != null && transparentPaletteIndices.Length > 1)
             {
-                return ReferenceFaceGenerator.Generate(dimX, dimY, dimZ, generatedSpans.GetBlockLocal, neighbors, TerrainLoader.IsOpaque);
+                ExtractBuildSectionDescriptorsRegion(sec, transparentPaletteIndices, ref dominantId, ref dominantCount, ref dominantBits, ref residualBits, ref residualCount);
             }
 
-            if (AllOneBlockChunk)
+            // Precompute per-face tile indices for transparent palette ids (6 each) for fast emission.
+            uint[]? transparentFaceTiles = null;
+            if (transparentPaletteIndices != null && transparentPaletteIndices.Length > 0 && sec.Palette != null)
             {
-                return ReferenceFaceGenerator.GenerateUniform(dimX, dimY, dimZ, AllOneBlockBlockId, neighbors, TerrainLoader.IsOpaque);
+                ExtractBuildSectionDescriptorsRegion2(sec, transparentPaletteIndices, out transparentFaceTiles);
             }
 
-            return ReferenceFaceGenerator.GenerateSections(dimX, dimY, dimZ, GetBlockLocal, neighbors, TerrainLoader.IsOpaque, BuildSectionDescriptors());
+            arr[idx] = new SectionPrerenderDesc
+            {
+                Kind = (byte)sec.Kind,
+                UniformBlockId = sec.UniformBlockId,
+                OpaqueCount = sec.OpaqueVoxelCount,
+                ExpandedDense = sec.ExpandedDense,
+                PackedBitData = sec.BitData,
+                Palette = sec.Palette,
+                BitsPerIndex = sec.BitsPerIndex,
+                OpaqueBits = sec.OpaqueBits,
+                FaceNegXBits = sec.FaceNegXBits,
+                FacePosXBits = sec.FacePosXBits,
+                FaceNegYBits = sec.FaceNegYBits,
+                FacePosYBits = sec.FacePosYBits,
+                FaceNegZBits = sec.FaceNegZBits,
+                FacePosZBits = sec.FacePosZBits,
+                TransparentCount = residualCount,
+                TransparentBits = uniformTransparentBits ?? residualBits,
+                TransparentFaceNegXBits = sec.TransparentFaceNegXBits,
+                TransparentFacePosXBits = sec.TransparentFacePosXBits,
+                TransparentFaceNegYBits = sec.TransparentFaceNegYBits,
+                TransparentFacePosYBits = sec.TransparentFacePosYBits,
+                TransparentFaceNegZBits = sec.TransparentFaceNegZBits,
+                TransparentFacePosZBits = sec.TransparentFacePosZBits,
+                TransparentPaletteIndices = transparentPaletteIndices,
+                DominantTransparentId = dominantId,
+                DominantTransparentCount = dominantCount,
+                DominantTransparentBits = dominantBits,
+                TransparentPaletteFaceTiles = transparentFaceTiles,
+                EmptyCount = sec.EmptyCount,
+                EmptyBits = sec.EmptyBits,
+                HasBounds = sec.HasBounds,
+                MinLX = sec.MinLX,
+                MinLY = sec.MinLY,
+                MinLZ = sec.MinLZ,
+                MaxLX = sec.MaxLX,
+                MaxLY = sec.MaxLY,
+                MaxLZ = sec.MaxLZ,
+                SectionBaseX = sx * S,
+                SectionBaseY = sy * S,
+                SectionBaseZ = sz * S
+            };
         }
     }
 }
