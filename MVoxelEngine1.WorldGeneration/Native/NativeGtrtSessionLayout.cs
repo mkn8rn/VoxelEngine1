@@ -79,7 +79,10 @@ internal readonly struct NativeGtrtSessionLayout
         GenerationLatticeCountPerWorker = TerrainGenerationUtils.GetSmoothValueNoiseLatticeCapacity(chunkSizeX, chunkSizeZ);
         MeshWorkerCount = meshWorkerCount;
         int maximumFacePlaneCount = Math.Max(ProfilesPerColumn, Math.Max(checked(chunkSizeX * chunkSizeY), checked(chunkSizeY * chunkSizeZ)));
-        MeshFaceScratchCountPerWorker = checked(maximumFacePlaneCount * 2);
+        // Three distinct transparent intervals contribute at most two horizontal
+        // rectangles and two visible runs on each of four sides per profile.
+        int profilePacketWords = checked(ProfilesPerColumn * 60);
+        MeshFaceScratchCountPerWorker = checked(maximumFacePlaneCount * 2 + profilePacketWords * 2);
         PacketWordCapacity = packetWordCapacity == 0 ? checked(RequiredChunkCount * DefaultPacketWordsPerRequiredChunk) : packetWordCapacity;
         Materials = materials;
         GameSnapshotByteCount = gameSnapshotByteCount;

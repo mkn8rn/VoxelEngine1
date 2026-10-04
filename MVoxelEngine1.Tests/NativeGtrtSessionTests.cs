@@ -157,6 +157,7 @@ public sealed class NativeGtrtSessionTests
             view.GetMeshTopFaceScratch(0).Fill(12);
             view.GetMeshBottomFaceScratch(1).Fill(21);
             view.GetMeshTopFaceScratch(1).Fill(22);
+            ValidateProfilePacketScratchIsolation(ref view);
             Assert.All(
                 view.GetMeshBottomFaceScratch(0).ToArray(),
                 value => Assert.Equal(11, value));
@@ -174,6 +175,24 @@ public sealed class NativeGtrtSessionTests
         ExtractMeshWorkersOwnDisjointScratchAndExactPacketRangesRegion(view);
             Assert.Equal(0, view.State.FailureCode);
         });
+    }
+
+    private static void ValidateProfilePacketScratchIsolation(scoped ref NativeGtrtSessionView view)
+    {
+        for (int worker = 0; worker < 2; worker++)
+        {
+            view.GetMeshProfilePacketScratch(worker, opaque: true).Fill((uint)(31 + worker));
+            view.GetMeshProfilePacketScratch(worker, opaque: false).Fill((uint)(41 + worker));
+        }
+        for (int worker = 0; worker < 2; worker++)
+        {
+            uint expectedOpaque = (uint)(31 + worker);
+            uint expectedTransparent = (uint)(41 + worker);
+            Assert.All(view.GetMeshProfilePacketScratch(worker, opaque: true).ToArray(),
+                value => Assert.Equal(expectedOpaque, value));
+            Assert.All(view.GetMeshProfilePacketScratch(worker, opaque: false).ToArray(),
+                value => Assert.Equal(expectedTransparent, value));
+        }
     }
 
     [Fact]

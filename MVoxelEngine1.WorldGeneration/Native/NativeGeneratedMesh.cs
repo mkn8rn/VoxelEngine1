@@ -27,26 +27,8 @@ internal static class NativeGeneratedMesh
                 return false;
             Span<int> negativeFaces = session.GetMeshNegativeFaceScratch(workerIndex);
             Span<int> positiveFaces = session.GetMeshPositiveFaceScratch(workerIndex);
-            var counter = new NativeGeneratedFaceWriter(NativeGeneratedTerrain.GetMaterials(ref session, claimedWork.RecordIndex));
-            if (!Emit(ref session, claimedWork.RecordIndex, negativeFaces, positiveFaces, ref counter) || !counter.Valid)
-            {
-                session.Fail(NativeGtrtFailureCode.InvalidGeneratedMesh);
+            if (!TryBuildPacket(ref session, in claimedWork, workerIndex, negativeFaces, positiveFaces))
                 return false;
-            }
-
-            if (session.CancellationRequested)
-                return false;
-            if (!session.TryBeginPacket(in claimedWork, counter.OpaqueWordCount, counter.OpaqueFaceCount, counter.TransparentWordCount, counter.TransparentFaceCount, out NativePacketWriteView packet))
-            {
-                return false;
-            }
-
-            var writer = new NativeGeneratedFaceWriter(NativeGeneratedTerrain.GetMaterials(ref session, claimedWork.RecordIndex), packet.OpaqueWords, packet.TransparentWords);
-            if (!Emit(ref session, claimedWork.RecordIndex, negativeFaces, positiveFaces, ref writer) || !writer.Valid || writer.OpaqueWordCount != counter.OpaqueWordCount || writer.OpaqueFaceCount != counter.OpaqueFaceCount || writer.TransparentWordCount != counter.TransparentWordCount || writer.TransparentFaceCount != counter.TransparentFaceCount)
-            {
-                session.Fail(NativeGtrtFailureCode.InvalidGeneratedMesh);
-                return false;
-            }
 
             if (session.CancellationRequested)
                 return false;
@@ -59,6 +41,66 @@ internal static class NativeGeneratedMesh
                 session.TryAbandonMesh(in claimedWork);
             session.ReleaseMeshWorkspace(workerIndex);
         }
+    }
+
+    private static bool TryBuildPacket(scoped ref NativeGtrtSessionView session,
+        scoped ref readonly NativeWorkItem work, int workerIndex, Span<int> negativeFaces, Span<int> positiveFaces)
+    {
+        NativeTerrainMaterialSet materials = NativeGeneratedTerrain.GetMaterials(ref session, work.RecordIndex);
+        if (!TryRequiresVoxelMesh(ref session, work.RecordIndex, out bool voxelMesh))
+            return false;
+        if (!voxelMesh && NativeTransparentProfileMesh.Supports(in materials))
+            return TryBuildProfilePacket(ref session, in work, workerIndex, in materials, negativeFaces, positiveFaces);
+        return TryBuildCountedPacket(ref session, in work, in materials, negativeFaces, positiveFaces);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    private static bool TryBuildProfilePacket(scoped ref NativeGtrtSessionView session,
+        scoped ref readonly NativeWorkItem work, int workerIndex, scoped in NativeTerrainMaterialSet materials,
+        Span<int> negativeFaces, Span<int> positiveFaces)
+    {
+        Span<uint> opaque = session.GetMeshProfilePacketScratch(workerIndex, opaque: true);
+        Span<uint> transparent = session.GetMeshProfilePacketScratch(workerIndex, opaque: false);
+        var writer = new NativeGeneratedFaceWriter(materials, opaque, transparent);
+        if (!Emit(ref session, work.RecordIndex, negativeFaces, positiveFaces, ref writer) || !writer.Valid)
+        {
+            session.Fail(NativeGtrtFailureCode.InvalidGeneratedMesh);
+            return false;
+        }
+        if (session.CancellationRequested)
+            return false;
+        if (!session.TryBeginPacket(in work, writer.OpaqueWordCount, writer.OpaqueFaceCount,
+                writer.TransparentWordCount, writer.TransparentFaceCount, out NativePacketWriteView packet))
+            return false;
+        opaque[..writer.OpaqueWordCount].CopyTo(packet.OpaqueWords);
+        transparent[..writer.TransparentWordCount].CopyTo(packet.TransparentWords);
+        return true;
+    }
+
+    private static bool TryBuildCountedPacket(scoped ref NativeGtrtSessionView session,
+        scoped ref readonly NativeWorkItem work, scoped in NativeTerrainMaterialSet materials,
+        Span<int> negativeFaces, Span<int> positiveFaces)
+    {
+        var counter = new NativeGeneratedFaceWriter(materials);
+        if (!Emit(ref session, work.RecordIndex, negativeFaces, positiveFaces, ref counter) || !counter.Valid)
+        {
+            session.Fail(NativeGtrtFailureCode.InvalidGeneratedMesh);
+            return false;
+        }
+        if (session.CancellationRequested)
+            return false;
+        if (!session.TryBeginPacket(in work, counter.OpaqueWordCount, counter.OpaqueFaceCount,
+                counter.TransparentWordCount, counter.TransparentFaceCount, out NativePacketWriteView packet))
+            return false;
+        var writer = new NativeGeneratedFaceWriter(materials, packet.OpaqueWords, packet.TransparentWords);
+        if (!Emit(ref session, work.RecordIndex, negativeFaces, positiveFaces, ref writer) || !writer.Valid ||
+            writer.OpaqueWordCount != counter.OpaqueWordCount || writer.OpaqueFaceCount != counter.OpaqueFaceCount ||
+            writer.TransparentWordCount != counter.TransparentWordCount || writer.TransparentFaceCount != counter.TransparentFaceCount)
+        {
+            session.Fail(NativeGtrtFailureCode.InvalidGeneratedMesh);
+            return false;
+        }
+        return true;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
