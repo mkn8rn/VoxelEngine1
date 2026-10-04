@@ -629,10 +629,17 @@ internal static class NativeGeneratedMesh
                     extentZ++;
                 }
 
-                for (int offsetX = 0; offsetX < extentX; offsetX++)
+                if (extentX == 1 && extentZ == 1)
                 {
-                    int row = (x + offsetX) * depth + z;
-                    faceHeights.Slice(row, extentZ).Fill(-2);
+                    faceHeights[index] = -2;
+                }
+                else
+                {
+                    for (int offsetX = 0; offsetX < extentX; offsetX++)
+                    {
+                        int row = (x + offsetX) * depth + z;
+                        faceHeights.Slice(row, extentZ).Fill(-2);
+                    }
                 }
 
                 int anchorZ = direction == 3 ? z + extentZ - 1 : z;
