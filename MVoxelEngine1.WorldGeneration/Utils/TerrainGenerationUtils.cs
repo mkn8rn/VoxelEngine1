@@ -266,52 +266,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                 if (gridX > maximumGridX)
                     maximumGridX = gridX;
             }
-
-            int minimumGridZ = int.MaxValue;
-            int maximumGridZ = int.MinValue;
-            for (int z = 0; z < sizeZ; z++)
-            {
-                int worldZ = unchecked(baseZ + z);
-                int gridZ = FloorDiv(worldZ, NoiseCellSize);
-                float fraction = (worldZ - gridZ * NoiseCellSize) / (float)NoiseCellSize;
-                zSamples[z] = new NoiseAxisSample(gridZ, SmoothStep(fraction));
-                if (gridZ < minimumGridZ)
-                    minimumGridZ = gridZ;
-                if (gridZ > maximumGridZ)
-                    maximumGridZ = gridZ;
-            }
-
-            int latticeSizeX = checked(maximumGridX - minimumGridX + 2);
-            int latticeSizeZ = checked(maximumGridZ - minimumGridZ + 2);
-            int latticeCount = checked(latticeSizeX * latticeSizeZ);
-            Span<float> lattice = latticeScratch.Slice(0, latticeCount);
-            for (int latticeX = 0; latticeX < latticeSizeX; latticeX++)
-            {
-                int gridX = unchecked(minimumGridX + latticeX);
-                int rowOffset = latticeX * latticeSizeZ;
-                for (int latticeZ = 0; latticeZ < latticeSizeZ; latticeZ++)
-                {
-                    int gridZ = unchecked(minimumGridZ + latticeZ);
-                    lattice[rowOffset + latticeZ] = HashToUnitFloat(gridX, gridZ, seed);
-                }
-            }
-
-            for (int x = 0; x < sizeX; x++)
-            {
-                NoiseAxisSample xSample = xSamples[x];
-                int latticeX = xSample.Grid - minimumGridX;
-                int firstRow = latticeX * latticeSizeZ;
-                int secondRow = firstRow + latticeSizeZ;
-                int destinationRow = checked(destinationOffset + x * destinationRowStride);
-                for (int z = 0; z < sizeZ; z++)
-                {
-                    NoiseAxisSample zSample = zSamples[z];
-                    int latticeZ = zSample.Grid - minimumGridZ;
-                    float valueX0 = Lerp(lattice[firstRow + latticeZ], lattice[secondRow + latticeZ], xSample.Smooth);
-                    float valueX1 = Lerp(lattice[firstRow + latticeZ + 1], lattice[secondRow + latticeZ + 1], xSample.Smooth);
-                    destination[destinationRow + z] = Lerp(valueX0, valueX1, zSample.Smooth);
-                }
-            }
+            CompleteFillSmoothValueNoiseSegmentPhase(baseZ, sizeX, sizeZ, seed, destination, destinationOffset, destinationRowStride, latticeScratch, xSamples, zSamples, minimumGridX, maximumGridX);
         }
 
         private static int GetFirstContiguousLength(int baseCoordinate, int length)
@@ -361,5 +316,56 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
         private static float Lerp(float first, float second, float amount) => first + (second - first) * amount;
         private static float SmoothStep(float value) => value * value * (3f - 2f * value);
         private static int FloorDiv(int dividend, int divisor) => (int)Math.Floor(dividend / (double)divisor);
+
+        private static void CompleteFillSmoothValueNoiseSegmentPhase(int baseZ, int sizeX, int sizeZ, long seed, scoped global::System.Span<float> destination, int destinationOffset, int destinationRowStride, scoped global::System.Span<float> latticeScratch, scoped global::System.Span<global::MVoxelEngine1.WorldGeneration.Terrain.TerrainGenerationUtils.NoiseAxisSample> xSamples, scoped global::System.Span<global::MVoxelEngine1.WorldGeneration.Terrain.TerrainGenerationUtils.NoiseAxisSample> zSamples, int minimumGridX, int maximumGridX)
+        {
+
+            int minimumGridZ = int.MaxValue;
+            int maximumGridZ = int.MinValue;
+            for (int z = 0; z < sizeZ; z++)
+            {
+                int worldZ = unchecked(baseZ + z);
+                int gridZ = FloorDiv(worldZ, NoiseCellSize);
+                float fraction = (worldZ - gridZ * NoiseCellSize) / (float)NoiseCellSize;
+                zSamples[z] = new NoiseAxisSample(gridZ, SmoothStep(fraction));
+                if (gridZ < minimumGridZ)
+                    minimumGridZ = gridZ;
+                if (gridZ > maximumGridZ)
+                    maximumGridZ = gridZ;
+            }
+
+            int latticeSizeX = checked(maximumGridX - minimumGridX + 2);
+            int latticeSizeZ = checked(maximumGridZ - minimumGridZ + 2);
+            int latticeCount = checked(latticeSizeX * latticeSizeZ);
+            Span<float> lattice = latticeScratch.Slice(0, latticeCount);
+            for (int latticeX = 0; latticeX < latticeSizeX; latticeX++)
+            {
+                int gridX = unchecked(minimumGridX + latticeX);
+                int rowOffset = latticeX * latticeSizeZ;
+                for (int latticeZ = 0; latticeZ < latticeSizeZ; latticeZ++)
+                {
+                    int gridZ = unchecked(minimumGridZ + latticeZ);
+                    lattice[rowOffset + latticeZ] = HashToUnitFloat(gridX, gridZ, seed);
+                }
+            }
+
+            for (int x = 0; x < sizeX; x++)
+            {
+                NoiseAxisSample xSample = xSamples[x];
+                int latticeX = xSample.Grid - minimumGridX;
+                int firstRow = latticeX * latticeSizeZ;
+                int secondRow = firstRow + latticeSizeZ;
+                int destinationRow = checked(destinationOffset + x * destinationRowStride);
+                for (int z = 0; z < sizeZ; z++)
+                {
+                    NoiseAxisSample zSample = zSamples[z];
+                    int latticeZ = zSample.Grid - minimumGridZ;
+                    float valueX0 = Lerp(lattice[firstRow + latticeZ], lattice[secondRow + latticeZ], xSample.Smooth);
+                    float valueX1 = Lerp(lattice[firstRow + latticeZ + 1], lattice[secondRow + latticeZ + 1], xSample.Smooth);
+                    destination[destinationRow + z] = Lerp(valueX0, valueX1, zSample.Smooth);
+                }
+            }
+
+        }
     }
 }

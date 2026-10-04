@@ -181,36 +181,7 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
             SignalWorkers();
             throw;
         }
-
-        publicationGate.Set();
-        if (!completionGate.WaitOne(WorkerCompletionTimeout))
-        {
-            session.RequestCancellation();
-            throw new TimeoutException("The native GTRT workers did not complete their work.");
-        }
-
-        foreach (NativeGtrtWorker worker in workers)
-        {
-            if (!worker.ActiveForRun)
-                continue;
-            while (worker.MeasuredRunEpoch != runEpoch)
-                Thread.Yield();
-            if (worker.Fault is not null)
-            {
-                throw new InvalidOperationException("A native GTRT worker failed.", worker.Fault);
-            }
-        }
-
-        Volatile.Write(ref runState, 2);
-        completionValid = false;
-        completionFailure = NativeGtrtFailureCode.None;
-        session.Access(validateCompletionAction);
-        if (!completionValid)
-        {
-            throw new InvalidOperationException($"Native GTRT work did not complete. " + $"Failure code: {completionFailure}.");
-        }
-
-        Volatile.Write(ref runState, 2);
+        CompleteRunPhase();
     }
 
     public void Dispose()
@@ -459,5 +430,40 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
                 StartupPerformanceRecorder.RecordFirstChunkBuild(Stopwatch.GetElapsedTime(buildStart));
             }
         }
+    }
+
+    private void CompleteRunPhase()
+    {
+
+        publicationGate.Set();
+        if (!completionGate.WaitOne(WorkerCompletionTimeout))
+        {
+            session.RequestCancellation();
+            throw new TimeoutException("The native GTRT workers did not complete their work.");
+        }
+
+        foreach (NativeGtrtWorker worker in workers)
+        {
+            if (!worker.ActiveForRun)
+                continue;
+            while (worker.MeasuredRunEpoch != runEpoch)
+                Thread.Yield();
+            if (worker.Fault is not null)
+            {
+                throw new InvalidOperationException("A native GTRT worker failed.", worker.Fault);
+            }
+        }
+
+        Volatile.Write(ref runState, 2);
+        completionValid = false;
+        completionFailure = NativeGtrtFailureCode.None;
+        session.Access(validateCompletionAction);
+        if (!completionValid)
+        {
+            throw new InvalidOperationException($"Native GTRT work did not complete. " + $"Failure code: {completionFailure}.");
+        }
+
+        Volatile.Write(ref runState, 2);
+
     }
 }

@@ -45,51 +45,7 @@ public sealed class NativeColumnProfileGeneratorTests
         var atlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
         using NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(atlas, GameManager.settings,
             Environment.ProcessorCount * 2, Environment.ProcessorCount * 2);
-        pipeline.Run(seed);
-        pipeline.ConsumeReadyPackets(static (in NativeChunkRenderPacketDescriptor descriptor,
-            ReadOnlySpan<uint> opaque, ReadOnlySpan<uint> transparent) => { });
-        long profileCount = 0;
-        int columnCount = 0;
-        string? nativeHash = null, referenceHash = null;
-        pipeline.InspectState(owner =>
-        {
-            var view = new NativeGtrtSessionView(owner.AsSpan());
-            NativeColumnRecord[] columns = view.Columns.ToArray();
-            Array.Sort(columns, static (left, right) =>
-            {
-                int comparison = left.ChunkX.CompareTo(right.ChunkX);
-                return comparison == 0 ? left.ChunkZ.CompareTo(right.ChunkZ) : comparison;
-            });
-            using IncrementalHash native = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-            using IncrementalHash reference = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-            native.AppendData("MVoxelEngine1.DefaultColumnProfiles.v1"u8);
-            reference.AppendData("MVoxelEngine1.DefaultColumnProfiles.v1"u8);
-            Span<byte> coordinate = stackalloc byte[8];
-            foreach (NativeColumnRecord column in columns)
-            {
-                TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
-                Assert.Equal(NativeColumnState.Generated, column.State);
-                Assert.Equal(view.State.SessionEpoch, column.GenerationEpoch);
-                BlockColumnProfile[] expected = BuildReferenceProfiles(column.ChunkX, column.ChunkZ,
-                    view.ChunkSizeX, seed, biomes[column.BiomeIndex], noise, out _);
-                Span<BlockColumnProfile> actual = view.GetColumnProfiles(view.GetColumnIndex(column.ChunkX, column.ChunkZ));
-                ReadOnlySpan<byte> expectedBytes = MemoryMarshal.AsBytes(expected.AsSpan());
-                ReadOnlySpan<byte> actualBytes = MemoryMarshal.AsBytes(actual);
-                Assert.True(actualBytes.SequenceEqual(expectedBytes),
-                    $"Production profile bytes differ at column ({column.ChunkX},{column.ChunkZ}).");
-                BinaryPrimitives.WriteInt32LittleEndian(coordinate, column.ChunkX);
-                BinaryPrimitives.WriteInt32LittleEndian(coordinate[4..], column.ChunkZ);
-                native.AppendData(coordinate);
-                reference.AppendData(coordinate);
-                native.AppendData(actualBytes);
-                reference.AppendData(expectedBytes);
-                profileCount += actual.Length;
-                columnCount++;
-            }
-            nativeHash = Convert.ToHexString(native.GetHashAndReset());
-            referenceHash = Convert.ToHexString(reference.GetHashAndReset());
-        });
-        ValidateEveryProductionAndHaloProfileMatchesTheManagedHeightAuthorityEvidence(seed, profileCount, columnCount, nativeHash, referenceHash);
+        CompleteEveryProductionAndHaloProfileMatchesTheManagedHeightAuthorityPhase(seed, biomes, noise, pipeline);
     }
 
     [Theory]
@@ -531,6 +487,56 @@ public sealed class NativeColumnProfileGeneratorTests
             Assert.True(view.TryAbandonGeneration(in target));
             Assert.Equal(0, view.State.ClaimedGenerationCount);
         });
+
+    }
+
+    private static void CompleteEveryProductionAndHaloProfileMatchesTheManagedHeightAuthorityPhase(long seed, global::MVoxelEngine1.Infrastructure.Models.Generation.Biomes.Biome[] biomes, global::Supprocom.OpenSimplexNoise.OpenSimplexNoise noise, global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtPipeline pipeline)
+    {
+        pipeline.Run(seed);
+        pipeline.ConsumeReadyPackets(static (in NativeChunkRenderPacketDescriptor descriptor,
+            ReadOnlySpan<uint> opaque, ReadOnlySpan<uint> transparent) => { });
+        long profileCount = 0;
+        int columnCount = 0;
+        string? nativeHash = null, referenceHash = null;
+        pipeline.InspectState(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            NativeColumnRecord[] columns = view.Columns.ToArray();
+            Array.Sort(columns, static (left, right) =>
+            {
+                int comparison = left.ChunkX.CompareTo(right.ChunkX);
+                return comparison == 0 ? left.ChunkZ.CompareTo(right.ChunkZ) : comparison;
+            });
+            using IncrementalHash native = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            using IncrementalHash reference = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            native.AppendData("MVoxelEngine1.DefaultColumnProfiles.v1"u8);
+            reference.AppendData("MVoxelEngine1.DefaultColumnProfiles.v1"u8);
+            Span<byte> coordinate = stackalloc byte[8];
+            foreach (NativeColumnRecord column in columns)
+            {
+                TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+                Assert.Equal(NativeColumnState.Generated, column.State);
+                Assert.Equal(view.State.SessionEpoch, column.GenerationEpoch);
+                BlockColumnProfile[] expected = BuildReferenceProfiles(column.ChunkX, column.ChunkZ,
+                    view.ChunkSizeX, seed, biomes[column.BiomeIndex], noise, out _);
+                Span<BlockColumnProfile> actual = view.GetColumnProfiles(view.GetColumnIndex(column.ChunkX, column.ChunkZ));
+                ReadOnlySpan<byte> expectedBytes = MemoryMarshal.AsBytes(expected.AsSpan());
+                ReadOnlySpan<byte> actualBytes = MemoryMarshal.AsBytes(actual);
+                Assert.True(actualBytes.SequenceEqual(expectedBytes),
+                    $"Production profile bytes differ at column ({column.ChunkX},{column.ChunkZ}).");
+                BinaryPrimitives.WriteInt32LittleEndian(coordinate, column.ChunkX);
+                BinaryPrimitives.WriteInt32LittleEndian(coordinate[4..], column.ChunkZ);
+                native.AppendData(coordinate);
+                reference.AppendData(coordinate);
+                native.AppendData(actualBytes);
+                reference.AppendData(expectedBytes);
+                profileCount += actual.Length;
+                columnCount++;
+            }
+            nativeHash = Convert.ToHexString(native.GetHashAndReset());
+            referenceHash = Convert.ToHexString(reference.GetHashAndReset());
+        });
+        ValidateEveryProductionAndHaloProfileMatchesTheManagedHeightAuthorityEvidence(seed, profileCount, columnCount, nativeHash, referenceHash);
 
     }
 }

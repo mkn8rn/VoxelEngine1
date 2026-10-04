@@ -118,6 +118,11 @@ namespace MVoxelEngine1.Infrastructure.Managers
                 Console.WriteLine($"Set GCHeapAffinitizeMask: {preparedFlags.GCHeapAffinitizeMask}");
             if (preparedFlags.GCLargeObjectHeapCompactionMode.HasValue)
                 Console.WriteLine($"Set GCLargeObjectHeapCompactionMode: {preparedFlags.GCLargeObjectHeapCompactionMode.Value}");
+            CompleteApplyFlagsPhase(preparedFlags);
+        }
+
+        private static void CompleteApplyFlagsPhase(global::MVoxelEngine1.Infrastructure.Models.ProgramFlags preparedFlags)
+        {
             if (!string.IsNullOrEmpty(preparedFlags.GCHeapSegmentSize))
                 Console.WriteLine($"Set GCHeapSegmentSize: {preparedFlags.GCHeapSegmentSize}");
             if (!string.IsNullOrEmpty(preparedFlags.GCStress))
@@ -165,6 +170,7 @@ namespace MVoxelEngine1.Infrastructure.Managers
                 Environment.SetEnvironmentVariable("COMPlus_GCHeapCount", preparedFlags.GCHeapCount);
 
             FlagManager.flags = preparedFlags;
+
         }
     }
 }

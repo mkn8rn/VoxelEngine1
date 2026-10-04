@@ -92,60 +92,7 @@ internal sealed partial class NativeWorldSaveImportPlan
         int preparedSectionCountZ = DivideRoundUp(
             settings.chunkMaxZ,
             VoxelSection.Size);
-        if (!Directory.Exists(quadsDirectory))
-        {
-            return new NativeWorldSaveImportPlan(
-                [],
-                preparedSectionCountX,
-                preparedSectionCountY,
-                preparedSectionCountZ,
-                0,
-                0,
-                0,
-                0,
-                0);
-        }
-
-        string[] paths = Directory.GetFiles(
-            quadsDirectory,
-            "quad*x*.bin",
-            SearchOption.TopDirectoryOnly);
-        Array.Sort(paths, StringComparer.Ordinal);
-        var preparedFiles = new SavedFile[paths.Length];
-        var chunkCoordinates = new HashSet<(int X, int Y, int Z)>();
-        var totals = new ImportTotals();
-        var preparedSavedChunks = new List<SavedChunkDescriptor>();
-        for (int index = 0; index < paths.Length; index++)
-        {
-            string path = paths[index];
-            using var stream = OpenRead(path);
-            ScanFile(
-                stream,
-                preparedSectionCountX,
-                preparedSectionCountY,
-                preparedSectionCountZ,
-                chunkCoordinates,
-                ref totals,
-                out int batchX,
-                out int batchZ,
-                preparedSavedChunks,
-                index);
-            stream.Position = 0;
-            byte[] hash = SHA256.HashData(stream);
-            preparedFiles[index] = new SavedFile(path, batchX, batchZ, hash);
-        }
-
-        return new NativeWorldSaveImportPlan(
-            preparedFiles,
-            preparedSectionCountX,
-            preparedSectionCountY,
-            preparedSectionCountZ,
-            totals.ChunkCount,
-            totals.SectionCount,
-            totals.RawSectionCount,
-            totals.PaletteCount,
-            totals.PackedWordCount,
-            preparedSavedChunks.ToArray());
+        return CompleteCreatePhase(quadsDirectory, preparedSectionCountX, preparedSectionCountY, preparedSectionCountZ);
     }
 
     internal void Import(NativeGtrtSession session)
@@ -1099,5 +1046,64 @@ internal sealed partial class NativeWorldSaveImportPlan
                     "A saved section payload is incomplete.");
             }
         }
+    }
+
+    private static NativeWorldSaveImportPlan CompleteCreatePhase(string quadsDirectory, int preparedSectionCountX, int preparedSectionCountY, int preparedSectionCountZ)
+    {
+        if (!Directory.Exists(quadsDirectory))
+        {
+            return new NativeWorldSaveImportPlan(
+                [],
+                preparedSectionCountX,
+                preparedSectionCountY,
+                preparedSectionCountZ,
+                0,
+                0,
+                0,
+                0,
+                0);
+        }
+
+        string[] paths = Directory.GetFiles(
+            quadsDirectory,
+            "quad*x*.bin",
+            SearchOption.TopDirectoryOnly);
+        Array.Sort(paths, StringComparer.Ordinal);
+        var preparedFiles = new SavedFile[paths.Length];
+        var chunkCoordinates = new HashSet<(int X, int Y, int Z)>();
+        var totals = new ImportTotals();
+        var preparedSavedChunks = new List<SavedChunkDescriptor>();
+        for (int index = 0; index < paths.Length; index++)
+        {
+            string path = paths[index];
+            using var stream = OpenRead(path);
+            ScanFile(
+                stream,
+                preparedSectionCountX,
+                preparedSectionCountY,
+                preparedSectionCountZ,
+                chunkCoordinates,
+                ref totals,
+                out int batchX,
+                out int batchZ,
+                preparedSavedChunks,
+                index);
+            stream.Position = 0;
+            byte[] hash = SHA256.HashData(stream);
+            preparedFiles[index] = new SavedFile(path, batchX, batchZ, hash);
+        }
+
+        return new NativeWorldSaveImportPlan(
+            preparedFiles,
+            preparedSectionCountX,
+            preparedSectionCountY,
+            preparedSectionCountZ,
+            totals.ChunkCount,
+            totals.SectionCount,
+            totals.RawSectionCount,
+            totals.PaletteCount,
+            totals.PackedWordCount,
+            preparedSavedChunks.ToArray());
+
     }
 }

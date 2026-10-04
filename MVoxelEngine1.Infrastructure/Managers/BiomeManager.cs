@@ -200,11 +200,7 @@ namespace MVoxelEngine1.Infrastructure.Managers
 
                 Console.WriteLine($"[Biome] Loaded biome id={runtimeBiome.id} folder='{biomeFolderName}' name='{runtimeBiome.name}' (microbiomes: {microbiomesMap.Count}, simpleRules: {simpleReplacementRules.Count})");
             }
-
-            _biomeOrder = new string[_biomes.Count];
-            _biomes.Keys.CopyTo(_biomeOrder, 0);
-            Array.Sort(_biomeOrder, StringComparer.OrdinalIgnoreCase);
-            Console.WriteLine($"Total biomes loaded: {_biomes.Count}");
+            CompleteLoadAllBiomesPhase();
         }
 
         private static void BuildCompiledSimpleReplacementRules(Biome biome)
@@ -254,40 +250,7 @@ namespace MVoxelEngine1.Infrastructure.Managers
                     r.RelativeMaxDepth ?? int.MaxValue);
                 compiled.Add(compiledRule);
             }
-            // The source list is already stably ordered by stage and priority.
-            biome.compiledSimpleReplacementRules = compiled.ToArray();
-
-            // Vertical bucketing by section Y (assuming fixed 16-high sections). Determine vertical span using game settings.
-            int chunkMaxY = GameManager.settings.chunkMaxY; // world vertical size per chunk
-            int sectionSize = VoxelSection.Size;
-            int sectionCountY = chunkMaxY / sectionSize;
-            var buckets = new int[sectionCountY][]; // fill lazily
-            var tempLists = new List<int>[sectionCountY];
-            foreach (ref List<int> bucket in tempLists.AsSpan())
-                bucket = new List<int>();
-            for (int ri=0; ri<compiled.Count; ri++)
-            {
-                var cr = compiled[ri];
-                // compute intersecting section indices
-                int firstSection = Math.Max(0, cr.MinY == int.MinValue ? 0 : cr.MinY / sectionSize);
-                int lastSection = cr.MaxY == int.MaxValue ? sectionCountY - 1 : cr.MaxY / sectionSize;
-                if (lastSection >= sectionCountY) lastSection = sectionCountY - 1;
-                if (firstSection >= sectionCountY || lastSection < 0) continue;
-                if (firstSection < 0) firstSection = 0;
-                for (int sy = firstSection; sy <= lastSection; sy++)
-                {
-                    // verify actual overlap (section world bounds)
-                    int secY0 = sy * sectionSize;
-                    int secY1 = secY0 + sectionSize - 1;
-                    if (!(cr.MaxY < secY0 || cr.MinY > secY1))
-                        tempLists[sy].Add(ri);
-                }
-            }
-            for (int sy=0; sy<sectionCountY; sy++)
-            {
-                buckets[sy] = tempLists[sy].Count == 0 ? Array.Empty<int>() : tempLists[sy].ToArray();
-            }
-            biome.sectionYRuleBuckets = buckets;
+            CompleteBuildCompiledSimpleReplacementRulesPhase(biome, compiled);
         }
 
         public static Biome SelectBiomeForChunk(long worldSeed, int chunkX, int chunkZ)
@@ -476,6 +439,55 @@ namespace MVoxelEngine1.Infrastructure.Managers
                 i++;
             }
             return sb.ToString();
+        }
+
+        private static void CompleteLoadAllBiomesPhase()
+        {
+
+            _biomeOrder = new string[_biomes.Count];
+            _biomes.Keys.CopyTo(_biomeOrder, 0);
+            Array.Sort(_biomeOrder, StringComparer.OrdinalIgnoreCase);
+            Console.WriteLine($"Total biomes loaded: {_biomes.Count}");
+
+        }
+
+        private static void CompleteBuildCompiledSimpleReplacementRulesPhase(global::MVoxelEngine1.Infrastructure.Models.Generation.Biomes.Biome biome, global::System.Collections.Generic.List<global::MVoxelEngine1.Infrastructure.Models.Generation.Biomes.CompiledSimpleReplacementRule> compiled)
+        {
+            // The source list is already stably ordered by stage and priority.
+            biome.compiledSimpleReplacementRules = compiled.ToArray();
+
+            // Vertical bucketing by section Y (assuming fixed 16-high sections). Determine vertical span using game settings.
+            int chunkMaxY = GameManager.settings.chunkMaxY; // world vertical size per chunk
+            int sectionSize = VoxelSection.Size;
+            int sectionCountY = chunkMaxY / sectionSize;
+            var buckets = new int[sectionCountY][]; // fill lazily
+            var tempLists = new List<int>[sectionCountY];
+            foreach (ref List<int> bucket in tempLists.AsSpan())
+                bucket = new List<int>();
+            for (int ri=0; ri<compiled.Count; ri++)
+            {
+                var cr = compiled[ri];
+                // compute intersecting section indices
+                int firstSection = Math.Max(0, cr.MinY == int.MinValue ? 0 : cr.MinY / sectionSize);
+                int lastSection = cr.MaxY == int.MaxValue ? sectionCountY - 1 : cr.MaxY / sectionSize;
+                if (lastSection >= sectionCountY) lastSection = sectionCountY - 1;
+                if (firstSection >= sectionCountY || lastSection < 0) continue;
+                if (firstSection < 0) firstSection = 0;
+                for (int sy = firstSection; sy <= lastSection; sy++)
+                {
+                    // verify actual overlap (section world bounds)
+                    int secY0 = sy * sectionSize;
+                    int secY1 = secY0 + sectionSize - 1;
+                    if (!(cr.MaxY < secY0 || cr.MinY > secY1))
+                        tempLists[sy].Add(ri);
+                }
+            }
+            for (int sy=0; sy<sectionCountY; sy++)
+            {
+                buckets[sy] = tempLists[sy].Count == 0 ? Array.Empty<int>() : tempLists[sy].ToArray();
+            }
+            biome.sectionYRuleBuckets = buckets;
+
         }
     }
 }

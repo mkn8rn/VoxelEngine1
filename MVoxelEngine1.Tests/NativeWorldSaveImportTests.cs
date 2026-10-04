@@ -315,51 +315,7 @@ public sealed class NativeWorldSaveImportTests
             }
             Assert.Equal(2, packedSectionCount);
         });
-
-        session.PublishSeed(123456);
-        session.Access(owner =>
-        {
-            var view = new NativeGtrtSessionView(owner.AsSpan());
-            int chunkIndex = view.GetChunkIndex(0, 0, 0);
-            AssertSavedBlock(ref view, chunkIndex, 1, 1, 17, SoilId);
-            AssertSavedBlock(
-                ref view,
-                chunkIndex,
-                3,
-                20,
-                5,
-                CustomTransparentBlockId);
-            AssertSavedBlock(ref view, chunkIndex, 2, 19, 20, WaterId);
-            AssertSavedBlock(
-                ref view,
-                chunkIndex,
-                22,
-                7,
-                8,
-                CustomTransparentBlockId);
-            AssertSavedBlock(ref view, chunkIndex, 17, 1, 17, 0);
-            AssertSavedBlock(ref view, chunkIndex, 23, 24, 9, WaterId);
-            AssertSavedBlock(ref view, chunkIndex, 20, 20, 20, WaterId);
-
-            Assert.True(NativeMaterializedTerrain.TrySetBlock(
-                ref view,
-                chunkIndex,
-                2,
-                19,
-                20,
-                CustomTransparentBlockId));
-            AssertSavedBlock(
-                ref view,
-                chunkIndex,
-                2,
-                19,
-                20,
-                CustomTransparentBlockId);
-            AssertSavedBlock(ref view, chunkIndex, 1, 17, 20, 0);
-            Assert.Equal(3, view.State.MaterializedRawSectionCount);
-            Assert.Equal(0, view.State.FailureCode);
-        });
-        ValidateLegacyRepresentationsEnterCompactNativeStorageBeforeSeedEvidence(settings, workspace, session);
+        CompleteLegacyRepresentationsEnterCompactNativeStorageBeforeSeedPhase(settings, workspace, session);
     }
 
     [Fact]
@@ -835,49 +791,7 @@ public sealed class NativeWorldSaveImportTests
         writer.Write((ushort)1);
         writer.Write((ushort)0);
         writer.Write(chunk.X);
-        writer.Write(chunk.Y);
-        writer.Write(chunk.Z);
-        writer.Write(sectionCountX);
-        writer.Write(sectionCountY);
-        writer.Write(sectionCountZ);
-        writer.Write(sectionCount);
-        long tablePosition = stream.Position;
-        for (int index = 0; index < sectionCount; index++)
-            writer.Write(0u);
-
-        uint[] offsets = new uint[sectionCount];
-        for (int index = 0; index < sectionCount; index++)
-        {
-            SectionFixture? section = chunk.Sections[index];
-            if (section is null)
-                continue;
-
-            offsets[index] = checked((uint)stream.Position);
-            writer.Write(section.Kind);
-            byte[] payload = section.WritePayload();
-            writer.Write(checked((ushort)payload.Length));
-            writer.Write(payload);
-        }
-
-        long endPosition = stream.Position;
-        stream.Position = tablePosition;
-        foreach (uint offset in offsets)
-            writer.Write(offset);
-        stream.Position = endPosition;
-        if (chunk.Temperature.HasValue || chunk.Humidity.HasValue)
-        {
-            writer.Write("CMD"u8);
-            writer.Write(chunk.Temperature ?? 0f);
-            writer.Write(chunk.Humidity ?? 0f);
-            writer.Write(0u);
-            writer.Write((byte)0);
-            writer.Write((byte)0);
-            writer.Write((byte)0);
-            writer.Write((ushort)0);
-            for (int index = 0; index < 12; index++)
-                writer.Write(0);
-        }
-        return stream.ToArray();
+        return CompleteWriteChunkPhase(chunk, sectionCountX, sectionCountY, sectionCountZ, sectionCount, stream, writer);
     }
 
     private sealed record ChunkFixture(
@@ -1203,6 +1117,104 @@ public sealed class NativeWorldSaveImportTests
                 }
             });
         Assert.Equal(1, consumed);
+
+    }
+
+    private static void CompleteLegacyRepresentationsEnterCompactNativeStorageBeforeSeedPhase(global::MVoxelEngine1.Infrastructure.Models.GameSettings settings, global::MVoxelEngine1.Tests.NativeWorldSaveImportTests.SaveWorkspace workspace, global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSession session)
+    {
+
+        session.PublishSeed(123456);
+        session.Access(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            int chunkIndex = view.GetChunkIndex(0, 0, 0);
+            AssertSavedBlock(ref view, chunkIndex, 1, 1, 17, SoilId);
+            AssertSavedBlock(
+                ref view,
+                chunkIndex,
+                3,
+                20,
+                5,
+                CustomTransparentBlockId);
+            AssertSavedBlock(ref view, chunkIndex, 2, 19, 20, WaterId);
+            AssertSavedBlock(
+                ref view,
+                chunkIndex,
+                22,
+                7,
+                8,
+                CustomTransparentBlockId);
+            AssertSavedBlock(ref view, chunkIndex, 17, 1, 17, 0);
+            AssertSavedBlock(ref view, chunkIndex, 23, 24, 9, WaterId);
+            AssertSavedBlock(ref view, chunkIndex, 20, 20, 20, WaterId);
+
+            Assert.True(NativeMaterializedTerrain.TrySetBlock(
+                ref view,
+                chunkIndex,
+                2,
+                19,
+                20,
+                CustomTransparentBlockId));
+            AssertSavedBlock(
+                ref view,
+                chunkIndex,
+                2,
+                19,
+                20,
+                CustomTransparentBlockId);
+            AssertSavedBlock(ref view, chunkIndex, 1, 17, 20, 0);
+            Assert.Equal(3, view.State.MaterializedRawSectionCount);
+            Assert.Equal(0, view.State.FailureCode);
+        });
+        ValidateLegacyRepresentationsEnterCompactNativeStorageBeforeSeedEvidence(settings, workspace, session);
+
+    }
+
+    private static byte[] CompleteWriteChunkPhase(global::MVoxelEngine1.Tests.NativeWorldSaveImportTests.ChunkFixture chunk, int sectionCountX, int sectionCountY, int sectionCountZ, int sectionCount, global::System.IO.MemoryStream stream, global::System.IO.BinaryWriter writer)
+    {
+        writer.Write(chunk.Y);
+        writer.Write(chunk.Z);
+        writer.Write(sectionCountX);
+        writer.Write(sectionCountY);
+        writer.Write(sectionCountZ);
+        writer.Write(sectionCount);
+        long tablePosition = stream.Position;
+        for (int index = 0; index < sectionCount; index++)
+            writer.Write(0u);
+
+        uint[] offsets = new uint[sectionCount];
+        for (int index = 0; index < sectionCount; index++)
+        {
+            SectionFixture? section = chunk.Sections[index];
+            if (section is null)
+                continue;
+
+            offsets[index] = checked((uint)stream.Position);
+            writer.Write(section.Kind);
+            byte[] payload = section.WritePayload();
+            writer.Write(checked((ushort)payload.Length));
+            writer.Write(payload);
+        }
+
+        long endPosition = stream.Position;
+        stream.Position = tablePosition;
+        foreach (uint offset in offsets)
+            writer.Write(offset);
+        stream.Position = endPosition;
+        if (chunk.Temperature.HasValue || chunk.Humidity.HasValue)
+        {
+            writer.Write("CMD"u8);
+            writer.Write(chunk.Temperature ?? 0f);
+            writer.Write(chunk.Humidity ?? 0f);
+            writer.Write(0u);
+            writer.Write((byte)0);
+            writer.Write((byte)0);
+            writer.Write((byte)0);
+            writer.Write((ushort)0);
+            for (int index = 0; index < 12; index++)
+                writer.Write(0);
+        }
+        return stream.ToArray();
 
     }
 }

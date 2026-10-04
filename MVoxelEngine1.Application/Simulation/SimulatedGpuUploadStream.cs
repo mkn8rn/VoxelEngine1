@@ -482,43 +482,7 @@ namespace MVoxelEngine1.Application.Simulation
             writer.WriteString("createdUtc", DateTimeOffset.UtcNow);
             writer.WriteBoolean("windowCreated", false);
             writer.WriteBoolean("openGlCallsAllowed", false);
-            writer.WriteNumber("actualGpuUploadCount", 0);
-            writer.WriteString("game", FlagManager.flags.game);
-            writer.WriteNumber("seed", FlagManager.flags.seed!.Value);
-            writer.WriteString("faceGenerationMode", "Optimized");
-            writer.WriteString("validationMode", (FlagManager.flags.faceGenerationMode ?? FaceGenerationMode.Optimized).ToString());
-            writer.WriteString("worldImplementation", "Native");
-            writer.WriteNumber("windowConstructionCount", 0);
-            writer.WriteString("worldId", world.ID);
-            writer.WriteString("regionId", world.RegionID);
-            writer.WriteString("inputScript", inputScript);
-            writer.WriteNumber("frameRate", frameRate);
-            writer.WriteNumber("playerMovementSpeed", Player.MovementSpeed);
-            writer.WriteNumber("windowWidth", windowWidth);
-            writer.WriteNumber("windowHeight", windowHeight);
-            writer.WriteNumber("recordQueueCapacity", RecordQueueCapacity);
-            writer.WriteString("recordQueueFullPolicy", "wait");
-            writer.WriteBoolean("silentRecordLossAllowed", false);
-            writer.WriteBoolean("atomicFinalPublication", true);
-            writer.WriteNumber("writerDelayMilliseconds", writerDelayMilliseconds);
-            if (writerFailAfterRecords.HasValue)
-                writer.WriteNumber("writerFailAfterRecords", writerFailAfterRecords.Value);
-            else
-                writer.WriteNull("writerFailAfterRecords");
-            writer.WriteStartObject("chunkDimensions");
-            writer.WriteNumber("x", GameManager.settings.chunkMaxX);
-            writer.WriteNumber("y", GameManager.settings.chunkMaxY);
-            writer.WriteNumber("z", GameManager.settings.chunkMaxZ);
-            writer.WriteEndObject();
-            writer.WriteStartObject("textureAtlas");
-            writer.WriteNumber("width", textureAtlas.atlasWidth);
-            writer.WriteNumber("height", textureAtlas.atlasHeight);
-            writer.WriteNumber("tilesX", textureAtlas.tilesX);
-            writer.WriteNumber("tilesY", textureAtlas.tilesY);
-            writer.WriteEndObject();
-            WriteUploadGeometry();
-            writer.WriteStartArray("events");
-            writer.Flush();
+            CompleteWriteSessionHeaderPhase(inputScript, frameRate, textureAtlas);
         }
 
         private void WriteUploadRecord(UploadRecord record, long sequence)
@@ -844,5 +808,47 @@ namespace MVoxelEngine1.Application.Simulation
             4 => "BACK",
             5 => "FRONT",
             _ => throw new InvalidDataException($"Face direction {direction} is invalid.")};
+
+        private void CompleteWriteSessionHeaderPhase(string inputScript, int frameRate, global::MVoxelEngine1.Graphics.Textures.BlockTextureAtlas textureAtlas)
+        {
+            writer.WriteNumber("actualGpuUploadCount", 0);
+            writer.WriteString("game", FlagManager.flags.game);
+            writer.WriteNumber("seed", FlagManager.flags.seed!.Value);
+            writer.WriteString("faceGenerationMode", "Optimized");
+            writer.WriteString("validationMode", (FlagManager.flags.faceGenerationMode ?? FaceGenerationMode.Optimized).ToString());
+            writer.WriteString("worldImplementation", "Native");
+            writer.WriteNumber("windowConstructionCount", 0);
+            writer.WriteString("worldId", world.ID);
+            writer.WriteString("regionId", world.RegionID);
+            writer.WriteString("inputScript", inputScript);
+            writer.WriteNumber("frameRate", frameRate);
+            writer.WriteNumber("playerMovementSpeed", Player.MovementSpeed);
+            writer.WriteNumber("windowWidth", windowWidth);
+            writer.WriteNumber("windowHeight", windowHeight);
+            writer.WriteNumber("recordQueueCapacity", RecordQueueCapacity);
+            writer.WriteString("recordQueueFullPolicy", "wait");
+            writer.WriteBoolean("silentRecordLossAllowed", false);
+            writer.WriteBoolean("atomicFinalPublication", true);
+            writer.WriteNumber("writerDelayMilliseconds", writerDelayMilliseconds);
+            if (writerFailAfterRecords.HasValue)
+                writer.WriteNumber("writerFailAfterRecords", writerFailAfterRecords.Value);
+            else
+                writer.WriteNull("writerFailAfterRecords");
+            writer.WriteStartObject("chunkDimensions");
+            writer.WriteNumber("x", GameManager.settings.chunkMaxX);
+            writer.WriteNumber("y", GameManager.settings.chunkMaxY);
+            writer.WriteNumber("z", GameManager.settings.chunkMaxZ);
+            writer.WriteEndObject();
+            writer.WriteStartObject("textureAtlas");
+            writer.WriteNumber("width", textureAtlas.atlasWidth);
+            writer.WriteNumber("height", textureAtlas.atlasHeight);
+            writer.WriteNumber("tilesX", textureAtlas.tilesX);
+            writer.WriteNumber("tilesY", textureAtlas.tilesY);
+            writer.WriteEndObject();
+            WriteUploadGeometry();
+            writer.WriteStartArray("events");
+            writer.Flush();
+
+        }
     }
 }
