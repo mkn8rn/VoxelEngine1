@@ -375,12 +375,7 @@ public sealed class NativeGtrtPipeline : IDisposable
         try
         {
             savePlan?.EnsureResidentPayloads(session, centerChunkX, centerChunkY, centerChunkZ);
-            NativePreUploadPacket packet = RunCore(
-                publishedSeed,
-                centerChunkX,
-                centerChunkY,
-                centerChunkZ,
-                recordInitialEndpoint: false);
+            NativePreUploadPacket packet = RunStreamingCore(centerChunkX, centerChunkY, centerChunkZ);
             this.centerChunkX = centerChunkX;
             this.centerChunkY = centerChunkY;
             this.centerChunkZ = centerChunkZ;
@@ -436,6 +431,33 @@ public sealed class NativeGtrtPipeline : IDisposable
     }
 
     internal NativeStreamingStatistics StreamingStatistics => streamingStatistics;
+
+    private NativePreUploadPacket RunStreamingCore(int destinationX, int destinationY, int destinationZ)
+    {
+        while (true)
+        {
+            try
+            {
+                return RunCore(publishedSeed, destinationX, destinationY, destinationZ,
+                    recordInitialEndpoint: false);
+            }
+            catch (InvalidOperationException failure) when (workers.CanGrowPacketStorage)
+            {
+                try
+                {
+                    RestorePreviousRun();
+                    if (!runRolledBack)
+                        throw new InvalidOperationException("Native packet growth requires a completed rollback.");
+                    session.ExpandPacketStorage();
+                    Volatile.Write(ref completedRunCount, -1);
+                }
+                catch (Exception growthFailure)
+                {
+                    throw new AggregateException(failure, growthFailure);
+                }
+            }
+        }
+    }
 
     internal int GetRendererSlot(in NativeChunkRenderPacketDescriptor descriptor) =>
         (NativeGtrtSessionView.FloorMod(descriptor.ChunkWorldX / chunkSizeX, requiredWidth) * requiredWidth +
@@ -579,12 +601,7 @@ public sealed class NativeGtrtPipeline : IDisposable
             RememberCurrentRun(runCount);
             try
             {
-                _ = RunCore(
-                    publishedSeed,
-                    centerChunkX,
-                    centerChunkY,
-                    centerChunkZ,
-                    recordInitialEndpoint: false);
+                _ = RunStreamingCore(centerChunkX, centerChunkY, centerChunkZ);
                 Volatile.Write(
                     ref completedRunCount,
                     checked(runCount + 1));

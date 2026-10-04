@@ -54,6 +54,10 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
     private int runEpoch;
     private bool completionValid;
     private NativeGtrtFailureCode completionFailure;
+    private bool completionCanceled;
+
+    internal bool CanGrowPacketStorage =>
+        completionFailure == NativeGtrtFailureCode.PacketStorageExhausted && !completionCanceled;
     private long initialGenerationMilliseconds = -1;
     private long initialMeshMilliseconds = -1;
 
@@ -179,6 +183,8 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
             break;
         }
 
+        completionFailure = NativeGtrtFailureCode.None;
+        completionCanceled = false;
         foreach (NativeGtrtWorker worker in workers)
         {
             if (worker.Fault is not null)
@@ -384,6 +390,7 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
         ref NativeGtrtSessionState state = ref view.State;
         completionFailure =
             (NativeGtrtFailureCode)Volatile.Read(ref state.FailureCode);
+        completionCanceled = Volatile.Read(ref state.CancellationState) != 0;
         completionValid =
             completionFailure == NativeGtrtFailureCode.None &&
             Volatile.Read(ref state.RemainingColumns) == 0 &&

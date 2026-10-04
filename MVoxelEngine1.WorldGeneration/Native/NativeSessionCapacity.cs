@@ -26,7 +26,40 @@ internal sealed partial class NativeGtrtSession
             return;
 
         NativeGtrtSessionLayout layout = SelectExpandedLayout(previous, materials, requirements, maximumByteCount);
+        ReplaceStorage(previous, layout);
+    }
 
+    internal void ExpandPacketStorage(int maximumByteCount = MaximumSessionByteCount)
+    {
+        ObjectDisposedException.ThrowIf(storage is null, this);
+        NativeSessionStorageInfo info = storage.Read(ReadGrowthInfo);
+        ReplaceStorage(info.Header, SelectExpandedPacketLayout(info.Header, info.Materials, maximumByteCount));
+    }
+
+    internal static NativeGtrtSessionLayout SelectExpandedPacketLayout(
+        NativeGtrtSessionHeader previous, NativeTerrainMaterialSet materials, int maximumByteCount)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumByteCount);
+        int availableWords = Math.Max(0, maximumByteCount - previous.TotalByteCount) / sizeof(uint);
+        int additionalWords = Math.Min(previous.PacketWordCapacity, availableWords) & ~1;
+        if (additionalWords == 0)
+            throw new InvalidOperationException("The native packet storage limit would be exceeded.");
+        var requirements = new NativeMaterializedStorageRequirements(previous.MaterializedChunkCapacity,
+            previous.MaterializedSectionCapacity, previous.MaterializedRawSectionCapacity,
+            previous.MaterializedPaletteCapacity, previous.MaterializedPackedWordCapacity);
+        int capacity = checked(previous.PacketWordCapacity + additionalWords);
+        NativeGtrtSessionLayout layout = CreateExpandedLayout(previous, materials, requirements,
+            geometric: false, packetWordCapacity: capacity);
+        if (layout.TotalByteCount > maximumByteCount)
+            layout = CreateExpandedLayout(previous, materials, requirements,
+                geometric: false, packetWordCapacity: capacity - 2);
+        if (layout.TotalByteCount > maximumByteCount || layout.PacketWordCapacity <= previous.PacketWordCapacity)
+            throw new InvalidOperationException("The native packet storage limit would be exceeded.");
+        return layout;
+    }
+
+    private void ReplaceStorage(NativeGtrtSessionHeader previous, NativeGtrtSessionLayout layout)
+    {
         pendingGrowthHeader = previous;
         pendingGrowthLayout = layout;
         try
@@ -121,10 +154,11 @@ internal sealed partial class NativeGtrtSession
 
     private static NativeGtrtSessionLayout CreateExpandedLayout(
         NativeGtrtSessionHeader previous, NativeTerrainMaterialSet materials,
-        NativeMaterializedStorageRequirements requirements, bool geometric) => new(
+        NativeMaterializedStorageRequirements requirements, bool geometric,
+        int? packetWordCapacity = null) => new(
             previous.ChunkSizeX, previous.ChunkSizeY, previous.ChunkSizeZ, previous.Lod1Radius,
             materials, previous.GenerationWorkerCount, previous.MeshWorkerCount,
-            previous.PacketWordCapacity, previous.GameSnapshotByteCount,
+            packetWordCapacity ?? previous.PacketWordCapacity, previous.GameSnapshotByteCount,
             GrowCapacity(previous.MaterializedChunkCapacity, requirements.ChunkCount, geometric),
             GrowCapacity(previous.MaterializedSectionCapacity, requirements.SectionCount, geometric),
             GrowCapacity(previous.MaterializedRawSectionCapacity, requirements.RawSectionCount, geometric),
@@ -181,6 +215,11 @@ internal static class NativeGtrtSessionCloner
         CopyRange<ushort>(bytes, source, old.MaterializedPaletteOffset, layout.MaterializedPaletteOffset, state.MaterializedPaletteCursor);
         CopyRange<uint>(bytes, source, old.MaterializedPackedWordOffset, layout.MaterializedPackedWordOffset, state.MaterializedPackedWordCursor);
         CopyRange<NativePacketWordRange>(bytes, source, old.Streaming.FreeRanges, layout.Streaming.FreeRanges, state.FreeRangeCount);
+        if (layout.PacketWordCapacity > old.PacketWordCapacity)
+        {
+            var expanded = new NativeGtrtSessionView(bytes);
+            expanded.AddPacketStorageTail(old.PacketWordCapacity);
+        }
 
         Span<int> index = MemoryMarshal.Cast<byte, int>(bytes.Slice(layout.MaterializedIndexOffset,
             checked(layout.MaterializedIndexCapacity * sizeof(int))));

@@ -21,6 +21,9 @@ internal ref partial struct NativeGtrtSessionView
         FreeRanges[0] = new NativePacketWordRange { Count = header.PacketWordCapacity };
     }
 
+    internal void AddPacketStorageTail(int previousCapacity) =>
+        ReleasePacketRange(previousCapacity, checked(header.PacketWordCapacity - previousCapacity));
+
     private bool TryPrepareStreamingRun(int centerX, int centerY, int centerZ)
     {
         foreach (ref readonly NativeRenderPacketRecord packet in Packets)

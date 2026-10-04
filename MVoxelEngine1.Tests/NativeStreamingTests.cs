@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using MVoxelEngine1.Graphics.Terrain;
@@ -12,6 +13,78 @@ namespace MVoxelEngine1.Tests;
 
 public sealed class NativeStreamingTests
 {
+    [Fact(Explicit = true, Timeout = 300_000)]
+    [Trait("Category", "Oracle")]
+    [Trait("Resource", "CPU")]
+    public void FullProductionTeleportKeepsPacketsReusable()
+    {
+        using TestWorkspace workspace = TestPaths.CreateWorkspace();
+        GameManager.Initialize(workspace.GameDataRoot);
+        GameManager.LoadGameDefaultSettings(GameManager.SelectGameFolder("Default"));
+        TerrainLoader.allBlockTypes.Clear();
+        TerrainLoader.allBlockTypesByBaseType.Clear();
+        TerrainLoader.allBlockTypesByIds.Clear();
+        TerrainLoader.allBlockTypeObjects.Clear();
+        _ = new TerrainLoader();
+        BiomeManager.LoadAllBiomes();
+        Assert.Equal(160, GameManager.settings.chunkMaxX);
+        Assert.Equal(160, GameManager.settings.chunkMaxY);
+        Assert.Equal(160, GameManager.settings.chunkMaxZ);
+        Assert.Equal(12, GameManager.settings.lod1RenderDistance);
+        var atlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
+        using NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(atlas, GameManager.settings,
+            Environment.ProcessorCount * 2, Environment.ProcessorCount * 2,
+            runtimeGenerationWorkerCount: NativeGtrtPipeline.GetWorkerCount(0.5f),
+            runtimeMeshWorkerCount: Environment.ProcessorCount);
+        using NativeWorld world = NativeWorld.CreateForTesting(pipeline, 123456, HeadlessRenderer);
+        string original = CaptureProductionPacketHash(world, (0, 0, 0));
+        Exception? failure = Record.Exception(() => world.PlayerChunkPosition = (40, 0, -40));
+        if (failure is not null)
+        {
+            Assert.Equal((0, 0, 0), world.PlayerChunkPosition);
+            Assert.Equal(original, CaptureProductionPacketHash(world, (0, 0, 0)));
+        }
+        Assert.Null(failure);
+        Assert.Equal(new NativeStreamingStatistics(729, 0, 15_625, 0), world.StreamingStatistics);
+        _ = CaptureProductionPacketHash(world, (40, 0, -40));
+        world.PlayerChunkPosition = (0, 0, 0);
+        Assert.Equal(original, CaptureProductionPacketHash(world, (0, 0, 0)));
+        world.InspectState(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            Assert.Equal(0, view.State.TransactionOpen);
+            Assert.InRange(view.SessionHeader.TotalByteCount, 1, NativeGtrtSession.MaximumSessionByteCount);
+            Console.WriteLine($"Full-production teleport native bytes: {view.SessionHeader.TotalByteCount}; " +
+                $"packet words: {view.PacketWordCapacity}; high water: {view.State.PacketWordCursor}.");
+        });
+    }
+
+    private static string CaptureProductionPacketHash(NativeWorld world, (int x, int y, int z) center)
+    {
+        using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var coordinates = new HashSet<(int, int, int)>();
+        long faces = 0;
+        world.InspectRenderPackets((in NativeChunkRenderPacketDescriptor descriptor,
+            ReadOnlySpan<uint> opaque, ReadOnlySpan<uint> transparent) =>
+        {
+            Assert.True(coordinates.Add((descriptor.ChunkWorldX, descriptor.ChunkWorldY, descriptor.ChunkWorldZ)));
+            Assert.InRange(descriptor.ChunkWorldX, (center.x - 12) * 160, (center.x + 12) * 160);
+            Assert.InRange(descriptor.ChunkWorldY, (center.y - 12) * 160, (center.y + 12) * 160);
+            Assert.InRange(descriptor.ChunkWorldZ, (center.z - 12) * 160, (center.z + 12) * 160);
+            Assert.True(opaque.IsEmpty);
+            Span<byte> coordinate = stackalloc byte[12];
+            BinaryPrimitives.WriteInt32LittleEndian(coordinate, descriptor.ChunkWorldX);
+            BinaryPrimitives.WriteInt32LittleEndian(coordinate[4..], descriptor.ChunkWorldY);
+            BinaryPrimitives.WriteInt32LittleEndian(coordinate[8..], descriptor.ChunkWorldZ);
+            hash.AppendData(coordinate);
+            hash.AppendData(MemoryMarshal.AsBytes(transparent));
+            faces += descriptor.TransparentFaceCount;
+        });
+        Assert.Equal(15_625, coordinates.Count);
+        Assert.True(faces > 0);
+        return Convert.ToHexString(hash.GetHashAndReset());
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

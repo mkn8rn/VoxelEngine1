@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using MVoxelEngine1.Infrastructure.Models.Generation;
 using MVoxelEngine1.WorldGeneration.Native;
 using Supprocom.NativeAllocationManagement;
@@ -6,6 +8,63 @@ namespace MVoxelEngine1.Tests;
 
 public sealed class NativeSessionCapacityTests
 {
+    [Fact]
+    public void PacketGrowthPreservesLivePayloadAndCoalescesTheNewTail()
+    {
+        using NativeGtrtSession session = CreateSession();
+        session.Access(Import);
+        int capacity = 0;
+        session.Access(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            capacity = view.PacketWordCapacity;
+            NativeStreamingLayout streaming = view.SessionHeader.Streaming;
+            Span<NativePacketWordRange> ranges = MemoryMarshal.Cast<byte, NativePacketWordRange>(owner.AsSpan().Slice(
+                streaming.FreeRanges, streaming.FreeRangeCapacity * Unsafe.SizeOf<NativePacketWordRange>()));
+            ranges[0] = new NativePacketWordRange { Offset = 20, Count = capacity - 20 };
+        });
+        session.ExpandPacketStorage();
+        session.Access(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            NativeStreamingLayout streaming = view.SessionHeader.Streaming;
+            Span<NativePacketWordRange> ranges = MemoryMarshal.Cast<byte, NativePacketWordRange>(owner.AsSpan().Slice(
+                streaming.FreeRanges, streaming.FreeRangeCapacity * Unsafe.SizeOf<NativePacketWordRange>()));
+            Assert.Equal(capacity * 2, view.PacketWordCapacity);
+            Assert.Equal(1, view.State.FreeRangeCount);
+            Assert.Equal(20, ranges[0].Offset);
+            Assert.Equal(capacity * 2 - 20, ranges[0].Count);
+            Assert.Equal(20, view.State.PacketWordCursor);
+            Assert.Equal(777, view.Packets[0].RenderDataId);
+            for (int index = 0; index < 20; index++)
+                Assert.Equal((uint)(100 + index), view.PacketWords[index]);
+            Assert.Equal(17, view.Profiles[0].StoneEnd);
+            Assert.Equal(0, view.FindMaterializedChunkIndex(-16, 7, 24));
+            Assert.True(NativeMaterializedTerrain.TryGetStoredBlock(ref view, 1, 0, 0, 0, out ushort packed));
+            Assert.Equal(11, packed);
+        });
+    }
+
+    [Fact]
+    public void PacketGrowthUsesTheRemainingByteBudgetAndRejectsAnUnchangedOwner()
+    {
+        NativeTerrainMaterialSet materials = NativeTerrainMaterialSet.CreateConventional();
+        var original = new NativeGtrtSessionLayout(16, 16, 16, 0, materials);
+        var header = new NativeGtrtSessionHeader(original);
+        NativeGtrtSessionLayout expanded = NativeGtrtSession.SelectExpandedPacketLayout(
+            header, materials, original.TotalByteCount + 12);
+        Assert.Equal(original.PacketWordCapacity + 2, expanded.PacketWordCapacity);
+        Assert.InRange(expanded.TotalByteCount, original.TotalByteCount + 1, original.TotalByteCount + 12);
+        Assert.Throws<InvalidOperationException>(() => NativeGtrtSession.SelectExpandedPacketLayout(
+            header, materials, original.TotalByteCount));
+        using NativeGtrtSession session = CreateSession();
+        session.Access(Import);
+        byte[] before = [];
+        session.Access(owner => before = owner.AsSpan().ToArray());
+        Assert.Throws<InvalidOperationException>(() => session.ExpandPacketStorage(before.Length));
+        session.Access(owner => Assert.Equal(before, owner.AsSpan().ToArray()));
+    }
+
     [Fact]
     public void GrowthUsesTheRequiredCapacityWhenDoublingWouldOverflowTheByteOwner()
     {
@@ -80,6 +139,7 @@ public sealed class NativeSessionCapacityTests
     {
         using NativeGtrtSession session = CreateSession();
         session.Access(owner => new NativeGtrtSessionView(owner.AsSpan()).State.TransactionOpen = 1);
+        Assert.Throws<InvalidOperationException>(() => session.ExpandPacketStorage());
         Assert.Throws<InvalidOperationException>(() => session.EnsureMaterializedCapacity(
             new NativeMaterializedStorageRequirements(3, 3, 2)));
         session.Access(owner => new NativeGtrtSessionView(owner.AsSpan()).State.TransactionOpen = 0);
