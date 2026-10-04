@@ -213,7 +213,9 @@ namespace MVoxelEngine1.Tests
             Assert.Empty(SimulatedGpuUploadTestSupport.FindIncompleteFiles(outputPath));
 
             string worldsDirectory = Path.Combine(workspace.GameDataRoot, "Default", "Saves", "Worlds");
+#pragma warning disable HLQ005 // Exactly one match is a correctness invariant; accepting the first of several matches would weaken this validation.
             string worldFile = Assert.Single(Directory.GetFiles(worldsDirectory, "world.txt", SearchOption.AllDirectories));
+#pragma warning restore HLQ005
             Assert.Equal("123456", (await File.ReadAllLinesAsync(worldFile,TestContext.Current.CancellationToken).ConfigureAwait(true))[3]);
             Console.WriteLine($"Simulated GPU upload result: {outputPath}");
 

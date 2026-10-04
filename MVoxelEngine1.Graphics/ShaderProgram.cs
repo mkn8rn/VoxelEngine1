@@ -109,7 +109,7 @@ namespace MVoxelEngine1.Graphics
                     shaderSource = reader.ReadToEnd();
                 }
             }
-            catch (Exception e)
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
             {
                 Console.WriteLine("Failed to load shader source file: " + e.Message);
             }

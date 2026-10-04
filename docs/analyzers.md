@@ -59,3 +59,8 @@ the same compilation policy. The allocation control and full production gate
 verify this choice; no analyzer rule is suppressed for it. The runtime's
 [Tier0 box-elision fix](https://github.com/dotnet/runtime/pull/130590) is tracked
 for a future runtime upgrade.
+
+The [scoped exception inventory](analyzer-exceptions.md) records each necessary
+diagnostic-line exception and its validation contract. SDK and third-party
+correctness, threading, disposal and performance rules remain enabled outside
+those exact lines.

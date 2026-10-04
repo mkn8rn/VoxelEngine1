@@ -48,11 +48,11 @@ namespace MVoxelEngine1.Graphics.Textures
         private static BlockTextureAtlas? instance; // lazy-built when GL upload occurs
         public static void BeginAsyncIOPreload()
         {
-            if (preloadTask != null)
+            if (System.Threading.Volatile.Read(ref preloadTask) != null)
                 return;
             lock (preloadLock)
             {
-                if (preloadTask != null)
+                if (System.Threading.Volatile.Read(ref preloadTask) != null)
                     return;
                 preloadTask = Task.Run(() =>
                 {
@@ -74,12 +74,12 @@ namespace MVoxelEngine1.Graphics.Textures
                                 var img = ImageResult.FromStream(fs, ColorComponents.RedGreenBlueAlpha);
                                 list.Add(new RawImage { Name = Path.GetFileNameWithoutExtension(f), Data = img.Data, Width = img.Width, Height = img.Height });
                             }
-                            catch
+                            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException or NotSupportedException)
                             { /* ignore single file errors */
                             }
                         }
                     }
-                    catch
+                    catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException or NotSupportedException)
                     {
                     }
 
@@ -101,16 +101,18 @@ namespace MVoxelEngine1.Graphics.Textures
                 List<RawImage> images;
                 try
                 {
+#pragma warning disable VSTHRD002 // GL upload must stay on its context thread; the preloader performs only file IO and image decoding through Task.Run without capturing that context.
                     images = preloadTask?.GetAwaiter().GetResult() ?? [];
+#pragma warning restore VSTHRD002
                 }
-                catch
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException or NotSupportedException)
                 {
                     images = new List<RawImage>();
                 }
 
                 instance = new BlockTextureAtlas(images);
                 atlasBuilt = true;
-                return instance ?? throw new InvalidOperationException("The texture atlas has not been published.");
+                return instance;
             }
         }
 
@@ -200,7 +202,7 @@ namespace MVoxelEngine1.Graphics.Textures
             currentX = 0;
             currentY = 0;
             textureCoordinates.Clear();
-            foreach (var name in System.Runtime.InteropServices.CollectionsMarshal.AsSpan(textureNames))
+            foreach (ref readonly var name in System.Runtime.InteropServices.CollectionsMarshal.AsSpan(textureNames))
             {
                 var ri = byName[name];
                 if (currentX + ri.Width > atlasWidth)
@@ -341,7 +343,9 @@ namespace MVoxelEngine1.Graphics.Textures
                 if (!blockTypeUVCoordinates.TryGetValue(bt.ID, out var faceDict))
                 {
                     // Safety: initialize if missing
+#pragma warning disable HLQ001 // This local is indexed only; the Dictionary reference conversion does not box an enumerator. Retain the interface-based atlas contract.
                     faceDict = new Dictionary<Faces, ByteVector2>();
+#pragma warning restore HLQ001
                     foreach (var faceInit in Enum.GetValues<Faces>().Cast<Faces>())
                         faceDict[faceInit] = new ByteVector2();
                     blockTypeUVCoordinates[bt.ID] = faceDict;
@@ -392,7 +396,9 @@ namespace MVoxelEngine1.Graphics.Textures
                     x = (byte)miss.X,
                     y = (byte)miss.Y
                 };
+#pragma warning disable HLQ001 // This local is indexed only; the Dictionary reference conversion does not box an enumerator. Retain the interface-based atlas contract.
                 blockCoords = new Dictionary<Faces, ByteVector2>();
+#pragma warning restore HLQ001
                 foreach (Faces f in Enum.GetValues<Faces>())
                     blockCoords[f] = missByte;
                 blockTypeUVCoordinates[blockType] = blockCoords;

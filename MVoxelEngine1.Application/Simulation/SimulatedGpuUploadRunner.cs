@@ -85,14 +85,18 @@ namespace MVoxelEngine1.Application.Simulation
             output.WriteSnapshot("final", simulationElapsedSeconds, frame);
             output.CompleteAsync(
                 simulationElapsedSeconds,
+#pragma warning disable VSTHRD002 // Keep the NativeWorld owner thread while its independent writer drains; that writer captures no synchronization context and never accesses world state.
                 movement.WallElapsedSeconds).GetAwaiter().GetResult();
+#pragma warning restore VSTHRD002
             Console.WriteLine($"Simulated GPU upload data written to {Path.GetFullPath(outputPath)}");
             }
             finally
             {
                 // The native world stays on its owner thread while the artifact
                 // writer drains independently and never accesses engine state.
+#pragma warning disable VSTHRD002 // Keep the NativeWorld owner thread while its independent writer drains; that writer captures no synchronization context and never accesses world state.
                 output.DisposeAsync().AsTask().GetAwaiter().GetResult();
+#pragma warning restore VSTHRD002
             }
         }
 

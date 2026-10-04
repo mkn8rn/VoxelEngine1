@@ -20,7 +20,9 @@ namespace MVoxelEngine1.Infrastructure.Models.Generation
         public int NonEmptyCount;
         // Per-id column membership bitsets (DistinctCount <=8). Each row = 256 bits -> 4 ulongs.
         // A bit set means the column *currently* (prior to replacement batch) contains that id in at least one run/voxel.
+#pragma warning disable CA1814 // The independent oracle retains the original dense matrix and coordinate indexing; this test-only layout is compared with native representations.
         public ulong[, ] IdColumnBits = new ulong[8, 4];
+#pragma warning restore CA1814
         // Global rolling stamp (ushort wrap). Managed externally via SectionUtils when renting.
         internal static ushort GlobalStamp; // not thread-safe increment; we accept rare collision (wrap) => fallback to full clear
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

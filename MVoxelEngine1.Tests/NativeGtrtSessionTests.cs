@@ -741,7 +741,7 @@ public sealed class NativeGtrtSessionTests
     }
 
     [Fact]
-    public void ConcurrentWorkersClaimEveryNativeJobExactlyOnce()
+    public async Task ConcurrentWorkersClaimEveryNativeJobExactlyOnceAsync()
     {
         var layout = new NativeGtrtSessionLayout(
             chunkSizeX: 4,
@@ -753,7 +753,7 @@ public sealed class NativeGtrtSessionTests
         session.PublishSeed(123456);
 
         int[] generationVisits = new int[layout.ColumnCount];
-        RunWorkers(
+        await RunWorkersAsync(
             workerCount: 4,
             () => session.Access(owner =>
             {
@@ -764,8 +764,8 @@ public sealed class NativeGtrtSessionTests
                         ref generationVisits[work.RecordIndex]);
                     Assert.True(view.TryCompleteGeneration(in work));
                 }
-            }));
-        ValidateConcurrentWorkersClaimEveryNativeJobExactlyOnceEvidence(layout, session, generationVisits);
+            })).ConfigureAwait(true);
+        await ValidateConcurrentWorkersClaimEveryNativeJobExactlyOnceEvidenceAsync(layout, session, generationVisits).ConfigureAwait(true);
     }
 
     [Fact]
@@ -935,7 +935,7 @@ public sealed class NativeGtrtSessionTests
             view.TryCompleteGeneration(in work);
     }
 
-    private static void RunWorkers(
+    private static Task RunWorkersAsync(
         int workerCount,
         Action action)
     {
@@ -943,7 +943,7 @@ public sealed class NativeGtrtSessionTests
         foreach (ref Task worker in workers.AsSpan())
             worker = Task.Run(action, TestContext.Current.CancellationToken);
 
-        Task.WaitAll(workers, TestContext.Current.CancellationToken);
+        return Task.WhenAll(workers);
     }
 
     private static void ValidateNativeSessionOwnsInitializedGridJobsProfilesAndSeedEvidence(global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSession session)
@@ -955,11 +955,11 @@ public sealed class NativeGtrtSessionTests
 
     }
 
-    private static void ValidateConcurrentWorkersClaimEveryNativeJobExactlyOnceEvidence(global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionLayout layout, global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSession session, int[] generationVisits)
+    private static async Task ValidateConcurrentWorkersClaimEveryNativeJobExactlyOnceEvidenceAsync(global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionLayout layout, global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSession session, int[] generationVisits)
     {
 
         int[] meshVisits = new int[layout.ChunkCount];
-        RunWorkers(
+        await RunWorkersAsync(
             workerCount: 4,
             () => session.Access(owner =>
             {
@@ -977,7 +977,7 @@ public sealed class NativeGtrtSessionTests
                         out _));
                     Assert.True(view.TryCompleteMesh(in work));
                 }
-            }));
+            })).ConfigureAwait(true);
 
         Assert.All(generationVisits, count => Assert.Equal(1, count));
         session.Access(owner =>

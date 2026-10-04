@@ -16,7 +16,9 @@ namespace MVoxelEngine1.Tests
             }
         }
 
+#pragma warning disable HLQ005 // Exactly one match is a correctness invariant; accepting the first of several matches would weaken this validation.
         private static string GetMetadata(string key) => typeof(TestPaths).Assembly.GetCustomAttributes<AssemblyMetadataAttribute>().Single(attribute => string.Equals(attribute.Key, key, StringComparison.Ordinal)).Value ?? throw new InvalidOperationException($"Missing build metadata: {key}.");
+#pragma warning restore HLQ005
         public static TestWorkspace CreateWorkspace()
         {
             string root = Path.Combine(Path.GetTempPath(), "MVoxelEngine1.Tests", Guid.NewGuid().ToString("N"));

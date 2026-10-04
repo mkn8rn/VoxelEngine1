@@ -195,7 +195,9 @@ internal sealed class NativeWorldSaveExporter
                 if (File.Exists(temporaryPath))
                     File.Delete(temporaryPath);
             }
+#pragma warning disable CA1031 // A publisher callback can throw any exception; finish temporary-file cleanup and preserve the original failure before returning it to the caller.
             catch (Exception exception)
+#pragma warning restore CA1031
             {
                 cleanupFailure = exception;
             }
@@ -344,7 +346,7 @@ internal sealed class NativeWorldSaveExporter
             throw new InvalidDataException(
                 "A native materialized section map is invalid.");
         }
-        return FinishWriteSectionPhase(ref view, writer, materializedChunkIndex, in chunk, sectionIndex, mapIndex);
+        return FinishWriteSectionPhase(ref view, writer, materializedChunkIndex, chunk, sectionIndex, mapIndex);
     }
 
     private static bool WriteUniformSection(
@@ -427,7 +429,7 @@ internal sealed class NativeWorldSaveExporter
             throw new InvalidDataException(
                 "A native packed section range is invalid.");
         }
-        return FinishWritePackedSectionPhase(ref view, writer, in section);
+        return FinishWritePackedSectionPhase(ref view, writer, section);
     }
 
     private static void WriteSectionHeader(
@@ -838,7 +840,7 @@ internal sealed class NativeWorldSaveExporter
 
     }
 
-    private static bool FinishWriteSectionPhase(scoped ref global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionView view, global::System.IO.BinaryWriter writer, int materializedChunkIndex, scoped in global::MVoxelEngine1.WorldGeneration.Native.NativeMaterializedChunkRecord chunk, int sectionIndex, int mapIndex)
+    private static bool FinishWriteSectionPhase(scoped ref global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionView view, global::System.IO.BinaryWriter writer, int materializedChunkIndex, global::MVoxelEngine1.WorldGeneration.Native.NativeMaterializedChunkRecord chunk, int sectionIndex, int mapIndex)
     {
 
         int recordIndex = view.MaterializedSectionMaps[mapIndex];
@@ -897,7 +899,7 @@ internal sealed class NativeWorldSaveExporter
 
     }
 
-    private static bool FinishWritePackedSectionPhase(scoped ref global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionView view, global::System.IO.BinaryWriter writer, scoped in global::MVoxelEngine1.WorldGeneration.Native.NativeMaterializedSectionRecord section)
+    private static bool FinishWritePackedSectionPhase(scoped ref global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionView view, global::System.IO.BinaryWriter writer, global::MVoxelEngine1.WorldGeneration.Native.NativeMaterializedSectionRecord section)
     {
 
         ReadOnlySpan<ushort> palette = view.MaterializedPalette.Slice(

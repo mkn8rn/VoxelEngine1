@@ -12,7 +12,9 @@ internal readonly struct NativeGtrtSessionHeader
 {
     internal const uint ExpectedMagic = 0x54525447;
     internal const int ExpectedVersion = 19;
+#pragma warning disable MA0051 // Immutable native layout properties must be assigned in this constructor; keeping the complete versioned mapping together preserves ABI auditability.
     internal NativeGtrtSessionHeader(NativeGtrtSessionLayout layout)
+#pragma warning restore MA0051
     {
         Magic = ExpectedMagic;
         Version = ExpectedVersion;

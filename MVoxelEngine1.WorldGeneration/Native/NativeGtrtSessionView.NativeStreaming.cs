@@ -318,7 +318,7 @@ internal readonly ref partial struct NativeGtrtSessionView
         State.FreeRangeCount--;
     }
 
-    private bool FinishTryPrepareStreamingRunPhase(ref global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionState state)
+    private static bool FinishTryPrepareStreamingRunPhase(ref global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionState state)
     {
 
         state.RemainingColumns = state.PlannedColumns;

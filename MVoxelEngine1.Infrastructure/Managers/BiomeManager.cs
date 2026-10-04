@@ -90,7 +90,7 @@ namespace MVoxelEngine1.Infrastructure.Managers
                         if (rules == null)
                             throw new InvalidOperationException("Deserialized rules list is null");
 
-                        foreach (var rule in System.Runtime.InteropServices.CollectionsMarshal.AsSpan(rules))
+                        foreach (ref readonly var rule in System.Runtime.InteropServices.CollectionsMarshal.AsSpan(rules))
                         {
                             if (rule.GenerationType is not (GenerationType.InlineReplacement or GenerationType.SimpleReplacement))
                                 throw new NotSupportedException($"Generation type '{rule.GenerationType}' is not supported.");

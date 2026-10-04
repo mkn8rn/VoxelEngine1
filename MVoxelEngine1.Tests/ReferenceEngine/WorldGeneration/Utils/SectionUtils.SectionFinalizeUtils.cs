@@ -266,7 +266,9 @@ namespace MVoxelEngine1.WorldGeneration.Utils
         //  - TransparentCount tracks transparent voxel count
         //  - HasTransparent flag set when any transparent voxel present
         // -------------------------------------------------------------------------------------------------
+#pragma warning disable MA0051 // Retain this historical dense/packed oracle algorithm independently of production; section, metadata and face-equivalence tests validate its original indexing.
         private static void FusedNonEscalatedFinalize(Section sec, SectionBuildScratch scratch)
+#pragma warning restore MA0051
         {
             const int localSectionSize = Section.SECTION_SIZE;
             int totalVoxels = localSectionSize * localSectionSize * localSectionSize;
@@ -369,7 +371,7 @@ namespace MVoxelEngine1.WorldGeneration.Utils
                             opaqueCount += (y1e - y1s + 1);
                             adjY += (y1e - y1s);
                             // contiguous opaque adjacency between runs
-                            if (rc == 2 && col.Id0 != Section.AIR && TerrainLoader.IsOpaque(col.Id0) && y1s == col.Y0End + 1)
+                            if (col.Id0 != Section.AIR && TerrainLoader.IsOpaque(col.Id0) && y1s == col.Y0End + 1)
                                 adjY++;
                         }
                         else
@@ -681,9 +683,9 @@ namespace MVoxelEngine1.WorldGeneration.Utils
                     ref readonly var col = ref scratch.GetReadonlyColumn(ci);
                     int baseLi = ci << 4;
                     if (opaqueBits != null)
-                        WriteColumnMask(opaqueBits ?? throw new InvalidOperationException("The opaque column mask has not been initialized."), ci, columnOpaqueMask[ci]);
+                        WriteColumnMask(opaqueBits, ci, columnOpaqueMask[ci]);
                     if (transparentBitsMask != null)
-                        WriteColumnMask(transparentBitsMask ?? throw new InvalidOperationException("The transparent column mask has not been initialized."), ci, columnTransparentMask[ci]);
+                        WriteColumnMask(transparentBitsMask, ci, columnTransparentMask[ci]);
                     if (sec.BitsPerIndex == 2)
                     {
                         uint packedColumn = 0;

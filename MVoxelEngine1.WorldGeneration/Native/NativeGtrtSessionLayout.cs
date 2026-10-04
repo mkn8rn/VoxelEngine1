@@ -13,7 +13,9 @@ internal readonly struct NativeGtrtSessionLayout
     private const int DefaultPacketWordsPerRequiredChunk = 8_192;
     internal const int DefaultMaterializedChunkCapacity = 64;
     internal const int DefaultMaterializedSectionCapacity = 4_096;
+#pragma warning disable MA0051 // Immutable native layout properties must be assigned in this constructor; keeping the complete versioned mapping together preserves ABI auditability.
     internal NativeGtrtSessionLayout(int chunkSizeX, int chunkSizeY, int chunkSizeZ, int lod1Radius, NativeTerrainMaterialSet materials, int generationWorkerCount = 1, int meshWorkerCount = 1, int packetWordCapacity = 0, int gameSnapshotByteCount = 0, int materializedChunkCapacity = 0, int materializedSectionCapacity = 0, int materializedRawSectionCapacity = -1, int materializedPaletteCapacity = 0, int materializedPackedWordCapacity = 0)
+#pragma warning restore MA0051
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(chunkSizeX);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(chunkSizeY);

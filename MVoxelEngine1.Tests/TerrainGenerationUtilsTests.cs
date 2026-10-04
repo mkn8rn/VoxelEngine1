@@ -163,7 +163,9 @@ namespace MVoxelEngine1.Tests
             long seed)
         {
             int valueCount = checked(sizeX * sizeZ);
+#pragma warning disable CA1814 // The independent oracle retains the original dense matrix and coordinate indexing; this test-only layout is compared with native representations.
             var expected = new float[sizeX, sizeZ];
+#pragma warning restore CA1814
             var noise = new OpenSimplexNoise(seed);
             const float scale = 0.001f;
             const float minimumHeight = 1f;
@@ -238,11 +240,15 @@ namespace MVoxelEngine1.Tests
                     cached), TestContext.Current.CancellationToken);
             }
 
+#pragma warning disable VSTHRD002 // Synchronous CPU-only Task.Run workers preserve coordinator timing and allocation samples; workers neither await nor capture its synchronization context.
             Task.WaitAll(workers, TestContext.Current.CancellationToken);
+#pragma warning restore VSTHRD002
             stopwatch.Stop();
             long checksum = 0;
             foreach (Task<long> worker in workers)
+#pragma warning disable VSTHRD002 // Synchronous CPU-only Task.Run workers preserve coordinator timing and allocation samples; workers neither await nor capture its synchronization context.
                 checksum = unchecked(checksum + worker.Result);
+#pragma warning restore VSTHRD002
             return new NoiseBatchEvidence(
                 cached ? "coarse-lattice-cache" : "scalar-four-hash",
                 stopwatch.Elapsed.TotalMilliseconds,

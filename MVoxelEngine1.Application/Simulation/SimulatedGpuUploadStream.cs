@@ -165,7 +165,9 @@ namespace MVoxelEngine1.Application.Simulation
             records.Writer.TryComplete();
             try
             {
+#pragma warning disable VSTHRD003 // This independent writer starts on a dedicated background thread, never calls engine state, and captures no caller synchronization context.
                 await writerTask.ConfigureAwait(false);
+#pragma warning restore VSTHRD003
                 ThrowIfWriterFailed();
                 if (writtenRecordCount != nextSequence)
                 {
@@ -203,9 +205,13 @@ namespace MVoxelEngine1.Application.Simulation
                     records.Writer.TryComplete();
                     try
                     {
+#pragma warning disable VSTHRD003 // This independent writer starts on a dedicated background thread, never calls engine state, and captures no caller synchronization context.
                         await writerTask.ConfigureAwait(false);
+#pragma warning restore VSTHRD003
                     }
+#pragma warning disable CA1031 // Drain the independent writer and close every output resource before rethrowing or aggregating arbitrary writer faults.
                     catch (Exception ex)
+#pragma warning restore CA1031
                     {
                         disposalFailure = ex;
                     }
@@ -225,7 +231,9 @@ namespace MVoxelEngine1.Application.Simulation
                     {
                         disposalFailure = new AggregateException(disposalFailure, ex);
                     }
+#pragma warning disable CA1031 // Drain the independent writer and close every output resource before rethrowing or aggregating arbitrary writer faults.
                     catch (Exception ex)
+#pragma warning restore CA1031
                     {
                         disposalFailure = ex;
                     }
@@ -250,45 +258,15 @@ namespace MVoxelEngine1.Application.Simulation
         {
             try
             {
+#pragma warning disable VSTHRD002 // A dedicated background thread synchronously drains this bounded channel; it has no synchronization context and never accesses world state.
                 while (records.Reader.WaitToReadAsync(writerFailureCancellation.Token).AsTask().GetAwaiter().GetResult())
+#pragma warning restore VSTHRD002
                 {
                     while (records.Reader.TryRead(out QueuedRecord? queued))
                     {
                         try
                         {
-                            if (writerDelayMilliseconds > 0)
-                                Thread.Sleep(writerDelayMilliseconds);
-                            if (writerFailAfterRecords.HasValue && writtenRecordCount >= writerFailAfterRecords.Value)
-                            {
-                                throw new IOException($"The simulated GPU writer failure was requested after {writerFailAfterRecords.Value} records.");
-                            }
-
-                            switch (queued.Record)
-                            {
-                                case UploadRecord upload:
-                                    WriteUploadRecord(upload, queued.Sequence);
-                                    break;
-                                case DeletionRecord deletion:
-                                    WriteDeletionRecord(deletion, queued.Sequence);
-                                    break;
-                                case RenderFrameRecord frame:
-                                    WriteRenderFrameRecord(frame, queued.Sequence);
-                                    break;
-                                case SnapshotRecord snapshot:
-                                    WriteSnapshotRecord(snapshot, queued.Sequence);
-                                    break;
-                                case InputBoundaryRecord inputBoundary:
-                                    WriteInputBoundaryRecord(inputBoundary, queued.Sequence);
-                                    break;
-                                case CompletionRecord completion:
-                                    WriteCompletionRecord(completion, queued.Sequence);
-                                    break;
-                                default:
-                                    throw new InvalidOperationException("The simulated GPU stream record is not valid.");
-                            }
-
-                            writer.Flush();
-                            writtenRecordCount++;
+                            WriteQueuedRecord(queued);
                         }
                         finally
                         {
@@ -306,6 +284,44 @@ namespace MVoxelEngine1.Application.Simulation
                     ReleaseRecordRetention(abandoned);
                 throw;
             }
+        }
+
+
+        private void WriteQueuedRecord(QueuedRecord queued)
+        {
+            if (writerDelayMilliseconds > 0)
+                Thread.Sleep(writerDelayMilliseconds);
+            if (writerFailAfterRecords.HasValue && writtenRecordCount >= writerFailAfterRecords.Value)
+            {
+                throw new IOException($"The simulated GPU writer failure was requested after {writerFailAfterRecords.Value} records.");
+            }
+
+            switch (queued.Record)
+            {
+                case UploadRecord upload:
+                    WriteUploadRecord(upload, queued.Sequence);
+                    break;
+                case DeletionRecord deletion:
+                    WriteDeletionRecord(deletion, queued.Sequence);
+                    break;
+                case RenderFrameRecord frame:
+                    WriteRenderFrameRecord(frame, queued.Sequence);
+                    break;
+                case SnapshotRecord snapshot:
+                    WriteSnapshotRecord(snapshot, queued.Sequence);
+                    break;
+                case InputBoundaryRecord inputBoundary:
+                    WriteInputBoundaryRecord(inputBoundary, queued.Sequence);
+                    break;
+                case CompletionRecord completion:
+                    WriteCompletionRecord(completion, queued.Sequence);
+                    break;
+                default:
+                    throw new InvalidOperationException("The simulated GPU stream record is not valid.");
+            }
+
+            writer.Flush();
+            writtenRecordCount++;
         }
 
         private void EnsureUploadQueued(long frameIndex, in NativeChunkRenderPacketDescriptor data, ReadOnlySpan<uint> opaque, ReadOnlySpan<uint> transparent)
@@ -726,7 +742,9 @@ namespace MVoxelEngine1.Application.Simulation
             {
                 writer.Dispose();
             }
+#pragma warning disable CA1031 // Drain the independent writer and close every output resource before rethrowing or aggregating arbitrary writer faults.
             catch (Exception ex)
+#pragma warning restore CA1031
             {
                 failure = ex;
             }
@@ -739,7 +757,9 @@ namespace MVoxelEngine1.Application.Simulation
             {
                 failure = new AggregateException(failure, ex);
             }
+#pragma warning disable CA1031 // Drain the independent writer and close every output resource before rethrowing or aggregating arbitrary writer faults.
             catch (Exception ex)
+#pragma warning restore CA1031
             {
                 failure = ex;
             }

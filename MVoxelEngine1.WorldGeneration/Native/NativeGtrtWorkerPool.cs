@@ -323,7 +323,9 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
                     session.Access(workAction);
                     workEnd = GC.GetAllocatedBytesForCurrentThread();
                 }
+#pragma warning disable CA1031 // Every worker fault must reach the coordinator after its completion gate is signalled; arbitrary NAM faults cannot terminate the worker silently.
                 catch (Exception exception)
+#pragma warning restore CA1031
                 {
                     Fault = exception;
                 }

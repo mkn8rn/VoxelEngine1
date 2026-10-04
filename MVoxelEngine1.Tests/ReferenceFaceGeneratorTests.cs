@@ -201,7 +201,9 @@ namespace MVoxelEngine1.Tests
             const int maxX = 32;
             const int maxY = 16;
             const int maxZ = 16;
+#pragma warning disable CA1814 // The independent oracle retains the original dense matrix and coordinate indexing; this test-only layout is compared with native representations.
             var blocks = new ushort[maxX, maxY, maxZ];
+#pragma warning restore CA1814
             for (int x = 0; x < 16; x++)
             {
                 for (int y = 0; y < maxY; y++)

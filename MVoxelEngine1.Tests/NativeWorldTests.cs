@@ -513,7 +513,9 @@ public sealed class NativeWorldTests
         Assert.Equal(1, world.Save());
         string quadPath = Directory.GetFiles(
             workspace.QuadsDirectory,
+#pragma warning disable HLQ005 // Exactly one match is a correctness invariant; accepting the first of several matches would weaken this validation.
             "quad*x*.bin").Single();
+#pragma warning restore HLQ005
         FinishFailedAtomicSaveKeepsThePriorQuadAndDirtyEditPhase(settings, workspace, out failPublication, world, quadPath);
     }
 

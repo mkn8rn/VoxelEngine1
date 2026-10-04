@@ -188,7 +188,9 @@ namespace MVoxelEngine1.Tests
             JsonElement transparentDirections = referenceFaces.GetProperty(
                 "transparentDirections");
             Assert.True(
+#pragma warning disable HLQ005 // Exactly one match is a correctness invariant; accepting the first of several matches would weaken this validation.
                 transparentDirections.EnumerateArray().Single(
+#pragma warning restore HLQ005
                     direction => direction.GetProperty("direction").GetByte() == 3)
                     .GetProperty("faceCount").GetInt64() > 0);
             Assert.All(

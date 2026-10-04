@@ -12,7 +12,9 @@ using MVoxelEngine1.Infrastructure.Models.Terrain;
 
 namespace MVoxelEngine1.WorldGeneration
 {
+#pragma warning disable CA1028 // Retain the existing one-byte enum contract used by block, face and render-pass data; changing the underlying type would alter that contract.
     public enum CanonicalRenderPass : byte
+#pragma warning restore CA1028
     {
         Opaque = 0,
         Transparent = 1

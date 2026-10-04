@@ -29,9 +29,13 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
         public string saveDirectory;
         public long generationSeed;
 
+#pragma warning disable CA1814 // The independent oracle retains the original dense matrix and coordinate indexing; this test-only layout is compared with native representations.
         private Section[,,]? sectionGrid;
+#pragma warning restore CA1814
         private Section? sharedUniformSection;
+#pragma warning disable CA1814 // The independent oracle retains the original dense matrix and coordinate indexing; this test-only layout is compared with native representations.
         public Section[,,] sections => GetIndependentSectionGrid();
+#pragma warning restore CA1814
         public int sectionsX;
         public int sectionsY;
         public int sectionsZ;
@@ -169,11 +173,15 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
         public void InitializeSectionGrid()
         {
             InitializeSectionDimensions();
+#pragma warning disable CA1814 // The independent oracle retains the original dense matrix and coordinate indexing; this test-only layout is compared with native representations.
             sectionGrid = new Section[sectionsX, sectionsY, sectionsZ];
+#pragma warning restore CA1814
             sharedUniformSection = null;
         }
 
+#pragma warning disable CA1814 // The independent oracle retains the original dense matrix and coordinate indexing; this test-only layout is compared with native representations.
         private Section[,,] EnsureSectionGrid()
+#pragma warning restore CA1814
         {
             if (sectionGrid is null)
                 InitializeSectionGrid();
@@ -184,9 +192,13 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
 
         internal bool UsesSharedUniformSection => sharedUniformSection is not null;
 
+#pragma warning disable CA1814 // The independent oracle retains the original dense matrix and coordinate indexing; this test-only layout is compared with native representations.
         internal Section[,,] GetReadOnlySectionGrid() => EnsureSectionGrid();
+#pragma warning restore CA1814
 
+#pragma warning disable CA1814 // The independent oracle retains the original dense matrix and coordinate indexing; this test-only layout is compared with native representations.
         private Section[,,] GetIndependentSectionGrid()
+#pragma warning restore CA1814
         {
             Section[,,] grid = EnsureSectionGrid();
             Section? shared = sharedUniformSection;

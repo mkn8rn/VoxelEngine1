@@ -42,7 +42,9 @@ internal sealed partial class NativeWorldSaveImportPlan
             FileStream? stream = null;
             try
             {
+#pragma warning disable CA2000 // This stream has unconditional finally disposal; ValidateFile uses a leave-open BinaryReader and does not own the stream.
                 stream = OpenRead(file.Path);
+#pragma warning restore CA2000
                 VerifySavedFile(stream, file);
                 ValidateFile(stream, file, session);
             }

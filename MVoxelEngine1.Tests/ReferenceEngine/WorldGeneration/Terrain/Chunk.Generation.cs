@@ -67,7 +67,9 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             _ = EnsureSectionGrid();
         }
 
+#pragma warning disable MA0051 // Retain this historical dense/packed oracle algorithm independently of production; section, metadata and face-equivalence tests validate its original indexing.
         internal void GenerateInitialChunkData(GeneratedChunkSpanData spanData)
+#pragma warning restore MA0051
         {
             BlockColumnProfile[] columnSpanMap = spanData.Columns;
             if (columnSpanMap == null)

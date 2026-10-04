@@ -153,7 +153,9 @@ public sealed class NativeWorldSaveImportTests
         var atlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
         using NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(atlas, settings, 2, 2, savePlan: plan);
         using NativeWorld world = NativeWorld.CreateForTesting(pipeline, 123456, NullRenderer);
+#pragma warning disable HLQ005 // Exactly one match is a correctness invariant; accepting the first of several matches would weaken this validation.
         string path = Directory.GetFiles(workspace.QuadsDirectory, "quad*x*.bin").Single();
+#pragma warning restore HLQ005
         byte[] original = File.ReadAllBytes(path);
         byte[] changed = (byte[])original.Clone();
         changed[^1] ^= 1;
@@ -194,7 +196,9 @@ public sealed class NativeWorldSaveImportTests
         using var workspace = new SaveWorkspace();
         WriteQuads(workspace.QuadsDirectory,
             [new ChunkFixture(0, 0, 0, [SectionFixture.Uniform(SoilId)], 42.5f, 12.25f)], 1, 1, 1);
+#pragma warning disable HLQ005 // Exactly one match is a correctness invariant; accepting the first of several matches would weaken this validation.
         string path = Directory.GetFiles(workspace.QuadsDirectory, "quad*x*.bin").Single();
+#pragma warning restore HLQ005
         byte[] bytes = File.ReadAllBytes(path);
         int payloadLength = BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(32));
         BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(32), payloadLength - 61);
@@ -473,7 +477,9 @@ public sealed class NativeWorldSaveImportTests
             NativeWorldSaveImportPlan.Create(
                 workspace.QuadsDirectory,
                 settings);
+#pragma warning disable HLQ005 // Exactly one match is a correctness invariant; accepting the first of several matches would weaken this validation.
         string path = Directory.GetFiles(workspace.QuadsDirectory).Single();
+#pragma warning restore HLQ005
         using (var stream = new FileStream(path, FileMode.Append, FileAccess.Write))
             stream.WriteByte(0xFF);
 
@@ -601,7 +607,9 @@ public sealed class NativeWorldSaveImportTests
     {
         string path = Directory.GetFiles(
             quadsDirectory,
+#pragma warning disable HLQ005 // Exactly one match is a correctness invariant; accepting the first of several matches would weaken this validation.
             "quad*x*.bin").Single();
+#pragma warning restore HLQ005
         byte[] quad = File.ReadAllBytes(path);
         const int quadHeaderSize = 20;
         const int recordHeaderSize = 16;

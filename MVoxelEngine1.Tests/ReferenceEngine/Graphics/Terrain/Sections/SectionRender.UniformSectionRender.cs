@@ -33,7 +33,9 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
         ///  4. (Opaque only) Emit full-plane faces first, then partial / boundary / fallback faces.
         ///  5. (Transparent) Direct per-face plane scan applying transparent rules (no opaque stratification overhead, bounded to 6 * 256 samples). Same-id uniform neighbor planes are skipped entirely up-front. Chunk boundary same-id uniform transparent neighbor chunks are also skipped when every opposing boundary cell matches this id.
         ///  6. Return true (uniform path always handled; empty uniform returns true with no output).
+#pragma warning disable MA0051 // Retain this historical dense/packed oracle algorithm independently of production; section, metadata and face-equivalence tests validate its original indexing.
         private bool EmitUniformSectionInstances(ref SectionPrerenderDesc desc, int sx, int sy, int sz, int S, List<byte> offsetList, List<uint> tileIndexList, List<byte> faceDirList)
+#pragma warning restore MA0051
         {
             ushort block = desc.UniformBlockId;
             if (block == 0)

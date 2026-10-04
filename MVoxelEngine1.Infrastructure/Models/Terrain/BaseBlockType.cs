@@ -6,7 +6,9 @@ using System.Threading.Tasks;
 
 namespace MVoxelEngine1.Infrastructure.Models.Terrain
 {
+#pragma warning disable CA1028 // Retain the existing one-byte enum contract used by block, face and render-pass data; changing the underlying type would alter that contract.
     public enum BaseBlockType : byte
+#pragma warning restore CA1028
     {
         Empty = 0,
         Gas = 1,

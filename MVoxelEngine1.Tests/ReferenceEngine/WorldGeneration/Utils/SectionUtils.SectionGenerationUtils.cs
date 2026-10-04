@@ -16,10 +16,16 @@ namespace MVoxelEngine1.WorldGeneration.Utils
         private const int S = Section.SECTION_SIZE; // Section linear dimension (16)
         private const int AIR = Section.AIR; // Block id representing empty space
         private const int COLUMN_COUNT = S * S; // 256 vertical columns (z * S + x)
+#pragma warning disable CA1814 // The independent oracle retains the original dense matrix and coordinate indexing; this test-only layout is compared with native representations.
         private static readonly ushort[, ] MaskRangeLut = BuildMaskRangeLut();
+#pragma warning restore CA1814
+#pragma warning disable CA1814 // The independent oracle retains the original dense matrix and coordinate indexing; this test-only layout is compared with native representations.
         private static ushort[, ] BuildMaskRangeLut()
+#pragma warning restore CA1814
         {
+#pragma warning disable CA1814 // The independent oracle retains the original dense matrix and coordinate indexing; this test-only layout is compared with native representations.
             var t = new ushort[16, 16];
+#pragma warning restore CA1814
             for (int i = 0; i < 16; i++)
                 for (int j = i; j < 16; j++)
                     t[i, j] = (ushort)(((1 << (j - i + 1)) - 1) << i);
@@ -207,7 +213,9 @@ namespace MVoxelEngine1.WorldGeneration.Utils
         //   When any column escalated (RunCount==255) we rebuild a dense array (O(4096)).
         // -------------------------------------------------------------------------------------------------
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+#pragma warning disable MA0051 // Retain this historical dense/packed oracle algorithm independently of production; section, metadata and face-equivalence tests validate its original indexing.
         public static void GenerationFinalizeSection(Section sec)
+#pragma warning restore MA0051
         {
             if (sec == null)
                 return;
@@ -343,9 +351,9 @@ namespace MVoxelEngine1.WorldGeneration.Utils
                 }
             }
 
-            var scratch = sec.BuildScratch as SectionBuildScratch;
-            // 3. Empty / untouched early exit
-            if (scratch == null || !scratch.AnyNonAir)
+            var scratch = sec.BuildScratch;
+            // The preceding no-scratch branch returned for every representation.
+            if (!scratch.AnyNonAir)
             {
                 sec.Kind = Section.RepresentationKind.Empty;
                 sec.IsAllAir = true;
@@ -353,11 +361,8 @@ namespace MVoxelEngine1.WorldGeneration.Utils
                 sec.VoxelCount = S * S * S;
                 sec.StructuralDirty = false;
                 sec.IdMapDirty = false;
-                if (scratch != null)
-                {
-                    sec.BuildScratch = null;
-                    ReturnScratch(scratch);
-                }
+                sec.BuildScratch = null;
+                ReturnScratch(scratch);
 
                 FinalizeTransparentAndEmptyMasks(sec);
                 return;

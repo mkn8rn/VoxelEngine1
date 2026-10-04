@@ -68,7 +68,9 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
             {
                 allocationMonitor?.Dispose();
             }
+#pragma warning disable CA1031 // Renderer callbacks may throw arbitrary exceptions; finish releasing the entire renderer bank and rethrow or aggregate the original fault.
             catch (Exception exception)
+#pragma warning restore CA1031
             {
                 monitorFailure = exception;
             }
@@ -166,7 +168,9 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
             {
                 pipeline.RollbackBlockEdit();
             }
+#pragma warning disable CA1031 // Renderer callbacks may throw arbitrary exceptions; finish releasing the entire renderer bank and rethrow or aggregate the original fault.
             catch (Exception exception)
+#pragma warning restore CA1031
             {
                 rollbackFailure = exception;
             }
@@ -208,7 +212,9 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
     {
         ValidateOwnerThread();
         if (inspectingPackets)
+#pragma warning disable CA1065 // Reject disposal during an active native packet borrow before changing state; inspection and owner-thread tests require the world to remain usable after rejection.
             throw new InvalidOperationException("The native world is being inspected.");
+#pragma warning restore CA1065
         if (Interlocked.Exchange(ref disposed, 1) != 0)
             return;
         Exception? failure = null;
@@ -218,7 +224,9 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
             {
                 _ = pipeline.SaveDirtyChunks(quadsDirectory);
             }
+#pragma warning disable CA1031 // Renderer callbacks may throw arbitrary exceptions; finish releasing the entire renderer bank and rethrow or aggregate the original fault.
             catch (Exception exception)
+#pragma warning restore CA1031
             {
                 failure = exception;
             }
@@ -230,7 +238,9 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
         {
             pipeline.Dispose();
         }
+#pragma warning disable CA1031 // Renderer callbacks may throw arbitrary exceptions; finish releasing the entire renderer bank and rethrow or aggregate the original fault.
         catch (Exception exception)
+#pragma warning restore CA1031
         {
             failure = Combine(failure, exception);
         }
@@ -350,7 +360,9 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
             {
                 renderer.Dispose();
             }
+#pragma warning disable CA1031 // Renderer callbacks may throw arbitrary exceptions; finish releasing the entire renderer bank and rethrow or aggregate the original fault.
             catch (Exception exception)
+#pragma warning restore CA1031
             {
                 failure ??= exception;
             }
@@ -375,7 +387,9 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
             {
                 renderer.Dispose();
             }
+#pragma warning disable CA1031 // Renderer callbacks may throw arbitrary exceptions; finish releasing the entire renderer bank and rethrow or aggregate the original fault.
             catch (Exception exception)
+#pragma warning restore CA1031
             {
                 failure ??= exception;
             }
@@ -407,7 +421,9 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
         {
             pipeline.Dispose();
         }
+#pragma warning disable CA1031 // Renderer callbacks may throw arbitrary exceptions; finish releasing the entire renderer bank and rethrow or aggregate the original fault.
         catch (Exception exception)
+#pragma warning restore CA1031
         {
             failure = Combine(failure, exception);
         }
@@ -428,7 +444,9 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
             {
                 renderer.Dispose();
             }
+#pragma warning disable CA1031 // Renderer callbacks may throw arbitrary exceptions; finish releasing the entire renderer bank and rethrow or aggregate the original fault.
             catch (Exception exception)
+#pragma warning restore CA1031
             {
                 failure ??= exception;
             }

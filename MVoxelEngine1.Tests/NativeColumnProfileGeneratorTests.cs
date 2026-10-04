@@ -40,7 +40,9 @@ public sealed class NativeColumnProfileGeneratorTests
         Assert.Equal(12, GameManager.settings.lod1RenderDistance);
         Biome[] biomes = BiomeManager.Biomes.OrderBy(static pair => pair.Key, StringComparer.OrdinalIgnoreCase)
             .Select(static pair => pair.Value).ToArray();
+#pragma warning disable HLQ005 // Exactly one match is a correctness invariant; accepting the first of several matches would weaken this validation.
         Assert.Single(biomes);
+#pragma warning restore HLQ005
         var noise = new OpenSimplexNoise(seed);
         var atlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
         using NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(atlas, GameManager.settings,
@@ -218,7 +220,7 @@ public sealed class NativeColumnProfileGeneratorTests
         {
             summary.AllColumnsHaveStone = false;
         }
-        FinishAddToSummaryPhase(ref summary, in profile, hasSoil, hasWater);
+        FinishAddToSummaryPhase(ref summary, profile, hasSoil, hasWater);
     }
 
     private static void AssertProfileEqual(
@@ -493,7 +495,7 @@ public sealed class NativeColumnProfileGeneratorTests
 
     }
 
-    private static void FinishAddToSummaryPhase(ref global::MVoxelEngine1.WorldGeneration.Terrain.ColumnUniformRanges summary, scoped in global::MVoxelEngine1.Infrastructure.Models.Generation.BlockColumnProfile profile, bool hasSoil, bool hasWater)
+    private static void FinishAddToSummaryPhase(ref global::MVoxelEngine1.WorldGeneration.Terrain.ColumnUniformRanges summary, global::MVoxelEngine1.Infrastructure.Models.Generation.BlockColumnProfile profile, bool hasSoil, bool hasWater)
     {
 
         if (hasSoil)

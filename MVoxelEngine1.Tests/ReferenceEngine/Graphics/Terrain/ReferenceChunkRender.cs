@@ -25,7 +25,9 @@ internal sealed class ReferenceChunkRender : IDisposable
     private readonly int prepassSolidCount, prepassExposureEstimate;
     private int opaqueFaceCount, opaqueRectangleCount, transparentFaceCount, transparentRectangleCount;
     private bool fullyOccluded;
+#pragma warning disable CA2213 // ScheduleDelete atomically exchanges this owner to null and disposes the returned owner; retention tests prove release and idempotence.
     private ChunkRenderUploadData? uploadData;
+#pragma warning restore CA2213
     public static BlockTextureAtlas terrainTextureAtlas
     {
         get => ChunkRender.terrainTextureAtlas;

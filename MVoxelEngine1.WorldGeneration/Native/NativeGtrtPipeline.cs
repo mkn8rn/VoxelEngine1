@@ -579,7 +579,9 @@ public sealed class NativeGtrtPipeline : IDisposable
         {
             workers.Dispose();
         }
+#pragma warning disable CA1031 // Complete packet retirement, edit rollback and owner cleanup before propagating arbitrary callback or ownership faults.
         catch (Exception exception)
+#pragma warning restore CA1031
         {
             failure = Combine(failure, exception);
         }
@@ -589,7 +591,9 @@ public sealed class NativeGtrtPipeline : IDisposable
             {
                 session.Dispose();
             }
+#pragma warning disable CA1031 // Complete packet retirement, edit rollback and owner cleanup before propagating arbitrary callback or ownership faults.
             catch (Exception exception)
+#pragma warning restore CA1031
             {
                 failure = Combine(failure, exception);
             }
@@ -599,7 +603,9 @@ public sealed class NativeGtrtPipeline : IDisposable
                 {
                     game.Dispose();
                 }
+#pragma warning disable CA1031 // Complete packet retirement, edit rollback and owner cleanup before propagating arbitrary callback or ownership faults.
                 catch (Exception exception)
+#pragma warning restore CA1031
                 {
                     failure = Combine(failure, exception);
                 }
@@ -736,13 +742,17 @@ public sealed class NativeGtrtPipeline : IDisposable
                         consumer(in descriptor, packet.OpaqueWords, packet.TransparentWords);
                         consumedPacketCount++;
                     }
+#pragma warning disable CA1031 // Complete packet retirement, edit rollback and owner cleanup before propagating arbitrary callback or ownership faults.
                     catch (Exception exception)
+#pragma warning restore CA1031
                     {
                         packetConsumerFailure = exception;
                     }
                 }
             }
+#pragma warning disable CA1031 // Complete packet retirement, edit rollback and owner cleanup before propagating arbitrary callback or ownership faults.
             catch (Exception exception)
+#pragma warning restore CA1031
             {
                 packetFailure = exception;
             }
@@ -912,7 +922,9 @@ public sealed class NativeGtrtPipeline : IDisposable
 
             return null;
         }
+#pragma warning disable CA1031 // Complete packet retirement, edit rollback and owner cleanup before propagating arbitrary callback or ownership faults.
         catch (Exception exception)
+#pragma warning restore CA1031
         {
             Volatile.Write(ref completedRunCount, int.MinValue);
             return exception;

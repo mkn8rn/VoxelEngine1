@@ -87,10 +87,14 @@ namespace MVoxelEngine1.Tests
                     () => workerAction(capturedWorkerIndex), TestContext.Current.CancellationToken);
             }
 
+#pragma warning disable VSTHRD002 // Synchronous CPU-only Task.Run workers preserve coordinator timing and allocation samples; workers neither await nor capture its synchronization context.
             Task.WaitAll(workers, TestContext.Current.CancellationToken);
+#pragma warning restore VSTHRD002
             stopwatch.Stop();
             ulong[] checksums = workers
+#pragma warning disable VSTHRD002 // Synchronous CPU-only Task.Run workers preserve coordinator timing and allocation samples; workers neither await nor capture its synchronization context.
                 .Select(worker => worker.Result)
+#pragma warning restore VSTHRD002
                 .ToArray();
             return new HeightBatchEvidence(
                 implementation,

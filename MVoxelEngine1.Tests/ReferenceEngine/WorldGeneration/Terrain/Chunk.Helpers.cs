@@ -61,7 +61,9 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             FaceSolidPosZ = PlaneIsFull(PlanePosZ, xyWC, fullWord, lastXY);
         }
 
+#pragma warning disable MA0051 // Retain this historical dense/packed oracle algorithm independently of production; section, metadata and face-equivalence tests validate its original indexing.
         private void BuildAllBoundaryPlanesInitial()
+#pragma warning restore MA0051
         {
             long performanceStart = StartupPerformanceRecorder.IsRunning ? Stopwatch.GetTimestamp() : 0;
             if (generatedSpans is not null)
@@ -183,7 +185,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                                         SetPlaneBit(PlaneNegX, globalIdx);
                                     }
                             }
-                            else if (secNeg?.FaceNegXBits != null)
+                            else if (secNeg.FaceNegXBits != null)
                             {
                                 var bits = secNeg.FaceNegXBits;
                                 for (int wi = 0; wi < bits.Length; wi++)
@@ -241,7 +243,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                                             RecordTransparent(TransparentPlaneNegX, globalIdx, secNeg.UniformBlockId);
                                         }
                                 }
-                                else if (secNeg?.TransparentFaceNegXBits != null)
+                                else if (secNeg.TransparentFaceNegXBits != null)
                                 {
                                     EnsureTransparentPlaneArrays();
                                     var tBits = secNeg.TransparentFaceNegXBits;
@@ -301,7 +303,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                                         SetPlaneBit(PlanePosX, globalIdx);
                                     }
                             }
-                            else if (secPos?.FacePosXBits != null)
+                            else if (secPos.FacePosXBits != null)
                             {
                                 var bits = secPos.FacePosXBits;
                                 for (int wi = 0; wi < bits.Length; wi++)
@@ -428,7 +430,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                                         SetPlaneBit(PlaneNegY, globalIdx);
                                     }
                             }
-                            else if (secNeg?.FaceNegYBits != null)
+                            else if (secNeg.FaceNegYBits != null)
                             {
                                 var bits = secNeg.FaceNegYBits;
                                 for (int wi = 0; wi < bits.Length; wi++)
@@ -543,7 +545,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                                         SetPlaneBit(PlanePosY, globalIdx);
                                     }
                             }
-                            else if (secPos?.FacePosYBits != null)
+                            else if (secPos.FacePosYBits != null)
                             {
                                 var bits = secPos.FacePosYBits;
                                 for (int wi = 0; wi < bits.Length; wi++)
@@ -670,7 +672,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                                         SetPlaneBit(PlaneNegZ, globalIdx);
                                     }
                             }
-                            else if (secNeg?.FaceNegZBits != null)
+                            else if (secNeg.FaceNegZBits != null)
                             {
                                 var bits = secNeg.FaceNegZBits;
                                 for (int wi = 0; wi < bits.Length; wi++)
@@ -785,7 +787,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                                         SetPlaneBit(PlanePosZ, globalIdx);
                                     }
                             }
-                            else if (secPos?.FacePosZBits != null)
+                            else if (secPos.FacePosZBits != null)
                             {
                                 var bits = secPos.FacePosZBits;
                                 for (int wi = 0; wi < bits.Length; wi++)
