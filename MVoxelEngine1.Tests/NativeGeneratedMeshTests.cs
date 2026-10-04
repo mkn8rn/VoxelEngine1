@@ -15,6 +15,31 @@ public sealed class NativeGeneratedMeshTests
     private const ushort CustomTransparentBlockId = 257;
 
     [Theory]
+    [InlineData(0, false)]
+    [InlineData(0, true)]
+    [InlineData(6, false)]
+    [InlineData(6, true)]
+    public void GeneratedWriterRejectsUndefinedDescriptorsForDirectAndSelectedRanges(int id, bool defined)
+    {
+        NativeTerrainMaterialSet conventional = NativeTerrainMaterialSet.CreateConventional();
+        var stone = new NativeBlockDescriptor(checked((ushort)id), BaseBlockType.Stone,
+            BlockStateOfMatter.Solid, (defined ? NativeBlockFlags.Defined : NativeBlockFlags.None) | NativeBlockFlags.Transparent,
+            0, 0, 0, 0, 0, 0);
+        var materials = new NativeTerrainMaterialSet(stone, conventional.Soil, conventional.Water, resolved: true);
+        bool expectedValid = id != 0 && defined;
+        var direct = new NativeGeneratedFaceWriter(materials);
+        direct.EmitMaterialYRange(0, false, 0, 0, 0, 0, 0);
+        Assert.Equal(expectedValid, direct.Valid);
+        Assert.Equal(expectedValid ? 1 : 0, direct.TransparentFaceCount);
+        var selected = new NativeGeneratedFaceWriter(materials);
+        selected.SelectMaterial(0, false);
+        Assert.True(selected.Valid);
+        selected.EmitRectangle(0, 0, 0, 0, 1, 1);
+        Assert.Equal(expectedValid, selected.Valid);
+        Assert.Equal(expectedValid ? 1 : 0, selected.TransparentFaceCount);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void UniformChunksBesidePartialProfilesMatchEveryNaiveVoxelFace(bool transparent)

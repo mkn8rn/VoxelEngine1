@@ -8,11 +8,13 @@ internal ref struct NativeGeneratedFaceWriter
     private readonly Span<uint> opaqueWords;
     private readonly Span<uint> transparentWords;
     private readonly bool writes;
+    private readonly uint definedMaterials;
     private int currentMaterial;
     private bool currentOpaque;
     internal NativeGeneratedFaceWriter(NativeTerrainMaterialSet materials)
     {
         this.materials = materials;
+        definedMaterials = GetDefinedMaterials(in materials);
         opaqueWords = default;
         transparentWords = default;
         writes = false;
@@ -28,6 +30,7 @@ internal ref struct NativeGeneratedFaceWriter
     internal NativeGeneratedFaceWriter(NativeTerrainMaterialSet materials, Span<uint> opaqueWords, Span<uint> transparentWords)
     {
         this.materials = materials;
+        definedMaterials = GetDefinedMaterials(in materials);
         this.opaqueWords = opaqueWords;
         this.transparentWords = transparentWords;
         writes = true;
@@ -73,7 +76,7 @@ internal ref struct NativeGeneratedFaceWriter
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void Emit(int material, bool opaque, byte direction, int x, int y, int z, int extentU, int extentV)
     {
-        if ((uint)material >= 3)
+        if ((uint)material >= 3 || (definedMaterials & (1u << material)) == 0)
         {
             Valid = false;
             return;
@@ -86,13 +89,37 @@ internal ref struct NativeGeneratedFaceWriter
             2 => materials.Water,
             _ => default
         };
-        EmitDescriptor(in descriptor, opaque, direction, x, y, z, extentU, extentV);
+        EmitDefinedDescriptor(in descriptor, opaque, direction, x, y, z, extentU, extentV);
     }
+
+    private static uint GetDefinedMaterials(scoped in NativeTerrainMaterialSet materials)
+    {
+        NativeBlockDescriptor stone = materials.Stone;
+        NativeBlockDescriptor soil = materials.Soil;
+        NativeBlockDescriptor water = materials.Water;
+        return (IsDefined(in stone) ? 1u : 0u) |
+            (IsDefined(in soil) ? 2u : 0u) |
+            (IsDefined(in water) ? 4u : 0u);
+    }
+
+    private static bool IsDefined(scoped in NativeBlockDescriptor descriptor) =>
+        descriptor.Id != 0 && descriptor.HasFlag(NativeBlockFlags.Defined);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void EmitDescriptor(scoped in NativeBlockDescriptor descriptor, bool opaque, byte direction, int x, int y, int z, int extentU, int extentV)
     {
-        if (!Valid || descriptor.Id == 0 || !descriptor.HasFlag(NativeBlockFlags.Defined) || direction >= 6 || (uint)x > byte.MaxValue || (uint)y > byte.MaxValue || (uint)z > byte.MaxValue || (uint)(extentU - 1) > byte.MaxValue || (uint)(extentV - 1) > byte.MaxValue)
+        if (!IsDefined(in descriptor))
+        {
+            Valid = false;
+            return;
+        }
+        EmitDefinedDescriptor(in descriptor, opaque, direction, x, y, z, extentU, extentV);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void EmitDefinedDescriptor(scoped in NativeBlockDescriptor descriptor, bool opaque, byte direction, int x, int y, int z, int extentU, int extentV)
+    {
+        if (!Valid || direction >= 6 || (uint)x > byte.MaxValue || (uint)y > byte.MaxValue || (uint)z > byte.MaxValue || (uint)(extentU - 1) > byte.MaxValue || (uint)(extentV - 1) > byte.MaxValue)
         {
             Valid = false;
             return;

@@ -1,9 +1,11 @@
+using System.Runtime.CompilerServices;
 using Supprocom.OpenSimplexNoise;
 
 namespace MVoxelEngine1.WorldGeneration.Native;
 
 internal static class NativeHeightMap
 {
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         internal static void FillHeightMap(
             ReadOnlySpan<byte> permutation,
             ReadOnlySpan<byte> permutation2D,

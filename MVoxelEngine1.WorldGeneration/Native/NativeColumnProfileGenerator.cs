@@ -38,6 +38,7 @@ internal static class NativeColumnProfileGenerator
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     private static bool GenerateCore(scoped ref NativeGtrtSessionView session, int workerIndex, scoped ref readonly NativeWorkItem work, int biomeIndex, scoped in NativeBiomeDescriptor biome)
     {
         int profileCount = session.ProfilesPerColumn;
