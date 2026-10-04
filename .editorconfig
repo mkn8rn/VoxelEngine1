@@ -1,0 +1,51 @@
+root = true
+
+[*.cs]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+indent_style = space
+indent_size = 4
+
+dotnet_analyzer_diagnostic.category-Correctness.severity = warning
+dotnet_analyzer_diagnostic.category-Security.severity = warning
+dotnet_analyzer_diagnostic.category-Reliability.severity = warning
+dotnet_analyzer_diagnostic.category-Threading.severity = warning
+dotnet_analyzer_diagnostic.category-Disposal.severity = warning
+dotnet_analyzer_diagnostic.category-Performance.severity = warning
+dotnet_analyzer_diagnostic.category-Usage.severity = warning
+
+dotnet_diagnostic.RS0030.severity = error
+dotnet_diagnostic.RS0031.severity = error
+dotnet_diagnostic.AD0001.severity = error
+dotnet_diagnostic.CA5359.severity = error
+
+# Equivalent lower-priority diagnostics; see docs/analyzers.md for the CA owners.
+dotnet_diagnostic.MA0001.severity = none
+dotnet_diagnostic.MA0005.severity = none
+dotnet_diagnostic.MA0010.severity = none
+dotnet_diagnostic.MA0011.severity = none
+dotnet_diagnostic.MA0012.severity = none
+dotnet_diagnostic.MA0013.severity = none
+dotnet_diagnostic.MA0014.severity = none
+dotnet_diagnostic.MA0027.severity = none
+dotnet_diagnostic.MA0028.severity = none
+dotnet_diagnostic.MA0033.severity = none
+dotnet_diagnostic.MA0039.severity = none
+dotnet_diagnostic.MA0043.severity = none
+dotnet_diagnostic.MA0047.severity = none
+dotnet_diagnostic.MA0049.severity = none
+dotnet_diagnostic.MA0057.severity = none
+dotnet_diagnostic.MA0058.severity = none
+dotnet_diagnostic.MA0059.severity = none
+dotnet_diagnostic.MA0062.severity = none
+dotnet_diagnostic.MA0069.severity = none
+dotnet_diagnostic.MA0070.severity = none
+dotnet_diagnostic.MA0072.severity = none
+dotnet_diagnostic.MA0074.severity = none
+dotnet_diagnostic.MA0082.severity = none
+dotnet_diagnostic.MA0086.severity = none
+dotnet_diagnostic.MA0095.severity = none
+dotnet_diagnostic.MA0097.severity = none
+dotnet_diagnostic.MA0112.severity = none
+dotnet_diagnostic.MA0131.severity = none

@@ -1,0 +1,7 @@
+# Native ownership must remain with NAM; manual allocations bypass its lifetime checks.
+T:System.Runtime.InteropServices.NativeMemory; Use NAM owners and scoped native leases.
+M:System.Runtime.InteropServices.Marshal.AllocHGlobal(System.Int32); Use NAM owners and scoped native leases.
+M:System.Runtime.InteropServices.Marshal.AllocHGlobal(System.IntPtr); Use NAM owners and scoped native leases.
+M:System.Runtime.InteropServices.Marshal.AllocCoTaskMem(System.Int32); Use NAM owners and scoped native leases.
+M:System.Runtime.InteropServices.Marshal.ReAllocHGlobal(System.IntPtr,System.IntPtr); Grow NAM owned storage between runs.
+M:System.Runtime.InteropServices.Marshal.ReAllocCoTaskMem(System.IntPtr,System.Int32); Grow NAM owned storage between runs.
