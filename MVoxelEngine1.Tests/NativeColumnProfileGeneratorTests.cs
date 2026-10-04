@@ -1,3 +1,11 @@
+using System.Buffers.Binary;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text.Json;
+using MVoxelEngine1.Graphics.Terrain;
+using MVoxelEngine1.Graphics.Textures;
+using MVoxelEngine1.Infrastructure.Loaders;
+using MVoxelEngine1.Infrastructure.Managers;
 using MVoxelEngine1.Infrastructure.Models.Generation;
 using MVoxelEngine1.Infrastructure.Models.Generation.Biomes;
 using MVoxelEngine1.WorldGeneration.Native;
@@ -9,6 +17,87 @@ namespace MVoxelEngine1.Tests;
 
 public sealed class NativeColumnProfileGeneratorTests
 {
+    [Fact(Explicit = true, Timeout = 300_000)]
+    [Trait("Category", "Oracle")]
+    [Trait("Resource", "CPU")]
+    public void EveryProductionAndHaloProfileMatchesTheManagedHeightAuthority()
+    {
+        const long seed = 123456;
+        GameManager.Initialize(TestPaths.GameDataRoot);
+        GameManager.LoadGameDefaultSettings(GameManager.SelectGameFolder("Default"));
+        TerrainLoader.allBlockTypes.Clear();
+        TerrainLoader.allBlockTypesByBaseType.Clear();
+        TerrainLoader.allBlockTypesByIds.Clear();
+        TerrainLoader.allBlockTypeObjects.Clear();
+        _ = new TerrainLoader();
+        BiomeManager.LoadAllBiomes();
+        Assert.Equal(160, GameManager.settings.chunkMaxX);
+        Assert.Equal(160, GameManager.settings.chunkMaxY);
+        Assert.Equal(160, GameManager.settings.chunkMaxZ);
+        Assert.Equal(12, GameManager.settings.lod1RenderDistance);
+        Biome[] biomes = BiomeManager.Biomes.OrderBy(static pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(static pair => pair.Value).ToArray();
+        Assert.Single(biomes);
+        var noise = new OpenSimplexNoise(seed);
+        var atlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
+        using NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(atlas, GameManager.settings,
+            Environment.ProcessorCount * 2, Environment.ProcessorCount * 2);
+        pipeline.Run(seed);
+        pipeline.ConsumeReadyPackets(static (in NativeChunkRenderPacketDescriptor descriptor,
+            ReadOnlySpan<uint> opaque, ReadOnlySpan<uint> transparent) => { });
+        long profileCount = 0;
+        int columnCount = 0;
+        string? nativeHash = null, referenceHash = null;
+        pipeline.InspectState(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            NativeColumnRecord[] columns = view.Columns.ToArray();
+            Array.Sort(columns, static (left, right) =>
+            {
+                int comparison = left.ChunkX.CompareTo(right.ChunkX);
+                return comparison == 0 ? left.ChunkZ.CompareTo(right.ChunkZ) : comparison;
+            });
+            using IncrementalHash native = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            using IncrementalHash reference = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            native.AppendData("MVoxelEngine1.DefaultColumnProfiles.v1"u8);
+            reference.AppendData("MVoxelEngine1.DefaultColumnProfiles.v1"u8);
+            Span<byte> coordinate = stackalloc byte[8];
+            foreach (NativeColumnRecord column in columns)
+            {
+                Assert.Equal(NativeColumnState.Generated, column.State);
+                Assert.Equal(view.State.SessionEpoch, column.GenerationEpoch);
+                BlockColumnProfile[] expected = BuildReferenceProfiles(column.ChunkX, column.ChunkZ,
+                    view.ChunkSizeX, seed, biomes[column.BiomeIndex], noise, out _);
+                Span<BlockColumnProfile> actual = view.GetColumnProfiles(view.GetColumnIndex(column.ChunkX, column.ChunkZ));
+                ReadOnlySpan<byte> expectedBytes = MemoryMarshal.AsBytes(expected.AsSpan());
+                ReadOnlySpan<byte> actualBytes = MemoryMarshal.AsBytes(actual);
+                Assert.True(actualBytes.SequenceEqual(expectedBytes),
+                    $"Production profile bytes differ at column ({column.ChunkX},{column.ChunkZ}).");
+                BinaryPrimitives.WriteInt32LittleEndian(coordinate, column.ChunkX);
+                BinaryPrimitives.WriteInt32LittleEndian(coordinate[4..], column.ChunkZ);
+                native.AppendData(coordinate);
+                reference.AppendData(coordinate);
+                native.AppendData(actualBytes);
+                reference.AppendData(expectedBytes);
+                profileCount += actual.Length;
+                columnCount++;
+            }
+            nativeHash = Convert.ToHexString(native.GetHashAndReset());
+            referenceHash = Convert.ToHexString(reference.GetHashAndReset());
+        });
+        Assert.Equal(729, columnCount);
+        Assert.Equal(18_662_400, profileCount);
+        Assert.Equal(referenceHash, nativeHash);
+        string output = Path.Combine(TestPaths.ResultsRoot, "default-full-profiles.json");
+        Directory.CreateDirectory(TestPaths.ResultsRoot);
+        File.WriteAllText(output, JsonSerializer.Serialize(new
+        {
+            game = "Default", seed, chunkSize = 160, lod1Radius = 12,
+            columnCount, profileCount, nativeHash, referenceHash, allProfileBytesEqual = true
+        }, new JsonSerializerOptions { WriteIndented = true }));
+        Console.WriteLine($"Full-production profile authority evidence: {output}");
+    }
+
     [Theory]
     [InlineData(-1, -1, 16)]
     [InlineData(0, 0, 16)]

@@ -8,6 +8,8 @@ namespace MVoxelEngine1.Tests
     {
         private const long MaximumWorkingSetBytes = 16L * 1024 * 1024 * 1024;
         private const string SharedWorldName = "FullRadiusFaceManifestWorld";
+        private const string InitialReferenceFileName = "default-seed-123456-lod1-radius-12.reference.json";
+        private const string WasdReferenceFileName = "default-seed-123456-lod1-radius-12.wasd.reference.json";
         // These limits cover exhaustive post-GTRT identity/texture validation,
         // sorting and hashing; startup performance has a separate fixed gate.
         private static readonly TimeSpan OptimizedCaptureTimeout = TimeSpan.FromMinutes(10);
@@ -114,6 +116,41 @@ namespace MVoxelEngine1.Tests
             Console.WriteLine($"Full-radius Reference manifest: {referencePath}");
         }
 
+        [Fact(Explicit = true, Timeout = 1_560_000)]
+        [Trait("Category", "Oracle")]
+        [Trait("Resource", "CPU")]
+        public async Task ProductionRadiusTimedWasdFacesMatchReferenceAsync()
+        {
+            const string inputScript = "W:3,A:3,S:1,D:1,Space:3";
+            using TestWorkspace workspace = TestPaths.CreateWorkspace();
+            string resultsDirectory = Path.Combine(TestPaths.ResultsRoot, "face-manifests", "full-radius-wasd");
+            Directory.CreateDirectory(resultsDirectory);
+            string referencePath = Path.Combine(resultsDirectory, "reference-seed-123456.json");
+            string optimizedPath = Path.Combine(resultsDirectory, "optimized-seed-123456.json");
+            SimulatedGpuProcessResult optimizedResult = await RunAsync(workspace, optimizedPath,
+                "FullRadiusWasdManifestWorld", "Optimized", OptimizedCaptureTimeout, inputScript, 60);
+            WriteMetrics(optimizedPath, "Optimized", optimizedResult);
+            AssertProcess(optimizedPath, optimizedResult, "Optimized");
+            SimulatedGpuProcessResult referenceResult = await RunAsync(workspace, referencePath,
+                "FullRadiusWasdManifestWorld", "Reference", ReferenceCaptureTimeout, inputScript, 60);
+            WriteMetrics(referencePath, "Reference", referenceResult);
+            AssertProcess(referencePath, referenceResult, "Reference");
+            using JsonDocument optimizedDocument = JsonDocument.Parse(File.ReadAllText(optimizedPath));
+            using JsonDocument referenceDocument = JsonDocument.Parse(File.ReadAllText(referencePath));
+            AssertProductionManifest(optimizedDocument.RootElement, "Optimized", -1, 1, -1);
+            AssertProductionManifest(referenceDocument.RootElement, "Reference", -1, 1, -1);
+            AssertEquivalentManifests(referenceDocument.RootElement, optimizedDocument.RootElement);
+            AssertMatchesRecordedReference(optimizedDocument.RootElement, WasdReferenceFileName);
+            foreach (SimulatedGpuProcessResult result in new[] { optimizedResult, referenceResult })
+            {
+                Assert.Contains("Player chunk position updated to: (-2, 0, -2)", result.StandardOutput);
+                Assert.Contains("Player chunk position updated to: (-1, 1, -1)", result.StandardOutput);
+                Assert.Contains("11.000000 simulated seconds", result.StandardOutput);
+            }
+            Console.WriteLine($"Full-radius WASD Optimized manifest: {optimizedPath}");
+            Console.WriteLine($"Full-radius WASD Reference manifest: {referencePath}");
+        }
+
         [Fact(Explicit = true, Timeout = 630_000)]
         [Trait("Category", "Oracle")]
         [Trait("Resource", "CPU")]
@@ -151,14 +188,18 @@ namespace MVoxelEngine1.Tests
             string outputPath,
             string worldName,
             string faceGenerationMode,
-            TimeSpan timeout)
+            TimeSpan timeout,
+            string? inputScript = null,
+            int? frameRate = null)
         {
             ProcessStartInfo startInfo =
                 SimulatedGpuUploadTestSupport.CreateFaceManifestStartInfo(
                     workspace,
                     outputPath,
                     worldName,
-                    faceGenerationMode);
+                    faceGenerationMode,
+                    inputScript,
+                    frameRate);
             return await SimulatedGpuUploadTestSupport.RunAsync(
                 startInfo,
                 timeout,
@@ -184,7 +225,10 @@ namespace MVoxelEngine1.Tests
 
         private static void AssertProductionManifest(
             JsonElement manifest,
-            string mode)
+            string mode,
+            int centerX = 0,
+            int centerY = 0,
+            int centerZ = 0)
         {
             Assert.Equal(1, manifest.GetProperty("schemaVersion").GetInt32());
             Assert.Equal("Default", manifest.GetProperty("game").GetString());
@@ -195,9 +239,9 @@ namespace MVoxelEngine1.Tests
             Assert.Equal(160, manifest.GetProperty("chunkSizeZ").GetInt32());
             Assert.Equal(12, manifest.GetProperty("lod1Radius").GetInt32());
             Assert.Equal(15_625, manifest.GetProperty("activeChunkCount").GetInt32());
-            Assert.Equal(0, manifest.GetProperty("captureCenterChunkX").GetInt32());
-            Assert.Equal(0, manifest.GetProperty("captureCenterChunkY").GetInt32());
-            Assert.Equal(0, manifest.GetProperty("captureCenterChunkZ").GetInt32());
+            Assert.Equal(centerX, manifest.GetProperty("captureCenterChunkX").GetInt32());
+            Assert.Equal(centerY, manifest.GetProperty("captureCenterChunkY").GetInt32());
+            Assert.Equal(centerZ, manifest.GetProperty("captureCenterChunkZ").GetInt32());
             Assert.Equal(0,
                 manifest.GetProperty("faces").GetProperty("opaqueFaceCount").GetInt64());
             Assert.True(
@@ -243,9 +287,11 @@ namespace MVoxelEngine1.Tests
             Assert.False(optimizedChunks.MoveNext());
         }
 
-        private static void AssertMatchesRecordedReference(JsonElement optimized)
+        private static void AssertMatchesRecordedReference(
+            JsonElement optimized,
+            string referenceFileName = InitialReferenceFileName)
         {
-            using JsonDocument referenceDocument = LoadRecordedReference();
+            using JsonDocument referenceDocument = LoadRecordedReference(referenceFileName);
             JsonElement reference = referenceDocument.RootElement;
 
             Assert.Equal(
@@ -264,14 +310,14 @@ namespace MVoxelEngine1.Tests
                 "The production face digest differs from the recorded Reference oracle.");
         }
 
-        private static JsonDocument LoadRecordedReference()
+        private static JsonDocument LoadRecordedReference(string referenceFileName = InitialReferenceFileName)
         {
             string referencePath = Path.Combine(
                 TestPaths.RepositoryRoot,
                 "MVoxelEngine1.Tests",
                 "TestData",
                 "FaceManifests",
-                "default-seed-123456-lod1-radius-12.reference.json");
+                referenceFileName);
             return JsonDocument.Parse(File.ReadAllText(referencePath));
         }
 

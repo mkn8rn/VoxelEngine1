@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "replacementRulesApplied": true,
+  "simulatedInput": "W:3,A:3,S:1,D:1,Space:3",
+  "simulatedFrameRate": 60,
+  "simulationElapsedSeconds": 11,
+  "referenceManifestSha256": "BAA8A96A7E12754EC471AE6B821478E1910DED2185D613946C57E7D37EC63AEC",
+  "optimizedManifestSha256": "15A8524FEBA8FAFD83F7001D517725B604EF8D36B558A7740C56F000BA7589E2",
+  "game": "Default",
+  "seed": 123456,
+  "chunkSizeX": 160,
+  "chunkSizeY": 160,
+  "chunkSizeZ": 160,
+  "lod1Radius": 12,
+  "activeChunkCount": 15625,
+  "captureCenterChunkX": -1,
+  "captureCenterChunkY": 1,
+  "captureCenterChunkZ": -1,
+  "activeCoordinateSha256": "C35F3AFED693ADF6A15E0175468FFC7EA39110AEF76268440A03DA9A44D5D0DD",
+  "gameInputSha256": "EC1700462B7799D48E52AF43A86608FFB98BD9A19A213CBDA731D0708C0F8B8B",
+  "blockRegistrySha256": "CC5C57FE8EE451A52B36CA85081E2EEBD436BD751B1EDA2C8025CEF71211A414",
+  "faces": {
+    "faceCount": 135294697,
+    "opaqueFaceCount": 0,
+    "transparentFaceCount": 135294697,
+    "sha256": "75202577D1BC77BF0ED94D8303FC4346FA5975F308E874473EB72028B4E67624",
+    "opaqueSha256": "F000C996D87756706059FD75445271AEFA0322C22A0826F42D42230EE3D8F2A8",
+    "transparentSha256": "23E11971E133028CB140213288AF675A20B668276A3C53735A6DB4BED904D402",
+    "opaqueDirections": [
+      {
+        "direction": 0,
+        "faceCount": 0,
+        "sha256": "E32BA0A03C8192DD0EBEAC3DA9203376BE044487D43020512890BAC9E82C51A1"
+      },
+      {
+        "direction": 1,
+        "faceCount": 0,
+        "sha256": "30B7AD3171C1DE42E7FE9AD88DEABDE4EF2803131322BB7EA2AB254C8DC71465"
+      },
+      {
+        "direction": 2,
+        "faceCount": 0,
+        "sha256": "62E1580C7ACA7C32B8FA7678BDC5D9FEA4C207A4196EC4C05539337FFDB85F7E"
+      },
+      {
+        "direction": 3,
+        "faceCount": 0,
+        "sha256": "9DC33405AFF96949EFA5D0562C4B47BB200F08531D230B05D3D294BABA55596F"
+      },
+      {
+        "direction": 4,
+        "faceCount": 0,
+        "sha256": "F88AD73C49D1DB83E6CF143F721B60D0AE5244363EA22211B43B28A34120E777"
+      },
+      {
+        "direction": 5,
+        "faceCount": 0,
+        "sha256": "6B5A0DBA134D91CE32554E9DA50AE364ED523A81E64ABD1E399AFBD184A1A3D1"
+      }
+    ],
+    "transparentDirections": [
+      {
+        "direction": 0,
+        "faceCount": 16132553,
+        "sha256": "F56575BEDF1B357C7C4211F9864D0B26B72BB2E2BB98DCBD6F08A8CCA061DEBF"
+      },
+      {
+        "direction": 1,
+        "faceCount": 16409309,
+        "sha256": "EC1773D27A7F04775E0C4F5164593003D3176AB20DD12549807C65A2CB0099F2"
+      },
+      {
+        "direction": 2,
+        "faceCount": 34088270,
+        "sha256": "EF5809E73ABFEB8225694E06AB093D2B69F34BE00F47BEE9764DC66753FCE3E2"
+      },
+      {
+        "direction": 3,
+        "faceCount": 34088270,
+        "sha256": "519EEFB65A68BCD82F645A54706D3136EC366B68230104771D828752424D2805"
+      },
+      {
+        "direction": 4,
+        "faceCount": 17293629,
+        "sha256": "78A06C842DFB9700697D1006AB15FA494ED8FF0D1BE8D77AED6F6495D715EA55"
+      },
+      {
+        "direction": 5,
+        "faceCount": 17282666,
+        "sha256": "F049209D7AF5DD8C28262EE1F4BC0DA7FCF71481782870FE6CC8998C47C21AD2"
+      }
+    ]
+  }
+}
