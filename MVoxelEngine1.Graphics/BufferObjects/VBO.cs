@@ -1,4 +1,4 @@
-﻿using OpenTK.Graphics.OpenGL4;
+using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 using System;
 using System.Collections.Generic;
@@ -9,9 +9,6 @@ using System.Runtime.InteropServices;
 
 namespace MVoxelEngine1.Graphics.BufferObjects
 {
-    // Render passes supported by the renderer. Opaque = default geometry, Transparent = alpha blended geometry.
-    public enum RenderPass : byte { Opaque = 0, Transparent = 1 }
-
     public class VBO
     {
         // OpenGL buffer object id (immutable after creation)
@@ -59,33 +56,21 @@ namespace MVoxelEngine1.Graphics.BufferObjects
         {
             if ((uint)wordCount > (uint)data.Length)
                 throw new ArgumentOutOfRangeException(nameof(wordCount));
-
             Pass = pass;
             ID = GL.GenBuffer();
             GL.BindBuffer(BufferTarget.ArrayBuffer, ID);
-            GL.BufferData(
-                BufferTarget.ArrayBuffer,
-                checked(wordCount * sizeof(uint)),
-                data,
-                BufferUsageHint.StaticDraw);
+            GL.BufferData(BufferTarget.ArrayBuffer, checked(wordCount * sizeof(uint)), data, BufferUsageHint.StaticDraw);
         }
 
-        public VBO(
-            ReadOnlySpan<uint> data,
-            RenderPass pass = RenderPass.Opaque)
+        public VBO(ReadOnlySpan<uint> data, RenderPass pass = RenderPass.Opaque)
         {
             if (data.IsEmpty)
                 throw new ArgumentException("The VBO data cannot be empty.", nameof(data));
-
             Pass = pass;
             ID = GL.GenBuffer();
             GL.BindBuffer(BufferTarget.ArrayBuffer, ID);
             ref uint first = ref MemoryMarshal.GetReference(data);
-            GL.BufferData(
-                BufferTarget.ArrayBuffer,
-                checked(data.Length * sizeof(uint)),
-                ref first,
-                BufferUsageHint.StaticDraw);
+            GL.BufferData(BufferTarget.ArrayBuffer, checked(data.Length * sizeof(uint)), ref first, BufferUsageHint.StaticDraw);
         }
 
         // Bind this VBO to GL_ARRAY_BUFFER target.

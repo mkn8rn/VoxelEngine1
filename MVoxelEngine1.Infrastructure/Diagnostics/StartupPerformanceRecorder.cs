@@ -6,125 +6,6 @@ using MVoxelEngine1.Infrastructure.Models;
 
 namespace MVoxelEngine1.Infrastructure.Diagnostics
 {
-    public sealed record StartupBenchmarkParameters
-    {
-        public required int ChunkSizeX { get; init; }
-        public required int ChunkSizeY { get; init; }
-        public required int ChunkSizeZ { get; init; }
-        public required int Lod1Radius { get; init; }
-        public required int Lod2Radius { get; init; }
-        public required int Lod3Radius { get; init; }
-        public required int Lod4Radius { get; init; }
-        public required int Lod5Radius { get; init; }
-        public required int InitialGenerationBuffer { get; init; }
-        public required int RuntimeGenerationBuffer { get; init; }
-        public required int BlockTileWidth { get; init; }
-        public required int BlockTileHeight { get; init; }
-        public required bool RenderStreamingAllowed { get; init; }
-        public required bool RenderStreamingEnabled { get; init; }
-        public required string FaceGenerationMode { get; init; }
-        public required float WorldGenerationWorkersPerCore { get; init; }
-        public required float InitialWorldGenerationWorkersPerCore { get; init; }
-        public required float MeshBuildWorkersPerCore { get; init; }
-        public required float InitialMeshBuildWorkersPerCore { get; init; }
-        public required int WindowWidth { get; init; }
-        public required int WindowHeight { get; init; }
-        public required int LogicalProcessorCount { get; init; }
-        public required bool ServerGarbageCollection { get; init; }
-        public required string GarbageCollectionLatencyMode { get; init; }
-    }
-
-    public sealed record StartupPerformanceSnapshot
-    {
-        public const double GtrtTargetMilliseconds = 2_000;
-        public const long MaximumWorkingSetBytes = 16L * 1024 * 1024 * 1024;
-
-        public required string Game { get; init; }
-        public required int Seed { get; init; }
-        public required string GameInputSha256 { get; init; }
-        public required string BlockRegistrySha256 { get; init; }
-        public required StartupBenchmarkParameters Parameters { get; init; }
-        public required double TargetGenerationToRenderMilliseconds { get; init; }
-        public required long MaximumWorkingSetBytesLimit { get; init; }
-        public required double GameLoadMilliseconds { get; init; }
-        public required double SeedAcceptedMilliseconds { get; init; }
-        public required double InitialGenerationStartMilliseconds { get; init; }
-        public required long InitialGenerationMilliseconds { get; init; }
-        public required double InitialGenerationCompleteMilliseconds { get; init; }
-        public required double InitialChunkMeshBuildStartMilliseconds { get; init; }
-        public required long InitialChunkMeshBuildMilliseconds { get; init; }
-        public required double InitialChunkMeshBuildCompleteMilliseconds { get; init; }
-        public required double BuildMilliseconds { get; init; }
-        public required double RenderMilliseconds { get; init; }
-        public required double CameraAppearanceMilliseconds { get; init; }
-        public required double GpuStreamingStartMilliseconds { get; init; }
-        public required double GenerationToRenderMilliseconds { get; init; }
-        public required double GenerationToRenderCompleteMilliseconds { get; init; }
-        public required long WorkingSetBytes { get; init; }
-        public required long PeakWorkingSetBytes { get; init; }
-        public required long ManagedHeapBytes { get; init; }
-        public required long TotalAllocatedBytes { get; init; }
-        public required double ProcessorTimeMilliseconds { get; init; }
-        public required GenerationPerformanceSnapshot GenerationDiagnostics { get; init; }
-        public required MeshPerformanceSnapshot MeshDiagnostics { get; init; }
-        public required DateTimeOffset RecordedAtUtc { get; init; }
-    }
-
-    public sealed record SimulatedGpuUploadBoundarySnapshot
-    {
-        public required long RenderDataId { get; init; }
-        public required int ChunkX { get; init; }
-        public required int ChunkY { get; init; }
-        public required int ChunkZ { get; init; }
-        public required int OpaqueFaceCount { get; init; }
-        public required int OpaqueRectangleCount { get; init; }
-        public required int OpaqueWordCount { get; init; }
-        public required int TransparentFaceCount { get; init; }
-        public required int TransparentRectangleCount { get; init; }
-        public required int TransparentWordCount { get; init; }
-    }
-
-    public sealed record HeadlessGtrtPerformanceSnapshot
-    {
-        public const double GtrtGoalMilliseconds = 1_000;
-        public const double MaximumGtrtMilliseconds = 2_000;
-        public const long MaximumWorkingSetBytes = 16L * 1024 * 1024 * 1024;
-
-        public required string Mode { get; init; }
-        public required bool WindowCreated { get; init; }
-        public required int WindowConstructionCount { get; init; }
-        public required bool OpenGlCallsAllowed { get; init; }
-        public required int ActualGpuUploadCount { get; init; }
-        public required string Game { get; init; }
-        public required int Seed { get; init; }
-        public required string GameInputSha256 { get; init; }
-        public required string BlockRegistrySha256 { get; init; }
-        public required StartupBenchmarkParameters Parameters { get; init; }
-        public required double TargetGenerationToRenderMilliseconds { get; init; }
-        public required double MaximumGenerationToRenderMilliseconds { get; init; }
-        public required long MaximumWorkingSetBytesLimit { get; init; }
-        public required double GameLoadMilliseconds { get; init; }
-        public required double SeedAcceptedMilliseconds { get; init; }
-        public required double InitialGenerationStartMilliseconds { get; init; }
-        public required long InitialGenerationMilliseconds { get; init; }
-        public required double InitialGenerationCompleteMilliseconds { get; init; }
-        public required double InitialChunkMeshBuildStartMilliseconds { get; init; }
-        public required long InitialChunkMeshBuildMilliseconds { get; init; }
-        public required double InitialChunkMeshBuildCompleteMilliseconds { get; init; }
-        public required double FirstChunkMeshBuildMilliseconds { get; init; }
-        public required double GenerationToRenderMilliseconds { get; init; }
-        public required double GenerationToRenderCompleteMilliseconds { get; init; }
-        public required SimulatedGpuUploadBoundarySnapshot SimulatedUploadBoundary { get; init; }
-        public required long WorkingSetBytes { get; init; }
-        public required long PeakWorkingSetBytes { get; init; }
-        public required long ManagedHeapBytes { get; init; }
-        public required long TotalAllocatedBytes { get; init; }
-        public required double ProcessorTimeMilliseconds { get; init; }
-        public required GenerationPerformanceSnapshot GenerationDiagnostics { get; init; }
-        public required MeshPerformanceSnapshot MeshDiagnostics { get; init; }
-        public required DateTimeOffset RecordedAtUtc { get; init; }
-    }
-
     public static class StartupPerformanceRecorder
     {
         private const long UnrecordedMilliseconds = -1;
@@ -152,54 +33,19 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
         private static int actualGpuUploadCount;
         private static int openGlCallsAllowed;
         private static int graphicsForbidden;
-
         public static int WindowConstructionCount => Volatile.Read(ref windowConstructionCount);
-
         public static int ActualGpuUploadCount => Volatile.Read(ref actualGpuUploadCount);
 
         public static void ForbidGraphics() => Volatile.Write(ref graphicsForbidden, 1);
-
-        public static bool IsRunning => Volatile.Read(ref timer) is not null;
-
+        public static bool IsRunning => Volatile.Read(ref timer)is not null;
         public static bool HasGpuStreamingStarted => Volatile.Read(ref gpuStreamingStartTicks) > 0;
+        public static bool IsComplete => Volatile.Read(ref gameLoadTicks) > 0 && Volatile.Read(ref seedAcceptedTicks) > 0 && Volatile.Read(ref initialGenerationStartTicks) > 0 && Volatile.Read(ref initialGenerationMilliseconds) >= 0 && Volatile.Read(ref initialGenerationCompleteTicks) > 0 && Volatile.Read(ref initialChunkMeshBuildStartTicks) > 0 && Volatile.Read(ref initialChunkMeshBuildMilliseconds) >= 0 && Volatile.Read(ref initialChunkMeshBuildCompleteTicks) > 0 && Volatile.Read(ref buildTicks) > 0 && Volatile.Read(ref renderTicks) > 0 && Volatile.Read(ref cameraAppearanceTicks) > 0 && Volatile.Read(ref gpuStreamingStartTicks) > 0 && Volatile.Read(ref generationToRenderTicks) > 0 && Volatile.Read(ref generationToRenderCompleteTicks) > 0;
+        public static bool IsHeadlessGtrtComplete => Volatile.Read(ref gameLoadTicks) > 0 && Volatile.Read(ref seedAcceptedTicks) > 0 && Volatile.Read(ref initialGenerationStartTicks) > 0 && Volatile.Read(ref initialGenerationMilliseconds) >= 0 && Volatile.Read(ref initialGenerationCompleteTicks) > 0 && Volatile.Read(ref initialChunkMeshBuildStartTicks) > 0 && Volatile.Read(ref initialChunkMeshBuildMilliseconds) >= 0 && Volatile.Read(ref initialChunkMeshBuildCompleteTicks) > 0 && Volatile.Read(ref buildTicks) > 0 && Volatile.Read(ref generationToRenderTicks) > 0 && Volatile.Read(ref generationToRenderCompleteTicks) > 0;
 
-        public static bool IsComplete =>
-            Volatile.Read(ref gameLoadTicks) > 0 &&
-            Volatile.Read(ref seedAcceptedTicks) > 0 &&
-            Volatile.Read(ref initialGenerationStartTicks) > 0 &&
-            Volatile.Read(ref initialGenerationMilliseconds) >= 0 &&
-            Volatile.Read(ref initialGenerationCompleteTicks) > 0 &&
-            Volatile.Read(ref initialChunkMeshBuildStartTicks) > 0 &&
-            Volatile.Read(ref initialChunkMeshBuildMilliseconds) >= 0 &&
-            Volatile.Read(ref initialChunkMeshBuildCompleteTicks) > 0 &&
-            Volatile.Read(ref buildTicks) > 0 &&
-            Volatile.Read(ref renderTicks) > 0 &&
-            Volatile.Read(ref cameraAppearanceTicks) > 0 &&
-            Volatile.Read(ref gpuStreamingStartTicks) > 0 &&
-            Volatile.Read(ref generationToRenderTicks) > 0 &&
-            Volatile.Read(ref generationToRenderCompleteTicks) > 0;
-
-        public static bool IsHeadlessGtrtComplete =>
-            Volatile.Read(ref gameLoadTicks) > 0 &&
-            Volatile.Read(ref seedAcceptedTicks) > 0 &&
-            Volatile.Read(ref initialGenerationStartTicks) > 0 &&
-            Volatile.Read(ref initialGenerationMilliseconds) >= 0 &&
-            Volatile.Read(ref initialGenerationCompleteTicks) > 0 &&
-            Volatile.Read(ref initialChunkMeshBuildStartTicks) > 0 &&
-            Volatile.Read(ref initialChunkMeshBuildMilliseconds) >= 0 &&
-            Volatile.Read(ref initialChunkMeshBuildCompleteTicks) > 0 &&
-            Volatile.Read(ref buildTicks) > 0 &&
-            Volatile.Read(ref generationToRenderTicks) > 0 &&
-            Volatile.Read(ref generationToRenderCompleteTicks) > 0;
-
-        public static void Begin(
-            string gameName,
-            int worldSeed,
-            bool openGlCallsAllowed)
+        public static void Begin(string gameName, int worldSeed, bool openGlCallsAllowed)
         {
             if (string.IsNullOrWhiteSpace(gameName))
                 throw new ArgumentException("Game name is null or empty.", nameof(gameName));
-
             lock (Sync)
             {
                 game = gameName;
@@ -222,8 +68,7 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
                 generationToRenderCompleteTicks = 0;
                 windowConstructionCount = 0;
                 actualGpuUploadCount = 0;
-                StartupPerformanceRecorder.openGlCallsAllowed =
-                    openGlCallsAllowed ? 1 : 0;
+                StartupPerformanceRecorder.openGlCallsAllowed = openGlCallsAllowed ? 1 : 0;
                 GenerationPerformanceRecorder.Reset();
                 MeshPerformanceRecorder.Reset();
                 timer = Stopwatch.StartNew();
@@ -231,66 +76,31 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
         }
 
         public static void RecordGameLoaded() => RecordElapsed(ref gameLoadTicks);
-
         public static void RecordSeedAccepted()
         {
             Stopwatch? activeTimer = Volatile.Read(ref timer);
             if (activeTimer is null)
                 return;
-
             long elapsedTicks = Math.Max(1, activeTimer.Elapsed.Ticks);
-            if (Interlocked.CompareExchange(
-                    ref seedAcceptedTicks,
-                    elapsedTicks,
-                    0) != 0)
+            if (Interlocked.CompareExchange(ref seedAcceptedTicks, elapsedTicks, 0) != 0)
             {
-                throw new InvalidOperationException(
-                    "The benchmark seed was already accepted.");
+                throw new InvalidOperationException("The benchmark seed was already accepted.");
             }
         }
 
-        public static void BeginInitialGeneration() =>
-            BeginPhase(
-                ref initialGenerationStartTimestamp,
-                ref initialGenerationMilliseconds,
-                ref initialGenerationStartTicks,
-                "initial generation");
-
-        public static long CompleteInitialGeneration() =>
-            CompletePhase(
-                ref initialGenerationStartTimestamp,
-                ref initialGenerationMilliseconds,
-                ref initialGenerationCompleteTicks,
-                "initial generation");
-
-        public static void BeginInitialChunkMeshBuild() =>
-            BeginPhase(
-                ref initialChunkMeshBuildStartTimestamp,
-                ref initialChunkMeshBuildMilliseconds,
-                ref initialChunkMeshBuildStartTicks,
-                "initial chunk mesh build");
-
-        public static long CompleteInitialChunkMeshBuild() =>
-            CompletePhase(
-                ref initialChunkMeshBuildStartTimestamp,
-                ref initialChunkMeshBuildMilliseconds,
-                ref initialChunkMeshBuildCompleteTicks,
-                "initial chunk mesh build");
-
+        public static void BeginInitialGeneration() => BeginPhase(ref initialGenerationStartTimestamp, ref initialGenerationMilliseconds, ref initialGenerationStartTicks, "initial generation");
+        public static long CompleteInitialGeneration() => CompletePhase(ref initialGenerationStartTimestamp, ref initialGenerationMilliseconds, ref initialGenerationCompleteTicks, "initial generation");
+        public static void BeginInitialChunkMeshBuild() => BeginPhase(ref initialChunkMeshBuildStartTimestamp, ref initialChunkMeshBuildMilliseconds, ref initialChunkMeshBuildStartTicks, "initial chunk mesh build");
+        public static long CompleteInitialChunkMeshBuild() => CompletePhase(ref initialChunkMeshBuildStartTimestamp, ref initialChunkMeshBuildMilliseconds, ref initialChunkMeshBuildCompleteTicks, "initial chunk mesh build");
         public static void RecordFirstChunkBuild(TimeSpan duration) => RecordDuration(ref buildTicks, duration);
-
         public static void RecordFirstRender(TimeSpan duration) => RecordDuration(ref renderTicks, duration);
-
         public static void RecordCameraAppearance() => RecordElapsed(ref cameraAppearanceTicks);
-
         public static void RecordGpuStreamingStart()
         {
             Interlocked.Increment(ref actualGpuUploadCount);
-            if (Volatile.Read(ref graphicsForbidden) != 0 ||
-                (IsRunning && Volatile.Read(ref openGlCallsAllowed) == 0))
+            if (Volatile.Read(ref graphicsForbidden) != 0 || (IsRunning && Volatile.Read(ref openGlCallsAllowed) == 0))
             {
-                throw new InvalidOperationException(
-                    "Headless GTRT mode forbids real GPU uploads.");
+                throw new InvalidOperationException("Headless GTRT mode forbids real GPU uploads.");
             }
 
             RecordElapsed(ref gpuStreamingStartTicks);
@@ -299,11 +109,9 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
         public static void RecordWindowConstruction()
         {
             Interlocked.Increment(ref windowConstructionCount);
-            if (Volatile.Read(ref graphicsForbidden) != 0 ||
-                (IsRunning && Volatile.Read(ref openGlCallsAllowed) == 0))
+            if (Volatile.Read(ref graphicsForbidden) != 0 || (IsRunning && Volatile.Read(ref openGlCallsAllowed) == 0))
             {
-                throw new InvalidOperationException(
-                    "Headless GTRT mode forbids Window construction.");
+                throw new InvalidOperationException("Headless GTRT mode forbids Window construction.");
             }
         }
 
@@ -312,25 +120,20 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
             Stopwatch? activeTimer = Volatile.Read(ref timer);
             if (activeTimer is null)
                 return null;
-
             lock (Sync)
             {
                 if (generationToRenderCompleteTicks > 0)
                     return null;
-
                 long acceptedTicks = Volatile.Read(ref seedAcceptedTicks);
                 if (acceptedTicks <= 0)
                 {
-                    throw new InvalidOperationException(
-                        "The benchmark seed was not accepted.");
+                    throw new InvalidOperationException("The benchmark seed was not accepted.");
                 }
 
                 long completeTicks = Math.Max(1, activeTimer.Elapsed.Ticks);
                 long durationTicks = Math.Max(1, completeTicks - acceptedTicks);
                 Volatile.Write(ref generationToRenderTicks, durationTicks);
-                Volatile.Write(
-                    ref generationToRenderCompleteTicks,
-                    completeTicks);
+                Volatile.Write(ref generationToRenderCompleteTicks, completeTicks);
                 return ToMilliseconds(durationTicks);
             }
         }
@@ -339,10 +142,8 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
         {
             if (!IsComplete)
                 throw new InvalidOperationException("Startup performance metrics are incomplete.");
-
             using Process process = Process.GetCurrentProcess();
             process.Refresh();
-
             return new StartupPerformanceSnapshot
             {
                 Game = game,
@@ -350,32 +151,22 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
                 GameInputSha256 = RuntimeInputHasher.HashGameInputs(),
                 BlockRegistrySha256 = RuntimeInputHasher.HashBlockRegistry(),
                 Parameters = CaptureParameters(),
-                TargetGenerationToRenderMilliseconds =
-                    StartupPerformanceSnapshot.GtrtTargetMilliseconds,
-                MaximumWorkingSetBytesLimit =
-                    StartupPerformanceSnapshot.MaximumWorkingSetBytes,
+                TargetGenerationToRenderMilliseconds = StartupPerformanceSnapshot.GtrtTargetMilliseconds,
+                MaximumWorkingSetBytesLimit = StartupPerformanceSnapshot.MaximumWorkingSetBytes,
                 GameLoadMilliseconds = ToMilliseconds(Volatile.Read(ref gameLoadTicks)),
-                SeedAcceptedMilliseconds =
-                    ToMilliseconds(Volatile.Read(ref seedAcceptedTicks)),
-                InitialGenerationStartMilliseconds =
-                    ToMilliseconds(Volatile.Read(ref initialGenerationStartTicks)),
+                SeedAcceptedMilliseconds = ToMilliseconds(Volatile.Read(ref seedAcceptedTicks)),
+                InitialGenerationStartMilliseconds = ToMilliseconds(Volatile.Read(ref initialGenerationStartTicks)),
                 InitialGenerationMilliseconds = Volatile.Read(ref initialGenerationMilliseconds),
-                InitialGenerationCompleteMilliseconds =
-                    ToMilliseconds(Volatile.Read(ref initialGenerationCompleteTicks)),
-                InitialChunkMeshBuildStartMilliseconds =
-                    ToMilliseconds(Volatile.Read(ref initialChunkMeshBuildStartTicks)),
+                InitialGenerationCompleteMilliseconds = ToMilliseconds(Volatile.Read(ref initialGenerationCompleteTicks)),
+                InitialChunkMeshBuildStartMilliseconds = ToMilliseconds(Volatile.Read(ref initialChunkMeshBuildStartTicks)),
                 InitialChunkMeshBuildMilliseconds = Volatile.Read(ref initialChunkMeshBuildMilliseconds),
-                InitialChunkMeshBuildCompleteMilliseconds =
-                    ToMilliseconds(Volatile.Read(ref initialChunkMeshBuildCompleteTicks)),
+                InitialChunkMeshBuildCompleteMilliseconds = ToMilliseconds(Volatile.Read(ref initialChunkMeshBuildCompleteTicks)),
                 BuildMilliseconds = ToMilliseconds(Volatile.Read(ref buildTicks)),
                 RenderMilliseconds = ToMilliseconds(Volatile.Read(ref renderTicks)),
                 CameraAppearanceMilliseconds = ToMilliseconds(Volatile.Read(ref cameraAppearanceTicks)),
                 GpuStreamingStartMilliseconds = ToMilliseconds(Volatile.Read(ref gpuStreamingStartTicks)),
-                GenerationToRenderMilliseconds =
-                    ToMilliseconds(Volatile.Read(ref generationToRenderTicks)),
-                GenerationToRenderCompleteMilliseconds =
-                    ToMilliseconds(
-                        Volatile.Read(ref generationToRenderCompleteTicks)),
+                GenerationToRenderMilliseconds = ToMilliseconds(Volatile.Read(ref generationToRenderTicks)),
+                GenerationToRenderCompleteMilliseconds = ToMilliseconds(Volatile.Read(ref generationToRenderCompleteTicks)),
                 WorkingSetBytes = process.WorkingSet64,
                 PeakWorkingSetBytes = process.PeakWorkingSet64,
                 ManagedHeapBytes = GC.GetTotalMemory(forceFullCollection: false),
@@ -387,14 +178,12 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
             };
         }
 
-        public static HeadlessGtrtPerformanceSnapshot CreateHeadlessGtrtSnapshot(
-            SimulatedGpuUploadBoundarySnapshot simulatedUploadBoundary)
+        public static HeadlessGtrtPerformanceSnapshot CreateHeadlessGtrtSnapshot(SimulatedGpuUploadBoundarySnapshot simulatedUploadBoundary)
         {
             ArgumentNullException.ThrowIfNull(simulatedUploadBoundary);
             if (!IsHeadlessGtrtComplete)
             {
-                throw new InvalidOperationException(
-                    "Headless GTRT metrics are incomplete.");
+                throw new InvalidOperationException("Headless GTRT metrics are incomplete.");
             }
 
             using Process process = Process.GetCurrentProcess();
@@ -402,65 +191,41 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
             long workingSetBytes = process.WorkingSet64;
             long peakWorkingSetBytes = process.PeakWorkingSet64;
             long managedHeapBytes = GC.GetTotalMemory(forceFullCollection: false);
-            long totalAllocatedBytes =
-                GC.GetTotalAllocatedBytes(precise: false);
-            double processorTimeMilliseconds =
-                process.TotalProcessorTime.TotalMilliseconds;
-
+            long totalAllocatedBytes = GC.GetTotalAllocatedBytes(precise: false);
+            double processorTimeMilliseconds = process.TotalProcessorTime.TotalMilliseconds;
             return new HeadlessGtrtPerformanceSnapshot
             {
                 Mode = "headlessGtrt",
                 WindowCreated = Volatile.Read(ref windowConstructionCount) != 0,
-                WindowConstructionCount =
-                    Volatile.Read(ref windowConstructionCount),
-                OpenGlCallsAllowed =
-                    Volatile.Read(ref openGlCallsAllowed) != 0,
+                WindowConstructionCount = Volatile.Read(ref windowConstructionCount),
+                OpenGlCallsAllowed = Volatile.Read(ref openGlCallsAllowed) != 0,
                 ActualGpuUploadCount = Volatile.Read(ref actualGpuUploadCount),
                 Game = game,
                 Seed = seed,
                 GameInputSha256 = RuntimeInputHasher.HashGameInputs(),
                 BlockRegistrySha256 = RuntimeInputHasher.HashBlockRegistry(),
                 Parameters = CaptureParameters(),
-                TargetGenerationToRenderMilliseconds =
-                    HeadlessGtrtPerformanceSnapshot.GtrtGoalMilliseconds,
-                MaximumGenerationToRenderMilliseconds =
-                    HeadlessGtrtPerformanceSnapshot.MaximumGtrtMilliseconds,
-                MaximumWorkingSetBytesLimit =
-                    HeadlessGtrtPerformanceSnapshot.MaximumWorkingSetBytes,
-                GameLoadMilliseconds =
-                    ToMilliseconds(Volatile.Read(ref gameLoadTicks)),
-                SeedAcceptedMilliseconds =
-                    ToMilliseconds(Volatile.Read(ref seedAcceptedTicks)),
-                InitialGenerationStartMilliseconds =
-                    ToMilliseconds(Volatile.Read(ref initialGenerationStartTicks)),
-                InitialGenerationMilliseconds =
-                    Volatile.Read(ref initialGenerationMilliseconds),
-                InitialGenerationCompleteMilliseconds =
-                    ToMilliseconds(
-                        Volatile.Read(ref initialGenerationCompleteTicks)),
-                InitialChunkMeshBuildStartMilliseconds =
-                    ToMilliseconds(
-                        Volatile.Read(ref initialChunkMeshBuildStartTicks)),
-                InitialChunkMeshBuildMilliseconds =
-                    Volatile.Read(ref initialChunkMeshBuildMilliseconds),
-                InitialChunkMeshBuildCompleteMilliseconds =
-                    ToMilliseconds(
-                        Volatile.Read(ref initialChunkMeshBuildCompleteTicks)),
-                FirstChunkMeshBuildMilliseconds =
-                    ToMilliseconds(Volatile.Read(ref buildTicks)),
-                GenerationToRenderMilliseconds =
-                    ToMilliseconds(Volatile.Read(ref generationToRenderTicks)),
-                GenerationToRenderCompleteMilliseconds =
-                    ToMilliseconds(
-                        Volatile.Read(ref generationToRenderCompleteTicks)),
+                TargetGenerationToRenderMilliseconds = HeadlessGtrtPerformanceSnapshot.GtrtGoalMilliseconds,
+                MaximumGenerationToRenderMilliseconds = HeadlessGtrtPerformanceSnapshot.MaximumGtrtMilliseconds,
+                MaximumWorkingSetBytesLimit = HeadlessGtrtPerformanceSnapshot.MaximumWorkingSetBytes,
+                GameLoadMilliseconds = ToMilliseconds(Volatile.Read(ref gameLoadTicks)),
+                SeedAcceptedMilliseconds = ToMilliseconds(Volatile.Read(ref seedAcceptedTicks)),
+                InitialGenerationStartMilliseconds = ToMilliseconds(Volatile.Read(ref initialGenerationStartTicks)),
+                InitialGenerationMilliseconds = Volatile.Read(ref initialGenerationMilliseconds),
+                InitialGenerationCompleteMilliseconds = ToMilliseconds(Volatile.Read(ref initialGenerationCompleteTicks)),
+                InitialChunkMeshBuildStartMilliseconds = ToMilliseconds(Volatile.Read(ref initialChunkMeshBuildStartTicks)),
+                InitialChunkMeshBuildMilliseconds = Volatile.Read(ref initialChunkMeshBuildMilliseconds),
+                InitialChunkMeshBuildCompleteMilliseconds = ToMilliseconds(Volatile.Read(ref initialChunkMeshBuildCompleteTicks)),
+                FirstChunkMeshBuildMilliseconds = ToMilliseconds(Volatile.Read(ref buildTicks)),
+                GenerationToRenderMilliseconds = ToMilliseconds(Volatile.Read(ref generationToRenderTicks)),
+                GenerationToRenderCompleteMilliseconds = ToMilliseconds(Volatile.Read(ref generationToRenderCompleteTicks)),
                 SimulatedUploadBoundary = simulatedUploadBoundary,
                 WorkingSetBytes = workingSetBytes,
                 PeakWorkingSetBytes = peakWorkingSetBytes,
                 ManagedHeapBytes = managedHeapBytes,
                 TotalAllocatedBytes = totalAllocatedBytes,
                 ProcessorTimeMilliseconds = processorTimeMilliseconds,
-                GenerationDiagnostics =
-                    GenerationPerformanceRecorder.CreateSnapshot(),
+                GenerationDiagnostics = GenerationPerformanceRecorder.CreateSnapshot(),
                 MeshDiagnostics = MeshPerformanceRecorder.CreateSnapshot(),
                 RecordedAtUtc = DateTimeOffset.UtcNow
             };
@@ -471,50 +236,31 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
             WriteJson(outputPath, CreateSnapshot());
         }
 
-        public static void WriteHeadlessGtrtSnapshot(
-            string outputPath,
-            SimulatedGpuUploadBoundarySnapshot simulatedUploadBoundary)
+        public static void WriteHeadlessGtrtSnapshot(string outputPath, SimulatedGpuUploadBoundarySnapshot simulatedUploadBoundary)
         {
-            WriteJson(
-                outputPath,
-                CreateHeadlessGtrtSnapshot(simulatedUploadBoundary));
+            WriteJson(outputPath, CreateHeadlessGtrtSnapshot(simulatedUploadBoundary));
         }
 
-        private static void BeginPhase(
-            ref long phaseStartTimestamp,
-            ref long destination,
-            ref long startTicks,
-            string phaseName)
+        private static void BeginPhase(ref long phaseStartTimestamp, ref long destination, ref long startTicks, string phaseName)
         {
             lock (Sync)
             {
                 if (phaseStartTimestamp != 0)
                     throw new InvalidOperationException($"The {phaseName} timer is already running.");
-
                 destination = UnrecordedMilliseconds;
                 RecordElapsed(ref startTicks);
-                Volatile.Write(
-                    ref phaseStartTimestamp,
-                    Stopwatch.GetTimestamp());
+                Volatile.Write(ref phaseStartTimestamp, Stopwatch.GetTimestamp());
             }
         }
 
-        private static long CompletePhase(
-            ref long phaseStartTimestamp,
-            ref long destination,
-            ref long completeTicks,
-            string phaseName)
+        private static long CompletePhase(ref long phaseStartTimestamp, ref long destination, ref long completeTicks, string phaseName)
         {
             lock (Sync)
             {
-                long startTimestamp = Interlocked.Exchange(
-                    ref phaseStartTimestamp,
-                    0);
+                long startTimestamp = Interlocked.Exchange(ref phaseStartTimestamp, 0);
                 if (startTimestamp == 0)
                     throw new InvalidOperationException($"The {phaseName} timer is not running.");
-
-                long elapsedMilliseconds = (long)Stopwatch.GetElapsedTime(
-                    startTimestamp).TotalMilliseconds;
+                long elapsedMilliseconds = (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds;
                 Volatile.Write(ref destination, elapsedMilliseconds);
                 RecordElapsed(ref completeTicks);
                 return elapsedMilliseconds;
@@ -526,7 +272,6 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
             Stopwatch? activeTimer = Volatile.Read(ref timer);
             if (activeTimer is null)
                 return;
-
             long elapsedTicks = Math.Max(1, activeTimer.Elapsed.Ticks);
             Interlocked.CompareExchange(ref destination, elapsedTicks, 0);
         }
@@ -535,7 +280,6 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
         {
             if (!IsRunning)
                 return;
-
             long durationTicks = Math.Max(1, duration.Ticks);
             Interlocked.CompareExchange(ref destination, durationTicks, 0);
         }
@@ -560,18 +304,11 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
                 BlockTileHeight = settings.blockTileHeight,
                 RenderStreamingAllowed = settings.renderStreamingAllowed,
                 RenderStreamingEnabled = flags.renderStreamingIfAllowed ?? false,
-                FaceGenerationMode =
-                    (flags.faceGenerationMode ?? FaceGenerationMode.Optimized).ToString(),
-                WorldGenerationWorkersPerCore =
-                    flags.worldGenWorkersPerCore ?? 0,
-                InitialWorldGenerationWorkersPerCore =
-                    flags.worldGenWorkersPerCoreInitial ??
-                    flags.worldGenWorkersPerCore ?? 0,
-                MeshBuildWorkersPerCore =
-                    flags.meshRenderWorkersPerCore ?? 0,
-                InitialMeshBuildWorkersPerCore =
-                    flags.meshRenderWorkersPerCoreInitial ??
-                    flags.meshRenderWorkersPerCore ?? 0,
+                FaceGenerationMode = (flags.faceGenerationMode ?? FaceGenerationMode.Optimized).ToString(),
+                WorldGenerationWorkersPerCore = flags.worldGenWorkersPerCore ?? 0,
+                InitialWorldGenerationWorkersPerCore = flags.worldGenWorkersPerCoreInitial ?? flags.worldGenWorkersPerCore ?? 0,
+                MeshBuildWorkersPerCore = flags.meshRenderWorkersPerCore ?? 0,
+                InitialMeshBuildWorkersPerCore = flags.meshRenderWorkersPerCoreInitial ?? flags.meshRenderWorkersPerCore ?? 0,
                 WindowWidth = flags.windowWidth ?? 0,
                 WindowHeight = flags.windowHeight ?? 0,
                 LogicalProcessorCount = Environment.ProcessorCount,
@@ -584,39 +321,23 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
         {
             if (string.IsNullOrWhiteSpace(outputPath))
             {
-                throw new ArgumentException(
-                    "Benchmark output path is null or empty.",
-                    nameof(outputPath));
+                throw new ArgumentException("Benchmark output path is null or empty.", nameof(outputPath));
             }
 
             string fullPath = Path.GetFullPath(outputPath);
             string? outputDirectory = Path.GetDirectoryName(fullPath);
             if (string.IsNullOrWhiteSpace(outputDirectory))
             {
-                throw new InvalidOperationException(
-                    "Benchmark output directory is not available.");
+                throw new InvalidOperationException("Benchmark output directory is not available.");
             }
 
             Directory.CreateDirectory(outputDirectory);
-            string temporaryPath = Path.Combine(
-                outputDirectory,
-                $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.incomplete");
+            string temporaryPath = Path.Combine(outputDirectory, $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.incomplete");
             try
             {
-                using (var stream = new FileStream(
-                           temporaryPath,
-                           FileMode.CreateNew,
-                           FileAccess.Write,
-                           FileShare.None))
+                using (var stream = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
                 {
-                    JsonSerializer.Serialize(
-                        stream,
-                        snapshot,
-                        new JsonSerializerOptions
-                        {
-                            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                            WriteIndented = true
-                        });
+                    JsonSerializer.Serialize(stream, snapshot, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = true });
                     stream.Flush(flushToDisk: true);
                 }
 

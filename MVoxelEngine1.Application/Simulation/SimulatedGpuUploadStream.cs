@@ -15,92 +15,20 @@ using OpenTK.Mathematics;
 
 namespace MVoxelEngine1.Application.Simulation
 {
-    internal sealed class SimulatedRenderFrameState
-    {
-        public required long FrameIndex { get; init; }
-
-        public required IReadOnlyList<NativeChunkRenderPacketDescriptor> OpaquePassChunks { get; init; }
-
-        public required IReadOnlyList<NativeChunkRenderPacketDescriptor> TransparentPassChunks { get; init; }
-    }
-
     internal sealed class SimulatedGpuUploadStream : IAsyncDisposable
     {
         private const int RecordQueueCapacity = 4;
-
-        private readonly record struct ChunkIdentity(
-            int ChunkX,
-            int ChunkY,
-            int ChunkZ,
-            float WorldOriginX,
-            float WorldOriginY,
-            float WorldOriginZ);
-
-        private readonly record struct ActiveChunkCapture(
-            ChunkIdentity Chunk,
-            long? RenderDataId,
-            bool OpenGlUploaded);
-
-        private sealed record CameraCapture(
-            Vector3 Position,
-            Vector3 Front,
-            Vector3 Up,
-            Matrix4 Model,
-            Matrix4 View,
-            Matrix4 Projection,
-            int PlayerChunkX,
-            int PlayerChunkY,
-            int PlayerChunkZ);
-
+        private readonly record struct ChunkIdentity(int ChunkX, int ChunkY, int ChunkZ, float WorldOriginX, float WorldOriginY, float WorldOriginZ);
+        private readonly record struct ActiveChunkCapture(ChunkIdentity Chunk, long? RenderDataId, bool OpenGlUploaded);
+        private sealed record CameraCapture(Vector3 Position, Vector3 Front, Vector3 Up, Matrix4 Model, Matrix4 View, Matrix4 Projection, int PlayerChunkX, int PlayerChunkY, int PlayerChunkZ);
         private abstract record StreamRecord;
-
-        private sealed record QueuedRecord(
-            long Sequence,
-            long RetainedPayloadBytes,
-            StreamRecord Record);
-
+        private sealed record QueuedRecord(long Sequence, long RetainedPayloadBytes, StreamRecord Record);
         private sealed record UploadRecord(long Sequence, byte[] Payload) : StreamRecord;
-
-        private sealed record DeletionRecord(
-            long FrameIndex,
-            long RenderDataId,
-            ChunkIdentity Chunk) : StreamRecord;
-
-        private sealed record RenderFrameRecord(
-            long FrameIndex,
-            double SimulationElapsedSeconds,
-            double WallElapsedSeconds,
-            double DeltaSeconds,
-            PlayerInputKeys Input,
-            CameraCapture Camera,
-            int ActiveChunkCount,
-            long UploadsThisFrame,
-            long[] OpaqueDrawRenderDataIds,
-            long[] TransparentDrawRenderDataIds) : StreamRecord;
-
-        private sealed record SnapshotRecord(
-            int SnapshotIndex,
-            string Name,
-            long FrameIndex,
-            double SimulationElapsedSeconds,
-            CameraCapture Camera,
-            ActiveChunkCapture[] ActiveChunks) : StreamRecord;
-
-        private sealed record InputBoundaryRecord(
-            string Type,
-            int StepIndex,
-            TimedPlayerInputStep Step,
-            double SimulationElapsedSeconds,
-            CameraCapture Camera) : StreamRecord;
-
-        private sealed record CompletionRecord(
-            double SimulationElapsedSeconds,
-            double WallElapsedSeconds,
-            long FrameCount,
-            long UploadCount,
-            long DeletionCount,
-            int SnapshotCount) : StreamRecord;
-
+        private sealed record DeletionRecord(long FrameIndex, long RenderDataId, ChunkIdentity Chunk) : StreamRecord;
+        private sealed record RenderFrameRecord(long FrameIndex, double SimulationElapsedSeconds, double WallElapsedSeconds, double DeltaSeconds, PlayerInputKeys Input, CameraCapture Camera, int ActiveChunkCount, long UploadsThisFrame, long[] OpaqueDrawRenderDataIds, long[] TransparentDrawRenderDataIds) : StreamRecord;
+        private sealed record SnapshotRecord(int SnapshotIndex, string Name, long FrameIndex, double SimulationElapsedSeconds, CameraCapture Camera, ActiveChunkCapture[] ActiveChunks) : StreamRecord;
+        private sealed record InputBoundaryRecord(string Type, int StepIndex, TimedPlayerInputStep Step, double SimulationElapsedSeconds, CameraCapture Camera) : StreamRecord;
+        private sealed record CompletionRecord(double SimulationElapsedSeconds, double WallElapsedSeconds, long FrameCount, long UploadCount, long DeletionCount, int SnapshotCount) : StreamRecord;
         private readonly NativeWorld world;
         private readonly Player player;
         private readonly int windowWidth;
@@ -133,18 +61,7 @@ namespace MVoxelEngine1.Application.Simulation
         private bool finalOutputPublished;
         private bool disposed;
         private int validatedRevision = -1;
-
-        public SimulatedGpuUploadStream(
-            string outputPath,
-            string inputScript,
-            int frameRate,
-            BlockTextureAtlas textureAtlas,
-            NativeWorld world,
-            Player player,
-            int windowWidth,
-            int windowHeight,
-            int writerDelayMilliseconds,
-            int? writerFailAfterRecords)
+        public SimulatedGpuUploadStream(string outputPath, string inputScript, int frameRate, BlockTextureAtlas textureAtlas, NativeWorld world, Player player, int windowWidth, int windowHeight, int writerDelayMilliseconds, int? writerFailAfterRecords)
         {
             this.world = world;
             this.player = player;
@@ -152,43 +69,20 @@ namespace MVoxelEngine1.Application.Simulation
             this.windowHeight = windowHeight;
             this.writerDelayMilliseconds = writerDelayMilliseconds;
             this.writerFailAfterRecords = writerFailAfterRecords;
-
             finalOutputPath = Path.GetFullPath(outputPath);
-            string outputDirectory = Path.GetDirectoryName(finalOutputPath)
-                ?? throw new InvalidOperationException("The simulated GPU output directory is not valid.");
+            string outputDirectory = Path.GetDirectoryName(finalOutputPath) ?? throw new InvalidOperationException("The simulated GPU output directory is not valid.");
             Directory.CreateDirectory(outputDirectory);
             if (File.Exists(finalOutputPath))
                 throw new IOException($"The simulated GPU output already exists: {finalOutputPath}");
-
-            temporaryOutputPath = Path.Combine(
-                outputDirectory,
-                $".{Path.GetFileName(finalOutputPath)}.{Guid.NewGuid():N}.incomplete");
-
-            fileStream = new FileStream(
-                temporaryOutputPath,
-                FileMode.CreateNew,
-                FileAccess.Write,
-                FileShare.Read,
-                1_048_576,
-                FileOptions.SequentialScan);
+            temporaryOutputPath = Path.Combine(outputDirectory, $".{Path.GetFileName(finalOutputPath)}.{Guid.NewGuid():N}.incomplete");
+            fileStream = new FileStream(temporaryOutputPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read, 1_048_576, FileOptions.SequentialScan);
             writer = new Utf8JsonWriter(fileStream, new JsonWriterOptions { Indented = false });
-            records = Channel.CreateBounded<QueuedRecord>(new BoundedChannelOptions(RecordQueueCapacity)
-            {
-                SingleReader = true,
-                SingleWriter = true,
-                AllowSynchronousContinuations = false,
-                FullMode = BoundedChannelFullMode.Wait
-            });
+            records = Channel.CreateBounded<QueuedRecord>(new BoundedChannelOptions(RecordQueueCapacity) { SingleReader = true, SingleWriter = true, AllowSynchronousContinuations = false, FullMode = BoundedChannelFullMode.Wait });
             retainedRecordSlots = new SemaphoreSlim(RecordQueueCapacity, RecordQueueCapacity);
-
             try
             {
                 WriteSessionHeader(inputScript, frameRate, textureAtlas);
-                writerTask = Task.Factory.StartNew(
-                    WriteRecords,
-                    CancellationToken.None,
-                    TaskCreationOptions.LongRunning,
-                    TaskScheduler.Default);
+                writerTask = Task.Factory.StartNew(WriteRecords, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
             }
             catch
             {
@@ -207,29 +101,21 @@ namespace MVoxelEngine1.Application.Simulation
             }
         }
 
-        public SimulatedRenderFrameState RenderFrame(
-            long frameIndex,
-            double simulationElapsedSeconds,
-            double wallElapsedSeconds,
-            double deltaSeconds,
-            PlayerInputKeys input)
+        public SimulatedRenderFrameState RenderFrame(long frameIndex, double simulationElapsedSeconds, double wallElapsedSeconds, double deltaSeconds, PlayerInputKeys input)
         {
-            if (FlagManager.flags.faceGenerationMode == FaceGenerationMode.Reference &&
-                validatedRevision != world.Revision)
+            if (FlagManager.flags.faceGenerationMode == FaceGenerationMode.Reference && validatedRevision != world.Revision)
             {
-                WorldFaceManifest reference = WorldFaceManifestBuilder.Capture(
-                    world, FlagManager.flags.game!, FlagManager.flags.seed!.Value, FaceGenerationMode.Reference);
-                WorldFaceManifest optimized = WorldFaceManifestBuilder.Capture(
-                    world, FlagManager.flags.game!, FlagManager.flags.seed!.Value, FaceGenerationMode.Optimized);
+                WorldFaceManifest reference = WorldFaceManifestBuilder.Capture(world, FlagManager.flags.game!, FlagManager.flags.seed!.Value, FaceGenerationMode.Reference);
+                WorldFaceManifest optimized = WorldFaceManifestBuilder.Capture(world, FlagManager.flags.game!, FlagManager.flags.seed!.Value, FaceGenerationMode.Optimized);
                 if (reference.Faces.Sha256 != optimized.Faces.Sha256)
                     throw new InvalidDataException("Native streaming faces differ from the reference authority.");
                 validatedRevision = world.Revision;
             }
+
             long uploadsBeforeFrame = uploadCount;
             var chunks = new List<NativeChunkRenderPacketDescriptor>();
             var currentRenderData = new HashSet<long>();
-            world.InspectRenderPackets((in NativeChunkRenderPacketDescriptor descriptor,
-                ReadOnlySpan<uint> opaque, ReadOnlySpan<uint> transparent) =>
+            world.InspectRenderPackets((in NativeChunkRenderPacketDescriptor descriptor, ReadOnlySpan<uint> opaque, ReadOnlySpan<uint> transparent) =>
             {
                 chunks.Add(descriptor);
                 currentRenderData.Add(descriptor.RenderDataId);
@@ -245,20 +131,10 @@ namespace MVoxelEngine1.Application.Simulation
                 uploadedRenderData.Remove(renderDataId);
                 deletionCount++;
             }
-            activeRenderData = currentRenderData;
-            QueueRecord(new RenderFrameRecord(
-                frameIndex,
-                simulationElapsedSeconds,
-                wallElapsedSeconds,
-                deltaSeconds,
-                input,
-                CaptureCamera(),
-                chunks.Count,
-                uploadCount - uploadsBeforeFrame,
-                CaptureDrawList(chunks, transparent: false),
-                CaptureDrawList(chunks, transparent: true)));
-            frameCount++;
 
+            activeRenderData = currentRenderData;
+            QueueRecord(new RenderFrameRecord(frameIndex, simulationElapsedSeconds, wallElapsedSeconds, deltaSeconds, input, CaptureCamera(), chunks.Count, uploadCount - uploadsBeforeFrame, CaptureDrawList(chunks, transparent: false), CaptureDrawList(chunks, transparent: true)));
+            frameCount++;
             return new SimulatedRenderFrameState
             {
                 FrameIndex = frameIndex,
@@ -267,64 +143,32 @@ namespace MVoxelEngine1.Application.Simulation
             };
         }
 
-        public void WriteSnapshot(
-            string name,
-            double simulationElapsedSeconds,
-            SimulatedRenderFrameState frame)
+        public void WriteSnapshot(string name, double simulationElapsedSeconds, SimulatedRenderFrameState frame)
         {
-            ActiveChunkCapture[] chunks = frame.TransparentPassChunks
-                .Select(chunk => new ActiveChunkCapture(
-                    CaptureChunkIdentity(chunk),
-                    chunk.RenderDataId,
-                    false))
-                .ToArray();
-            QueueRecord(new SnapshotRecord(
-                snapshotCount,
-                name,
-                frame.FrameIndex,
-                simulationElapsedSeconds,
-                CaptureCamera(),
-                chunks));
+            ActiveChunkCapture[] chunks = frame.TransparentPassChunks.Select(chunk => new ActiveChunkCapture(CaptureChunkIdentity(chunk), chunk.RenderDataId, false)).ToArray();
+            QueueRecord(new SnapshotRecord(snapshotCount, name, frame.FrameIndex, simulationElapsedSeconds, CaptureCamera(), chunks));
             snapshotCount++;
         }
 
-        public void WriteInputBoundary(
-            string type,
-            int stepIndex,
-            TimedPlayerInputStep step,
-            double simulationElapsedSeconds)
+        public void WriteInputBoundary(string type, int stepIndex, TimedPlayerInputStep step, double simulationElapsedSeconds)
         {
-            QueueRecord(new InputBoundaryRecord(
-                type,
-                stepIndex,
-                step,
-                simulationElapsedSeconds,
-                CaptureCamera()));
+            QueueRecord(new InputBoundaryRecord(type, stepIndex, step, simulationElapsedSeconds, CaptureCamera()));
         }
 
         public async Task CompleteAsync(double simulationElapsedSeconds, double wallElapsedSeconds)
         {
             if (completionQueued)
                 throw new InvalidOperationException("The simulated GPU output is already complete.");
-
-            QueueRecord(new CompletionRecord(
-                simulationElapsedSeconds,
-                wallElapsedSeconds,
-                frameCount,
-                uploadCount,
-                deletionCount,
-                snapshotCount));
+            QueueRecord(new CompletionRecord(simulationElapsedSeconds, wallElapsedSeconds, frameCount, uploadCount, deletionCount, snapshotCount));
             completionQueued = true;
             records.Writer.TryComplete();
-
             try
             {
                 await writerTask.ConfigureAwait(false);
                 ThrowIfWriterFailed();
                 if (writtenRecordCount != nextSequence)
                 {
-                    throw new InvalidDataException(
-                        $"The simulated GPU writer recorded {writtenRecordCount} of {nextSequence} queued records.");
+                    throw new InvalidDataException($"The simulated GPU writer recorded {writtenRecordCount} of {nextSequence} queued records.");
                 }
 
                 PublishFinalOutput();
@@ -349,7 +193,6 @@ namespace MVoxelEngine1.Application.Simulation
         {
             if (disposed)
                 return;
-
             disposed = true;
             Exception? disposalFailure = null;
             try
@@ -377,7 +220,7 @@ namespace MVoxelEngine1.Application.Simulation
                     {
                         DisposeOutputResources();
                     }
-                    catch (Exception ex) when (disposalFailure is not null)
+                    catch (Exception ex)when (disposalFailure is not null)
                     {
                         disposalFailure = new AggregateException(disposalFailure, ex);
                     }
@@ -414,11 +257,9 @@ namespace MVoxelEngine1.Application.Simulation
                         {
                             if (writerDelayMilliseconds > 0)
                                 Thread.Sleep(writerDelayMilliseconds);
-                            if (writerFailAfterRecords.HasValue &&
-                                writtenRecordCount >= writerFailAfterRecords.Value)
+                            if (writerFailAfterRecords.HasValue && writtenRecordCount >= writerFailAfterRecords.Value)
                             {
-                                throw new IOException(
-                                    $"The simulated GPU writer failure was requested after {writerFailAfterRecords.Value} records.");
+                                throw new IOException($"The simulated GPU writer failure was requested after {writerFailAfterRecords.Value} records.");
                             }
 
                             switch (queued.Record)
@@ -457,27 +298,20 @@ namespace MVoxelEngine1.Application.Simulation
             }
             catch (Exception ex)
             {
-                Interlocked.CompareExchange(
-                    ref writerFailure,
-                    ExceptionDispatchInfo.Capture(ex),
-                    null);
+                Interlocked.CompareExchange(ref writerFailure, ExceptionDispatchInfo.Capture(ex), null);
                 writerFailureCancellation.Cancel();
                 records.Writer.TryComplete(ex);
-
                 while (records.Reader.TryRead(out QueuedRecord? abandoned))
                     ReleaseRecordRetention(abandoned);
-
                 throw;
             }
         }
 
-        private void EnsureUploadQueued(long frameIndex,
-            in NativeChunkRenderPacketDescriptor data, ReadOnlySpan<uint> opaque, ReadOnlySpan<uint> transparent)
+        private void EnsureUploadQueued(long frameIndex, in NativeChunkRenderPacketDescriptor data, ReadOnlySpan<uint> opaque, ReadOnlySpan<uint> transparent)
         {
             if (uploadedRenderData.ContainsKey(data.RenderDataId))
                 return;
-            if (PackedFaceRectangle.CountLogicalFaces(opaque) != data.OpaqueFaceCount ||
-                PackedFaceRectangle.CountLogicalFaces(transparent) != data.TransparentFaceCount)
+            if (PackedFaceRectangle.CountLogicalFaces(opaque) != data.OpaqueFaceCount || PackedFaceRectangle.CountLogicalFaces(transparent) != data.TransparentFaceCount)
                 throw new InvalidDataException("Native upload rectangle counts are inconsistent.");
             ChunkIdentity identity = CaptureChunkIdentity(data);
             var buffer = new ArrayBufferWriter<byte>();
@@ -496,8 +330,7 @@ namespace MVoxelEngine1.Application.Simulation
                 capture.WriteNumber("z", identity.ChunkZ);
                 capture.WriteEndObject();
                 WriteVector(capture, "worldOrigin", data.ChunkWorldX, data.ChunkWorldY, data.ChunkWorldZ);
-                WriteVector(capture, "shaderChunkPosition", data.ChunkWorldX + 1,
-                    data.ChunkWorldY + 1, data.ChunkWorldZ + 1);
+                WriteVector(capture, "shaderChunkPosition", data.ChunkWorldX + 1, data.ChunkWorldY + 1, data.ChunkWorldZ + 1);
                 capture.WriteBoolean("fullyOccluded", data.IsEmpty);
                 capture.WriteNumber("opaqueFaceCount", data.OpaqueFaceCount);
                 capture.WriteNumber("opaqueRectangleCount", data.OpaqueRectangleCount);
@@ -508,6 +341,7 @@ namespace MVoxelEngine1.Application.Simulation
                 capture.WriteEndObject();
                 capture.Flush();
             }
+
             // Only diagnostic JSON leaves this callback. Mesh words remain in
             // the borrowed native packet, and never enter a second mesh owner.
             QueueRecord(new UploadRecord(nextSequence, buffer.WrittenSpan.ToArray()));
@@ -515,8 +349,7 @@ namespace MVoxelEngine1.Application.Simulation
             uploadCount++;
         }
 
-        private void WriteNativeFaces(Utf8JsonWriter capture, string name,
-            in NativeChunkRenderPacketDescriptor data, ReadOnlySpan<uint> words, bool transparent)
+        private void WriteNativeFaces(Utf8JsonWriter capture, string name, in NativeChunkRenderPacketDescriptor data, ReadOnlySpan<uint> words, bool transparent)
         {
             capture.WriteStartArray(name);
             var reader = new PackedFaceRectangleReader(words);
@@ -542,6 +375,7 @@ namespace MVoxelEngine1.Application.Simulation
                 WriteBlockName(capture, "neighborBlockNameAtUpload", neighbor);
                 capture.WriteEndObject();
             }
+
             capture.WriteEndArray();
         }
 
@@ -566,7 +400,6 @@ namespace MVoxelEngine1.Application.Simulation
         {
             if (completionQueued)
                 throw new InvalidOperationException("The simulated GPU output stream is closed.");
-
             ThrowIfWriterFailed();
             try
             {
@@ -579,15 +412,11 @@ namespace MVoxelEngine1.Application.Simulation
             }
 
             long retainedBytes = EstimateRetainedPayloadBytes(record);
-            var queued = new QueuedRecord(
-                Interlocked.Increment(ref nextSequence) - 1,
-                retainedBytes,
-                record);
+            var queued = new QueuedRecord(Interlocked.Increment(ref nextSequence) - 1, retainedBytes, record);
             int currentCount = Interlocked.Increment(ref retainedRecordCount);
             long currentBytes = Interlocked.Add(ref retainedPayloadBytes, retainedBytes);
             UpdateMaximum(ref peakRetainedRecordCount, currentCount);
             UpdateMaximum(ref peakRetainedPayloadBytes, currentBytes);
-
             bool retained = true;
             try
             {
@@ -611,7 +440,7 @@ namespace MVoxelEngine1.Application.Simulation
         {
             try
             {
-                // Diagnostic records contain no native lease or mesh retention.
+            // Diagnostic records contain no native lease or mesh retention.
             }
             finally
             {
@@ -631,26 +460,11 @@ namespace MVoxelEngine1.Application.Simulation
         private CameraCapture CaptureCamera()
         {
             (int cx, int cy, int cz) = world.PlayerChunkPosition;
-            return new CameraCapture(
-                player.camera.position,
-                player.camera.front,
-                player.camera.up,
-                Matrix4.Identity,
-                player.camera.GetViewMatrix(),
-                player.camera.GetProjectionMatrix((float)windowWidth / windowHeight),
-                cx,
-                cy,
-                cz);
+            return new CameraCapture(player.camera.position, player.camera.front, player.camera.up, Matrix4.Identity, player.camera.GetViewMatrix(), player.camera.GetProjectionMatrix((float)windowWidth / windowHeight), cx, cy, cz);
         }
 
-        private static ChunkIdentity CaptureChunkIdentity(NativeChunkRenderPacketDescriptor data) => new(
-            data.ChunkWorldX / GameManager.settings.chunkMaxX,
-            data.ChunkWorldY / GameManager.settings.chunkMaxY,
-            data.ChunkWorldZ / GameManager.settings.chunkMaxZ,
-            data.ChunkWorldX, data.ChunkWorldY, data.ChunkWorldZ);
-
-        private static long[] CaptureDrawList(
-            IReadOnlyList<NativeChunkRenderPacketDescriptor> chunks, bool transparent)
+        private static ChunkIdentity CaptureChunkIdentity(NativeChunkRenderPacketDescriptor data) => new(data.ChunkWorldX / GameManager.settings.chunkMaxX, data.ChunkWorldY / GameManager.settings.chunkMaxY, data.ChunkWorldZ / GameManager.settings.chunkMaxZ, data.ChunkWorldX, data.ChunkWorldY, data.ChunkWorldZ);
+        private static long[] CaptureDrawList(IReadOnlyList<NativeChunkRenderPacketDescriptor> chunks, bool transparent)
         {
             var ids = new List<long>();
             foreach (NativeChunkRenderPacketDescriptor data in chunks)
@@ -659,10 +473,7 @@ namespace MVoxelEngine1.Application.Simulation
             return ids.ToArray();
         }
 
-        private void WriteSessionHeader(
-            string inputScript,
-            int frameRate,
-            BlockTextureAtlas textureAtlas)
+        private void WriteSessionHeader(string inputScript, int frameRate, BlockTextureAtlas textureAtlas)
         {
             writer.WriteStartObject();
             writer.WriteNumber("schemaVersion", 2);
@@ -674,8 +485,7 @@ namespace MVoxelEngine1.Application.Simulation
             writer.WriteString("game", FlagManager.flags.game);
             writer.WriteNumber("seed", FlagManager.flags.seed!.Value);
             writer.WriteString("faceGenerationMode", "Optimized");
-            writer.WriteString("validationMode",
-                (FlagManager.flags.faceGenerationMode ?? FaceGenerationMode.Optimized).ToString());
+            writer.WriteString("validationMode", (FlagManager.flags.faceGenerationMode ?? FaceGenerationMode.Optimized).ToString());
             writer.WriteString("worldImplementation", "Native");
             writer.WriteNumber("windowConstructionCount", 0);
             writer.WriteString("worldId", world.ID);
@@ -694,20 +504,17 @@ namespace MVoxelEngine1.Application.Simulation
                 writer.WriteNumber("writerFailAfterRecords", writerFailAfterRecords.Value);
             else
                 writer.WriteNull("writerFailAfterRecords");
-
             writer.WriteStartObject("chunkDimensions");
             writer.WriteNumber("x", GameManager.settings.chunkMaxX);
             writer.WriteNumber("y", GameManager.settings.chunkMaxY);
             writer.WriteNumber("z", GameManager.settings.chunkMaxZ);
             writer.WriteEndObject();
-
             writer.WriteStartObject("textureAtlas");
             writer.WriteNumber("width", textureAtlas.atlasWidth);
             writer.WriteNumber("height", textureAtlas.atlasHeight);
             writer.WriteNumber("tilesX", textureAtlas.tilesX);
             writer.WriteNumber("tilesY", textureAtlas.tilesY);
             writer.WriteEndObject();
-
             WriteUploadGeometry();
             writer.WriteStartArray("events");
             writer.Flush();
@@ -768,11 +575,7 @@ namespace MVoxelEngine1.Application.Simulation
             {
                 writer.WriteStartObject();
                 WriteChunkIndex(chunk.Chunk);
-                WriteVector(
-                    "worldOrigin",
-                    chunk.Chunk.WorldOriginX,
-                    chunk.Chunk.WorldOriginY,
-                    chunk.Chunk.WorldOriginZ);
+                WriteVector("worldOrigin", chunk.Chunk.WorldOriginX, chunk.Chunk.WorldOriginY, chunk.Chunk.WorldOriginZ);
                 if (chunk.RenderDataId.HasValue)
                     writer.WriteNumber("renderDataId", chunk.RenderDataId.Value);
                 else
@@ -780,6 +583,7 @@ namespace MVoxelEngine1.Application.Simulation
                 writer.WriteBoolean("openGlUploaded", chunk.OpenGlUploaded);
                 writer.WriteEndObject();
             }
+
             writer.WriteEndArray();
             writer.WriteEndObject();
         }
@@ -872,21 +676,7 @@ namespace MVoxelEngine1.Application.Simulation
             writer.WriteEndObject();
         }
 
-        private void WriteFaceDirection(
-            byte id,
-            string name,
-            int normalX,
-            int normalY,
-            int normalZ,
-            int originX,
-            int originY,
-            int originZ,
-            int uX,
-            int uY,
-            int uZ,
-            int vX,
-            int vY,
-            int vZ)
+        private void WriteFaceDirection(byte id, string name, int normalX, int normalY, int normalZ, int originX, int originY, int originZ, int uX, int uY, int uZ, int vX, int vY, int vZ)
         {
             writer.WriteStartObject();
             writer.WriteNumber("id", id);
@@ -965,7 +755,6 @@ namespace MVoxelEngine1.Application.Simulation
         {
             if (outputResourcesDisposed)
                 return;
-
             outputResourcesDisposed = true;
             Exception? failure = null;
             try
@@ -981,7 +770,7 @@ namespace MVoxelEngine1.Application.Simulation
             {
                 fileStream.Dispose();
             }
-            catch (Exception ex) when (failure is not null)
+            catch (Exception ex)when (failure is not null)
             {
                 failure = new AggregateException(failure, ex);
             }
@@ -1006,12 +795,8 @@ namespace MVoxelEngine1.Application.Simulation
             return record switch
             {
                 UploadRecord upload => checked(RecordOverheadEstimate + upload.Payload.Length),
-                RenderFrameRecord frame => checked(
-                    RecordOverheadEstimate +
-                    frame.OpaqueDrawRenderDataIds.Length * sizeof(long) +
-                    frame.TransparentDrawRenderDataIds.Length * sizeof(long)),
-                SnapshotRecord snapshot => checked(
-                    RecordOverheadEstimate + snapshot.ActiveChunks.Length * 64L),
+                RenderFrameRecord frame => checked(RecordOverheadEstimate + frame.OpaqueDrawRenderDataIds.Length * sizeof(long) + frame.TransparentDrawRenderDataIds.Length * sizeof(long)),
+                SnapshotRecord snapshot => checked(RecordOverheadEstimate + snapshot.ActiveChunks.Length * 64L),
                 _ => RecordOverheadEstimate
             };
         }
@@ -1024,7 +809,6 @@ namespace MVoxelEngine1.Application.Simulation
                 int previous = Interlocked.CompareExchange(ref maximum, candidate, observed);
                 if (previous == observed)
                     return;
-
                 observed = previous;
             }
         }
@@ -1037,7 +821,6 @@ namespace MVoxelEngine1.Application.Simulation
                 long previous = Interlocked.CompareExchange(ref maximum, candidate, observed);
                 if (previous == observed)
                     return;
-
                 observed = previous;
             }
         }
@@ -1050,9 +833,7 @@ namespace MVoxelEngine1.Application.Simulation
             3 => (0, 1, 0),
             4 => (0, 0, -1),
             5 => (0, 0, 1),
-            _ => throw new InvalidDataException($"Face direction {direction} is invalid.")
-        };
-
+            _ => throw new InvalidDataException($"Face direction {direction} is invalid.")};
         private static string GetFaceName(byte direction) => direction switch
         {
             0 => "LEFT",
@@ -1061,7 +842,6 @@ namespace MVoxelEngine1.Application.Simulation
             3 => "TOP",
             4 => "BACK",
             5 => "FRONT",
-            _ => throw new InvalidDataException($"Face direction {direction} is invalid.")
-        };
+            _ => throw new InvalidDataException($"Face direction {direction} is invalid.")};
     }
 }

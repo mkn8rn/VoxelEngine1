@@ -9,28 +9,18 @@ using OpenTK.Graphics.OpenGL4;
 using Supprocom.NativeAllocationManagement;
 
 namespace MVoxelEngine1.WorldGeneration.Native;
-
-internal delegate INativeChunkRenderer? NativeChunkRendererFactory(
-    in NativeChunkRenderPacketDescriptor descriptor,
-    ReadOnlySpan<uint> opaqueWords,
-    ReadOnlySpan<uint> transparentWords);
-
 public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
 {
-    private static readonly NativeChunkRendererFactory OpenGlRendererFactory =
-        CreateOpenGlRenderer;
-    private static readonly NativeChunkRendererFactory HeadlessRendererFactory =
-        static (in NativeChunkRenderPacketDescriptor descriptor,
-            ReadOnlySpan<uint> opaqueWords, ReadOnlySpan<uint> transparentWords) => null;
-
+    private static readonly NativeChunkRendererFactory OpenGlRendererFactory = CreateOpenGlRenderer;
+    private static readonly NativeChunkRendererFactory HeadlessRendererFactory = static (in NativeChunkRenderPacketDescriptor descriptor, ReadOnlySpan<uint> opaqueWords, ReadOnlySpan<uint> transparentWords) => null;
     private readonly NativeGtrtPipeline pipeline;
     private readonly NativeChunkRendererFactory rendererFactory;
     private readonly NativeChunkRenderPacketAction uploadPacketAction;
     private readonly NativeGtrtAllocationMonitor? allocationMonitor;
     private readonly int ownerThreadId;
     private readonly string? quadsDirectory;
-    private INativeChunkRenderer?[] currentRenderers;
-    private INativeChunkRenderer?[] stagingRenderers;
+    private INativeChunkRenderer? [] currentRenderers;
+    private INativeChunkRenderer? [] stagingRenderers;
     private long[] currentPacketIds;
     private long[] stagingPacketIds;
     private readonly bool[] stagingOwned;
@@ -38,9 +28,9 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
     private int stagingCount;
     private int disposed;
     private bool inspectingPackets;
-
     public Guid ID { get; private set; }
     public Guid RegionID { get; private set; }
+
     public int Revision
     {
         get
@@ -50,28 +40,21 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
         }
     }
 
-    private NativeWorld(
-        NativeGtrtPipeline pipeline,
-        long seed,
-        NativeChunkRendererFactory rendererFactory,
-        string? quadsDirectory,
-        NativeGtrtAllocationMonitor? allocationMonitor)
+    private NativeWorld(NativeGtrtPipeline pipeline, long seed, NativeChunkRendererFactory rendererFactory, string? quadsDirectory, NativeGtrtAllocationMonitor? allocationMonitor)
     {
         ArgumentNullException.ThrowIfNull(pipeline);
         ArgumentNullException.ThrowIfNull(rendererFactory);
-
         this.pipeline = pipeline;
         this.rendererFactory = rendererFactory;
         this.quadsDirectory = quadsDirectory;
         this.allocationMonitor = allocationMonitor;
         ownerThreadId = Environment.CurrentManagedThreadId;
-        currentRenderers = new INativeChunkRenderer?[pipeline.RequiredPacketCount];
-        stagingRenderers = new INativeChunkRenderer?[pipeline.RequiredPacketCount];
+        currentRenderers = new INativeChunkRenderer? [pipeline.RequiredPacketCount];
+        stagingRenderers = new INativeChunkRenderer? [pipeline.RequiredPacketCount];
         currentPacketIds = new long[pipeline.RequiredPacketCount];
         stagingPacketIds = new long[pipeline.RequiredPacketCount];
         stagingOwned = new bool[pipeline.RequiredPacketCount];
         uploadPacketAction = UploadPacket;
-
         try
         {
             allocationMonitor?.Prepare(pipeline);
@@ -81,76 +64,47 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
         catch (Exception failure)
         {
             Exception? monitorFailure = null;
-            try { allocationMonitor?.Dispose(); }
-            catch (Exception exception) { monitorFailure = exception; }
-            Exception? cleanupFailure =
-                ReleaseAfterConstructionFailure();
+            try
+            {
+                allocationMonitor?.Dispose();
+            }
+            catch (Exception exception)
+            {
+                monitorFailure = exception;
+            }
+
+            Exception? cleanupFailure = ReleaseAfterConstructionFailure();
             if (monitorFailure is not null)
-                throw cleanupFailure is null
-                    ? new AggregateException(failure, monitorFailure)
-                    : new AggregateException(failure, monitorFailure, cleanupFailure);
+                throw cleanupFailure is null ? new AggregateException(failure, monitorFailure) : new AggregateException(failure, monitorFailure, cleanupFailure);
             if (cleanupFailure is null)
                 ExceptionDispatchInfo.Capture(failure).Throw();
-
             throw new AggregateException(failure, cleanupFailure);
         }
     }
 
-    public static NativeWorld CreateOpenGl(BlockTextureAtlas textureAtlas) =>
-        Create(textureAtlas, OpenGlRendererFactory);
-
-    public static NativeWorld CreateHeadless(BlockTextureAtlas textureAtlas) =>
-        Create(textureAtlas, HeadlessRendererFactory);
-
-    public static NativeWorld CreateHeadless(
-        BlockTextureAtlas textureAtlas,
-        NativeGtrtAllocationMonitor allocationMonitor)
+    public static NativeWorld CreateOpenGl(BlockTextureAtlas textureAtlas) => Create(textureAtlas, OpenGlRendererFactory);
+    public static NativeWorld CreateHeadless(BlockTextureAtlas textureAtlas) => Create(textureAtlas, HeadlessRendererFactory);
+    public static NativeWorld CreateHeadless(BlockTextureAtlas textureAtlas, NativeGtrtAllocationMonitor allocationMonitor)
     {
         ArgumentNullException.ThrowIfNull(allocationMonitor);
         return Create(textureAtlas, HeadlessRendererFactory, allocationMonitor);
     }
 
-    private static NativeWorld Create(
-        BlockTextureAtlas textureAtlas,
-        NativeChunkRendererFactory rendererFactory,
-        NativeGtrtAllocationMonitor? allocationMonitor = null)
+    private static NativeWorld Create(BlockTextureAtlas textureAtlas, NativeChunkRendererFactory rendererFactory, NativeGtrtAllocationMonitor? allocationMonitor = null)
     {
         ArgumentNullException.ThrowIfNull(textureAtlas);
-
         var loader = new WorldLoader();
-        loader.ChooseWorld(
-            FlagManager.flags.worldName,
-            FlagManager.flags.seed);
-
-        string quadsDirectory = Path.Combine(
-            loader.currentWorldSaveDirectory,
-            loader.RegionID.ToString(),
-            "quads");
-        NativeWorldSaveImportPlan savePlan =
-            NativeWorldSaveImportPlan.Create(
-                quadsDirectory,
-                GameManager.settings);
-        NativeGtrtPipeline pipeline =
-            NativeGtrtPipeline.Create(textureAtlas, savePlan);
-        NativeWorld world = CreateOwned(
-            pipeline,
-            loader.seed,
-            rendererFactory,
-            quadsDirectory,
-            allocationMonitor);
+        loader.ChooseWorld(FlagManager.flags.worldName, FlagManager.flags.seed);
+        string quadsDirectory = Path.Combine(loader.currentWorldSaveDirectory, loader.RegionID.ToString(), "quads");
+        NativeWorldSaveImportPlan savePlan = NativeWorldSaveImportPlan.Create(quadsDirectory, GameManager.settings);
+        NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(textureAtlas, savePlan);
+        NativeWorld world = CreateOwned(pipeline, loader.seed, rendererFactory, quadsDirectory, allocationMonitor);
         world.ID = loader.ID;
         world.RegionID = loader.RegionID;
         return world;
     }
 
-    internal static NativeWorld CreateForTesting(
-        NativeGtrtPipeline pipeline,
-        long seed,
-        NativeChunkRendererFactory rendererFactory,
-        string? quadsDirectory = null,
-        NativeGtrtAllocationMonitor? allocationMonitor = null) =>
-        CreateOwned(pipeline, seed, rendererFactory, quadsDirectory, allocationMonitor);
-
+    internal static NativeWorld CreateForTesting(NativeGtrtPipeline pipeline, long seed, NativeChunkRendererFactory rendererFactory, string? quadsDirectory = null, NativeGtrtAllocationMonitor? allocationMonitor = null) => CreateOwned(pipeline, seed, rendererFactory, quadsDirectory, allocationMonitor);
     public (int cx, int cy, int cz) PlayerChunkPosition
     {
         get
@@ -158,19 +112,17 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
             ValidateOwner();
             return playerChunkPosition;
         }
+
         set
         {
             ValidateMutation();
             if (value == playerChunkPosition)
                 return;
-
             pipeline.MoveToChunk(value.cx, value.cy, value.cz);
             bool bankPublished = false;
             try
             {
-                PublishReadyPackets(
-                    commitBlockEdit: false,
-                    out bankPublished);
+                PublishReadyPackets(commitBlockEdit: false, out bankPublished);
                 playerChunkPosition = value;
             }
             catch
@@ -191,18 +143,10 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
         return pipeline.GetBlock(worldX, worldY, worldZ);
     }
 
-    public bool SetBlock(
-        int worldX,
-        int worldY,
-        int worldZ,
-        ushort blockId)
+    public bool SetBlock(int worldX, int worldY, int worldZ, ushort blockId)
     {
         ValidateMutation();
-        if (!pipeline.BeginBlockEdit(
-                worldX,
-                worldY,
-                worldZ,
-                blockId))
+        if (!pipeline.BeginBlockEdit(worldX, worldY, worldZ, blockId))
         {
             return false;
         }
@@ -210,16 +154,13 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
         bool bankPublished = false;
         try
         {
-            PublishReadyPackets(
-                commitBlockEdit: true,
-                out bankPublished);
+            PublishReadyPackets(commitBlockEdit: true, out bankPublished);
             return true;
         }
         catch (Exception failure)
         {
             if (bankPublished)
                 throw;
-
             Exception? rollbackFailure = null;
             try
             {
@@ -241,9 +182,9 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
         ValidateMutation();
         if (quadsDirectory is null)
         {
-            throw new InvalidOperationException(
-                "The native world does not have a save directory.");
+            throw new InvalidOperationException("The native world does not have a save directory.");
         }
+
         return pipeline.SaveDirtyChunks(quadsDirectory);
     }
 
@@ -254,11 +195,9 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
         if (rendererFactory == HeadlessRendererFactory)
             throw new InvalidOperationException("A headless world cannot execute OpenGL rendering.");
         ChunkRender.ProcessPendingDeletes();
-
         GL.DepthMask(true);
         for (int index = 0; index < currentRenderers.Length; index++)
             currentRenderers[index]?.RenderOpaque(program);
-
         GL.DepthMask(false);
         for (int index = 0; index < currentRenderers.Length; index++)
             currentRenderers[index]?.RenderTransparent(program);
@@ -272,7 +211,6 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
             throw new InvalidOperationException("The native world is being inspected.");
         if (Interlocked.Exchange(ref disposed, 1) != 0)
             return;
-
         Exception? failure = null;
         if (quadsDirectory is not null)
         {
@@ -286,13 +224,8 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
             }
         }
 
-        failure = Combine(
-            failure,
-            ReleaseRendererSet(currentRenderers));
-        failure = Combine(
-            failure,
-            ReleaseRendererSet(stagingRenderers));
-
+        failure = Combine(failure, ReleaseRendererSet(currentRenderers));
+        failure = Combine(failure, ReleaseRendererSet(stagingRenderers));
         try
         {
             pipeline.Dispose();
@@ -343,47 +276,37 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
 
     private void PublishReadyPackets()
     {
-        PublishReadyPackets(
-            commitBlockEdit: false,
-            out _);
+        PublishReadyPackets(commitBlockEdit: false, out _);
     }
 
-    private void PublishReadyPackets(
-        bool commitBlockEdit,
-        out bool bankPublished)
+    private void PublishReadyPackets(bool commitBlockEdit, out bool bankPublished)
     {
         bankPublished = false;
         stagingCount = 0;
         try
         {
             int consumed = pipeline.ConsumeReadyPackets(uploadPacketAction);
-            if (consumed != stagingRenderers.Length ||
-                stagingCount != stagingRenderers.Length)
+            if (consumed != stagingRenderers.Length || stagingCount != stagingRenderers.Length)
             {
-                throw new InvalidOperationException(
-                    "The native renderer bank did not receive every packet.");
+                throw new InvalidOperationException("The native renderer bank did not receive every packet.");
             }
 
             if (commitBlockEdit)
                 pipeline.CommitBlockEdit();
-
-            INativeChunkRenderer?[] previous = currentRenderers;
+            INativeChunkRenderer? [] previous = currentRenderers;
             currentRenderers = stagingRenderers;
             stagingRenderers = previous;
             (currentPacketIds, stagingPacketIds) = (stagingPacketIds, currentPacketIds);
             bankPublished = true;
-            Exception? releaseFailure =
-                ReleasePreviousRenderers();
+            Exception? releaseFailure = ReleasePreviousRenderers();
             if (releaseFailure is not null)
                 ExceptionDispatchInfo.Capture(releaseFailure).Throw();
         }
         catch (Exception failure)
         {
-            Exception? releaseFailure =
-                ReleaseStagedRenderers();
+            Exception? releaseFailure = ReleaseStagedRenderers();
             if (releaseFailure is null)
                 ExceptionDispatchInfo.Capture(failure).Throw();
-
             throw new AggregateException(failure, releaseFailure);
         }
         finally
@@ -392,15 +315,11 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
         }
     }
 
-    private void UploadPacket(
-        in NativeChunkRenderPacketDescriptor descriptor,
-        ReadOnlySpan<uint> opaqueWords,
-        ReadOnlySpan<uint> transparentWords)
+    private void UploadPacket(in NativeChunkRenderPacketDescriptor descriptor, ReadOnlySpan<uint> opaqueWords, ReadOnlySpan<uint> transparentWords)
     {
         if ((uint)stagingCount >= (uint)stagingRenderers.Length)
         {
-            throw new InvalidOperationException(
-                "The native renderer bank received too many packets.");
+            throw new InvalidOperationException("The native renderer bank received too many packets.");
         }
 
         int index = pipeline.GetRendererSlot(in descriptor);
@@ -409,8 +328,7 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
         bool retained = currentPacketIds[index] == descriptor.RenderDataId;
         if (!retained)
             allocationMonitor?.BeforeRequiredUpload(in descriptor);
-        stagingRenderers[index] = retained ? currentRenderers[index] : rendererFactory(
-            in descriptor, opaqueWords, transparentWords);
+        stagingRenderers[index] = retained ? currentRenderers[index] : rendererFactory(in descriptor, opaqueWords, transparentWords);
         stagingOwned[index] = !retained;
         stagingPacketIds[index] = descriptor.RenderDataId;
         stagingCount++;
@@ -428,9 +346,16 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
             stagingOwned[index] = false;
             if (retained || renderer is null)
                 continue;
-            try { renderer.Dispose(); }
-            catch (Exception exception) { failure ??= exception; }
+            try
+            {
+                renderer.Dispose();
+            }
+            catch (Exception exception)
+            {
+                failure ??= exception;
+            }
         }
+
         return failure;
     }
 
@@ -446,74 +371,6 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
             stagingOwned[index] = false;
             if (!owned || renderer is null)
                 continue;
-            try { renderer.Dispose(); }
-            catch (Exception exception) { failure ??= exception; }
-        }
-        return failure;
-    }
-
-    private static INativeChunkRenderer? CreateOpenGlRenderer(
-        in NativeChunkRenderPacketDescriptor descriptor,
-        ReadOnlySpan<uint> opaqueWords,
-        ReadOnlySpan<uint> transparentWords) =>
-        ChunkRender.UploadNative(
-            in descriptor,
-            opaqueWords,
-            transparentWords);
-
-    private static NativeWorld CreateOwned(
-        NativeGtrtPipeline pipeline,
-        long seed,
-        NativeChunkRendererFactory rendererFactory,
-        string? quadsDirectory,
-        NativeGtrtAllocationMonitor? allocationMonitor = null)
-    {
-        try
-        {
-            return new NativeWorld(
-                pipeline,
-                seed,
-                rendererFactory,
-                quadsDirectory,
-                allocationMonitor);
-        }
-        catch
-        {
-            pipeline.Dispose();
-            throw;
-        }
-    }
-
-    private Exception? ReleaseAfterConstructionFailure()
-    {
-        Interlocked.Exchange(ref disposed, 1);
-        Exception? failure = ReleaseRendererSet(currentRenderers);
-        failure = Combine(
-            failure,
-            ReleaseRendererSet(stagingRenderers));
-        try
-        {
-            pipeline.Dispose();
-        }
-        catch (Exception exception)
-        {
-            failure = Combine(failure, exception);
-        }
-
-        return failure;
-    }
-
-    private static Exception? ReleaseRendererSet(
-        INativeChunkRenderer?[] renderers)
-    {
-        Exception? failure = null;
-        for (int index = 0; index < renderers.Length; index++)
-        {
-            INativeChunkRenderer? renderer = renderers[index];
-            renderers[index] = null;
-            if (renderer is null)
-                continue;
-
             try
             {
                 renderer.Dispose();
@@ -527,20 +384,63 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
         return failure;
     }
 
-    private static Exception? Combine(
-        Exception? first,
-        Exception? second) =>
-        first is null
-            ? second
-            : second is null
-                ? first
-                : new AggregateException(first, second);
+    private static INativeChunkRenderer? CreateOpenGlRenderer(in NativeChunkRenderPacketDescriptor descriptor, ReadOnlySpan<uint> opaqueWords, ReadOnlySpan<uint> transparentWords) => ChunkRender.UploadNative(in descriptor, opaqueWords, transparentWords);
+    private static NativeWorld CreateOwned(NativeGtrtPipeline pipeline, long seed, NativeChunkRendererFactory rendererFactory, string? quadsDirectory, NativeGtrtAllocationMonitor? allocationMonitor = null)
+    {
+        try
+        {
+            return new NativeWorld(pipeline, seed, rendererFactory, quadsDirectory, allocationMonitor);
+        }
+        catch
+        {
+            pipeline.Dispose();
+            throw;
+        }
+    }
 
+    private Exception? ReleaseAfterConstructionFailure()
+    {
+        Interlocked.Exchange(ref disposed, 1);
+        Exception? failure = ReleaseRendererSet(currentRenderers);
+        failure = Combine(failure, ReleaseRendererSet(stagingRenderers));
+        try
+        {
+            pipeline.Dispose();
+        }
+        catch (Exception exception)
+        {
+            failure = Combine(failure, exception);
+        }
+
+        return failure;
+    }
+
+    private static Exception? ReleaseRendererSet(INativeChunkRenderer? [] renderers)
+    {
+        Exception? failure = null;
+        for (int index = 0; index < renderers.Length; index++)
+        {
+            INativeChunkRenderer? renderer = renderers[index];
+            renderers[index] = null;
+            if (renderer is null)
+                continue;
+            try
+            {
+                renderer.Dispose();
+            }
+            catch (Exception exception)
+            {
+                failure ??= exception;
+            }
+        }
+
+        return failure;
+    }
+
+    private static Exception? Combine(Exception? first, Exception? second) => first is null ? second : second is null ? first : new AggregateException(first, second);
     private void ValidateOwner()
     {
-        ObjectDisposedException.ThrowIf(
-            Volatile.Read(ref disposed) != 0,
-            this);
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
         ValidateOwnerThread();
     }
 
@@ -548,8 +448,7 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
     {
         if (Environment.CurrentManagedThreadId != ownerThreadId)
         {
-            throw new InvalidOperationException(
-                "The native world must stay on its creating thread.");
+            throw new InvalidOperationException("The native world must stay on its creating thread.");
         }
     }
 }

@@ -2,52 +2,6 @@ using System.Runtime;
 using Supprocom.NativeAllocationManagement;
 
 namespace MVoxelEngine1.WorldGeneration.Native;
-
-public readonly record struct NativeSessionAllocationMetrics(
-    long OwnerLengthBytes,
-    long OwnerCapacityBytes,
-    int ResidentColumns,
-    int RequiredChunks,
-    int ProfileCount,
-    int PacketWordCapacity,
-    int PacketWordHighWaterCount,
-    int MaterializedChunks,
-    int MaterializedSections,
-    int MaterializedRawSections,
-    int MaterializedPaletteEntries,
-    int MaterializedPackedWords)
-{
-    internal static NativeSessionAllocationMetrics Capture(NativeGtrtSession session)
-    {
-        NativeSessionAllocationMetrics metrics = default;
-        session.Access((scoped NativeLeaseView<byte> owner) =>
-        {
-            var view = new NativeGtrtSessionView(owner.AsSpan());
-            metrics = new NativeSessionAllocationMetrics(
-                session.OwnerLength, session.OwnerCapacity, view.Columns.Length,
-                view.RequiredChunkCount, view.Profiles.Length, view.PacketWordCapacity,
-                view.State.PacketWordCursor, view.State.MaterializedChunkCount,
-                view.State.MaterializedSectionCount, view.State.MaterializedRawSectionCount,
-                view.State.MaterializedPaletteCursor, view.State.MaterializedPackedWordCursor);
-        });
-        return metrics;
-    }
-}
-
-public sealed record NativeGtrtAllocationEvidence(
-    string IntervalStart,
-    string IntervalEnd,
-    int CoordinatorManagedThreadId,
-    long CoordinatorManagedBytes,
-    long ProcessManagedBytes,
-    int Generation0Collections,
-    int Generation1Collections,
-    int Generation2Collections,
-    bool NoGcRegionCompleted,
-    IReadOnlyList<NativeWorkerAllocationSample> Workers,
-    NativePreUploadPacket FirstRequiredPacket,
-    NativeSessionAllocationMetrics NativeStorage);
-
 public sealed class NativeGtrtAllocationMonitor : IDisposable
 {
     private readonly Action publicationObserver;
@@ -71,9 +25,7 @@ public sealed class NativeGtrtAllocationMonitor : IDisposable
     private bool started;
     private bool completed;
     private bool noGcRegionCompleted;
-
     public NativeGtrtAllocationMonitor() => publicationObserver = RecordPublication;
-
     internal void Prepare(NativeGtrtPipeline source)
     {
         if (prepared)
@@ -127,14 +79,10 @@ public sealed class NativeGtrtAllocationMonitor : IDisposable
     {
         if (!completed)
             throw new InvalidOperationException("The native allocation interval has no required pre-upload endpoint.");
-        return new NativeGtrtAllocationEvidence(
-            "validated native seed publication", "immediately before the first nonempty packet renderer/upload callback",
-            coordinatorThread, coordinatorBytes, processBytes, generation0Changes, generation1Changes,
-            generation2Changes, noGcRegionCompleted, Array.AsReadOnly(samples), firstPacket, metrics);
+        return new NativeGtrtAllocationEvidence("validated native seed publication", "immediately before the first nonempty packet renderer/upload callback", coordinatorThread, coordinatorBytes, processBytes, generation0Changes, generation1Changes, generation2Changes, noGcRegionCompleted, Array.AsReadOnly(samples), firstPacket, metrics);
     }
 
     public void Dispose() => EndNoGcRegion();
-
     private void EndNoGcRegion()
     {
         if (!ownsNoGcRegion)

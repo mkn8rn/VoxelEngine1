@@ -2,42 +2,6 @@ using System.Diagnostics;
 
 namespace MVoxelEngine1.Infrastructure.Diagnostics
 {
-    public sealed record GenerationPerformanceSnapshot
-    {
-        public required long Columns { get; init; }
-        public required long Chunks { get; init; }
-        public required long AllAirChunks { get; init; }
-        public required long AllStoneChunks { get; init; }
-        public required long AllSoilChunks { get; init; }
-        public required long AllWaterChunks { get; init; }
-        public required long NonUniformChunks { get; init; }
-        public required double AggregatedProfileMilliseconds { get; init; }
-        public required double HeightMapMilliseconds { get; init; }
-        public required double SmoothValueNoiseMilliseconds { get; init; }
-        public required double ProfileDerivationMilliseconds { get; init; }
-        public required double VerticalClassificationMilliseconds { get; init; }
-        public required double SpanMapMilliseconds { get; init; }
-        public required double ChunkConstructionMilliseconds { get; init; }
-        public required double UniformSectionMilliseconds { get; init; }
-        public required double NonUniformGenerationMilliseconds { get; init; }
-        public required double NonUniformColumnScanMilliseconds { get; init; }
-        public required double NonUniformUniformSectionMilliseconds { get; init; }
-        public required double NonUniformTerrainEmissionMilliseconds { get; init; }
-        public required double NonUniformWaterEmissionMilliseconds { get; init; }
-        public required double NonUniformCollapseMilliseconds { get; init; }
-        public required double NonUniformFinalizeMilliseconds { get; init; }
-        public required long FinalizedSections { get; init; }
-        public required long ScratchSections { get; init; }
-        public required long EscalatedScratchSections { get; init; }
-        public required long EmptySections { get; init; }
-        public required long UniformSections { get; init; }
-        public required long PackedSections { get; init; }
-        public required long MultiPackedSections { get; init; }
-        public required long ExpandedSections { get; init; }
-        public required double BoundaryPlaneMilliseconds { get; init; }
-        public required double RegistrarMilliseconds { get; init; }
-    }
-
     public static class GenerationPerformanceRecorder
     {
         private static long columns;
@@ -72,7 +36,6 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
         private static long expandedSections;
         private static long boundaryPlaneTicks;
         private static long registrarTicks;
-
         public static void Reset()
         {
             Volatile.Write(ref columns, 0);
@@ -109,12 +72,7 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
             Volatile.Write(ref registrarTicks, 0);
         }
 
-        public static void RecordColumn(
-            long profileTicks,
-            long classificationTicks,
-            long mapTicks,
-            long constructionTicks,
-            long registrationTicks)
+        public static void RecordColumn(long profileTicks, long classificationTicks, long mapTicks, long constructionTicks, long registrationTicks)
         {
             Interlocked.Increment(ref columns);
             Interlocked.Add(ref aggregatedProfileTicks, profileTicks);
@@ -124,15 +82,9 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
             Interlocked.Add(ref registrarTicks, registrationTicks);
         }
 
-        public static void RecordSmoothValueNoise(long elapsedTicks) =>
-            Interlocked.Add(ref smoothValueNoiseTicks, elapsedTicks);
-
-        public static void RecordHeightMap(long elapsedTicks) =>
-            Interlocked.Add(ref heightMapTicks, elapsedTicks);
-
-        public static void RecordProfileDerivation(long elapsedTicks) =>
-            Interlocked.Add(ref profileDerivationTicks, elapsedTicks);
-
+        public static void RecordSmoothValueNoise(long elapsedTicks) => Interlocked.Add(ref smoothValueNoiseTicks, elapsedTicks);
+        public static void RecordHeightMap(long elapsedTicks) => Interlocked.Add(ref heightMapTicks, elapsedTicks);
+        public static void RecordProfileDerivation(long elapsedTicks) => Interlocked.Add(ref profileDerivationTicks, elapsedTicks);
         public static void RecordChunkKind(int uniformOverride)
         {
             Interlocked.Increment(ref chunks);
@@ -156,19 +108,9 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
             }
         }
 
-        public static void RecordUniformSections(long elapsedTicks) =>
-            Interlocked.Add(ref uniformSectionTicks, elapsedTicks);
-
-        public static void RecordNonUniformGeneration(long elapsedTicks) =>
-            Interlocked.Add(ref nonUniformGenerationTicks, elapsedTicks);
-
-        public static void RecordNonUniformPhases(
-            long columnScanTicks,
-            long uniformSectionTicks,
-            long terrainEmissionTicks,
-            long waterEmissionTicks,
-            long collapseTicks,
-            long finalizeTicks)
+        public static void RecordUniformSections(long elapsedTicks) => Interlocked.Add(ref uniformSectionTicks, elapsedTicks);
+        public static void RecordNonUniformGeneration(long elapsedTicks) => Interlocked.Add(ref nonUniformGenerationTicks, elapsedTicks);
+        public static void RecordNonUniformPhases(long columnScanTicks, long uniformSectionTicks, long terrainEmissionTicks, long waterEmissionTicks, long collapseTicks, long finalizeTicks)
         {
             Interlocked.Add(ref nonUniformColumnScanTicks, columnScanTicks);
             Interlocked.Add(ref nonUniformUniformSectionTicks, uniformSectionTicks);
@@ -178,15 +120,7 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
             Interlocked.Add(ref nonUniformFinalizeTicks, finalizeTicks);
         }
 
-        public static void RecordFinalizedSections(
-            long finalized,
-            long scratch,
-            long escalatedScratch,
-            long empty,
-            long uniform,
-            long packed,
-            long multiPacked,
-            long expanded)
+        public static void RecordFinalizedSections(long finalized, long scratch, long escalatedScratch, long empty, long uniform, long packed, long multiPacked, long expanded)
         {
             Interlocked.Add(ref finalizedSections, finalized);
             Interlocked.Add(ref scratchSections, scratch);
@@ -198,9 +132,7 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
             Interlocked.Add(ref expandedSections, expanded);
         }
 
-        public static void RecordBoundaryPlanes(long elapsedTicks) =>
-            Interlocked.Add(ref boundaryPlaneTicks, elapsedTicks);
-
+        public static void RecordBoundaryPlanes(long elapsedTicks) => Interlocked.Add(ref boundaryPlaneTicks, elapsedTicks);
         public static GenerationPerformanceSnapshot CreateSnapshot() => new()
         {
             Columns = Volatile.Read(ref columns),
@@ -236,11 +168,7 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
             BoundaryPlaneMilliseconds = ToMilliseconds(Volatile.Read(ref boundaryPlaneTicks)),
             RegistrarMilliseconds = ToMilliseconds(Volatile.Read(ref registrarTicks))
         };
-
-        public static long GetElapsedTicks(long startTimestamp) =>
-            Stopwatch.GetElapsedTime(startTimestamp).Ticks;
-
-        private static double ToMilliseconds(long ticks) =>
-            TimeSpan.FromTicks(ticks).TotalMilliseconds;
+        public static long GetElapsedTicks(long startTimestamp) => Stopwatch.GetElapsedTime(startTimestamp).Ticks;
+        private static double ToMilliseconds(long ticks) => TimeSpan.FromTicks(ticks).TotalMilliseconds;
     }
 }

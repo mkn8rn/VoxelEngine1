@@ -3,30 +3,15 @@ using MVoxelEngine1.Infrastructure.Diagnostics;
 using Supprocom.NativeAllocationManagement;
 
 namespace MVoxelEngine1.WorldGeneration.Native;
-
-public readonly record struct NativeWorkerAllocationSample(
-    int ManagedThreadId,
-    int WorkerIndex,
-    bool GeneratesTerrain,
-    long WaitBytes,
-    long WorkBytes,
-    long CompletionBytes,
-    long TotalBytes);
-
 internal sealed class NativeGtrtWorkerPool : IDisposable
 {
-    private static readonly NativeLeaseAction<byte> WarmSessionAction =
-        static (scoped NativeLeaseView<byte> owner) =>
-        {
-            _ = new NativeGtrtSessionView(owner.AsSpan());
-        };
-    private static readonly TimeSpan WorkerStartTimeout =
-        TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan WorkerCompletionTimeout =
-        TimeSpan.FromMinutes(2);
-    private static readonly TimeSpan WorkerJoinTimeout =
-        TimeSpan.FromSeconds(30);
-
+    private static readonly NativeLeaseAction<byte> WarmSessionAction = static (scoped NativeLeaseView<byte> owner) =>
+    {
+        _ = new NativeGtrtSessionView(owner.AsSpan());
+    };
+    private static readonly TimeSpan WorkerStartTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan WorkerCompletionTimeout = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan WorkerJoinTimeout = TimeSpan.FromSeconds(30);
     private readonly NativeGtrtSession session;
     private readonly ManualResetEvent readyGate = new(false);
     private readonly ManualResetEvent armedGate = new(false);
@@ -55,60 +40,39 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
     private bool completionValid;
     private NativeGtrtFailureCode completionFailure;
     private bool completionCanceled;
+    internal bool CanGrowPacketStorage => completionFailure == NativeGtrtFailureCode.PacketStorageExhausted && !completionCanceled;
 
-    internal bool CanGrowPacketStorage =>
-        completionFailure == NativeGtrtFailureCode.PacketStorageExhausted && !completionCanceled;
     private long initialGenerationMilliseconds = -1;
     private long initialMeshMilliseconds = -1;
-
-    internal NativeGtrtWorkerPool(
-        NativeGtrtSession session,
-        int generationWorkerCount,
-        int meshWorkerCount,
-        bool streamGeneration = false,
-        int? runtimeGenerationWorkerCount = null,
-        int? runtimeMeshWorkerCount = null)
+    internal NativeGtrtWorkerPool(NativeGtrtSession session, int generationWorkerCount, int meshWorkerCount, bool streamGeneration = false, int? runtimeGenerationWorkerCount = null, int? runtimeMeshWorkerCount = null)
     {
         ArgumentNullException.ThrowIfNull(session);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
-            generationWorkerCount);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
-            meshWorkerCount);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(generationWorkerCount);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(meshWorkerCount);
         int runtimeGeneration = runtimeGenerationWorkerCount ?? generationWorkerCount;
         int runtimeMesh = runtimeMeshWorkerCount ?? meshWorkerCount;
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(runtimeGeneration);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(runtimeMesh);
         int maximumGeneration = Math.Max(generationWorkerCount, runtimeGeneration);
         int maximumMesh = Math.Max(meshWorkerCount, runtimeMesh);
-
         _ = StartupPerformanceRecorder.IsRunning;
         this.session = session;
         this.streamGeneration = streamGeneration;
         validateCompletionAction = ValidateCompletion;
-        workers = new NativeGtrtWorker[
-            checked(maximumGeneration + maximumMesh)];
+        workers = new NativeGtrtWorker[checked(maximumGeneration + maximumMesh)];
         this.generationWorkerCount = generationWorkerCount;
         this.meshWorkerCount = meshWorkerCount;
         this.runtimeGenerationWorkerCount = runtimeGeneration;
         this.runtimeMeshWorkerCount = runtimeMesh;
-
         int workerOffset = 0;
         for (int index = 0; index < maximumGeneration; index++)
         {
-            workers[workerOffset++] = new NativeGtrtWorker(
-                this,
-                session,
-                index,
-                NativeGtrtWorkerKind.Generation);
+            workers[workerOffset++] = new NativeGtrtWorker(this, session, index, NativeGtrtWorkerKind.Generation);
         }
 
         for (int index = 0; index < maximumMesh; index++)
         {
-            workers[workerOffset++] = new NativeGtrtWorker(
-                this,
-                session,
-                index,
-                NativeGtrtWorkerKind.Mesh);
+            workers[workerOffset++] = new NativeGtrtWorker(this, session, index, NativeGtrtWorkerKind.Mesh);
         }
 
         try
@@ -139,16 +103,10 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
         }
     }
 
-    internal long InitialGenerationMilliseconds =>
-        Volatile.Read(ref initialGenerationMilliseconds);
-
-    internal long InitialMeshMilliseconds =>
-        Volatile.Read(ref initialMeshMilliseconds);
-
+    internal long InitialGenerationMilliseconds => Volatile.Read(ref initialGenerationMilliseconds);
+    internal long InitialMeshMilliseconds => Volatile.Read(ref initialMeshMilliseconds);
     internal int WorkerCount => workers.Length;
-
     internal int ActiveGenerationWorkerCount => activeGenerationWorkerCount;
-
     internal int ActiveMeshWorkerCount => activeMeshWorkerCount;
 
     internal void CopyAllocationSamples(Span<NativeWorkerAllocationSample> destination)
@@ -159,27 +117,19 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
             destination[index] = workers[index].AllocationSample;
     }
 
-    internal void Run(
-        long seed,
-        int centerChunkX = 0,
-        int centerChunkY = 0,
-        int centerChunkZ = 0)
+    internal void Run(long seed, int centerChunkX = 0, int centerChunkY = 0, int centerChunkZ = 0)
     {
         int priorState;
         while (true)
         {
             priorState = Volatile.Read(ref runState);
-            if ((priorState != 0 && priorState != 2) ||
-                Interlocked.CompareExchange(
-                    ref runState,
-                    1,
-                    priorState) != priorState)
+            if ((priorState != 0 && priorState != 2) || Interlocked.CompareExchange(ref runState, 1, priorState) != priorState)
             {
                 if (priorState == 0 || priorState == 2)
                     continue;
-                throw new InvalidOperationException(
-                    "The native GTRT worker pool is not idle.");
+                throw new InvalidOperationException("The native GTRT worker pool is not idle.");
             }
+
             break;
         }
 
@@ -190,9 +140,7 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
             if (worker.Fault is not null)
             {
                 Volatile.Write(ref runState, 3);
-                throw new InvalidOperationException(
-                    "A native GTRT worker is not available.",
-                    worker.Fault);
+                throw new InvalidOperationException("A native GTRT worker is not available.", worker.Fault);
             }
         }
 
@@ -208,7 +156,6 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
         remainingGenerationWorkerCount = activeGenerationWorkerCount;
         remainingMeshWorkerCount = activeMeshWorkerCount;
         runEpoch = checked(runEpoch + 1);
-
         try
         {
             foreach (NativeGtrtWorker worker in workers)
@@ -216,11 +163,7 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
                     worker.Signal();
             if (!armedGate.WaitOne(WorkerStartTimeout))
                 throw new TimeoutException("The native GTRT workers did not arm before seed publication.");
-            session.PrepareRun(
-                seed,
-                centerChunkX,
-                centerChunkY,
-                centerChunkZ);
+            session.PrepareRun(seed, centerChunkX, centerChunkY, centerChunkZ);
             if (priorState == 0 && StartupPerformanceRecorder.IsRunning)
             {
                 Volatile.Write(ref startupPerformanceEnabled, 1);
@@ -243,8 +186,7 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
         if (!completionGate.WaitOne(WorkerCompletionTimeout))
         {
             session.RequestCancellation();
-            throw new TimeoutException(
-                "The native GTRT workers did not complete their work.");
+            throw new TimeoutException("The native GTRT workers did not complete their work.");
         }
 
         foreach (NativeGtrtWorker worker in workers)
@@ -255,9 +197,7 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
                 Thread.Yield();
             if (worker.Fault is not null)
             {
-                throw new InvalidOperationException(
-                    "A native GTRT worker failed.",
-                    worker.Fault);
+                throw new InvalidOperationException("A native GTRT worker failed.", worker.Fault);
             }
         }
 
@@ -267,9 +207,7 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
         session.Access(validateCompletionAction);
         if (!completionValid)
         {
-            throw new InvalidOperationException(
-                $"Native GTRT work did not complete. " +
-                $"Failure code: {completionFailure}.");
+            throw new InvalidOperationException($"Native GTRT work did not complete. " + $"Failure code: {completionFailure}.");
         }
 
         Volatile.Write(ref runState, 2);
@@ -279,12 +217,10 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
     {
         if (Interlocked.Exchange(ref disposed, 1) != 0)
             return;
-
         int priorState = Interlocked.Exchange(ref runState, 3);
         Volatile.Write(ref shutdownRequested, 1);
         if (priorState == 1)
             session.RequestCancellation();
-
         SignalWorkers();
         publicationGate.Set();
         generationCompletionGate.Set();
@@ -309,8 +245,7 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
         readyGate.Dispose();
     }
 
-    private bool ShutdownRequested =>
-        Volatile.Read(ref shutdownRequested) != 0;
+    private bool ShutdownRequested => Volatile.Read(ref shutdownRequested) != 0;
 
     private void NotifyReady()
     {
@@ -331,15 +266,12 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
         {
             if (kind == NativeGtrtWorkerKind.Generation)
             {
-                int remainingGeneration = Interlocked.Decrement(
-                    ref remainingGenerationWorkerCount);
+                int remainingGeneration = Interlocked.Decrement(ref remainingGenerationWorkerCount);
                 if (remainingGeneration == 0)
                 {
                     if (Volatile.Read(ref startupPerformanceEnabled) != 0)
                     {
-                        Volatile.Write(
-                            ref initialGenerationMilliseconds,
-                            StartupPerformanceRecorder.CompleteInitialGeneration());
+                        Volatile.Write(ref initialGenerationMilliseconds, StartupPerformanceRecorder.CompleteInitialGeneration());
                         if (!streamGeneration)
                         {
                             StartupPerformanceRecorder.BeginInitialChunkMeshBuild();
@@ -351,18 +283,13 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
             }
             else
             {
-                int remainingMesh = Interlocked.Decrement(
-                    ref remainingMeshWorkerCount);
-                if (remainingMesh == 0 &&
-                    Volatile.Read(ref startupPerformanceEnabled) != 0)
+                int remainingMesh = Interlocked.Decrement(ref remainingMeshWorkerCount);
+                if (remainingMesh == 0 && Volatile.Read(ref startupPerformanceEnabled) != 0)
                 {
-                    Volatile.Write(
-                        ref initialMeshMilliseconds,
-                        StartupPerformanceRecorder.CompleteInitialChunkMeshBuild());
+                    Volatile.Write(ref initialMeshMilliseconds, StartupPerformanceRecorder.CompleteInitialChunkMeshBuild());
                 }
             }
         }
-
     }
 
     private void NotifyWorkerFinished()
@@ -378,8 +305,7 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
         {
             if (!worker.Join(WorkerJoinTimeout))
             {
-                throw new TimeoutException(
-                    "A native GTRT worker did not stop.");
+                throw new TimeoutException("A native GTRT worker did not stop.");
             }
         }
     }
@@ -388,18 +314,9 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
     {
         var view = new NativeGtrtSessionView(owner.AsSpan());
         ref NativeGtrtSessionState state = ref view.State;
-        completionFailure =
-            (NativeGtrtFailureCode)Volatile.Read(ref state.FailureCode);
+        completionFailure = (NativeGtrtFailureCode)Volatile.Read(ref state.FailureCode);
         completionCanceled = Volatile.Read(ref state.CancellationState) != 0;
-        completionValid =
-            completionFailure == NativeGtrtFailureCode.None &&
-            Volatile.Read(ref state.RemainingColumns) == 0 &&
-            Volatile.Read(ref state.RemainingChunks) == 0 &&
-            Volatile.Read(ref state.ReadyPacketCount) ==
-                state.PlannedMeshes &&
-            state.PlannedMeshes + state.RetainedPackets == view.RequiredChunkCount &&
-            Volatile.Read(ref state.ClaimedGenerationCount) == 0 &&
-            Volatile.Read(ref state.ClaimedMeshCount) == 0;
+        completionValid = completionFailure == NativeGtrtFailureCode.None && Volatile.Read(ref state.RemainingColumns) == 0 && Volatile.Read(ref state.RemainingChunks) == 0 && Volatile.Read(ref state.ReadyPacketCount) == state.PlannedMeshes && state.PlannedMeshes + state.RetainedPackets == view.RequiredChunkCount && Volatile.Read(ref state.ClaimedGenerationCount) == 0 && Volatile.Read(ref state.ClaimedMeshCount) == 0;
     }
 
     private enum NativeGtrtWorkerKind
@@ -419,38 +336,24 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
         private readonly AutoResetEvent startSignal = new(false);
         private bool started;
         private int measuredRunEpoch;
-
-        internal NativeGtrtWorker(
-            NativeGtrtWorkerPool owner,
-            NativeGtrtSession session,
-            int workerIndex,
-            NativeGtrtWorkerKind kind)
+        internal NativeGtrtWorker(NativeGtrtWorkerPool owner, NativeGtrtSession session, int workerIndex, NativeGtrtWorkerKind kind)
         {
             this.owner = owner;
             this.session = session;
             this.workerIndex = workerIndex;
             this.kind = kind;
-            workAction = kind == NativeGtrtWorkerKind.Generation
-                ? RunGeneration
-                : RunMesh;
+            workAction = kind == NativeGtrtWorkerKind.Generation ? RunGeneration : RunMesh;
             thread = new Thread(Run)
             {
                 IsBackground = true,
-                Name = $"Native GTRT {kind} {workerIndex}"
-            };
+                Name = $"Native GTRT {kind} {workerIndex}"};
         }
 
         internal Exception? Fault { get; private set; }
-
         internal long ManagedAllocationBytes { get; private set; }
-
         internal NativeWorkerAllocationSample AllocationSample { get; private set; }
-
         internal int MeasuredRunEpoch => Volatile.Read(ref measuredRunEpoch);
-
-        internal bool ActiveForRun => kind == NativeGtrtWorkerKind.Generation
-            ? workerIndex < owner.activeGenerationWorkerCount
-            : workerIndex < owner.activeMeshWorkerCount;
+        internal bool ActiveForRun => kind == NativeGtrtWorkerKind.Generation ? workerIndex < owner.activeGenerationWorkerCount : workerIndex < owner.activeMeshWorkerCount;
 
         internal void Start()
         {
@@ -459,11 +362,8 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
         }
 
         internal void Signal() => startSignal.Set();
-
         internal void DisposeStartSignal() => startSignal.Dispose();
-
         internal bool Join(TimeSpan timeout) => !started || thread.Join(timeout);
-
         private void Run()
         {
             session.Access(WarmSessionAction);
@@ -472,16 +372,13 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
             _ = startSignal.WaitOne(0);
             _ = owner.publicationGate.WaitOne(0);
             _ = owner.generationCompletionGate.WaitOne(0);
-            AllocationSample = new NativeWorkerAllocationSample(
-                Environment.CurrentManagedThreadId, workerIndex,
-                kind == NativeGtrtWorkerKind.Generation, 0, 0, 0, 0);
+            AllocationSample = new NativeWorkerAllocationSample(Environment.CurrentManagedThreadId, workerIndex, kind == NativeGtrtWorkerKind.Generation, 0, 0, 0, 0);
             owner.NotifyReady();
             while (true)
             {
                 startSignal.WaitOne();
                 if (owner.ShutdownRequested)
                     return;
-
                 long allocationStart = GC.GetAllocatedBytesForCurrentThread();
                 owner.NotifyArmed();
                 long workStart = allocationStart;
@@ -491,8 +388,7 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
                     owner.publicationGate.WaitOne();
                     if (owner.ShutdownRequested)
                         return;
-                    if (kind == NativeGtrtWorkerKind.Mesh &&
-                        !owner.streamGeneration)
+                    if (kind == NativeGtrtWorkerKind.Mesh && !owner.streamGeneration)
                     {
                         owner.generationCompletionGate.WaitOne();
                         if (owner.ShutdownRequested)
@@ -516,15 +412,9 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
                     if (allocated >= ManagedAllocationBytes)
                     {
                         ManagedAllocationBytes = allocated;
-                        AllocationSample = new NativeWorkerAllocationSample(
-                            Environment.CurrentManagedThreadId,
-                            workerIndex,
-                            kind == NativeGtrtWorkerKind.Generation,
-                            workStart - allocationStart,
-                            workEnd - workStart,
-                            allocationEnd - workEnd,
-                            allocated);
+                        AllocationSample = new NativeWorkerAllocationSample(Environment.CurrentManagedThreadId, workerIndex, kind == NativeGtrtWorkerKind.Generation, workStart - allocationStart, workEnd - workStart, allocationEnd - workEnd, allocated);
                     }
+
                     Volatile.Write(ref measuredRunEpoch, owner.runEpoch);
                 }
 
@@ -535,27 +425,14 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
 
         private void RunGeneration(scoped NativeLeaseView<byte> ownerView)
         {
-            var sessionView = new NativeGtrtSessionView(
-                ownerView.AsSpan());
+            var sessionView = new NativeGtrtSessionView(ownerView.AsSpan());
             NativeGameSnapshotView game = sessionView.GameSnapshot;
-            while (sessionView.State.FailureCode == 0 &&
-                   sessionView.TryClaimGeneration(
-                       out NativeWorkItem work))
+            while (sessionView.State.FailureCode == 0 && sessionView.TryClaimGeneration(out NativeWorkItem work))
             {
-                NativeColumnRecord column =
-                    sessionView.Columns[work.RecordIndex];
-                int biomeIndex = game.SelectBiomeIndex(
-                    sessionView.State.Seed,
-                    column.ChunkX,
-                    column.ChunkZ);
+                NativeColumnRecord column = sessionView.Columns[work.RecordIndex];
+                int biomeIndex = game.SelectBiomeIndex(sessionView.State.Seed, column.ChunkX, column.ChunkZ);
                 NativeBiomeDescriptor biome = game.Biomes[biomeIndex];
-                if (!NativeColumnProfileGenerator.TryGenerate(
-                        ref sessionView,
-                        workerIndex,
-                        in work,
-                        biomeIndex,
-                        in biome) ||
-                    !sessionView.TryCompleteGeneration(in work))
+                if (!NativeColumnProfileGenerator.TryGenerate(ref sessionView, workerIndex, in work, biomeIndex, in biome) || !sessionView.TryCompleteGeneration(in work))
                 {
                     return;
                 }
@@ -564,12 +441,8 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
 
         private void RunMesh(scoped NativeLeaseView<byte> ownerView)
         {
-            var sessionView = new NativeGtrtSessionView(
-                ownerView.AsSpan());
-            while (!sessionView.CancellationRequested &&
-                   sessionView.State.FailureCode == 0 &&
-                   Volatile.Read(
-                       ref sessionView.State.RemainingChunks) != 0)
+            var sessionView = new NativeGtrtSessionView(ownerView.AsSpan());
+            while (!sessionView.CancellationRequested && sessionView.State.FailureCode == 0 && Volatile.Read(ref sessionView.State.RemainingChunks) != 0)
             {
                 if (!sessionView.TryClaimMesh(out NativeWorkItem work))
                 {
@@ -578,16 +451,12 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
                 }
 
                 long buildStart = Stopwatch.GetTimestamp();
-                if (!NativeGeneratedMesh.TryBuild(
-                        ref sessionView,
-                        in work,
-                        workerIndex))
+                if (!NativeGeneratedMesh.TryBuild(ref sessionView, in work, workerIndex))
                 {
                     return;
                 }
 
-                StartupPerformanceRecorder.RecordFirstChunkBuild(
-                    Stopwatch.GetElapsedTime(buildStart));
+                StartupPerformanceRecorder.RecordFirstChunkBuild(Stopwatch.GetElapsedTime(buildStart));
             }
         }
     }

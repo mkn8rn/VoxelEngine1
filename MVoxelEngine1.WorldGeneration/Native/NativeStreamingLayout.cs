@@ -3,7 +3,6 @@ using System.Runtime.InteropServices;
 using MVoxelEngine1.Infrastructure.Models.Generation;
 
 namespace MVoxelEngine1.WorldGeneration.Native;
-
 [StructLayout(LayoutKind.Sequential, Pack = 4)]
 internal readonly struct NativeStreamingLayout
 {
@@ -41,23 +40,11 @@ internal readonly struct NativeStreamingLayout
     internal int FreeRangeCapacity { get; }
     internal int EndOffset { get; }
 
-    private static int Reserve<T>(ref int cursor, int count) where T : unmanaged
+    private static int Reserve<T>(ref int cursor, int count)
+        where T : unmanaged
     {
         int offset = cursor;
         cursor = checked((checked(cursor + count * Unsafe.SizeOf<T>()) + 7) & ~7);
         return offset;
     }
 }
-
-[StructLayout(LayoutKind.Sequential, Pack = 4)]
-internal struct NativePacketWordRange
-{
-    internal int Offset;
-    internal int Count;
-}
-
-internal readonly record struct NativeStreamingStatistics(
-    int GeneratedColumns,
-    int RetainedColumns,
-    int MeshedChunks,
-    int RetainedPackets);

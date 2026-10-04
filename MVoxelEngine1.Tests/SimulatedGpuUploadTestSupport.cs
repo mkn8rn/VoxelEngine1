@@ -4,22 +4,9 @@ using System.Text.Json.Nodes;
 
 namespace MVoxelEngine1.Tests
 {
-    internal sealed record SimulatedGpuProcessResult(
-        int ExitCode,
-        string StandardOutput,
-        string StandardError,
-        bool WindowObserved,
-        long PeakWorkingSetBytes);
-
     internal static class SimulatedGpuUploadTestSupport
     {
-        public static void ConfigureSmallWorld(
-            string gameDataRoot,
-            int maximumWorldHeight = 160,
-            int lod1RenderDistance = 1,
-            int chunkSizeY = 16,
-            int chunkSizeX = 16,
-            int chunkSizeZ = 16)
+        public static void ConfigureSmallWorld(string gameDataRoot, int maximumWorldHeight = 160, int lod1RenderDistance = 1, int chunkSizeY = 16, int chunkSizeX = 16, int chunkSizeZ = 16)
         {
             string defaultsPath = Path.Combine(gameDataRoot, "Default", "Defaults.txt");
             JsonObject defaults = JsonNode.Parse(File.ReadAllText(defaultsPath))!.AsObject();
@@ -32,30 +19,18 @@ namespace MVoxelEngine1.Tests
             defaults["lod3RenderDistance"] = 1;
             defaults["lod4RenderDistance"] = 1;
             defaults["lod5RenderDistance"] = 4;
-            defaults["regionWidthInChunks"] = Math.Max(
-                16,
-                (maximumWorldHeight + chunkSizeY - 1) / chunkSizeY);
+            defaults["regionWidthInChunks"] = Math.Max(16, (maximumWorldHeight + chunkSizeY - 1) / chunkSizeY);
             defaults["chunkGenerationBufferInitial"] = lod1RenderDistance;
             defaults["chunkGenerationBufferRuntime"] = lod1RenderDistance;
-            File.WriteAllText(
-                defaultsPath,
-                defaults.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+            File.WriteAllText(defaultsPath, defaults.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
         }
 
         public static void SetWaterLevel(string gameDataRoot, int waterLevel)
         {
-            string biomePath = Path.Combine(
-                gameDataRoot,
-                "Default",
-                "Data",
-                "Biomes",
-                "Fallowlands",
-                "Defaults.txt");
+            string biomePath = Path.Combine(gameDataRoot, "Default", "Data", "Biomes", "Fallowlands", "Defaults.txt");
             JsonObject biome = JsonNode.Parse(File.ReadAllText(biomePath))!.AsObject();
             biome["water_level"] = waterLevel;
-            File.WriteAllText(
-                biomePath,
-                biome.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+            File.WriteAllText(biomePath, biome.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
         }
 
         public static void SetBlockTransparency(string gameDataRoot, string uniqueName, bool transparent)
@@ -66,18 +41,10 @@ namespace MVoxelEngine1.Tests
             File.WriteAllText(path, block.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
         }
 
-        public static ProcessStartInfo CreateStartInfo(
-            TestWorkspace workspace,
-            string outputPath,
-            string worldName,
-            string inputScript,
-            int frameRate,
-            int writerDelayMilliseconds = 0,
-            int? writerFailAfterRecords = null)
+        public static ProcessStartInfo CreateStartInfo(TestWorkspace workspace, string outputPath, string worldName, string inputScript, int frameRate, int writerDelayMilliseconds = 0, int? writerFailAfterRecords = null)
         {
             string application = TestPaths.ApplicationExecutable;
             Assert.True(File.Exists(application), $"Application executable was not found at {application}.");
-
             var startInfo = new ProcessStartInfo
             {
                 FileName = application,
@@ -99,34 +66,21 @@ namespace MVoxelEngine1.Tests
             AddArgument(startInfo, "simulatedFrameRate", frameRate.ToString());
             if (writerDelayMilliseconds > 0)
             {
-                AddArgument(
-                    startInfo,
-                    "simulatedGpuWriterDelayMilliseconds",
-                    writerDelayMilliseconds.ToString());
+                AddArgument(startInfo, "simulatedGpuWriterDelayMilliseconds", writerDelayMilliseconds.ToString());
             }
 
             if (writerFailAfterRecords.HasValue)
             {
-                AddArgument(
-                    startInfo,
-                    "simulatedGpuWriterFailAfterRecords",
-                    writerFailAfterRecords.Value.ToString());
+                AddArgument(startInfo, "simulatedGpuWriterFailAfterRecords", writerFailAfterRecords.Value.ToString());
             }
 
             return startInfo;
         }
 
-        public static ProcessStartInfo CreateFaceManifestStartInfo(
-            TestWorkspace workspace,
-            string outputPath,
-            string worldName,
-            string faceGenerationMode,
-            string? inputScript = null,
-            int? frameRate = null)
+        public static ProcessStartInfo CreateFaceManifestStartInfo(TestWorkspace workspace, string outputPath, string worldName, string faceGenerationMode, string? inputScript = null, int? frameRate = null)
         {
             string application = TestPaths.ApplicationExecutable;
             Assert.True(File.Exists(application), $"Application executable was not found at {application}.");
-
             var startInfo = new ProcessStartInfo
             {
                 FileName = application,
@@ -150,26 +104,21 @@ namespace MVoxelEngine1.Tests
             return startInfo;
         }
 
-        public static async Task<SimulatedGpuProcessResult> RunAsync(
-            ProcessStartInfo startInfo,
-            TimeSpan timeout,
-            CancellationToken testCancellation,
-            long? maximumWorkingSetBytes = null)
+        public static async Task<SimulatedGpuProcessResult> RunAsync(ProcessStartInfo startInfo, TimeSpan timeout, CancellationToken testCancellation, long? maximumWorkingSetBytes = null)
         {
             if (maximumWorkingSetBytes is <= 0)
                 throw new ArgumentOutOfRangeException(nameof(maximumWorkingSetBytes));
-
-            using var process = new Process { StartInfo = startInfo };
+            using var process = new Process
+            {
+                StartInfo = startInfo
+            };
             Assert.True(process.Start(), "Application process did not start.");
             Task<string> standardOutputTask = process.StandardOutput.ReadToEndAsync(testCancellation);
             Task<string> standardErrorTask = process.StandardError.ReadToEndAsync(testCancellation);
             bool windowObserved = false;
             long peakWorkingSetBytes = 0;
-
             using var timeoutSource = new CancellationTokenSource(timeout);
-            using var combinedCancellation = CancellationTokenSource.CreateLinkedTokenSource(
-                timeoutSource.Token,
-                testCancellation);
+            using var combinedCancellation = CancellationTokenSource.CreateLinkedTokenSource(timeoutSource.Token, testCancellation);
             try
             {
                 while (!process.HasExited)
@@ -181,37 +130,31 @@ namespace MVoxelEngine1.Tests
                         if (OperatingSystem.IsWindows())
                             windowObserved |= process.MainWindowHandle != IntPtr.Zero;
                     }
-                    catch (InvalidOperationException) when (process.HasExited)
+                    catch (InvalidOperationException)when (process.HasExited)
                     {
                         break;
                     }
-                    if (maximumWorkingSetBytes.HasValue &&
-                        peakWorkingSetBytes > maximumWorkingSetBytes.Value)
+
+                    if (maximumWorkingSetBytes.HasValue && peakWorkingSetBytes > maximumWorkingSetBytes.Value)
                     {
                         process.Kill(entireProcessTree: true);
                         await process.WaitForExitAsync(testCancellation);
                         string limitOutput = await standardOutputTask;
                         string limitError = await standardErrorTask;
-                        throw new InvalidOperationException(
-                            $"Application process exceeded the {maximumWorkingSetBytes.Value}-byte memory limit. " +
-                            $"Peak working set: {peakWorkingSetBytes} bytes. " +
-                            $"Output: {Tail(limitOutput)} Error: {Tail(limitError)}");
+                        throw new InvalidOperationException($"Application process exceeded the {maximumWorkingSetBytes.Value}-byte memory limit. " + $"Peak working set: {peakWorkingSetBytes} bytes. " + $"Output: {Tail(limitOutput)} Error: {Tail(limitError)}");
                     }
 
                     await Task.Delay(10, combinedCancellation.Token);
                 }
             }
-            catch (OperationCanceledException) when (timeoutSource.IsCancellationRequested)
+            catch (OperationCanceledException)when (timeoutSource.IsCancellationRequested)
             {
                 if (!process.HasExited)
                     process.Kill(entireProcessTree: true);
-
                 await process.WaitForExitAsync(testCancellation);
                 string timeoutOutput = await standardOutputTask;
                 string timeoutError = await standardErrorTask;
-                throw new TimeoutException(
-                    $"Application process exceeded {timeout.TotalSeconds:0} seconds. " +
-                    $"Output: {Tail(timeoutOutput)} Error: {Tail(timeoutError)}");
+                throw new TimeoutException($"Application process exceeded {timeout.TotalSeconds:0} seconds. " + $"Output: {Tail(timeoutOutput)} Error: {Tail(timeoutError)}");
             }
 
             try
@@ -219,24 +162,18 @@ namespace MVoxelEngine1.Tests
                 process.Refresh();
                 peakWorkingSetBytes = Math.Max(peakWorkingSetBytes, process.PeakWorkingSet64);
             }
-            catch (InvalidOperationException) when (process.HasExited)
+            catch (InvalidOperationException)when (process.HasExited)
             {
             }
-            return new SimulatedGpuProcessResult(
-                process.ExitCode,
-                await standardOutputTask,
-                await standardErrorTask,
-                windowObserved,
-                peakWorkingSetBytes);
+
+            return new SimulatedGpuProcessResult(process.ExitCode, await standardOutputTask, await standardErrorTask, windowObserved, peakWorkingSetBytes);
         }
 
         public static string[] FindIncompleteFiles(string outputPath)
         {
             string directory = Path.GetDirectoryName(outputPath)!;
             string pattern = $".{Path.GetFileName(outputPath)}.*.incomplete";
-            return Directory.Exists(directory)
-                ? Directory.GetFiles(directory, pattern, SearchOption.TopDirectoryOnly)
-                : Array.Empty<string>();
+            return Directory.Exists(directory) ? Directory.GetFiles(directory, pattern, SearchOption.TopDirectoryOnly) : Array.Empty<string>();
         }
 
         public static void AssertCompleteOrderedStream(JsonElement root)
@@ -244,7 +181,6 @@ namespace MVoxelEngine1.Tests
             JsonElement[] events = root.GetProperty("events").EnumerateArray().ToArray();
             for (int index = 0; index < events.Length; index++)
                 Assert.Equal(index, events[index].GetProperty("sequence").GetInt64());
-
             JsonElement summary = root.GetProperty("summary");
             Assert.Equal(events.Length, summary.GetProperty("completionSequence").GetInt64());
             Assert.Equal(events.Length + 1, summary.GetProperty("streamRecordCount").GetInt64());
