@@ -63,11 +63,11 @@ namespace MVoxelEngine1.Tests
                 "Reference repeat");
 
             using JsonDocument referenceDocument = JsonDocument.Parse(
-                File.ReadAllText(referencePath));
+                (await File.ReadAllTextAsync(referencePath,TestContext.Current.CancellationToken).ConfigureAwait(true)));
             using JsonDocument optimizedDocument = JsonDocument.Parse(
-                File.ReadAllText(optimizedPath));
+                (await File.ReadAllTextAsync(optimizedPath,TestContext.Current.CancellationToken).ConfigureAwait(true)));
             using JsonDocument referenceRepeatDocument = JsonDocument.Parse(
-                File.ReadAllText(referenceRepeatPath));
+                (await File.ReadAllTextAsync(referenceRepeatPath,TestContext.Current.CancellationToken).ConfigureAwait(true)));
             JsonElement reference = referenceDocument.RootElement;
             JsonElement optimized = optimizedDocument.RootElement;
             JsonElement referenceRepeat = referenceRepeatDocument.RootElement;
@@ -171,9 +171,9 @@ namespace MVoxelEngine1.Tests
             AssertManifestProcess(optimizedResult, optimizedPath, "Optimized movement");
 
             using JsonDocument referenceDocument = JsonDocument.Parse(
-                File.ReadAllText(referencePath));
+                (await File.ReadAllTextAsync(referencePath,TestContext.Current.CancellationToken).ConfigureAwait(true)));
             using JsonDocument optimizedDocument = JsonDocument.Parse(
-                File.ReadAllText(optimizedPath));
+                (await File.ReadAllTextAsync(optimizedPath,TestContext.Current.CancellationToken).ConfigureAwait(true)));
             JsonElement reference = referenceDocument.RootElement;
             JsonElement optimized = optimizedDocument.RootElement;
 

@@ -47,7 +47,7 @@ namespace MVoxelEngine1.Tests
             Assert.Contains("Reference face validation enabled.", result.StandardOutput,StringComparison.Ordinal);
             Assert.True(File.Exists(outputPath));
 
-            using JsonDocument document = JsonDocument.Parse(File.ReadAllText(outputPath));
+            using JsonDocument document = JsonDocument.Parse((await File.ReadAllTextAsync(outputPath,TestContext.Current.CancellationToken).ConfigureAwait(true)));
             JsonElement root = document.RootElement;
             Assert.Equal("Optimized", root.GetProperty("faceGenerationMode").GetString());
             Assert.Equal("Reference", root.GetProperty("validationMode").GetString());

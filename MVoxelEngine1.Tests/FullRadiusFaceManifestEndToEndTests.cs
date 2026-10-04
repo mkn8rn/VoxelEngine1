@@ -6,6 +6,8 @@ namespace MVoxelEngine1.Tests
 {
     public class FullRadiusFaceManifestEndToEndTests
     {
+
+    private static readonly System.Text.Json.JsonSerializerOptions EvidenceJsonOptions0 = new JsonSerializerOptions { WriteIndented = true };
         private const long MaximumWorkingSetBytes = 16L * 1024 * 1024 * 1024;
         private const string SharedWorldName = "FullRadiusFaceManifestWorld";
         private const string InitialReferenceFileName = "default-seed-123456-lod1-radius-12.reference.json";
@@ -72,9 +74,9 @@ namespace MVoxelEngine1.Tests
             AssertProcess(referencePath, referenceResult, "Reference");
 
             using JsonDocument optimizedDocument = JsonDocument.Parse(
-                File.ReadAllText(optimizedPath));
+                (await File.ReadAllTextAsync(optimizedPath,TestContext.Current.CancellationToken).ConfigureAwait(true)));
             using JsonDocument referenceDocument = JsonDocument.Parse(
-                File.ReadAllText(referencePath));
+                (await File.ReadAllTextAsync(referencePath,TestContext.Current.CancellationToken).ConfigureAwait(true)));
             JsonElement optimized = optimizedDocument.RootElement;
             JsonElement reference = referenceDocument.RootElement;
             AssertProductionManifest(optimized, "Optimized");
@@ -111,7 +113,7 @@ namespace MVoxelEngine1.Tests
             AssertProcess(referencePath, result, "Reference");
 
             using JsonDocument document = JsonDocument.Parse(
-                File.ReadAllText(referencePath));
+                (await File.ReadAllTextAsync(referencePath,TestContext.Current.CancellationToken).ConfigureAwait(true)));
             AssertProductionManifest(document.RootElement, "Reference");
             Console.WriteLine($"Full-radius Reference manifest: {referencePath}");
         }
@@ -135,8 +137,8 @@ namespace MVoxelEngine1.Tests
                 "FullRadiusWasdManifestWorld", "Reference", ReferenceCaptureTimeout, inputScript, 60).ConfigureAwait(true);
             WriteMetrics(referencePath, "Reference", referenceResult);
             AssertProcess(referencePath, referenceResult, "Reference");
-            using JsonDocument optimizedDocument = JsonDocument.Parse(File.ReadAllText(optimizedPath));
-            using JsonDocument referenceDocument = JsonDocument.Parse(File.ReadAllText(referencePath));
+            using JsonDocument optimizedDocument = JsonDocument.Parse((await File.ReadAllTextAsync(optimizedPath,TestContext.Current.CancellationToken).ConfigureAwait(true)));
+            using JsonDocument referenceDocument = JsonDocument.Parse((await File.ReadAllTextAsync(referencePath,TestContext.Current.CancellationToken).ConfigureAwait(true)));
             AssertProductionManifest(optimizedDocument.RootElement, "Optimized", -1, 1, -1);
             AssertProductionManifest(referenceDocument.RootElement, "Reference", -1, 1, -1);
             AssertEquivalentManifests(referenceDocument.RootElement, optimizedDocument.RootElement);
@@ -177,7 +179,7 @@ namespace MVoxelEngine1.Tests
             AssertProcess(optimizedPath, result, "Optimized");
 
             using JsonDocument document = JsonDocument.Parse(
-                File.ReadAllText(optimizedPath));
+                (await File.ReadAllTextAsync(optimizedPath,TestContext.Current.CancellationToken).ConfigureAwait(true)));
             AssertProductionManifest(document.RootElement, "Optimized");
             AssertMatchesRecordedReference(document.RootElement);
             Console.WriteLine($"Full-radius Optimized manifest: {optimizedPath}");
@@ -345,7 +347,7 @@ namespace MVoxelEngine1.Tests
                 metricsPath,
                 JsonSerializer.Serialize(
                     metrics,
-                    new JsonSerializerOptions { WriteIndented = true }));
+                    EvidenceJsonOptions0));
         }
     }
 }

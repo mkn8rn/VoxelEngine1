@@ -64,8 +64,7 @@ namespace MVoxelEngine1.Graphics.Terrain
             while (true)
             {
                 int current = Volatile.Read(ref retainCount);
-                if (current <= 0 || Volatile.Read(ref rootDisposed) != 0)
-                    throw new ObjectDisposedException(nameof(ChunkRenderUploadData));
+                ObjectDisposedException.ThrowIf(current <= 0 || Volatile.Read(ref rootDisposed) != 0, this);
                 if (current == int.MaxValue)
                 {
                     throw new InvalidOperationException("The render upload retention count reached its limit.");

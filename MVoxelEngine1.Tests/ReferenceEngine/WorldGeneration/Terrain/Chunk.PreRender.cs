@@ -383,7 +383,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                         if (sec.TransparentCount > 0 && sec.Palette != null && transparentPaletteIndices != null && transparentPaletteIndices.Length > 1)
                         {
                             // Tally counts per transparent palette index using bit scans with on-demand decode (acceptable during prerender build).
-                            Span<int> perIdCounts = stackalloc int[transparentPaletteIndices.Length];
+                            Span<int> perIdCounts = new int[transparentPaletteIndices.Length];
                             perIdCounts.Clear();
                             // Build perId bitset lazily only for the candidate; we just count first.
                             for (int w = 0; w < 64; w++)

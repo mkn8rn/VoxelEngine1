@@ -9,9 +9,9 @@ namespace MVoxelEngine1.Tests
         public async Task ReaderCannotMissChunkDuringStateMove()
         {
             using var gate = new RenderStateGate();
-            var unbuilt = new ConcurrentDictionary<string, object>();
-            var active = new ConcurrentDictionary<string, object>();
-            var dirty = new ConcurrentDictionary<string, long>();
+            var unbuilt = new ConcurrentDictionary<string, object>(StringComparer.Ordinal);
+            var active = new ConcurrentDictionary<string, object>(StringComparer.Ordinal);
+            var dirty = new ConcurrentDictionary<string, long>(StringComparer.Ordinal);
             using var activeCheckCompleted = new ManualResetEventSlim(false);
             using var releaseReader = new ManualResetEventSlim(false);
             using var writerStarted = new ManualResetEventSlim(false);
@@ -37,7 +37,7 @@ namespace MVoxelEngine1.Tests
                 gate.EnterRead();
                 try
                 {
-                    bool found = active.TryGetValue(Key, out _);
+                    bool found = active.ContainsKey(Key);
                     activeCheckCompleted.Set();
                     if (!releaseReader.Wait(
                         TimeSpan.FromSeconds(1),
@@ -46,7 +46,7 @@ namespace MVoxelEngine1.Tests
                         throw new TimeoutException("The state reader was not released.");
                     }
 
-                    return found || unbuilt.TryGetValue(Key, out _);
+                    return found || unbuilt.ContainsKey(Key);
                 }
                 finally
                 {

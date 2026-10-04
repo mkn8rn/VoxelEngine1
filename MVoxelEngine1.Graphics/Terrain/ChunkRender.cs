@@ -186,6 +186,7 @@ namespace MVoxelEngine1.Graphics.Terrain
         // Opaque pass: draws opaque face instances only. Depth test/write is managed by the caller.
         public void RenderOpaque(ShaderProgram program)
         {
+ArgumentNullException.ThrowIfNull(program);
             ProcessPendingDeletes();
             ObjectDisposedException.ThrowIf(Volatile.Read(ref deletionScheduled) != 0, this);
             if (!isBuilt) throw new InvalidOperationException("Native words must be uploaded before rendering.");
@@ -218,6 +219,7 @@ namespace MVoxelEngine1.Graphics.Terrain
         // Depth test is respected but this pass does not write depth; caller coordinates depth mask globally.
         public void RenderTransparent(ShaderProgram program)
         {
+ArgumentNullException.ThrowIfNull(program);
             ProcessPendingDeletes();
             ObjectDisposedException.ThrowIf(Volatile.Read(ref deletionScheduled) != 0, this);
             if (!isBuilt) throw new InvalidOperationException("Native words must be uploaded before rendering.");

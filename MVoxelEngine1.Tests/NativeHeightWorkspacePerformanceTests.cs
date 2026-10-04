@@ -9,6 +9,8 @@ namespace MVoxelEngine1.Tests
 {
     public sealed class NativeHeightWorkspacePerformanceTests
     {
+
+    private static readonly System.Text.Json.JsonSerializerOptions EvidenceJsonOptions0 = new JsonSerializerOptions { WriteIndented = true };
         private const int MapCount = 729;
         private const int MapSide = 27;
         private const int MapSize = 160;
@@ -100,7 +102,7 @@ namespace MVoxelEngine1.Tests
                 resultPath,
                 JsonSerializer.Serialize(
                     report,
-                    new JsonSerializerOptions { WriteIndented = true }));
+                    EvidenceJsonOptions0));
             Console.WriteLine($"Native height workspace result: {resultPath}");
             Console.WriteLine(
                 $"Managed mean: {managedMean:R} ms. " +

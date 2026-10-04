@@ -8,6 +8,8 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
 {
     public static class StartupPerformanceRecorder
     {
+
+    private static readonly System.Text.Json.JsonSerializerOptions EvidenceJsonOptions0 = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = true };
         private const long UnrecordedMilliseconds = -1;
         private static readonly object Sync = new();
         private static Stopwatch? timer;
@@ -337,7 +339,7 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
             {
                 using (var stream = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
                 {
-                    JsonSerializer.Serialize(stream, snapshot, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = true });
+                    JsonSerializer.Serialize(stream, snapshot, EvidenceJsonOptions0);
                     stream.Flush(flushToDisk: true);
                 }
 

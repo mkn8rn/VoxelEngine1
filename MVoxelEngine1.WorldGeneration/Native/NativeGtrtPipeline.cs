@@ -149,8 +149,8 @@ public sealed class NativeGtrtPipeline : IDisposable
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(meshWorkerCount);
         int runtimeGeneration = runtimeGenerationWorkerCount ?? generationWorkerCount;
         int runtimeMesh = runtimeMeshWorkerCount ?? meshWorkerCount;
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(runtimeGeneration);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(runtimeMesh);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(runtimeGeneration, nameof(runtimeGenerationWorkerCount));
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(runtimeMesh, nameof(runtimeMeshWorkerCount));
         int diameter = checked(settings.lod1RenderDistance * 2 + 1);
         int requiredPacketCount = checked(diameter * diameter * diameter);
         NativeGameSnapshot? game = null;
@@ -294,7 +294,7 @@ public sealed class NativeGtrtPipeline : IDisposable
                 {
                     RestorePreviousRun();
                     if (!runRolledBack)
-                        throw new InvalidOperationException("Native packet growth requires a completed rollback.");
+                        throw new InvalidOperationException("Native packet growth requires a completed rollback.",failure);
                     session.ExpandPacketStorage();
                     Volatile.Write(ref completedRunCount, -1);
                 }
@@ -420,7 +420,7 @@ public sealed class NativeGtrtPipeline : IDisposable
                 {
                     session.Access(rollbackBlockAction);
                     if (!pendingRollbackSucceeded)
-                        throw new InvalidOperationException("The native edit preparation could not roll back.");
+                        throw new InvalidOperationException("The native edit preparation could not roll back.",failure);
                     pendingEditMutationStarted = false;
                 }
                 catch (Exception rollbackFailure)

@@ -17,11 +17,14 @@ namespace MVoxelEngine1.Tests;
 
 public sealed class NativeColumnProfileGeneratorTests
 {
+
+    private static readonly System.Text.Json.JsonSerializerOptions EvidenceJsonOptions0 = new JsonSerializerOptions { WriteIndented = true };
     [Fact(Explicit = true, Timeout = 300_000)]
     [Trait("Category", "Oracle")]
     [Trait("Resource", "CPU")]
     public void EveryProductionAndHaloProfileMatchesTheManagedHeightAuthority()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         const long seed = 123456;
         GameManager.Initialize(TestPaths.GameDataRoot);
         GameManager.LoadGameDefaultSettings(GameManager.SelectGameFolder("Default"));
@@ -64,6 +67,7 @@ public sealed class NativeColumnProfileGeneratorTests
             Span<byte> coordinate = stackalloc byte[8];
             foreach (NativeColumnRecord column in columns)
             {
+                TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
                 Assert.Equal(NativeColumnState.Generated, column.State);
                 Assert.Equal(view.State.SessionEpoch, column.GenerationEpoch);
                 BlockColumnProfile[] expected = BuildReferenceProfiles(column.ChunkX, column.ChunkZ,
@@ -95,7 +99,7 @@ public sealed class NativeColumnProfileGeneratorTests
         {
             game = "Default", seed, chunkSize = 160, lod1Radius = 12,
             columnCount, profileCount, nativeHash, referenceHash, allProfileBytesEqual = true
-        }, new JsonSerializerOptions { WriteIndented = true }));
+        }, EvidenceJsonOptions0));
         Console.WriteLine($"Full-production profile authority evidence: {output}");
     }
 

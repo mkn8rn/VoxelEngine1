@@ -51,7 +51,7 @@ namespace MVoxelEngine1.WorldGeneration
             if (keys.Length != completedValues.Length)
             {
                 throw new ArgumentException(
-                    "Completed render keys and values must have equal lengths.");
+                    "Completed render keys and values must have equal lengths.", nameof(completedValues));
             }
 
             EnterWrite();

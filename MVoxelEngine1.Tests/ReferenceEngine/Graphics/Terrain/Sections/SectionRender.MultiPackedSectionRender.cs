@@ -103,8 +103,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     for (int i = 0; i < tCount; i++)
                     {
                         ushort bid = palette[transparentPaletteIndices[i]];
-                        if (!idToMaskIndex.ContainsKey(bid))
-                            idToMaskIndex.Add(bid, i);
+                        idToMaskIndex.TryAdd(bid, i);
                     }
 
                     // Single scan of residual transparent bits; decode palette id; set bit in its per-id mask.

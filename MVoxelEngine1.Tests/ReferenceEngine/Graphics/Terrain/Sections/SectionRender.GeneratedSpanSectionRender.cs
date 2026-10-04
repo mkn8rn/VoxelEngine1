@@ -744,7 +744,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                     {
                         uint tileIndex = ComputeTileIndex(atlas, blockIds[material], (Faces)direction);
                         if (tileIndex > ushort.MaxValue)
-                            throw new ArgumentOutOfRangeException(nameof(tileIndex));
+                            throw new ArgumentOutOfRangeException(nameof(atlas), "A face tile exceeds the packed atlas range.");
                         result[material * 6 + direction] = tileIndex << 16;
                     }
                 }

@@ -13,7 +13,7 @@ using System.Runtime.CompilerServices;
 
 namespace MVoxelEngine1.Infrastructure.Loaders
 {
-    public class TerrainLoader
+    public sealed class TerrainLoader
     {
         // Loading
         private const ushort FIRST_CUSTOM_BLOCK_ID = 256; // IDs <256 reserved for base / special
@@ -183,9 +183,9 @@ namespace MVoxelEngine1.Infrastructure.Loaders
                 BlockStateOfMatter StateOfMatter = LiquidBaseBlocks.Contains(baseType) ? BlockStateOfMatter.Liquid : BlockStateOfMatter.Solid;
 
                 // Detect and warn on duplicate (should not happen, but keeps behavior explicit).
-                if (allBlockTypesByIds.ContainsKey(id))
+                if (allBlockTypesByIds.TryGetValue(id, out string? existingName))
                 {
-                    Console.WriteLine($"[TerrainLoader][WARN] Duplicate base block ID {id} for enum {baseType}; existing='{allBlockTypesByIds[id]}'. Skipping.");
+                    Console.WriteLine($"[TerrainLoader][WARN] Duplicate base block ID {id} for enum {baseType}; existing='{existingName}'. Skipping.");
                     continue;
                 }
 

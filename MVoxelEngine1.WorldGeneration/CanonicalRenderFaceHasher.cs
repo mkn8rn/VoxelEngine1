@@ -32,7 +32,7 @@ namespace MVoxelEngine1.WorldGeneration
             using var accumulator = new CanonicalFaceDigestAccumulator();
             foreach (IEnumerable<CanonicalRenderFace> batch in batches)
             {
-                ArgumentNullException.ThrowIfNull(batch);
+                ArgumentNullException.ThrowIfNull(batch, nameof(batches));
                 CanonicalRenderFace[] faces = batch.ToArray();
                 Array.Sort(faces, Comparer);
                 accumulator.AppendSorted(faces);
@@ -180,7 +180,7 @@ namespace MVoxelEngine1.WorldGeneration
             return result;
         }
 
-        private static IReadOnlyList<FaceDirectionDigest> FinishDirections(IncrementalHash[] hashers, long[] counts)
+        private static FaceDirectionDigest[] FinishDirections(IncrementalHash[] hashers, long[] counts)
         {
             var result = new FaceDirectionDigest[6];
             for (byte direction = 0; direction < result.Length; direction++)

@@ -464,7 +464,12 @@ public sealed class NativeGtrtWorkerPoolTests
         uint[] OpaqueWords,
         uint[] TransparentWords);
 
-    private sealed class PacketConsumerFailure : Exception;
+    private sealed class PacketConsumerFailure : Exception
+    {
+        public PacketConsumerFailure() { }
+        public PacketConsumerFailure(string message) : base(message) { }
+        public PacketConsumerFailure(string message, Exception innerException) : base(message, innerException) { }
+    }
 
     private sealed class PacketBounds
     {

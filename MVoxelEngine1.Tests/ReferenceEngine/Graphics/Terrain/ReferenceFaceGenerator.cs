@@ -189,7 +189,7 @@ namespace MVoxelEngine1.Graphics.Terrain
             int size = Section.SECTION_SIZE;
             if (section.SectionBaseX < 0 || section.SectionBaseY < 0 || section.SectionBaseZ < 0 || section.SectionBaseX + size > maxX || section.SectionBaseY + size > maxY || section.SectionBaseZ + size > maxZ || section.SectionBaseX % size != 0 || section.SectionBaseY % size != 0 || section.SectionBaseZ % size != 0)
             {
-                throw new ArgumentException("A Reference section is outside the chunk.");
+                throw new ArgumentException("A Reference section is outside the chunk.", nameof(section));
             }
         }
 

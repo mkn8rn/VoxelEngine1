@@ -13,6 +13,7 @@ namespace MVoxelEngine1.Infrastructure.Flags
 
         public static void Parse(string[] args)
         {
+ArgumentNullException.ThrowIfNull(args);
             var flags = new ProgramFlags();
             for (int i = 0; i < args.Length; i++)
             {

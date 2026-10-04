@@ -41,13 +41,13 @@ public readonly record struct NativeChunkRenderPacketDescriptor
         ArgumentOutOfRangeException.ThrowIfNegative(wordCount);
         if (wordCount % PackedFaceRectangle.WordsPerRectangle != 0)
         {
-            throw new ArgumentException($"The {passName} word count is not a complete rectangle.");
+            throw new ArgumentException($"The {passName} word count is not a complete rectangle.", nameof(wordCount));
         }
 
         int rectangleCount = wordCount / PackedFaceRectangle.WordsPerRectangle;
         if ((faceCount == 0) != (rectangleCount == 0) || faceCount < rectangleCount)
         {
-            throw new ArgumentException($"The {passName} face and rectangle counts are invalid.");
+            throw new ArgumentException($"The {passName} face and rectangle counts are invalid.", nameof(faceCount));
         }
     }
 }

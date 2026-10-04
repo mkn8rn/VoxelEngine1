@@ -171,7 +171,7 @@ namespace MVoxelEngine1.Infrastructure.Managers
                     }
                     catch (Exception ex)
                     {
-                        throw new InvalidOperationException($"Failed to parse generation rules for biome '{biomeFolderName}': {ex.Message}");
+                        throw new InvalidOperationException($"Failed to parse generation rules for biome '{biomeFolderName}': {ex.Message}",ex);
                     }
                 }
 
@@ -322,7 +322,7 @@ namespace MVoxelEngine1.Infrastructure.Managers
             }
             catch (Exception ex)
             {
-                throw new InvalidOperationException($"Failed to parse biome JSON for '{biomeFolderName}': {ex.Message}");
+                throw new InvalidOperationException($"Failed to parse biome JSON for '{biomeFolderName}': {ex.Message}",ex);
             }
 
             if (biome.id == 0 && !json.Contains("\"id\"", StringComparison.OrdinalIgnoreCase))
@@ -331,7 +331,7 @@ namespace MVoxelEngine1.Infrastructure.Managers
             return biome;
         }
 
-        private static IReadOnlyDictionary<string, MicrobiomeJSON> LoadMicrobiomes(string microbiomesRoot, string biomeName)
+        private static Dictionary<string, MicrobiomeJSON> LoadMicrobiomes(string microbiomesRoot, string biomeName)
         {
             var result = new Dictionary<string, MicrobiomeJSON>(StringComparer.OrdinalIgnoreCase);
             if (!Directory.Exists(microbiomesRoot)) return result;
@@ -458,12 +458,12 @@ namespace MVoxelEngine1.Infrastructure.Managers
                     }
                     if (baseTypeMap.TryGetValue(token, out ushort baseId))
                     {
-                        sb.Append(baseId.ToString(System.Globalization.CultureInfo.CurrentCulture));
+                        sb.Append(baseId);
                         continue;
                     }
                     if (blockTypeMap.TryGetValue(token, out ushort blockId))
                     {
-                        sb.Append(blockId.ToString(System.Globalization.CultureInfo.CurrentCulture));
+                        sb.Append(blockId);
                         continue;
                     }
                     // Unknown identifier: leave unchanged so downstream error surfaces with context.

@@ -10,6 +10,8 @@ namespace MVoxelEngine1.Tests
 {
     public sealed class TerrainGenerationUtilsTests
     {
+
+    private static readonly System.Text.Json.JsonSerializerOptions EvidenceJsonOptions0 = new JsonSerializerOptions { WriteIndented = true };
         private const int ProductionMapCount = 729;
         private const int ProductionMapSide = 27;
         private const int ProductionMapSize = 160;
@@ -262,7 +264,7 @@ namespace MVoxelEngine1.Tests
                 resultPath,
                 JsonSerializer.Serialize(
                     report,
-                    new JsonSerializerOptions { WriteIndented = true }));
+                    EvidenceJsonOptions0));
             Console.WriteLine($"Terrain value-noise result: {resultPath}");
             Console.WriteLine(
                 $"Scalar mean: {scalarMean:R} ms. " +

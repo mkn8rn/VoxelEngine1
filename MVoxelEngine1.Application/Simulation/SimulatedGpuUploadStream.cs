@@ -406,10 +406,10 @@ namespace MVoxelEngine1.Application.Simulation
             {
                 retainedRecordSlots.Wait(writerFailureCancellation.Token);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException caughtFailure)
             {
                 ThrowIfWriterFailed();
-                throw new InvalidOperationException("The simulated GPU output stream is closed.");
+                throw new InvalidOperationException("The simulated GPU output stream is closed.",caughtFailure);
             }
 
             long retainedBytes = EstimateRetainedPayloadBytes(record);

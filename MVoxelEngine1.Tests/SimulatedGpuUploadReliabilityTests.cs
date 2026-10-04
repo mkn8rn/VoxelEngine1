@@ -6,6 +6,8 @@ namespace MVoxelEngine1.Tests
 {
     public class SimulatedGpuUploadReliabilityTests
     {
+
+    private static readonly System.Text.Json.JsonSerializerOptions EvidenceJsonOptions0 = new JsonSerializerOptions { WriteIndented = true };
         [Fact(Timeout = 90_000)]
         [Trait("Category", "EndToEnd")]
         [Trait("Resource", "CPU")]
@@ -40,7 +42,7 @@ namespace MVoxelEngine1.Tests
             Assert.True(File.Exists(outputPath));
             Assert.Empty(SimulatedGpuUploadTestSupport.FindIncompleteFiles(outputPath));
 
-            using JsonDocument document = JsonDocument.Parse(File.ReadAllText(outputPath));
+            using JsonDocument document = JsonDocument.Parse(await File.ReadAllTextAsync(outputPath, TestContext.Current.CancellationToken).ConfigureAwait(true));
             JsonElement root = document.RootElement;
             SimulatedGpuUploadTestSupport.AssertCompleteOrderedStream(root);
             Assert.Equal(4, root.GetProperty("recordQueueCapacity").GetInt32());
@@ -54,11 +56,11 @@ namespace MVoxelEngine1.Tests
             Assert.True(peakRetainedPayloadBytes > 0);
             Assert.InRange(result.PeakWorkingSetBytes, 1, 1_073_741_824);
 
-            string outputSha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(outputPath)));
+            string outputSha256 = Convert.ToHexString(SHA256.HashData((await File.ReadAllBytesAsync(outputPath,TestContext.Current.CancellationToken).ConfigureAwait(true))));
             string metricsPath = Path.Combine(
                 resultsDirectory,
                 $"slow-writer-seed-123456-{timestamp}.metrics.json");
-            File.WriteAllText(
+            await File.WriteAllTextAsync(
                 metricsPath,
                 JsonSerializer.Serialize(
                     new
@@ -77,7 +79,7 @@ namespace MVoxelEngine1.Tests
                             .GetProperty("silentRecordLossAllowed")
                             .GetBoolean()
                     },
-                    new JsonSerializerOptions { WriteIndented = true }));
+                    EvidenceJsonOptions0), TestContext.Current.CancellationToken).ConfigureAwait(true);
             Console.WriteLine($"Slow writer result: {outputPath}");
             Console.WriteLine($"Slow writer metrics: {metricsPath}");
         }
@@ -121,7 +123,7 @@ namespace MVoxelEngine1.Tests
             Assert.True(File.Exists(outputPath));
             Assert.Empty(SimulatedGpuUploadTestSupport.FindIncompleteFiles(outputPath));
 
-            using JsonDocument document = JsonDocument.Parse(File.ReadAllText(outputPath));
+            using JsonDocument document = JsonDocument.Parse(await File.ReadAllTextAsync(outputPath, TestContext.Current.CancellationToken).ConfigureAwait(true));
             JsonElement root = document.RootElement;
             SimulatedGpuUploadTestSupport.AssertCompleteOrderedStream(root);
             JsonElement[] events = root.GetProperty("events").EnumerateArray().ToArray();

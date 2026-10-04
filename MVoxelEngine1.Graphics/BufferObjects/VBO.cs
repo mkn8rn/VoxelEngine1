@@ -19,6 +19,7 @@ namespace MVoxelEngine1.Graphics.BufferObjects
         // Byte data constructor (defaults to Opaque pass)
         public VBO(IReadOnlyCollection<byte> data, RenderPass pass = RenderPass.Opaque)
         {
+ArgumentNullException.ThrowIfNull(data);
             Pass = pass;
             ID = GL.GenBuffer();
             GL.BindBuffer(BufferTarget.ArrayBuffer, ID);
@@ -28,6 +29,7 @@ namespace MVoxelEngine1.Graphics.BufferObjects
         // Vector2 data constructor (defaults to Opaque pass)
         public VBO(IReadOnlyCollection<Vector2> data, RenderPass pass = RenderPass.Opaque)
         {
+ArgumentNullException.ThrowIfNull(data);
             Pass = pass;
             ID = GL.GenBuffer();
             GL.BindBuffer(BufferTarget.ArrayBuffer, ID);
@@ -37,6 +39,7 @@ namespace MVoxelEngine1.Graphics.BufferObjects
         // Vector3 data constructor (defaults to Opaque pass)
         public VBO(IReadOnlyCollection<Vector3> data, RenderPass pass = RenderPass.Opaque)
         {
+ArgumentNullException.ThrowIfNull(data);
             Pass = pass;
             ID = GL.GenBuffer();
             GL.BindBuffer(BufferTarget.ArrayBuffer, ID);
@@ -54,6 +57,7 @@ namespace MVoxelEngine1.Graphics.BufferObjects
 
         public VBO(uint[] data, int wordCount, RenderPass pass = RenderPass.Opaque)
         {
+ArgumentNullException.ThrowIfNull(data);
             if ((uint)wordCount > (uint)data.Length)
                 throw new ArgumentOutOfRangeException(nameof(wordCount));
             Pass = pass;

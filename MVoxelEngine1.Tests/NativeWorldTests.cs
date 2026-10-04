@@ -815,7 +815,17 @@ public sealed class NativeWorldTests
         }
     }
 
-    private sealed class RendererFactoryFailure : Exception;
+    private sealed class RendererFactoryFailure : Exception
+    {
+        public RendererFactoryFailure() { }
+        public RendererFactoryFailure(string message) : base(message) { }
+        public RendererFactoryFailure(string message, Exception innerException) : base(message, innerException) { }
+    }
 
-    private sealed class RendererDisposeFailure : Exception;
+    private sealed class RendererDisposeFailure : Exception
+    {
+        public RendererDisposeFailure() { }
+        public RendererDisposeFailure(string message) : base(message) { }
+        public RendererDisposeFailure(string message, Exception innerException) : base(message, innerException) { }
+    }
 }

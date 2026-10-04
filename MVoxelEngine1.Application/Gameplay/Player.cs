@@ -15,7 +15,6 @@ namespace MVoxelEngine1.Application.Gameplay
 {
     internal sealed class Player
     {
-        private PlayerState playerMode;
         public Vector3 position = Vector3.Zero;
         public Vector3 velocity = Vector3.Zero;
         public Vector3 direction = -Vector3.UnitZ; // Facing forward
@@ -29,7 +28,6 @@ namespace MVoxelEngine1.Application.Gameplay
         public Player(IPlayerChunkPositionSink world)
         {
             this.world = world;
-            playerMode = PlayerState.Alive;
             camera = new Camera(position);
             UpdateWorldChunkPosition(); // initialize
         }

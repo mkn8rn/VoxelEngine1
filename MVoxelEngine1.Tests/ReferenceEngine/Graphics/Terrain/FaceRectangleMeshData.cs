@@ -81,8 +81,7 @@ namespace MVoxelEngine1.Graphics.Terrain
             NativeLeaseFunc<uint, TResult> nativeReader,
             PackedFaceReader<TResult> managedReader)
         {
-            if (Volatile.Read(ref disposed) != 0)
-                throw new ObjectDisposedException(nameof(FaceRectangleMeshData));
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
 
             return nativeOpaqueRectangles is not null
                 ? nativeOpaqueRectangles.Read(nativeReader)
@@ -93,8 +92,7 @@ namespace MVoxelEngine1.Graphics.Terrain
             NativeLeaseFunc<uint, TResult> nativeReader,
             PackedFaceReader<TResult> managedReader)
         {
-            if (Volatile.Read(ref disposed) != 0)
-                throw new ObjectDisposedException(nameof(FaceRectangleMeshData));
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
 
             return nativeTransparentRectangles is not null
                 ? nativeTransparentRectangles.Read(nativeReader)

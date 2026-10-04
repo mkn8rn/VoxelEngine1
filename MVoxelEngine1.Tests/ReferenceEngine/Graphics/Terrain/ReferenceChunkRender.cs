@@ -84,10 +84,8 @@ internal sealed class ReferenceChunkRender : IDisposable
         {
             if (faceGenerationMode == FaceGenerationMode.Reference)
             {
-                if (getLocalBlock is null)
-                    throw new ArgumentNullException(nameof(getLocalBlock));
-                if (referenceNeighbors is null)
-                    throw new ArgumentNullException(nameof(referenceNeighbors));
+                ArgumentNullException.ThrowIfNull(getLocalBlock);
+                ArgumentNullException.ThrowIfNull(referenceNeighbors);
 
                 return GenerateReferenceFaces(
                     prerenderData,

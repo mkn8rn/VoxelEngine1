@@ -5,6 +5,7 @@ namespace MVoxelEngine1.Tests
 {
     public class SimulatedGpuUploadEndToEndTests
     {
+        private static readonly string[] ExpectedPasses = ["opaque", "transparent"];
         [Fact(Timeout = 90_000)]
         [Trait("Category", "EndToEnd")]
         [Trait("Resource", "CPU")]
@@ -66,7 +67,7 @@ namespace MVoxelEngine1.Tests
                     await Task.Delay(20, combinedCancellation.Token).ConfigureAwait(true);
                 }
             }
-            catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+            catch (OperationCanceledException caughtFailure) when (timeout.IsCancellationRequested)
             {
                 if (!process.HasExited)
                     process.Kill(entireProcessTree: true);
@@ -74,7 +75,7 @@ namespace MVoxelEngine1.Tests
                 await process.WaitForExitAsync(testCancellation).ConfigureAwait(true);
                 string timeoutOutput = await standardOutputTask.ConfigureAwait(true);
                 string timeoutError = await standardErrorTask.ConfigureAwait(true);
-                throw new TimeoutException($"Simulated GPU upload exceeded 75 seconds. Output: {Tail(timeoutOutput)} Error: {Tail(timeoutError)}");
+                throw new TimeoutException($"Simulated GPU upload exceeded 75 seconds. Output: {Tail(timeoutOutput)} Error: {Tail(timeoutError)}",caughtFailure);
             }
 
             string standardOutput = await standardOutputTask.ConfigureAwait(true);
@@ -86,7 +87,7 @@ namespace MVoxelEngine1.Tests
             Assert.Contains("started without an OpenTK window", standardOutput,StringComparison.Ordinal);
             Assert.True(File.Exists(outputPath), $"Simulated GPU output was not written to {outputPath}.");
 
-            using JsonDocument document = JsonDocument.Parse(File.ReadAllText(outputPath));
+            using JsonDocument document = JsonDocument.Parse((await File.ReadAllTextAsync(outputPath,TestContext.Current.CancellationToken).ConfigureAwait(true)));
             JsonElement root = document.RootElement;
             Assert.Equal("Native", root.GetProperty("worldImplementation").GetString());
             Assert.Equal(0, root.GetProperty("windowConstructionCount").GetInt32());
@@ -140,7 +141,7 @@ namespace MVoxelEngine1.Tests
             Assert.True(face.TryGetProperty("neighborBlockIdAtUpload", out _));
             Assert.Contains(
                 face.GetProperty("renderPass").GetString(),
-                new[] { "opaque", "transparent" },StringComparer.Ordinal);
+                ExpectedPasses, StringComparer.Ordinal);
 
             foreach (JsonElement snapshot in snapshots)
             {
@@ -160,7 +161,7 @@ namespace MVoxelEngine1.Tests
 
             string worldsDirectory = Path.Combine(workspace.GameDataRoot, "Default", "Saves", "Worlds");
             string worldFile = Assert.Single(Directory.GetFiles(worldsDirectory, "world.txt", SearchOption.AllDirectories));
-            Assert.Equal("123456", File.ReadAllLines(worldFile)[3]);
+            Assert.Equal("123456", (await File.ReadAllLinesAsync(worldFile,TestContext.Current.CancellationToken).ConfigureAwait(true))[3]);
             Console.WriteLine($"Simulated GPU upload result: {outputPath}");
         }
 

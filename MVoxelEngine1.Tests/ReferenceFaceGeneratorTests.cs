@@ -7,6 +7,7 @@ namespace MVoxelEngine1.Tests
 {
     public class ReferenceFaceGeneratorTests
     {
+        private static readonly string[] ReferenceArguments = ["--faceGenerationMode", "Reference"];
         private const ushort Air = 0;
         private const ushort Stone = 1;
         private const ushort Water = 2;
@@ -279,7 +280,7 @@ namespace MVoxelEngine1.Tests
         [Fact]
         public void ParsesReferenceFaceGenerationMode()
         {
-            ConsoleFlags.Parse(new[] { "--faceGenerationMode", "Reference" });
+            ConsoleFlags.Parse(ReferenceArguments);
 
             Assert.Equal(
                 FaceGenerationMode.Reference,

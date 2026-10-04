@@ -51,8 +51,8 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(meshWorkerCount);
         int runtimeGeneration = runtimeGenerationWorkerCount ?? generationWorkerCount;
         int runtimeMesh = runtimeMeshWorkerCount ?? meshWorkerCount;
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(runtimeGeneration);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(runtimeMesh);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(runtimeGeneration, nameof(runtimeGenerationWorkerCount));
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(runtimeMesh, nameof(runtimeMeshWorkerCount));
         int maximumGeneration = Math.Max(generationWorkerCount, runtimeGeneration);
         int maximumMesh = Math.Max(meshWorkerCount, runtimeMesh);
         _ = StartupPerformanceRecorder.IsRunning;

@@ -71,7 +71,7 @@ namespace MVoxelEngine1.Infrastructure.Managers
             }
             catch (Exception ex)
             {
-                throw new InvalidOperationException($"Failed to deserialize game Defaults.txt: {ex.Message}");
+                throw new InvalidOperationException($"Failed to deserialize game Defaults.txt: {ex.Message}",ex);
             }
             if (loaded == null)
                 throw new InvalidOperationException("Deserialization returned null GameSettings.");

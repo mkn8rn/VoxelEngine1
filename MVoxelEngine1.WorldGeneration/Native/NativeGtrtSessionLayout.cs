@@ -32,12 +32,12 @@ internal readonly struct NativeGtrtSessionLayout
         int resolvedRawSectionCapacity = materializedRawSectionCapacity < 0 ? materializedSectionCapacity : materializedRawSectionCapacity;
         if ((materializedChunkCapacity == 0) != (materializedSectionCapacity == 0))
         {
-            throw new ArgumentException("Materialized chunk and section capacities must both be zero or positive.");
+            throw new ArgumentException("Materialized chunk and section capacities must both be zero or positive.", nameof(materializedSectionCapacity));
         }
 
         if (materializedSectionCapacity == 0 && (resolvedRawSectionCapacity != 0 || materializedPaletteCapacity != 0 || materializedPackedWordCapacity != 0))
         {
-            throw new ArgumentException("Materialized payload capacities require section storage.");
+            throw new ArgumentException("Materialized payload capacities require section storage.", nameof(materializedSectionCapacity));
         }
 
         ChunkSizeX = chunkSizeX;

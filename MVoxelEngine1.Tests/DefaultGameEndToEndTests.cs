@@ -7,6 +7,11 @@ namespace MVoxelEngine1.Tests
 {
     public class DefaultGameEndToEndTests
     {
+
+    private static readonly System.Text.Json.JsonSerializerOptions EvidenceJsonOptions0 = new JsonSerializerOptions
+{
+    PropertyNameCaseInsensitive = true
+};
         [Fact(Explicit = true, Timeout = 150_000)]
         [Trait("Category", "EndToEnd")]
         [Trait("Mode", "Headless")]
@@ -59,7 +64,7 @@ namespace MVoxelEngine1.Tests
             {
                 await process.WaitForExitAsync(combinedCancellation.Token).ConfigureAwait(true);
             }
-            catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+            catch (OperationCanceledException caughtFailure) when (timeout.IsCancellationRequested)
             {
                 if (!process.HasExited)
                     process.Kill(entireProcessTree: true);
@@ -67,7 +72,7 @@ namespace MVoxelEngine1.Tests
                 await process.WaitForExitAsync(testCancellation).ConfigureAwait(true);
                 string timeoutOutput = await standardOutputTask.ConfigureAwait(true);
                 string timeoutError = await standardErrorTask.ConfigureAwait(true);
-                throw new TimeoutException($"Application benchmark exceeded 120 seconds. Output: {Tail(timeoutOutput)} Error: {Tail(timeoutError)}");
+                throw new TimeoutException($"Application benchmark exceeded 120 seconds. Output: {Tail(timeoutOutput)} Error: {Tail(timeoutError)}",caughtFailure);
             }
 
             string standardOutput = await standardOutputTask.ConfigureAwait(true);
@@ -77,10 +82,10 @@ namespace MVoxelEngine1.Tests
                 $"Application exited with code {process.ExitCode}. Output: {Tail(standardOutput)} Error: {Tail(standardError)}");
             Assert.True(File.Exists(resultPath), $"Benchmark result was not written to {resultPath}.");
 
-            var jsonOptions = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            var jsonOptions = EvidenceJsonOptions0;
             HeadlessGtrtPerformanceSnapshot? result =
                 JsonSerializer.Deserialize<HeadlessGtrtPerformanceSnapshot>(
-                    File.ReadAllText(resultPath),
+                    (await File.ReadAllTextAsync(resultPath,TestContext.Current.CancellationToken).ConfigureAwait(true)),
                     jsonOptions);
             Assert.NotNull(result);
             Assert.Equal("headlessGtrt", result.Mode);
@@ -195,7 +200,7 @@ namespace MVoxelEngine1.Tests
 
             string worldsDirectory = Path.Combine(workspace.GameDataRoot, "Default", "Saves", "Worlds");
             string worldFile = Assert.Single(Directory.GetFiles(worldsDirectory, "world.txt", SearchOption.AllDirectories));
-            Assert.Equal("123456", File.ReadAllLines(worldFile)[3]);
+            Assert.Equal("123456", (await File.ReadAllLinesAsync(worldFile,TestContext.Current.CancellationToken).ConfigureAwait(true))[3]);
 
             Console.WriteLine($"Benchmark result: {resultPath}");
         }
@@ -265,7 +270,7 @@ namespace MVoxelEngine1.Tests
             {
                 await process.WaitForExitAsync(combinedCancellation.Token).ConfigureAwait(true);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException caughtFailure)
                 when (timeout.IsCancellationRequested)
             {
                 if (!process.HasExited)
@@ -277,7 +282,7 @@ namespace MVoxelEngine1.Tests
                 throw new TimeoutException(
                     $"Graphics benchmark exceeded 120 seconds. " +
                     $"Output: {Tail(timeoutOutput)} " +
-                    $"Error: {Tail(timeoutError)}");
+                    $"Error: {Tail(timeoutError)}",caughtFailure);
             }
 
             string standardOutput = await standardOutputTask.ConfigureAwait(true);
@@ -291,13 +296,10 @@ namespace MVoxelEngine1.Tests
                 File.Exists(resultPath),
                 $"Graphics benchmark result was not written to {resultPath}.");
 
-            var jsonOptions = new JsonSerializerOptions
-            {
-                PropertyNameCaseInsensitive = true
-            };
+            var jsonOptions = EvidenceJsonOptions0;
             StartupPerformanceSnapshot? result =
                 JsonSerializer.Deserialize<StartupPerformanceSnapshot>(
-                    File.ReadAllText(resultPath),
+                    (await File.ReadAllTextAsync(resultPath,TestContext.Current.CancellationToken).ConfigureAwait(true)),
                     jsonOptions);
             Assert.NotNull(result);
             Assert.Equal("Default", result.Game);
@@ -476,7 +478,7 @@ namespace MVoxelEngine1.Tests
         {
             Match match = Regex.Match(
                 output,
-                $"{Regex.Escape(prefix)}(?<milliseconds>[0-9]+) ms\\.");
+                $"{Regex.Escape(prefix)}(?<milliseconds>[0-9]+) ms\\.", RegexOptions.CultureInvariant | RegexOptions.NonBacktracking, TimeSpan.FromSeconds(1));
             Assert.True(match.Success, $"Console timing was not found for '{prefix}'. Output: {Tail(output)}");
             return long.Parse(match.Groups["milliseconds"].Value,System.Globalization.CultureInfo.CurrentCulture);
         }
@@ -485,7 +487,7 @@ namespace MVoxelEngine1.Tests
         {
             Match match = Regex.Match(
                 output,
-                $"{Regex.Escape(prefix)}(?<milliseconds>[0-9]+(?:\\.[0-9]+)?) ms\\.");
+                $"{Regex.Escape(prefix)}(?<milliseconds>[0-9]+(?:\\.[0-9]+)?) ms\\.", RegexOptions.CultureInvariant | RegexOptions.NonBacktracking, TimeSpan.FromSeconds(1));
             Assert.True(match.Success, $"Console timing was not found for '{prefix}'. Output: {Tail(output)}");
             return double.Parse(
                 match.Groups["milliseconds"].Value,

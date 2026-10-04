@@ -37,6 +37,7 @@ public sealed class NativeStreamingTests
             runtimeGenerationWorkerCount: NativeGtrtPipeline.GetWorkerCount(0.5f),
             runtimeMeshWorkerCount: Environment.ProcessorCount);
         using NativeWorld world = NativeWorld.CreateForTesting(pipeline, 123456, HeadlessRenderer);
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         string original = CaptureProductionPacketHash(world, (0, 0, 0));
         Exception? failure = Record.Exception(() => world.PlayerChunkPosition = (40, 0, -40));
         if (failure is not null)
@@ -47,6 +48,7 @@ public sealed class NativeStreamingTests
         Assert.Null(failure);
         Assert.Equal(new NativeStreamingStatistics(729, 0, 15_625, 0), world.StreamingStatistics);
         _ = CaptureProductionPacketHash(world, (40, 0, -40));
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         world.PlayerChunkPosition = (0, 0, 0);
         Assert.Equal(original, CaptureProductionPacketHash(world, (0, 0, 0)));
         world.InspectState(owner =>

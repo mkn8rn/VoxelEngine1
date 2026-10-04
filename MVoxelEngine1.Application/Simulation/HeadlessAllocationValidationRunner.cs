@@ -11,6 +11,8 @@ namespace MVoxelEngine1.Application.Simulation;
 
 internal static class HeadlessAllocationValidationRunner
 {
+
+    private static readonly System.Text.Json.JsonSerializerOptions EvidenceJsonOptions0 = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = true };
     internal static void Run(string outputPath)
     {
         if (StartupPerformanceRecorder.IsRunning)
@@ -66,11 +68,7 @@ internal static class HeadlessAllocationValidationRunner
         {
             using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             {
-                JsonSerializer.Serialize(stream, report, new JsonSerializerOptions
-                {
-                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                    WriteIndented = true
-                });
+                JsonSerializer.Serialize(stream, report, EvidenceJsonOptions0);
                 stream.Flush(flushToDisk: true);
             }
             File.Move(temporary, finalPath, overwrite: true);

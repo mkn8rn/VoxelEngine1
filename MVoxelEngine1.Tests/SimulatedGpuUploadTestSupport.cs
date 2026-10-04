@@ -147,14 +147,14 @@ namespace MVoxelEngine1.Tests
                     await Task.Delay(10, combinedCancellation.Token).ConfigureAwait(true);
                 }
             }
-            catch (OperationCanceledException)when (timeoutSource.IsCancellationRequested)
+            catch (OperationCanceledException caughtFailure)when (timeoutSource.IsCancellationRequested)
             {
                 if (!process.HasExited)
                     process.Kill(entireProcessTree: true);
                 await process.WaitForExitAsync(testCancellation).ConfigureAwait(true);
                 string timeoutOutput = await standardOutputTask.ConfigureAwait(true);
                 string timeoutError = await standardErrorTask.ConfigureAwait(true);
-                throw new TimeoutException($"Application process exceeded {timeout.TotalSeconds:0} seconds. " + $"Output: {Tail(timeoutOutput)} Error: {Tail(timeoutError)}");
+                throw new TimeoutException($"Application process exceeded {timeout.TotalSeconds:0} seconds. " + $"Output: {Tail(timeoutOutput)} Error: {Tail(timeoutError)}",caughtFailure);
             }
 
             try

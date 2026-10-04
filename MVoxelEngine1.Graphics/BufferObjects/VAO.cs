@@ -22,6 +22,7 @@ namespace MVoxelEngine1.Graphics.BufferObjects
         // calling code to express intent clearly when organizing opaque vs transparent attribute sets.
         public void LinkToVAO(int location, int numComponents, VertexAttribPointerType type, bool normalized, VBO vbo)
         {
+ArgumentNullException.ThrowIfNull(vbo);
             Bind();
             vbo.Bind();
             GL.VertexAttribPointer(location, numComponents, type, normalized, 0, 0);
@@ -33,6 +34,7 @@ namespace MVoxelEngine1.Graphics.BufferObjects
         // Use when attribute elements are padded for alignment (e.g., 4-byte stride for 3-byte values).
         public void LinkToVAO(int location, int numComponents, VertexAttribPointerType type, bool normalized, VBO vbo, int stride, int offset)
         {
+ArgumentNullException.ThrowIfNull(vbo);
             Bind();
             vbo.Bind();
             GL.VertexAttribPointer(location, numComponents, type, normalized, stride, offset);
@@ -43,6 +45,7 @@ namespace MVoxelEngine1.Graphics.BufferObjects
         // Link an integer attribute (no normalization) to this VAO.
         public void LinkIntegerToVAO(int location, int numComponents, VertexAttribIntegerType type, VBO vbo)
         {
+ArgumentNullException.ThrowIfNull(vbo);
             Bind();
             vbo.Bind();
             GL.VertexAttribIPointer(location, numComponents, type, 0, IntPtr.Zero);
