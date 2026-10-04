@@ -24,65 +24,8 @@ namespace MVoxelEngine1.Application
                 !string.IsNullOrWhiteSpace(FlagManager.flags.benchmarkOutput))
                 StartupPerformanceRecorder.ForbidGraphics();
 
-            if (!string.IsNullOrWhiteSpace(FlagManager.flags.allocationValidationOutput))
-            {
-                ValidateAllocationFlags();
-                HeadlessAllocationValidationRunner.Run(FlagManager.flags.allocationValidationOutput);
+            if (TryRunHeadlessMode())
                 return;
-            }
-
-            if (!string.IsNullOrWhiteSpace(FlagManager.flags.faceManifestOutput))
-            {
-                ValidateFaceManifestFlags();
-                string? inputScript = FlagManager.flags.simulatedInput;
-                IReadOnlyList<TimedPlayerInputStep> steps =
-                    string.IsNullOrWhiteSpace(inputScript)
-                        ? Array.Empty<TimedPlayerInputStep>()
-                        : TimedPlayerInputScript.Parse(inputScript);
-                FaceManifestRunner.Run(
-                    FlagManager.flags.faceManifestOutput,
-                    inputScript,
-                    steps,
-                    GetSimulatedFrameRate());
-                return;
-            }
-
-            if (!string.IsNullOrWhiteSpace(FlagManager.flags.simulatedGpuUploadOutput))
-            {
-                ValidateSimulatedGpuUploadFlags();
-                string inputScript = string.IsNullOrWhiteSpace(FlagManager.flags.simulatedInput)
-                    ? TimedPlayerInputScript.DefaultScript
-                    : FlagManager.flags.simulatedInput;
-                IReadOnlyList<TimedPlayerInputStep> steps = TimedPlayerInputScript.Parse(inputScript);
-                int frameRate = GetSimulatedFrameRate();
-                int writerDelayMilliseconds = FlagManager.flags.simulatedGpuWriterDelayMilliseconds ?? 0;
-                if (writerDelayMilliseconds < 0 || writerDelayMilliseconds > 1000)
-                    throw new InvalidOperationException("The simulated GPU writer delay must be from 0 through 1000 milliseconds.");
-                int? writerFailAfterRecords = FlagManager.flags.simulatedGpuWriterFailAfterRecords;
-                if (writerFailAfterRecords is <= 0)
-                    throw new InvalidOperationException("The simulated GPU writer failure record count must be positive.");
-
-                SimulatedGpuUploadRunner.Run(
-                    FlagManager.flags.simulatedGpuUploadOutput,
-                    inputScript,
-                    steps,
-                    frameRate,
-                    writerDelayMilliseconds,
-                    writerFailAfterRecords);
-                return;
-            }
-
-            if (!string.IsNullOrWhiteSpace(FlagManager.flags.benchmarkOutput))
-            {
-                ValidateBenchmarkFlags(headless: true);
-                StartupPerformanceRecorder.Begin(
-                    FlagManager.flags.game ?? throw new InvalidOperationException("The benchmark game is not set."),
-                    FlagManager.flags.seed ?? throw new InvalidOperationException("The benchmark seed is not set."),
-                    openGlCallsAllowed: false);
-                HeadlessGtrtBenchmarkRunner.Run(
-                    FlagManager.flags.benchmarkOutput);
-                return;
-            }
 
             if (!string.IsNullOrWhiteSpace(
                     FlagManager.flags.graphicsBenchmarkOutput))
@@ -98,6 +41,80 @@ namespace MVoxelEngine1.Application
             {
                 game.Run();
             }
+        }
+
+        private static bool TryRunHeadlessMode()
+        {
+            if (!string.IsNullOrWhiteSpace(FlagManager.flags.allocationValidationOutput))
+            {
+                ValidateAllocationFlags();
+                HeadlessAllocationValidationRunner.Run(FlagManager.flags.allocationValidationOutput);
+                return true;
+            }
+            if (!string.IsNullOrWhiteSpace(FlagManager.flags.faceManifestOutput))
+            {
+                RunFaceManifest();
+                return true;
+            }
+            if (!string.IsNullOrWhiteSpace(FlagManager.flags.simulatedGpuUploadOutput))
+            {
+                RunSimulatedUpload();
+                return true;
+            }
+            if (!string.IsNullOrWhiteSpace(FlagManager.flags.benchmarkOutput))
+            {
+                RunHeadlessBenchmark();
+                return true;
+            }
+            return false;
+        }
+
+        private static void RunFaceManifest()
+        {
+            ValidateFaceManifestFlags();
+            string? inputScript = FlagManager.flags.simulatedInput;
+            IReadOnlyList<TimedPlayerInputStep> steps =
+                string.IsNullOrWhiteSpace(inputScript)
+                    ? Array.Empty<TimedPlayerInputStep>()
+                    : TimedPlayerInputScript.Parse(inputScript);
+            FaceManifestRunner.Run(
+                FlagManager.flags.faceManifestOutput!,
+                inputScript,
+                steps,
+                GetSimulatedFrameRate());
+        }
+
+        private static void RunSimulatedUpload()
+        {
+            ValidateSimulatedGpuUploadFlags();
+            string inputScript = string.IsNullOrWhiteSpace(FlagManager.flags.simulatedInput)
+                ? TimedPlayerInputScript.DefaultScript
+                : FlagManager.flags.simulatedInput;
+            IReadOnlyList<TimedPlayerInputStep> steps = TimedPlayerInputScript.Parse(inputScript);
+            int frameRate = GetSimulatedFrameRate();
+            int writerDelayMilliseconds = FlagManager.flags.simulatedGpuWriterDelayMilliseconds ?? 0;
+            if (writerDelayMilliseconds < 0 || writerDelayMilliseconds > 1000)
+                throw new InvalidOperationException("The simulated GPU writer delay must be from 0 through 1000 milliseconds.");
+            int? writerFailAfterRecords = FlagManager.flags.simulatedGpuWriterFailAfterRecords;
+            if (writerFailAfterRecords is <= 0)
+                throw new InvalidOperationException("The simulated GPU writer failure record count must be positive.");
+            SimulatedGpuUploadRunner.Run(
+                FlagManager.flags.simulatedGpuUploadOutput!,
+                inputScript,
+                steps,
+                frameRate,
+                writerDelayMilliseconds,
+                writerFailAfterRecords);
+        }
+
+        private static void RunHeadlessBenchmark()
+        {
+            ValidateBenchmarkFlags(headless: true);
+            StartupPerformanceRecorder.Begin(
+                FlagManager.flags.game ?? throw new InvalidOperationException("The benchmark game is not set."),
+                FlagManager.flags.seed ?? throw new InvalidOperationException("The benchmark seed is not set."),
+                openGlCallsAllowed: false);
+            HeadlessGtrtBenchmarkRunner.Run(FlagManager.flags.benchmarkOutput!);
         }
 
         private static int GetSimulatedFrameRate()

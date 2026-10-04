@@ -52,155 +52,181 @@ namespace MVoxelEngine1.Infrastructure.Managers
                 throw new DirectoryNotFoundException($"Biome types directory not found: {biomesRoot}");
 
             foreach (var biomeDir in Directory.GetDirectories(biomesRoot))
+                LoadBiome(biomeDir);
+            PublishBiomeOrder();
+        }
+
+        private static void LoadBiome(string biomeDir)
+        {
+            var biomeFolderName = Path.GetFileName(biomeDir);
+            if (string.IsNullOrWhiteSpace(biomeFolderName)) return;
+
+            // Load raw JSON model
+            var biomeJson = LoadBiomeJson(biomeDir, biomeFolderName);
+            if (string.IsNullOrWhiteSpace(biomeJson.name))
             {
-                var biomeFolderName = Path.GetFileName(biomeDir);
-                if (string.IsNullOrWhiteSpace(biomeFolderName)) continue;
-
-                // Load raw JSON model
-                var biomeJson = LoadBiomeJson(biomeDir, biomeFolderName);
-                if (string.IsNullOrWhiteSpace(biomeJson.name))
-                {
-                    biomeJson.name = biomeFolderName; // fallback if name not provided in JSON
-                }
-
-                if (!_biomeIds.Add(biomeJson.id))
-                    throw new InvalidOperationException($"Duplicate biome id {biomeJson.id} detected (folder '{biomeFolderName}'). IDs must be unique.");
-
-                // Load microbiomes (raw JSON) and convert to list for runtime biome
-                var microbiomesMap = LoadMicrobiomes(Path.Combine(biomeDir, "Microbiomes"), biomeFolderName);
-                _microbiomes[biomeFolderName] = microbiomesMap; // store map
-                var microbiomesList = new List<MicrobiomeJSON>(microbiomesMap.Values);
-
-                // Load generation rules (required to parse if file exists; throw on failure if present)
-                var simpleReplacementRules = new List<SimpleReplacementRule>();
-                string generationRulesPath = Path.Combine(biomeDir, "GenerationRules.txt");
-                if (File.Exists(generationRulesPath))
-                {
-                    try
-                    {
-                        string rulesJsonText = File.ReadAllText(generationRulesPath);
-                        if (string.IsNullOrWhiteSpace(rulesJsonText))
-                            throw new InvalidOperationException("GenerationRules.txt is empty");
-
-                        // Preprocess to allow unquoted identifiers (e.g., Stone, Soil, LimeWhole) by mapping them to numeric IDs.
-                        // This keeps the on-disk format human-readable while reusing existing numeric-based JSON model.
-                        string processedText = PreprocessGenerationRulesText(rulesJsonText);
-
-                        var rules = JsonSerializer.Deserialize<List<GenerationRuleJSON>>(processedText, jsonOptions);
-                        if (rules == null)
-                            throw new InvalidOperationException("Deserialized rules list is null");
-
-                        foreach (ref readonly var rule in System.Runtime.InteropServices.CollectionsMarshal.AsSpan(rules))
-                        {
-                            if (rule.GenerationType is not (GenerationType.InlineReplacement or GenerationType.SimpleReplacement))
-                                throw new NotSupportedException($"Generation type '{rule.GenerationType}' is not supported.");
-                            if (rule.MicrobiomeId is not null || rule.NoiseType is not null ||
-                                rule.FillProportion is not (null or 1))
-                                throw new NotSupportedException("Replacement microbiome and noise filters are not implemented.");
-                            if (rule.AbsoluteMinYLevel > rule.AbsoluteMaxYLevel ||
-                                rule.RelativeMinDepth > rule.RelativeMaxDepth ||
-                                rule.RelativeMinDepth < 0 || rule.RelativeMaxDepth < 0)
-                                throw new InvalidDataException("Replacement rule bounds are invalid.");
-
-                            // Resolve target block type 
-                            var targetBlock = ResolveBlockType(rule.BlockTypeId);
-                            if (targetBlock == null)
-                                throw new InvalidOperationException($"Rule references unknown block_type_id '{rule.BlockTypeId}'");
-
-                            // Build list of base block types to replace
-                            var baseList = new List<BaseBlockType>();
-                            if (rule.BaseBlocksToReplace != null && rule.BaseBlocksToReplace.Count > 0)
-                            {
-                                foreach (var token in rule.BaseBlocksToReplace)
-                                {
-                                    if (string.IsNullOrWhiteSpace(token)) continue;
-                                    if (TryResolveBaseBlockType(token, out var bbt))
-                                    {
-                                        if (!baseList.Contains(bbt))
-                                            baseList.Add(bbt);
-                                    }
-                                    else
-                                    {
-                                        // Allow a block unique/name mapping -> its base type
-                                        var bt = ResolveBlockType(token);
-                                        if (bt == null)
-                                            throw new InvalidDataException($"Unknown base block token '{token}' in biome '{biomeFolderName}'.");
-                                        if (!baseList.Contains(bt.BaseType))
-                                            baseList.Add(bt.BaseType);
-                                    }
-                                }
-                            }
-
-                            // Specific block IDs to replace
-                            var blockList = new List<BlockType>();
-                            if (rule.BlocksToReplace != null && rule.BlocksToReplace.Count > 0)
-                            {
-                                // Derive block types from specific block IDs
-                                foreach (var btId in rule.BlocksToReplace)
-                                {
-                                    var blockType = TerrainLoader.allBlockTypeObjects.FirstOrDefault(b => b.ID == btId);
-                                    if (blockType == null)
-                                        throw new InvalidDataException($"Unknown replacement source block '{btId}'.");
-                                    if (!blockList.Contains(blockType))
-                                        blockList.Add(blockType);
-                                }
-                            }
-
-                            var simpleRule = new SimpleReplacementRule
-                            {
-                                GenerationType = rule.GenerationType,
-                                RelativeMinDepth = rule.RelativeMinDepth,
-                                RelativeMaxDepth = rule.RelativeMaxDepth,
-                                BaseBlocksToReplace = baseList,
-                                BlocksToReplace = blockList,
-                                BlockType = targetBlock,
-                                priority = rule.priority,
-                                microbiomeId = rule.MicrobiomeId,
-                                absoluteMinYlevel = rule.AbsoluteMinYLevel,
-                                absoluteMaxYlevel = rule.AbsoluteMaxYLevel
-                            };
-                            simpleReplacementRules.Add(simpleRule);
-                        }
-
-                        // Inline rules precede post-generation replacements. Stable
-                        // ordering preserves file order for equal priorities.
-                        simpleReplacementRules = simpleReplacementRules
-                            .OrderBy(static rule => rule.GenerationType)
-                            .ThenBy(static rule => rule.priority)
-                            .ToList();
-                    }
-                    catch (Exception ex)
-                    {
-                        throw new InvalidOperationException($"Failed to parse generation rules for biome '{biomeFolderName}': {ex.Message}",ex);
-                    }
-                }
-
-                // Map to runtime Biome class
-                var runtimeBiome = new Biome
-                {
-                    id = biomeJson.id,
-                    name = biomeJson.name,
-                    stoneMinYLevel = biomeJson.StoneMinYLevel,
-                    stoneMaxYLevel = biomeJson.StoneMaxYLevel,
-                    stoneMinDepth = biomeJson.StoneMinDepth,
-                    stoneMaxDepth = biomeJson.StoneMaxDepth,
-                    soilMinYLevel = biomeJson.SoilMinYLevel,
-                    soilMaxYLevel = biomeJson.SoilMaxYLevel,
-                    soilMinDepth = biomeJson.SoilMinDepth,
-                    soilMaxDepth = biomeJson.SoilMaxDepth,
-                    waterLevel = biomeJson.WaterLevel,
-                    microbiomes = microbiomesList,
-                    simpleReplacements = simpleReplacementRules
-                };
-
-                // --- Precompile simple replacement rules & vertical buckets -----------------------
-                BuildCompiledSimpleReplacementRules(runtimeBiome);
-
-                _biomes[biomeFolderName] = runtimeBiome;
-
-                Console.WriteLine($"[Biome] Loaded biome id={runtimeBiome.id} folder='{biomeFolderName}' name='{runtimeBiome.name}' (microbiomes: {microbiomesMap.Count}, simpleRules: {simpleReplacementRules.Count})");
+                biomeJson.name = biomeFolderName; // fallback if name not provided in JSON
             }
-            CompleteLoadAllBiomesPhase();
+
+            if (!_biomeIds.Add(biomeJson.id))
+                throw new InvalidOperationException($"Duplicate biome id {biomeJson.id} detected (folder '{biomeFolderName}'). IDs must be unique.");
+
+            // Load microbiomes (raw JSON) and convert to list for runtime biome
+            var microbiomesMap = LoadMicrobiomes(Path.Combine(biomeDir, "Microbiomes"), biomeFolderName);
+            _microbiomes[biomeFolderName] = microbiomesMap; // store map
+            var microbiomesList = new List<MicrobiomeJSON>(microbiomesMap.Values);
+
+            List<SimpleReplacementRule> simpleReplacementRules = LoadReplacementRules(biomeDir, biomeFolderName);
+
+            // Map to runtime Biome class
+            var runtimeBiome = new Biome
+            {
+                id = biomeJson.id,
+                name = biomeJson.name,
+                stoneMinYLevel = biomeJson.StoneMinYLevel,
+                stoneMaxYLevel = biomeJson.StoneMaxYLevel,
+                stoneMinDepth = biomeJson.StoneMinDepth,
+                stoneMaxDepth = biomeJson.StoneMaxDepth,
+                soilMinYLevel = biomeJson.SoilMinYLevel,
+                soilMaxYLevel = biomeJson.SoilMaxYLevel,
+                soilMinDepth = biomeJson.SoilMinDepth,
+                soilMaxDepth = biomeJson.SoilMaxDepth,
+                waterLevel = biomeJson.WaterLevel,
+                microbiomes = microbiomesList,
+                simpleReplacements = simpleReplacementRules
+            };
+
+            // --- Precompile simple replacement rules & vertical buckets -----------------------
+            BuildCompiledSimpleReplacementRules(runtimeBiome);
+
+            _biomes[biomeFolderName] = runtimeBiome;
+
+            Console.WriteLine($"[Biome] Loaded biome id={runtimeBiome.id} folder='{biomeFolderName}' name='{runtimeBiome.name}' (microbiomes: {microbiomesMap.Count}, simpleRules: {simpleReplacementRules.Count})");
+        }
+
+        private static List<SimpleReplacementRule> LoadReplacementRules(string biomeDir, string biomeFolderName)
+        {
+            // Load generation rules (required to parse if file exists; throw on failure if present)
+            var simpleReplacementRules = new List<SimpleReplacementRule>();
+            string generationRulesPath = Path.Combine(biomeDir, "GenerationRules.txt");
+            if (File.Exists(generationRulesPath))
+            {
+                try
+                {
+                    string rulesJsonText = File.ReadAllText(generationRulesPath);
+                    if (string.IsNullOrWhiteSpace(rulesJsonText))
+                        throw new InvalidOperationException("GenerationRules.txt is empty");
+
+                    // Preprocess to allow unquoted identifiers (e.g., Stone, Soil, LimeWhole) by mapping them to numeric IDs.
+                    // This keeps the on-disk format human-readable while reusing existing numeric-based JSON model.
+                    string processedText = PreprocessGenerationRulesText(rulesJsonText);
+
+                    var rules = JsonSerializer.Deserialize<List<GenerationRuleJSON>>(processedText, jsonOptions);
+                    if (rules == null)
+                        throw new InvalidOperationException("Deserialized rules list is null");
+
+                    foreach (ref readonly var rule in System.Runtime.InteropServices.CollectionsMarshal.AsSpan(rules))
+                        simpleReplacementRules.Add(ParseReplacementRule(rule, biomeFolderName));
+
+                    // Inline rules precede post-generation replacements. Stable
+                    // ordering preserves file order for equal priorities.
+                    simpleReplacementRules = simpleReplacementRules
+                        .OrderBy(static rule => rule.GenerationType)
+                        .ThenBy(static rule => rule.priority)
+                        .ToList();
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException($"Failed to parse generation rules for biome '{biomeFolderName}': {ex.Message}",ex);
+                }
+            }
+
+            return simpleReplacementRules;
+        }
+
+        private static SimpleReplacementRule ParseReplacementRule(GenerationRuleJSON rule, string biomeFolderName)
+        {
+            if (rule.GenerationType is not (GenerationType.InlineReplacement or GenerationType.SimpleReplacement))
+                throw new NotSupportedException($"Generation type '{rule.GenerationType}' is not supported.");
+            if (rule.MicrobiomeId is not null || rule.NoiseType is not null ||
+                rule.FillProportion is not (null or 1))
+                throw new NotSupportedException("Replacement microbiome and noise filters are not implemented.");
+            if (rule.AbsoluteMinYLevel > rule.AbsoluteMaxYLevel ||
+                rule.RelativeMinDepth > rule.RelativeMaxDepth ||
+                rule.RelativeMinDepth < 0 || rule.RelativeMaxDepth < 0)
+                throw new InvalidDataException("Replacement rule bounds are invalid.");
+
+            // Resolve target block type
+            var targetBlock = ResolveBlockType(rule.BlockTypeId);
+            if (targetBlock == null)
+                throw new InvalidOperationException($"Rule references unknown block_type_id '{rule.BlockTypeId}'");
+
+            List<BaseBlockType> baseList = ResolveReplacementBaseTypes(rule, biomeFolderName);
+
+            List<BlockType> blockList = ResolveReplacementBlocks(rule);
+
+            return new SimpleReplacementRule
+            {
+                GenerationType = rule.GenerationType,
+                RelativeMinDepth = rule.RelativeMinDepth,
+                RelativeMaxDepth = rule.RelativeMaxDepth,
+                BaseBlocksToReplace = baseList,
+                BlocksToReplace = blockList,
+                BlockType = targetBlock,
+                priority = rule.priority,
+                microbiomeId = rule.MicrobiomeId,
+                absoluteMinYlevel = rule.AbsoluteMinYLevel,
+                absoluteMaxYlevel = rule.AbsoluteMaxYLevel
+            };
+        }
+
+        private static List<BaseBlockType> ResolveReplacementBaseTypes(GenerationRuleJSON rule, string biomeFolderName)
+        {
+            // Build list of base block types to replace
+            var baseList = new List<BaseBlockType>();
+            if (rule.BaseBlocksToReplace != null && rule.BaseBlocksToReplace.Count > 0)
+            {
+                foreach (var token in rule.BaseBlocksToReplace)
+                {
+                    if (string.IsNullOrWhiteSpace(token)) continue;
+                    if (TryResolveBaseBlockType(token, out var bbt))
+                    {
+                        if (!baseList.Contains(bbt))
+                            baseList.Add(bbt);
+                    }
+                    else
+                    {
+                        // Allow a block unique/name mapping -> its base type
+                        var bt = ResolveBlockType(token);
+                        if (bt == null)
+                            throw new InvalidDataException($"Unknown base block token '{token}' in biome '{biomeFolderName}'.");
+                        if (!baseList.Contains(bt.BaseType))
+                            baseList.Add(bt.BaseType);
+                    }
+                }
+            }
+
+            return baseList;
+        }
+
+        private static List<BlockType> ResolveReplacementBlocks(GenerationRuleJSON rule)
+        {
+            // Specific block IDs to replace
+            var blockList = new List<BlockType>();
+            if (rule.BlocksToReplace != null && rule.BlocksToReplace.Count > 0)
+            {
+                // Derive block types from specific block IDs
+                foreach (var btId in rule.BlocksToReplace)
+                {
+                    var blockType = TerrainLoader.allBlockTypeObjects.FirstOrDefault(b => b.ID == btId);
+                    if (blockType == null)
+                        throw new InvalidDataException($"Unknown replacement source block '{btId}'.");
+                    if (!blockList.Contains(blockType))
+                        blockList.Add(blockType);
+                }
+            }
+
+            return blockList;
         }
 
         private static void BuildCompiledSimpleReplacementRules(Biome biome)
@@ -250,7 +276,7 @@ namespace MVoxelEngine1.Infrastructure.Managers
                     r.RelativeMaxDepth ?? int.MaxValue);
                 compiled.Add(compiledRule);
             }
-            CompleteBuildCompiledSimpleReplacementRulesPhase(biome, compiled);
+            BuildSectionRuleBuckets(biome, compiled);
         }
 
         public static Biome SelectBiomeForChunk(long worldSeed, int chunkX, int chunkZ)
@@ -386,10 +412,15 @@ namespace MVoxelEngine1.Infrastructure.Managers
             // We only transform tokens that are not inside strings.
             // A token becomes numeric if found in either map; otherwise left as-is.
             // Reserved literals that should remain untouched.
-            static bool IsReserved(string s) => string.Equals(s, "null", StringComparison.OrdinalIgnoreCase)
-                                              || string.Equals(s, "true", StringComparison.OrdinalIgnoreCase)
-                                              || string.Equals(s, "false", StringComparison.OrdinalIgnoreCase);
+            return ReplaceUnquotedRuleIdentifiers(raw, baseTypeMap, blockTypeMap);
+        }
 
+        private static bool IsReserved(string s) => string.Equals(s, "null", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(s, "true", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(s, "false", StringComparison.OrdinalIgnoreCase);
+
+        private static string ReplaceUnquotedRuleIdentifiers(string raw, Dictionary<string, ushort> baseTypeMap, Dictionary<string, ushort> blockTypeMap)
+        {
             var sb = new StringBuilder(raw.Length + 64);
             bool inString = false;
             for (int i = 0; i < raw.Length; )
@@ -441,7 +472,7 @@ namespace MVoxelEngine1.Infrastructure.Managers
             return sb.ToString();
         }
 
-        private static void CompleteLoadAllBiomesPhase()
+        private static void PublishBiomeOrder()
         {
 
             _biomeOrder = new string[_biomes.Count];
@@ -451,7 +482,7 @@ namespace MVoxelEngine1.Infrastructure.Managers
 
         }
 
-        private static void CompleteBuildCompiledSimpleReplacementRulesPhase(global::MVoxelEngine1.Infrastructure.Models.Generation.Biomes.Biome biome, global::System.Collections.Generic.List<global::MVoxelEngine1.Infrastructure.Models.Generation.Biomes.CompiledSimpleReplacementRule> compiled)
+        private static void BuildSectionRuleBuckets(global::MVoxelEngine1.Infrastructure.Models.Generation.Biomes.Biome biome, global::System.Collections.Generic.List<global::MVoxelEngine1.Infrastructure.Models.Generation.Biomes.CompiledSimpleReplacementRule> compiled)
         {
             // The source list is already stably ordered by stage and priority.
             biome.compiledSimpleReplacementRules = compiled.ToArray();

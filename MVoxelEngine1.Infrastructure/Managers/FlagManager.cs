@@ -10,15 +10,50 @@ namespace MVoxelEngine1.Infrastructure.Managers
         public static ProgramFlags flags { get; private set; } = new ProgramFlags();
         public static void ApplyFlags(string[] args)
         {
+            ProgramFlags preparedFlags = ResolveFlags();
+
+            if (!string.IsNullOrEmpty(preparedFlags.game))
+                Console.WriteLine($"Set game: {preparedFlags.game}");
+            if (!string.IsNullOrEmpty(preparedFlags.gameDataDirectory))
+                Console.WriteLine($"Set gameDataDirectory: {preparedFlags.gameDataDirectory}");
+            if (!string.IsNullOrEmpty(preparedFlags.worldName))
+                Console.WriteLine($"Set worldName: {preparedFlags.worldName}");
+            if (preparedFlags.seed.HasValue)
+                Console.WriteLine($"Set seed: {preparedFlags.seed.Value}");
+            if (!string.IsNullOrEmpty(preparedFlags.benchmarkOutput))
+                Console.WriteLine($"Set benchmarkOutput: {preparedFlags.benchmarkOutput}");
+            if (!string.IsNullOrEmpty(preparedFlags.allocationValidationOutput))
+                Console.WriteLine($"Set allocationValidationOutput: {preparedFlags.allocationValidationOutput}");
+            if (!string.IsNullOrEmpty(preparedFlags.graphicsBenchmarkOutput))
+            {
+                Console.WriteLine(
+                    $"Set graphicsBenchmarkOutput: " +
+                    $"{preparedFlags.graphicsBenchmarkOutput}");
+            }
+            if (!string.IsNullOrEmpty(preparedFlags.faceManifestOutput))
+                Console.WriteLine($"Set faceManifestOutput: {preparedFlags.faceManifestOutput}");
+            if (!string.IsNullOrEmpty(preparedFlags.simulatedGpuUploadOutput))
+                Console.WriteLine($"Set simulatedGpuUploadOutput: {preparedFlags.simulatedGpuUploadOutput}");
+            if (!string.IsNullOrEmpty(preparedFlags.simulatedInput))
+                Console.WriteLine($"Set simulatedInput: {preparedFlags.simulatedInput}");
+            if (preparedFlags.simulatedFrameRate.HasValue)
+                Console.WriteLine($"Set simulatedFrameRate: {preparedFlags.simulatedFrameRate.Value}");
+            LogWorkerFlagsAndApplyRuntime(preparedFlags);
+        }
+
+
+        private static T? PreferValue<T>(T? console, T? env) where T : struct
+            => console.HasValue ? console : env;
+
+        private static string PreferString(string? console, string? env)
+            => !string.IsNullOrEmpty(console) ? console : !string.IsNullOrEmpty(env) ? env : string.Empty;
+
+        private static ProgramFlags ResolveFlags()
+        {
             var consoleFlags = ConsoleFlags.consoleFlags;
             var envFlags = EnvironmentFlags.environmentFlags;
 
-            T? PreferValue<T>(T? console, T? env) where T : struct
-                => console.HasValue ? console : env;
-            string PreferString(string? console, string? env)
-                => !string.IsNullOrEmpty(console) ? console! : !string.IsNullOrEmpty(env) ? env! : string.Empty;
-
-            var preparedFlags = new ProgramFlags
+            return new ProgramFlags
             {
                 game = PreferString(consoleFlags.game, envFlags.game),
                 gameDataDirectory = PreferString(consoleFlags.gameDataDirectory, envFlags.gameDataDirectory),
@@ -58,36 +93,9 @@ namespace MVoxelEngine1.Infrastructure.Managers
                 GCMode = PreferValue(consoleFlags.GCMode, envFlags.GCMode)
             };
 
-            if (!string.IsNullOrEmpty(preparedFlags.game))
-                Console.WriteLine($"Set game: {preparedFlags.game}");
-            if (!string.IsNullOrEmpty(preparedFlags.gameDataDirectory))
-                Console.WriteLine($"Set gameDataDirectory: {preparedFlags.gameDataDirectory}");
-            if (!string.IsNullOrEmpty(preparedFlags.worldName))
-                Console.WriteLine($"Set worldName: {preparedFlags.worldName}");
-            if (preparedFlags.seed.HasValue)
-                Console.WriteLine($"Set seed: {preparedFlags.seed.Value}");
-            if (!string.IsNullOrEmpty(preparedFlags.benchmarkOutput))
-                Console.WriteLine($"Set benchmarkOutput: {preparedFlags.benchmarkOutput}");
-            if (!string.IsNullOrEmpty(preparedFlags.allocationValidationOutput))
-                Console.WriteLine($"Set allocationValidationOutput: {preparedFlags.allocationValidationOutput}");
-            if (!string.IsNullOrEmpty(preparedFlags.graphicsBenchmarkOutput))
-            {
-                Console.WriteLine(
-                    $"Set graphicsBenchmarkOutput: " +
-                    $"{preparedFlags.graphicsBenchmarkOutput}");
-            }
-            if (!string.IsNullOrEmpty(preparedFlags.faceManifestOutput))
-                Console.WriteLine($"Set faceManifestOutput: {preparedFlags.faceManifestOutput}");
-            if (!string.IsNullOrEmpty(preparedFlags.simulatedGpuUploadOutput))
-                Console.WriteLine($"Set simulatedGpuUploadOutput: {preparedFlags.simulatedGpuUploadOutput}");
-            if (!string.IsNullOrEmpty(preparedFlags.simulatedInput))
-                Console.WriteLine($"Set simulatedInput: {preparedFlags.simulatedInput}");
-            if (preparedFlags.simulatedFrameRate.HasValue)
-                Console.WriteLine($"Set simulatedFrameRate: {preparedFlags.simulatedFrameRate.Value}");
-            FinishApplyFlagsPhase(preparedFlags);
         }
 
-        private static void CompleteApplyFlagsPhase(global::MVoxelEngine1.Infrastructure.Models.ProgramFlags preparedFlags)
+        private static void ApplyGarbageCollectionFlagsAndPublish(global::MVoxelEngine1.Infrastructure.Models.ProgramFlags preparedFlags)
         {
             if (!string.IsNullOrEmpty(preparedFlags.GCHeapSegmentSize))
                 Console.WriteLine($"Set GCHeapSegmentSize: {preparedFlags.GCHeapSegmentSize}");
@@ -139,7 +147,7 @@ namespace MVoxelEngine1.Infrastructure.Managers
 
         }
 
-        private static void FinishApplyFlagsPhase(global::MVoxelEngine1.Infrastructure.Models.ProgramFlags preparedFlags)
+        private static void LogWorkerFlagsAndApplyRuntime(global::MVoxelEngine1.Infrastructure.Models.ProgramFlags preparedFlags)
         {
             if (preparedFlags.simulatedGpuWriterDelayMilliseconds.HasValue)
                 Console.WriteLine($"Set simulatedGpuWriterDelayMilliseconds: {preparedFlags.simulatedGpuWriterDelayMilliseconds.Value}");
@@ -175,7 +183,7 @@ namespace MVoxelEngine1.Infrastructure.Managers
                 Console.WriteLine($"Set GCHeapAffinitizeMask: {preparedFlags.GCHeapAffinitizeMask}");
             if (preparedFlags.GCLargeObjectHeapCompactionMode.HasValue)
                 Console.WriteLine($"Set GCLargeObjectHeapCompactionMode: {preparedFlags.GCLargeObjectHeapCompactionMode.Value}");
-            CompleteApplyFlagsPhase(preparedFlags);
+            ApplyGarbageCollectionFlagsAndPublish(preparedFlags);
 
         }
     }
