@@ -22,7 +22,7 @@ namespace MVoxelEngine1.Infrastructure.Flags
             return string.Equals(aspnetEnv, "Development", StringComparison.OrdinalIgnoreCase);
         }
 
-        public static Dictionary<string, string> ReadEnvironmentVariables()
+        public static IReadOnlyDictionary<string, string> ReadEnvironmentVariables()
         {
             var envVars = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             if (!File.Exists(EnvFilePath))

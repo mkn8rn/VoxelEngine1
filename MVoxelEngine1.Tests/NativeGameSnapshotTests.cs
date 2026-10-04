@@ -60,7 +60,7 @@ public sealed class NativeGameSnapshotTests
                     TerrainLoader.IsLiquid(block.ID),
                     descriptor.Flags.HasFlag(NativeBlockFlags.Liquid));
 
-                IReadOnlyDictionary<Faces, ByteVector2> faces =
+                IDictionary<Faces, ByteVector2> faces =
                     BlockTextureAtlas.blockTypeUVCoordinates[block.ID];
                 for (byte direction = 0; direction < 6; direction++)
                 {

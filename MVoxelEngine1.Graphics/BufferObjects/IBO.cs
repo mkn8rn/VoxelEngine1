@@ -12,7 +12,7 @@ namespace MVoxelEngine1.Graphics.BufferObjects
         public IndexRenderPass Pass { get; }
 
         // 32-bit indices (defaults to Opaque pass)
-        public IBO(List<uint> data, IndexRenderPass pass = IndexRenderPass.Opaque)
+        public IBO(IReadOnlyCollection<uint> data, IndexRenderPass pass = IndexRenderPass.Opaque)
         {
             Pass = pass;
             ID = GL.GenBuffer();
@@ -22,7 +22,7 @@ namespace MVoxelEngine1.Graphics.BufferObjects
         }
 
         // 16-bit indices (defaults to Opaque pass)
-        public IBO(List<ushort> data, IndexRenderPass pass = IndexRenderPass.Opaque)
+        public IBO(IReadOnlyCollection<ushort> data, IndexRenderPass pass = IndexRenderPass.Opaque)
         {
             Pass = pass;
             ID = GL.GenBuffer();

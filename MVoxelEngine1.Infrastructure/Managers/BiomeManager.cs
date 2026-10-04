@@ -138,7 +138,7 @@ namespace MVoxelEngine1.Infrastructure.Managers
                                 // Derive block types from specific block IDs
                                 foreach (var btId in rule.BlocksToReplace)
                                 {
-                                    var blockType = TerrainLoader.allBlockTypeObjects.Find(b => b.ID == btId);
+                                    var blockType = TerrainLoader.allBlockTypeObjects.FirstOrDefault(b => b.ID == btId);
                                     if (blockType == null)
                                         throw new InvalidDataException($"Unknown replacement source block '{btId}'.");
                                     if (!blockList.Contains(blockType))
@@ -362,22 +362,22 @@ namespace MVoxelEngine1.Infrastructure.Managers
             // Try numeric id
             if (ushort.TryParse(token, out var numeric))
             {
-                return TerrainLoader.allBlockTypeObjects.Find(b => b.ID == numeric);
+                return TerrainLoader.allBlockTypeObjects.FirstOrDefault(b => b.ID == numeric);
             }
 
             // Try base block enum name
             if (Enum.TryParse<BaseBlockType>(token, true, out var baseEnum))
             {
                 ushort id = (ushort)baseEnum;
-                return TerrainLoader.allBlockTypeObjects.Find(b => b.ID == id);
+                return TerrainLoader.allBlockTypeObjects.FirstOrDefault(b => b.ID == id);
             }
 
             // Try unique name first (UniqueName is distinct but we only have in object list)
-            var bt = TerrainLoader.allBlockTypeObjects.Find(b => token.Equals(b.UniqueName, StringComparison.OrdinalIgnoreCase));
+            var bt = TerrainLoader.allBlockTypeObjects.FirstOrDefault(b => token.Equals(b.UniqueName, StringComparison.OrdinalIgnoreCase));
             if (bt != null) return bt;
 
             // Try display Name
-            bt = TerrainLoader.allBlockTypeObjects.Find(b => token.Equals(b.Name, StringComparison.OrdinalIgnoreCase));
+            bt = TerrainLoader.allBlockTypeObjects.FirstOrDefault(b => token.Equals(b.Name, StringComparison.OrdinalIgnoreCase));
             return bt;
         }
 

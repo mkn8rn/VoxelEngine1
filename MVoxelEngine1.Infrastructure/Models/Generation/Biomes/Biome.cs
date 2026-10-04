@@ -13,8 +13,8 @@
         public required int soilMinDepth { get; set; }
         public required int soilMaxDepth { get; set; }
         public required int waterLevel { get; set; }
-        public required List<MicrobiomeJSON> microbiomes { get; set; }
-        public required List<SimpleReplacementRule> simpleReplacements { get; set; }
+        public required IList<MicrobiomeJSON> microbiomes { get; init; }
+        public required IList<SimpleReplacementRule> simpleReplacements { get; init; }
 
         // --- Added precompiled rule data (immutable once built) ---------------------------------
         public CompiledSimpleReplacementRule[] compiledSimpleReplacementRules { get; internal set; } = Array.Empty<CompiledSimpleReplacementRule>();

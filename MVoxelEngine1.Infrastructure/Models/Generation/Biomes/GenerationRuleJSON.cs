@@ -14,14 +14,14 @@ namespace MVoxelEngine1.Infrastructure.Models.Generation.Biomes
         [System.Text.Json.Serialization.JsonPropertyName("generation_type")]
         public required GenerationType GenerationType { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("base_blocks_to_replace")]
-        public required List<string> BaseBlocksToReplace { get; set; }
+        public required IList<string> BaseBlocksToReplace { get; init; }
         [System.Text.Json.Serialization.JsonPropertyName("block_type_id")]
         public required string BlockTypeId { get; set; }
         public required int priority { get; set; }
 
         // Target blocks (for after inline rules)
         [System.Text.Json.Serialization.JsonPropertyName("blocks_to_replace")]
-        public List<ushort>? BlocksToReplace { get; set; }
+        public IList<ushort>? BlocksToReplace { get; init; }
 
         // Biome parameters
         [System.Text.Json.Serialization.JsonPropertyName("microbiome_id")]

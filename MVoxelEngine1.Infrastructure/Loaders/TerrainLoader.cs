@@ -19,8 +19,10 @@ namespace MVoxelEngine1.Infrastructure.Loaders
         private const ushort FIRST_CUSTOM_BLOCK_ID = 256; // IDs <256 reserved for base / special
 
         // Non-opaque (transparent or translucent) blocks.
-        public static HashSet<BlockType> NonOpaqueBlocks { get; private set; } = [];
-        public static HashSet<ushort> NonOpaqueBlockIds { get; private set; } = [];
+        private static HashSet<BlockType> nonOpaqueBlocks = [];
+        public static IReadOnlySet<BlockType> NonOpaqueBlocks => nonOpaqueBlocks;
+        private static HashSet<ushort> nonOpaqueBlockIds = [];
+        public static IReadOnlySet<ushort> NonOpaqueBlockIds => nonOpaqueBlockIds;
 
         // Fast O(1) classification table (index = block id)
         // Always length 65536 (full ushort domain) to avoid bounds checks.
@@ -30,21 +32,23 @@ namespace MVoxelEngine1.Infrastructure.Loaders
         private static readonly bool[] GasLut = new bool[65536];
 
         // Liquid blocks.
-        public static HashSet<BlockType> LiquidBlocks { get; private set; } = [];
-        public static HashSet<ushort> LiquidBlockIds { get; private set; } = [];
+        private static HashSet<BlockType> liquidBlocks = [];
+        public static IReadOnlySet<BlockType> LiquidBlocks => liquidBlocks;
+        private static HashSet<ushort> liquidBlockIds = [];
+        public static IReadOnlySet<ushort> LiquidBlockIds => liquidBlockIds;
 
         // Hardcoded list of base block types that are non-opaque.
-        public List<BaseBlockType> NonOpaqueBaseBlocks = new List<BaseBlockType> {
+        private static readonly BaseBlockType[] NonOpaqueBaseBlocks = [
             BaseBlockType.Empty,
             BaseBlockType.Gas,
             BaseBlockType.Water,
             BaseBlockType.Glass
-        };
+        ];
 
         // Hardcoded list of liquid base block types.
-        public List<BaseBlockType> LiquidBaseBlocks = new List<BaseBlockType> {
+        private static readonly BaseBlockType[] LiquidBaseBlocks = [
             BaseBlockType.Water
-        };
+        ];
 
         public TerrainLoader()
         {
@@ -97,11 +101,11 @@ namespace MVoxelEngine1.Infrastructure.Loaders
             return LiquidLut[blockId];
         }
 
-        private void InitializeNonOpaqueBlocks()
+        private static void InitializeNonOpaqueBlocks()
         {
             // Create new set (object instances) and parallel id set for O(1) lookups (backing data for LUT construction).
-            NonOpaqueBlocks = new HashSet<BlockType>();
-            NonOpaqueBlockIds = new HashSet<ushort>();
+            nonOpaqueBlocks = new HashSet<BlockType>();
+            nonOpaqueBlockIds = new HashSet<ushort>();
 
             // 1. Add the hardcoded non-opaque base block types (includes Empty).
             foreach (var baseType in NonOpaqueBaseBlocks)
@@ -110,8 +114,8 @@ namespace MVoxelEngine1.Infrastructure.Loaders
                 var bt = allBlockTypeObjects.FirstOrDefault(o => o.ID == id);
                 if (bt != null)
                 {
-                    NonOpaqueBlocks.Add(bt);
-                    NonOpaqueBlockIds.Add(bt.ID);
+                    nonOpaqueBlocks.Add(bt);
+                    nonOpaqueBlockIds.Add(bt.ID);
                 }
             }
 
@@ -121,17 +125,17 @@ namespace MVoxelEngine1.Infrastructure.Loaders
                 if (bt.ID < FIRST_CUSTOM_BLOCK_ID) continue; // skip base enum defined types here
                 if (bt.IsTransparent)
                 {
-                    NonOpaqueBlocks.Add(bt);
-                    NonOpaqueBlockIds.Add(bt.ID);
+                    nonOpaqueBlocks.Add(bt);
+                    nonOpaqueBlockIds.Add(bt.ID);
                 }
             }
         }
 
-        private void InitializeLiquidBlocks()
+        private static void InitializeLiquidBlocks()
         {
             // Create new set (object instances) and parallel id set for O(1) lookups (backing data for LUT construction).
-            LiquidBlocks = new HashSet<BlockType>();
-            LiquidBlockIds = new HashSet<ushort>();
+            liquidBlocks = new HashSet<BlockType>();
+            liquidBlockIds = new HashSet<ushort>();
             // 1. Add the hardcoded liquid base block types.
             foreach (var baseType in LiquidBaseBlocks)
             {
@@ -139,8 +143,8 @@ namespace MVoxelEngine1.Infrastructure.Loaders
                 var bt = allBlockTypeObjects.FirstOrDefault(o => o.ID == id);
                 if (bt != null)
                 {
-                    LiquidBlocks.Add(bt);
-                    LiquidBlockIds.Add(bt.ID);
+                    liquidBlocks.Add(bt);
+                    liquidBlockIds.Add(bt.ID);
                 }
             }
             // 2. Add all custom (non-base) block types that are liquids.
@@ -149,13 +153,13 @@ namespace MVoxelEngine1.Infrastructure.Loaders
                 if (bt.ID < FIRST_CUSTOM_BLOCK_ID) continue; // skip base enum defined types here
                 if (bt.StateOfMatter == BlockStateOfMatter.Liquid)
                 {
-                    LiquidBlocks.Add(bt);
-                    LiquidBlockIds.Add(bt.ID);
+                    liquidBlocks.Add(bt);
+                    liquidBlockIds.Add(bt.ID);
                 }
             }
         }
 
-        private void BuildLiquidLookup()
+        private static void BuildLiquidLookup()
         {
             if (LiquidBlockIds == null) return; // nothing to do yet
             Array.Clear(LiquidLut, 0, LiquidLut.Length);
@@ -165,7 +169,7 @@ namespace MVoxelEngine1.Infrastructure.Loaders
             }
         }
 
-        internal void LoadBaseBlockType()
+        internal static void LoadBaseBlockType()
         {
             // Base enum block types occupy the reserved ID range starting at 0.
             foreach (BaseBlockType baseType in Enum.GetValues(typeof(BaseBlockType)))
@@ -382,9 +386,9 @@ namespace MVoxelEngine1.Infrastructure.Loaders
                 Console.WriteLine("  Skipped " + f + ": " + r);
         }
 
-        public static List<string> allBlockTypes { get; set; } = new List<string>();
-        public static Dictionary<string, BaseBlockType> allBlockTypesByBaseType { get; set; } = new Dictionary<string, BaseBlockType>();
-        public static Dictionary<ushort, string> allBlockTypesByIds { get; set; } = new Dictionary<ushort, string>();
-        public static List<BlockType> allBlockTypeObjects { get; set; } = new List<BlockType>();
+        public static IList<string> allBlockTypes { get; } = new List<string>();
+        public static IDictionary<string, BaseBlockType> allBlockTypesByBaseType { get; } = new Dictionary<string, BaseBlockType>(StringComparer.Ordinal);
+        public static IDictionary<ushort, string> allBlockTypesByIds { get; } = new Dictionary<ushort, string>();
+        public static IList<BlockType> allBlockTypeObjects { get; } = new List<BlockType>();
     }
 }

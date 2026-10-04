@@ -30,9 +30,9 @@ namespace MVoxelEngine1.Graphics.Textures
         private string missingTextureName = "404";
         private readonly BlockTextureAtlasUploadMode uploadMode;
         //coordinates of all loaded and merged textures
-        public static Dictionary<string, Vector2> textureCoordinates = new Dictionary<string, Vector2>();
+        public static IDictionary<string, Vector2> textureCoordinates { get; } = new Dictionary<string, Vector2>(StringComparer.Ordinal);
         //uv coordinates of all faces of all block types
-        public static Dictionary<ushort, Dictionary<Faces, ByteVector2>> blockTypeUVCoordinates = new Dictionary<ushort, Dictionary<Faces, ByteVector2>>();
+        public static IDictionary<ushort, IDictionary<Faces, ByteVector2>> blockTypeUVCoordinates { get; } = new Dictionary<ushort, IDictionary<Faces, ByteVector2>>();
         // --- Async IO preload support ---
         private struct RawImage
         {
@@ -379,7 +379,7 @@ namespace MVoxelEngine1.Graphics.Textures
             }
         }
 
-        public List<ByteVector2> GetBlockUVs(ushort blockType, Faces face)
+        public IReadOnlyList<ByteVector2> GetBlockUVs(ushort blockType, Faces face)
         {
             if (!blockTypeUVCoordinates.TryGetValue(blockType, out var blockCoords))
             {

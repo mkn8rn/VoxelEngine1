@@ -13,9 +13,9 @@ namespace MVoxelEngine1.Infrastructure.Models.Generation.Biomes
         public int? RelativeMinDepth { get; set; }
         public int? RelativeMaxDepth { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("blocks_to_replace")]
-        public required List<BlockType> BlocksToReplace { get; set; }
+        public required IList<BlockType> BlocksToReplace { get; init; }
         [System.Text.Json.Serialization.JsonPropertyName("base_blocks_to_replace")]
-        public required List<BaseBlockType> BaseBlocksToReplace { get; set; }
+        public required IList<BaseBlockType> BaseBlocksToReplace { get; init; }
         [System.Text.Json.Serialization.JsonPropertyName("block_type")]
         public required BlockType BlockType { get; set; }
         public required int priority { get; set; }

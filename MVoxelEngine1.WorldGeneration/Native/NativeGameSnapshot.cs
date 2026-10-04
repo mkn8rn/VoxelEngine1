@@ -103,7 +103,7 @@ internal sealed class NativeGameSnapshot : IDisposable
         var result = new NativeBlockDescriptor[ushort.MaxValue + 1];
         foreach (BlockType block in TerrainLoader.allBlockTypeObjects)
         {
-            if (!BlockTextureAtlas.blockTypeUVCoordinates.TryGetValue(block.ID, out Dictionary<Faces, ByteVector2>? faces))
+            if (!BlockTextureAtlas.blockTypeUVCoordinates.TryGetValue(block.ID, out IDictionary<Faces, ByteVector2>? faces))
             {
                 throw new InvalidDataException($"The texture atlas has no entry for block {block.ID}.");
             }
@@ -153,7 +153,7 @@ internal sealed class NativeGameSnapshot : IDisposable
         specificIds = nativeSpecificIds.ToArray();
     }
 
-    private static ushort GetTile(BlockTextureAtlas atlas, IReadOnlyDictionary<Faces, ByteVector2> faces, Faces face)
+    private static ushort GetTile(BlockTextureAtlas atlas, IDictionary<Faces, ByteVector2> faces, Faces face)
     {
         if (!faces.TryGetValue(face, out ByteVector2 coordinates))
             throw new InvalidDataException($"The texture atlas has no {face} face.");

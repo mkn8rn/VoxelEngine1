@@ -10,7 +10,7 @@ namespace MVoxelEngine1.Infrastructure.Models.Generation.Biomes
     public class InlineReplacementRule
     {
         [System.Text.Json.Serialization.JsonPropertyName("base_blocks_to_replace")]
-        public required List<BaseBlockType> BaseBlocksToReplace { get; set; }
+        public required IList<BaseBlockType> BaseBlocksToReplace { get; init; }
         [System.Text.Json.Serialization.JsonPropertyName("block_type")]
         public required BlockType BlockType { get; set; }
         public required int priority { get; set; }

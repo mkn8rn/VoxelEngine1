@@ -760,10 +760,10 @@ namespace MVoxelEngine1.Tests
             GameManager.Initialize(gameDataRoot);
             string game = GameManager.SelectGameFolder("Default");
             GameManager.LoadGameDefaultSettings(game);
-            TerrainLoader.allBlockTypes = new List<string>();
-            TerrainLoader.allBlockTypesByBaseType = new Dictionary<string, BaseBlockType>();
-            TerrainLoader.allBlockTypesByIds = new Dictionary<ushort, string>();
-            TerrainLoader.allBlockTypeObjects = new List<BlockType>();
+            TerrainLoader.allBlockTypes.Clear();
+            TerrainLoader.allBlockTypesByBaseType.Clear();
+            TerrainLoader.allBlockTypesByIds.Clear();
+            TerrainLoader.allBlockTypeObjects.Clear();
             _ = new TerrainLoader();
         }
 

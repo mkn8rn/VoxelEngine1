@@ -17,7 +17,7 @@ namespace MVoxelEngine1.Graphics.BufferObjects
         public RenderPass Pass { get; }
 
         // Byte data constructor (defaults to Opaque pass)
-        public VBO(List<byte> data, RenderPass pass = RenderPass.Opaque)
+        public VBO(IReadOnlyCollection<byte> data, RenderPass pass = RenderPass.Opaque)
         {
             Pass = pass;
             ID = GL.GenBuffer();
@@ -26,7 +26,7 @@ namespace MVoxelEngine1.Graphics.BufferObjects
         }
 
         // Vector2 data constructor (defaults to Opaque pass)
-        public VBO(List<Vector2> data, RenderPass pass = RenderPass.Opaque)
+        public VBO(IReadOnlyCollection<Vector2> data, RenderPass pass = RenderPass.Opaque)
         {
             Pass = pass;
             ID = GL.GenBuffer();
@@ -35,7 +35,7 @@ namespace MVoxelEngine1.Graphics.BufferObjects
         }
 
         // Vector3 data constructor (defaults to Opaque pass)
-        public VBO(List<Vector3> data, RenderPass pass = RenderPass.Opaque)
+        public VBO(IReadOnlyCollection<Vector3> data, RenderPass pass = RenderPass.Opaque)
         {
             Pass = pass;
             ID = GL.GenBuffer();
