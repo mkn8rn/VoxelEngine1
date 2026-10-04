@@ -41,6 +41,9 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
         public required long ManagedHeapBytes { get; init; }
         public required long TotalAllocatedBytes { get; init; }
         public required double ProcessorTimeMilliseconds { get; init; }
+        // Process CPU bracketing pipeline invocation; excludes game/atlas/native-owner preparation.
+        // Readings occur before invocation and after the pre-upload endpoint, outside the allocation interval.
+        public double PipelineProcessorTimeMilliseconds { get; init; }
         public required GenerationPerformanceSnapshot GenerationDiagnostics { get; init; }
         public required MeshPerformanceSnapshot MeshDiagnostics { get; init; }
         public required DateTimeOffset RecordedAtUtc { get; init; }

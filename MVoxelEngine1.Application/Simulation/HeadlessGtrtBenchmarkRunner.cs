@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using MVoxelEngine1.Infrastructure.Resources;
 using MVoxelEngine1.Graphics.Terrain;
 using MVoxelEngine1.Graphics.Textures;
@@ -26,7 +27,7 @@ namespace MVoxelEngine1.Application.Simulation
 
             using NativeGtrtPipeline pipeline =
                 NativeGtrtPipeline.Create(textureAtlas);
-            NativePreUploadPacket nativePacket = pipeline.Run(loader.seed);
+            NativePreUploadPacket nativePacket = RunMeasuredPipeline(pipeline, loader.seed, out double pipelineCpuMilliseconds);
 
             double generationToRender =
                 pipeline.GenerationToRenderMilliseconds ??
@@ -61,11 +62,22 @@ namespace MVoxelEngine1.Application.Simulation
 
             StartupPerformanceRecorder.WriteHeadlessGtrtSnapshot(
                 outputPath,
-                uploadBoundary);
+                uploadBoundary,
+                pipelineCpuMilliseconds);
             Console.WriteLine(
                 $"Headless GTRT metrics written to " +
                 $"{Path.GetFullPath(outputPath)}");
         }
 
+        private static NativePreUploadPacket RunMeasuredPipeline(NativeGtrtPipeline pipeline, int seed,
+            out double pipelineCpuMilliseconds)
+        {
+            using Process process = Process.GetCurrentProcess();
+            double before = process.TotalProcessorTime.TotalMilliseconds;
+            NativePreUploadPacket packet = pipeline.Run(seed);
+            process.Refresh();
+            pipelineCpuMilliseconds = process.TotalProcessorTime.TotalMilliseconds - before;
+            return packet;
+        }
     }
 }

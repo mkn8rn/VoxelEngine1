@@ -452,6 +452,7 @@ namespace MVoxelEngine1.Tests
             AssertPositiveFinite(result.FirstChunkMeshBuildMilliseconds, nameof(result.FirstChunkMeshBuildMilliseconds));
             AssertPositiveFinite(result.GenerationToRenderMilliseconds, nameof(result.GenerationToRenderMilliseconds));
             AssertPositiveFinite(result.GenerationToRenderCompleteMilliseconds, nameof(result.GenerationToRenderCompleteMilliseconds));
+            AssertPositiveFinite(result.PipelineProcessorTimeMilliseconds, nameof(result.PipelineProcessorTimeMilliseconds));
             Assert.InRange(result.GenerationToRenderMilliseconds, double.Epsilon, result.MaximumGenerationToRenderMilliseconds);
             Assert.True(result.SimulatedUploadBoundary.RenderDataId > 0);
             Assert.True(result.SimulatedUploadBoundary.OpaqueFaceCount + result.SimulatedUploadBoundary.TransparentFaceCount > 0);

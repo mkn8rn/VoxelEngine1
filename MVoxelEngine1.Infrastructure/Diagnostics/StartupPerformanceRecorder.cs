@@ -180,7 +180,7 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
             };
         }
 
-        public static HeadlessGtrtPerformanceSnapshot CreateHeadlessGtrtSnapshot(SimulatedGpuUploadBoundarySnapshot simulatedUploadBoundary)
+        public static HeadlessGtrtPerformanceSnapshot CreateHeadlessGtrtSnapshot(SimulatedGpuUploadBoundarySnapshot simulatedUploadBoundary, double pipelineProcessorTimeMilliseconds = 0)
         {
             ArgumentNullException.ThrowIfNull(simulatedUploadBoundary);
             if (!IsHeadlessGtrtComplete)
@@ -229,6 +229,7 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
                 ProcessorTimeMilliseconds = processorTimeMilliseconds,
                 GenerationDiagnostics = GenerationPerformanceRecorder.CreateSnapshot(),
                 MeshDiagnostics = MeshPerformanceRecorder.CreateSnapshot(),
+                PipelineProcessorTimeMilliseconds = pipelineProcessorTimeMilliseconds,
                 RecordedAtUtc = DateTimeOffset.UtcNow
             };
         }
@@ -238,9 +239,9 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
             WriteJson(outputPath, CreateSnapshot());
         }
 
-        public static void WriteHeadlessGtrtSnapshot(string outputPath, SimulatedGpuUploadBoundarySnapshot simulatedUploadBoundary)
+        public static void WriteHeadlessGtrtSnapshot(string outputPath, SimulatedGpuUploadBoundarySnapshot simulatedUploadBoundary, double pipelineProcessorTimeMilliseconds = 0)
         {
-            WriteJson(outputPath, CreateHeadlessGtrtSnapshot(simulatedUploadBoundary));
+            WriteJson(outputPath, CreateHeadlessGtrtSnapshot(simulatedUploadBoundary, pipelineProcessorTimeMilliseconds));
         }
 
         private static void BeginPhase(ref long phaseStartTimestamp, ref long destination, ref long startTicks, string phaseName)
