@@ -28,7 +28,7 @@ internal readonly struct NativeTerrainMaterialSet
     internal static NativeTerrainMaterialSet Create(ReadOnlySpan<NativeBlockDescriptor> blocks) => new(GetRequired(blocks, BaseBlockType.Stone), GetRequired(blocks, BaseBlockType.Soil), GetRequired(blocks, BaseBlockType.Water));
     internal static NativeTerrainMaterialSet CreateConventional() => new(CreateConventionalDescriptor(BaseBlockType.Stone, BlockStateOfMatter.Solid, NativeBlockFlags.Opaque), CreateConventionalDescriptor(BaseBlockType.Soil, BlockStateOfMatter.Solid, NativeBlockFlags.Opaque), CreateConventionalDescriptor(BaseBlockType.Water, BlockStateOfMatter.Liquid, NativeBlockFlags.Transparent | NativeBlockFlags.Liquid));
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal ushort GetBlockWorld(scoped in BlockColumnProfile profile, int worldY)
+    internal ushort GetBlockWorld(scoped ref readonly BlockColumnProfile profile, int worldY)
     {
         if (profile.StoneStart >= 0 && profile.StoneEnd >= profile.StoneStart && worldY >= profile.StoneStart && worldY <= profile.StoneEnd)
         {

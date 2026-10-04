@@ -4,7 +4,7 @@ using MVoxelEngine1.Infrastructure.Models.Generation;
 
 namespace MVoxelEngine1.Graphics.Terrain
 {
-    public sealed class ReferenceNeighborBlockPlanes
+    internal sealed class ReferenceNeighborBlockPlanes
     {
         private readonly ReferenceBlockPlane negativeXPlane;
         private readonly ReferenceBlockPlane positiveXPlane;

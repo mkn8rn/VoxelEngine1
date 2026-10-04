@@ -4,7 +4,7 @@ using MVoxelEngine1.Infrastructure.Models.Generation;
 namespace MVoxelEngine1.WorldGeneration.Native;
 internal static class NativeGeneratedMesh
 {
-    internal static bool TryBuild(scoped ref NativeGtrtSessionView session, scoped in NativeWorkItem claimedWork, int workerIndex)
+    internal static bool TryBuild(scoped ref NativeGtrtSessionView session, scoped ref readonly NativeWorkItem claimedWork, int workerIndex)
     {
         if ((uint)(session.ChunkSizeX - 1) > byte.MaxValue || (uint)(session.ChunkSizeY - 1) > byte.MaxValue || (uint)(session.ChunkSizeZ - 1) > byte.MaxValue || claimedWork.Kind != NativeWorkKind.BuildChunkMesh || (uint)claimedWork.RecordIndex >= (uint)session.ChunkCount)
         {
@@ -192,7 +192,7 @@ internal static class NativeGeneratedMesh
         return true;
     }
 
-    private static bool SameMaterials(scoped ref NativeGtrtSessionView session, scoped in NativeColumnRecord first, scoped in NativeColumnRecord second)
+    private static bool SameMaterials(scoped ref NativeGtrtSessionView session, scoped ref readonly NativeColumnRecord first, scoped ref readonly NativeColumnRecord second)
     {
         NativeTerrainMaterialSet a = first.ReplacementMode == 1 ? first.ResolvedMaterials : session.Materials;
         NativeTerrainMaterialSet b = second.ReplacementMode == 1 ? second.ResolvedMaterials : session.Materials;
@@ -221,7 +221,7 @@ internal static class NativeGeneratedMesh
         return true;
     }
 
-    private static void GetMaterialInterval(scoped in BlockColumnProfile column, int material, out int intervalStart, out int intervalEnd)
+    private static void GetMaterialInterval(scoped ref readonly BlockColumnProfile column, int material, out int intervalStart, out int intervalEnd)
     {
         switch (material)
         {
@@ -244,7 +244,7 @@ internal static class NativeGeneratedMesh
         }
     }
 
-    private static bool GenerateIntervalRectangles(scoped ref NativeGtrtSessionView session, int chunkIndex, ReadOnlySpan<BlockColumnProfile> columns, scoped in BlockColumnProfile column, ushort blockId, bool blockOpaque, bool emitInteriorSides, int intervalStart, int intervalEnd, int x, int z, Span<int> bottomFaces, Span<int> topFaces, scoped ref NativeGeneratedFaceWriter writer)
+    private static bool GenerateIntervalRectangles(scoped ref NativeGtrtSessionView session, int chunkIndex, ReadOnlySpan<BlockColumnProfile> columns, scoped ref readonly BlockColumnProfile column, ushort blockId, bool blockOpaque, bool emitInteriorSides, int intervalStart, int intervalEnd, int x, int z, Span<int> bottomFaces, Span<int> topFaces, scoped ref NativeGeneratedFaceWriter writer)
     {
         if (intervalStart < 0 || intervalEnd < intervalStart)
             return true;
@@ -359,7 +359,7 @@ internal static class NativeGeneratedMesh
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void EmitContiguousColumnPair(scoped in BlockColumnProfile firstColumn, scoped in BlockColumnProfile secondColumn, int chunkStart, int chunkEnd, byte firstDirection, int firstX, int firstZ, byte secondDirection, int secondX, int secondZ, scoped ref NativeGeneratedFaceWriter writer)
+    private static void EmitContiguousColumnPair(scoped ref readonly BlockColumnProfile firstColumn, scoped ref readonly BlockColumnProfile secondColumn, int chunkStart, int chunkEnd, byte firstDirection, int firstX, int firstZ, byte secondDirection, int secondX, int secondZ, scoped ref NativeGeneratedFaceWriter writer)
     {
         bool firstHasGround = TryGetGroundRange(in firstColumn, out int firstGroundStart, out int firstGroundEnd);
         bool secondHasGround = TryGetGroundRange(in secondColumn, out int secondGroundStart, out int secondGroundEnd);
@@ -438,7 +438,7 @@ internal static class NativeGeneratedMesh
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool TryGetGroundRange(scoped in BlockColumnProfile column, out int start, out int end)
+    private static bool TryGetGroundRange(scoped ref readonly BlockColumnProfile column, out int start, out int end)
     {
         bool hasStone = HasRange(column.StoneStart, column.StoneEnd);
         bool hasSoil = HasRange(column.SoilStart, column.SoilEnd);
@@ -455,7 +455,7 @@ internal static class NativeGeneratedMesh
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void EmitGroundDifference(scoped in BlockColumnProfile sourceColumn, int sourceStart, int sourceEnd, bool neighborPresent, int neighborStart, int neighborEnd, int chunkStart, byte direction, int x, int z, scoped ref NativeGeneratedFaceWriter writer)
+    private static void EmitGroundDifference(scoped ref readonly BlockColumnProfile sourceColumn, int sourceStart, int sourceEnd, bool neighborPresent, int neighborStart, int neighborEnd, int chunkStart, byte direction, int x, int z, scoped ref NativeGeneratedFaceWriter writer)
     {
         if (!neighborPresent || neighborEnd < sourceStart || neighborStart > sourceEnd)
         {
@@ -475,7 +475,7 @@ internal static class NativeGeneratedMesh
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void EmitGroundSegment(scoped in BlockColumnProfile column, int segmentStart, int segmentEnd, int chunkStart, byte direction, int x, int z, scoped ref NativeGeneratedFaceWriter writer)
+    private static void EmitGroundSegment(scoped ref readonly BlockColumnProfile column, int segmentStart, int segmentEnd, int chunkStart, byte direction, int x, int z, scoped ref NativeGeneratedFaceWriter writer)
     {
         int stoneStart = Math.Max(segmentStart, column.StoneStart);
         int stoneEnd = Math.Min(segmentEnd, column.StoneEnd);
@@ -558,7 +558,7 @@ internal static class NativeGeneratedMesh
         }
     }
 
-    private static void EmitColumnRange(NativeTerrainMaterialSet materials, scoped in BlockColumnProfile neighborColumn, ushort blockId, bool blockOpaque, byte direction, int x, int z, int worldStart, int worldEnd, int chunkStart, scoped ref NativeGeneratedFaceWriter writer)
+    private static void EmitColumnRange(NativeTerrainMaterialSet materials, scoped ref readonly BlockColumnProfile neighborColumn, ushort blockId, bool blockOpaque, byte direction, int x, int z, int worldStart, int worldEnd, int chunkStart, scoped ref NativeGeneratedFaceWriter writer)
     {
         int current = worldStart;
         while (current <= worldEnd)
@@ -573,7 +573,7 @@ internal static class NativeGeneratedMesh
         }
     }
 
-    private static void GetNeighborRun(NativeTerrainMaterialSet materials, scoped in BlockColumnProfile column, int worldY, int maximumWorldY, out ushort blockId, out bool blockOpaque, out int runEnd)
+    private static void GetNeighborRun(NativeTerrainMaterialSet materials, scoped ref readonly BlockColumnProfile column, int worldY, int maximumWorldY, out ushort blockId, out bool blockOpaque, out int runEnd)
     {
         if (HasRange(column.StoneStart, column.StoneEnd) && worldY >= column.StoneStart && worldY <= column.StoneEnd)
         {

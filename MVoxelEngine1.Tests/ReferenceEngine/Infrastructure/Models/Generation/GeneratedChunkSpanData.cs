@@ -2,7 +2,7 @@ using System.Runtime.CompilerServices;
 
 namespace MVoxelEngine1.Infrastructure.Models.Generation
 {
-    public sealed class GeneratedChunkSpanData
+    internal sealed class GeneratedChunkSpanData
     {
         public GeneratedChunkSpanData(
             BlockColumnProfile[] columns,

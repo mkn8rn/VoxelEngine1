@@ -6,7 +6,7 @@ using MVoxelEngine1.WorldGeneration.Terrain;
 namespace MVoxelEngine1.WorldGeneration.Native;
 internal static class NativeColumnProfileGenerator
 {
-    internal static bool TryGenerate(scoped ref NativeGtrtSessionView session, int workerIndex, scoped in NativeWorkItem work, int biomeIndex, scoped in NativeBiomeDescriptor biome)
+    internal static bool TryGenerate(scoped ref NativeGtrtSessionView session, int workerIndex, scoped ref readonly NativeWorkItem work, int biomeIndex, scoped in NativeBiomeDescriptor biome)
     {
         if (work.Kind != NativeWorkKind.GenerateColumn || work.State != NativeWorkState.Claimed || work.Epoch != session.State.SessionEpoch || (uint)work.RecordIndex >= (uint)session.ColumnCount || biomeIndex < 0)
         {
@@ -38,7 +38,7 @@ internal static class NativeColumnProfileGenerator
         }
     }
 
-    private static bool GenerateCore(scoped ref NativeGtrtSessionView session, int workerIndex, scoped in NativeWorkItem work, int biomeIndex, scoped in NativeBiomeDescriptor biome)
+    private static bool GenerateCore(scoped ref NativeGtrtSessionView session, int workerIndex, scoped ref readonly NativeWorkItem work, int biomeIndex, scoped in NativeBiomeDescriptor biome)
     {
         int profileCount = session.ProfilesPerColumn;
         int sizeX = session.ChunkSizeX;

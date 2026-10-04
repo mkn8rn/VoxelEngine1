@@ -3,7 +3,7 @@ using Supprocom.NativeAllocationManagement;
 
 namespace MVoxelEngine1.Graphics.Terrain
 {
-    public sealed class ChunkRenderUploadRetention : IDisposable
+    internal sealed class ChunkRenderUploadRetention : IDisposable
     {
         private readonly object gate = new();
         private ChunkRenderUploadData? owner;

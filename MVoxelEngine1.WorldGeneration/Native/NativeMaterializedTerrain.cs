@@ -834,7 +834,7 @@ internal static class NativeMaterializedTerrain
         return checked(rawSectionIndex * VoxelSection.VoxelCount);
     }
 
-    private static bool TryDecodePackedSection(scoped ref NativeGtrtSessionView session, scoped in NativeMaterializedSectionRecord section, Span<ushort> destination)
+    private static bool TryDecodePackedSection(scoped ref NativeGtrtSessionView session, scoped ref readonly NativeMaterializedSectionRecord section, Span<ushort> destination)
     {
         if (destination.Length != VoxelSection.VoxelCount)
         {
@@ -868,7 +868,7 @@ internal static class NativeMaterializedTerrain
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool TryReadPackedBlock(scoped ref NativeGtrtSessionView session, scoped in NativeMaterializedSectionRecord section, int voxelIndex, out ushort blockId)
+    private static bool TryReadPackedBlock(scoped ref NativeGtrtSessionView session, scoped ref readonly NativeMaterializedSectionRecord section, int voxelIndex, out ushort blockId)
     {
         blockId = 0;
         int bitsPerIndex = section.BitsPerIndex;
@@ -979,7 +979,7 @@ internal static class NativeMaterializedTerrain
         sectionX = remaining / session.SectionCountY;
     }
 
-    private static void Attach(scoped ref NativeGtrtSessionView session, ref NativeChunkRecord chunk, int materializedChunkIndex, scoped in NativeMaterializedChunkRecord materialized)
+    private static void Attach(scoped ref NativeGtrtSessionView session, ref NativeChunkRecord chunk, int materializedChunkIndex, scoped ref readonly NativeMaterializedChunkRecord materialized)
     {
         session.IndexMaterializedChunk(materializedChunkIndex);
         chunk.MaterializedChunkIndex = materializedChunkIndex;

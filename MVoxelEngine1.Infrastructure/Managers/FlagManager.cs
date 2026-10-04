@@ -1,11 +1,11 @@
-﻿using MVoxelEngine1.Infrastructure.Flags;
+using MVoxelEngine1.Infrastructure.Flags;
 using MVoxelEngine1.Infrastructure.Models;
 using System;
 using System.Runtime;
 
 namespace MVoxelEngine1.Infrastructure.Managers
 {
-    public class FlagManager
+    public static class FlagManager
     {
         public static ProgramFlags flags { get; private set; } = new ProgramFlags();
         public static void ApplyFlags(string[] args)

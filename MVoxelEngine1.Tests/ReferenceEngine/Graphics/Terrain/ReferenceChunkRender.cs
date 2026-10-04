@@ -12,7 +12,7 @@ using OpenTK.Mathematics;
 namespace MVoxelEngine1.Graphics.Terrain;
 
 // CPU-only reference builder. Compiled only into the test executable.
-public sealed class ReferenceChunkRender : IDisposable
+internal sealed class ReferenceChunkRender : IDisposable
 {
     private static long nextRenderDataId;
     private readonly Vector3 chunkWorldPosition;

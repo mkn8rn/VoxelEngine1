@@ -16,7 +16,7 @@ using MVoxelEngine1.Infrastructure.Loaders;
 
 namespace MVoxelEngine1.WorldGeneration.Terrain
 {
-    public partial class Chunk
+    internal partial class Chunk
     {
         // Optional uniform override supplied by batch classification to skip normal span derivation path.
         internal enum UniformOverride { None = 0, AllAir, AllStone, AllSoil, AllWater } // AllWater added for slabs fully submerged between surface+1 and cached water level
@@ -50,7 +50,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
         // Occupancy flags
         public bool HasAnyBoundarySolid { get; internal set; }
         [Flags]
-        public enum OcclusionClass : byte
+        internal enum OcclusionClass : byte
         {
             None = 0,
             FullyBuried = 1 << 0,

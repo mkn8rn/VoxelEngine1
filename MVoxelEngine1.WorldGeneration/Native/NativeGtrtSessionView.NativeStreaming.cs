@@ -1,7 +1,7 @@
 using MVoxelEngine1.Infrastructure.Models.Generation;
 
 namespace MVoxelEngine1.WorldGeneration.Native;
-internal ref partial struct NativeGtrtSessionView
+internal readonly ref partial struct NativeGtrtSessionView
 {
     private Span<NativePacketWordRange> FreeRanges => ReadRange<NativePacketWordRange>(header.Streaming.FreeRanges, header.Streaming.FreeRangeCapacity);
     private Span<NativeRenderPacketRecord> PreviousPackets => ReadRange<NativeRenderPacketRecord>(header.Streaming.PacketsBackup, header.ChunkCount);

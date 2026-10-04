@@ -4,7 +4,7 @@ using MVoxelEngine1.Infrastructure.Models.Generation;
 
 namespace MVoxelEngine1.Graphics.Terrain
 {
-    public sealed class ReferenceFaceGenerationResult
+    internal sealed class ReferenceFaceGenerationResult
     {
         internal ReferenceFaceGenerationResult(byte[] opaqueOffsets, ushort[] opaqueBlockIds, byte[] opaqueDirections, byte[] transparentOffsets, ushort[] transparentBlockIds, byte[] transparentDirections)
         {

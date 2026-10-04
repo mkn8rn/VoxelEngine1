@@ -4,7 +4,7 @@ using System.Runtime.CompilerServices;
 namespace MVoxelEngine1.Infrastructure.Models.Generation
 {
     // Scratch structures for two-phase build
-    public sealed class SectionBuildScratch
+    internal sealed class SectionBuildScratch
     {
         private const int COLUMN_COUNT = Section.SECTION_SIZE * Section.SECTION_SIZE; // 256 columns
         public ColumnData[] Columns = new ColumnData[COLUMN_COUNT];

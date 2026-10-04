@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -7,7 +7,7 @@ using MVoxelEngine1.Infrastructure.Models;
 
 namespace MVoxelEngine1.Infrastructure.Managers
 {
-    public class GameManager
+    public static class GameManager
     {
         // Backing field (nullable until a game is loaded)
         private static GameSettings? _settings;

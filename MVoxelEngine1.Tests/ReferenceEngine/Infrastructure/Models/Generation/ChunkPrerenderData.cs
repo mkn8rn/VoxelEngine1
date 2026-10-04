@@ -8,7 +8,7 @@ using System.Threading.Tasks;
 namespace MVoxelEngine1.Infrastructure.Models.Generation
 {
     // Container for all pre-render flags and cached plane data passed from Chunk -> ChunkRender.
-    public struct ChunkPrerenderData
+    internal struct ChunkPrerenderData
     {
         // Face solidity flags for this chunk
         public bool FaceNegX;

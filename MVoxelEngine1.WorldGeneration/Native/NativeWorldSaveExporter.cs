@@ -328,7 +328,7 @@ internal sealed class NativeWorldSaveExporter
         scoped ref NativeGtrtSessionView view,
         BinaryWriter writer,
         int materializedChunkIndex,
-        scoped in NativeMaterializedChunkRecord chunk)
+        scoped ref readonly NativeMaterializedChunkRecord chunk)
     {
         if (chunk.StorageKind == NativeChunkStorageKind.HybridSections)
         {
@@ -388,7 +388,7 @@ internal sealed class NativeWorldSaveExporter
         scoped ref NativeGtrtSessionView view,
         BinaryWriter writer,
         int materializedChunkIndex,
-        scoped in NativeMaterializedChunkRecord chunk,
+        scoped ref readonly NativeMaterializedChunkRecord chunk,
         int sectionIndex)
     {
         int mapIndex = checked(chunk.SectionMapOffset + sectionIndex);
@@ -479,7 +479,7 @@ internal sealed class NativeWorldSaveExporter
     private static bool WriteRawSection(
         scoped ref NativeGtrtSessionView view,
         BinaryWriter writer,
-        scoped in NativeMaterializedSectionRecord section)
+        scoped ref readonly NativeMaterializedSectionRecord section)
     {
         if (section.RawVoxelOffset < 0 ||
             section.RawVoxelOffset >
@@ -517,7 +517,7 @@ internal sealed class NativeWorldSaveExporter
     private static bool WritePackedSection(
         scoped ref NativeGtrtSessionView view,
         BinaryWriter writer,
-        scoped in NativeMaterializedSectionRecord section)
+        scoped ref readonly NativeMaterializedSectionRecord section)
     {
         if (section.BitsPerIndex is 0 or > 16 ||
             section.PaletteCount == 0 ||
@@ -615,7 +615,7 @@ internal sealed class NativeWorldSaveExporter
         scoped ref NativeGtrtSessionView view,
         BinaryWriter writer,
         int materializedChunkIndex,
-        scoped in NativeMaterializedChunkRecord chunk)
+        scoped ref readonly NativeMaterializedChunkRecord chunk)
     {
         writer.Write(ChunkFooterMagic);
         writer.Write(chunk.Temperature);
@@ -688,7 +688,7 @@ internal sealed class NativeWorldSaveExporter
 
     private static bool HasNoSectionOverrides(
         scoped ref NativeGtrtSessionView view,
-        scoped in NativeMaterializedChunkRecord chunk)
+        scoped ref readonly NativeMaterializedChunkRecord chunk)
     {
         if (chunk.SectionMapOffset < 0 ||
             chunk.SectionMapOffset >

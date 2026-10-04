@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -8,7 +8,7 @@ using MVoxelEngine1.Infrastructure.Models;
 
 namespace MVoxelEngine1.Infrastructure.Flags
 {
-    public class EnvironmentFlags
+    public static class EnvironmentFlags
     {
         private static readonly string EnvFolder = Path.GetDirectoryName(typeof(EnvironmentFlags).Assembly.Location)!;
         private static readonly string EnvFileName = IsDevelopment() ? ".env.development" : ".env";

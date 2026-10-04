@@ -3,14 +3,14 @@ using System.Runtime.CompilerServices;
 
 namespace MVoxelEngine1.Infrastructure.Models.Generation
 {
-    public sealed class Section
+    internal sealed class Section
     {
         public const int SECTION_SIZE = 16;
         public const int VOXELS_PER_SECTION = SECTION_SIZE * SECTION_SIZE * SECTION_SIZE;
         public const ushort AIR = 0;
 
         // Multi-form representation kind (added for performance optimization / decode avoidance)
-        public enum RepresentationKind : byte
+        internal enum RepresentationKind : byte
         {
             Empty = 0,          // All air (IsAllAir == true, no storage)
             Uniform = 1,        // Single non-air block fills all voxels (uniformBlockId)

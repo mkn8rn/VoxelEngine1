@@ -13,7 +13,7 @@ using MVoxelEngine1.WorldGeneration.Utils;
 
 namespace MVoxelEngine1.WorldGeneration.Terrain
 {
-    public partial class Chunk
+    internal partial class Chunk
     {
         // Static cache: block id -> base block type (built on first use)
         private static Dictionary<ushort, BaseBlockType> _blockIdToBaseType;

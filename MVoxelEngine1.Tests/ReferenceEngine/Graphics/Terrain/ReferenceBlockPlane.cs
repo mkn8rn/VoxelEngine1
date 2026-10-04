@@ -4,7 +4,7 @@ using MVoxelEngine1.Infrastructure.Models.Generation;
 
 namespace MVoxelEngine1.Graphics.Terrain
 {
-    public sealed class ReferenceBlockPlane
+    internal sealed class ReferenceBlockPlane
     {
         private ReferenceBlockPlane(ushort uniformBlockId, ushort[]? blocks, bool uniform)
         {

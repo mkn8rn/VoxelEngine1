@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 
 namespace MVoxelEngine1.Infrastructure.Models.Generation
 {
-    public struct SectionPrerenderDesc
+    internal struct SectionPrerenderDesc
     {
         public byte Kind; // representation kind (0 Empty,1 Uniform,3 Expanded,4 Packed,5 MultiPacked)
         public ushort UniformBlockId;

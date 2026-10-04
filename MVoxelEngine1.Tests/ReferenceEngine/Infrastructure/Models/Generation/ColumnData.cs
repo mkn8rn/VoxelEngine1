@@ -3,7 +3,7 @@ using System.Runtime.CompilerServices;
 
 namespace MVoxelEngine1.Infrastructure.Models.Generation
 {
-    public struct ColumnData
+    internal struct ColumnData
     {
         public byte RunCount; // 0,1,2 or 255 for escalated
         public ushort Id0, Id1;

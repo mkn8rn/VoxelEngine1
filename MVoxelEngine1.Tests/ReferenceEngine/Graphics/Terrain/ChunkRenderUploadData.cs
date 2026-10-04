@@ -3,7 +3,7 @@ using Supprocom.NativeAllocationManagement;
 
 namespace MVoxelEngine1.Graphics.Terrain
 {
-    public sealed class ChunkRenderUploadData : IDisposable
+    internal sealed class ChunkRenderUploadData : IDisposable
     {
         private FaceRectangleMeshData? meshData;
         private int retainCount = 1;

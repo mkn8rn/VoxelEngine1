@@ -1,4 +1,4 @@
-﻿using MVoxelEngine1.Infrastructure.Managers;
+using MVoxelEngine1.Infrastructure.Managers;
 using MVoxelEngine1.Infrastructure.Flags;
 using MVoxelEngine1.Infrastructure.Diagnostics;
 using MVoxelEngine1.Infrastructure.Models;
@@ -9,7 +9,7 @@ using System.Runtime;
 
 namespace MVoxelEngine1.Application
 {
-    class Program
+    static class Program
     {
         static void Main(string[] args)
         {

@@ -1019,7 +1019,7 @@ internal sealed partial class NativeWorldSaveImportPlan
         internal int PaletteCount;
         internal int PackedWordCount;
 
-        internal void Add(scoped in ChunkShape shape)
+        internal void Add(scoped ref readonly ChunkShape shape)
         {
             ChunkCount = checked(ChunkCount + 1);
             SectionCount = checked(SectionCount + shape.SectionCount);

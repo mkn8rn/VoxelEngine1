@@ -4,7 +4,7 @@ using MVoxelEngine1.Infrastructure.Models.Generation;
 
 namespace MVoxelEngine1.Graphics.Terrain
 {
-    public static class ReferenceFaceGenerator
+    internal static class ReferenceFaceGenerator
     {
         private static readonly (int X, int Y, int Z)[] FaceNormals =
         {

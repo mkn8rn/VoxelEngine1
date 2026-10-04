@@ -195,7 +195,7 @@ internal sealed class NativeReferenceFaceGenerator
         return true;
     }
 
-    private bool CanReadProfiles(ref NativeGtrtSessionView view, in NativeChunkRecord chunk)
+    private bool CanReadProfiles(ref NativeGtrtSessionView view, ref readonly NativeChunkRecord chunk)
     {
         for (int direction = -1; direction < 6; direction++)
         {
@@ -247,7 +247,7 @@ internal sealed class NativeReferenceFaceGenerator
         }
     }
 
-    private void GetAdjacentProfile(ref NativeGtrtSessionView view, in NativeChunkRecord chunk,
+    private void GetAdjacentProfile(ref NativeGtrtSessionView view, ref readonly NativeChunkRecord chunk,
         int x, int z, out BlockColumnProfile profile, out ReferenceColumn column)
     {
         int chunkX = chunk.ChunkX + Normalize(ref x, view.ChunkSizeX);
@@ -257,7 +257,7 @@ internal sealed class NativeReferenceFaceGenerator
         profile = view.GetColumnProfiles(columnIndex)[x * view.ChunkSizeZ + z];
     }
 
-    private static ushort ProfileBlock(in BlockColumnProfile profile, int worldY, in ReferenceColumn column)
+    private static ushort ProfileBlock(ref readonly BlockColumnProfile profile, int worldY, in ReferenceColumn column)
     {
         if (Contains(profile.StoneStart, profile.StoneEnd, worldY))
             return column.StoneId;
@@ -266,7 +266,7 @@ internal sealed class NativeReferenceFaceGenerator
         return Contains(profile.WaterStart, profile.WaterEnd, worldY) ? column.WaterId : (ushort)0;
     }
 
-    private static bool UniformProfile(in BlockColumnProfile profile, in ReferenceColumn column,
+    private static bool UniformProfile(ref readonly BlockColumnProfile profile, in ReferenceColumn column,
         int bottom, int top, out ushort id)
     {
         id = 0;

@@ -1,7 +1,7 @@
 using System.Numerics;
 
 namespace MVoxelEngine1.WorldGeneration.Native;
-internal ref partial struct NativeGtrtSessionView
+internal readonly ref partial struct NativeGtrtSessionView
 {
     private Span<int> MaterializedIndex => ReadRange<int>(header.MaterializedIndexOffset, header.MaterializedIndexCapacity);
 

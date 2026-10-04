@@ -46,7 +46,7 @@ internal struct NativeColumnSummary
         WaterEndMaximum = int.MinValue
     };
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void Add(scoped in BlockColumnProfile profile)
+    internal void Add(scoped ref readonly BlockColumnProfile profile)
     {
         bool hasStone = profile.StoneStart >= 0 && profile.StoneEnd >= profile.StoneStart;
         bool hasSoil = profile.SoilStart >= 0 && profile.SoilEnd >= profile.SoilStart;

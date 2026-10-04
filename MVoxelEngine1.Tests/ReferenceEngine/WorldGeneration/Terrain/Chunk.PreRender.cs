@@ -16,7 +16,7 @@ using MVoxelEngine1.WorldGeneration.Utils;
 
 namespace MVoxelEngine1.WorldGeneration.Terrain
 {
-    public partial class Chunk
+    internal partial class Chunk
     {
         // ----- Added plane caches for pre-render handoff -----
         // Layouts:

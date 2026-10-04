@@ -7,10 +7,10 @@ using MVoxelEngine1.WorldGeneration.Terrain;
 using Supprocom.NativeAllocationManagement;
 
 namespace MVoxelEngine1.WorldGeneration.Native;
-internal ref partial struct NativeGtrtSessionView
+internal readonly ref partial struct NativeGtrtSessionView
 {
-    private Span<byte> bytes;
-    private NativeGtrtSessionHeader header;
+    private readonly Span<byte> bytes;
+    private readonly NativeGtrtSessionHeader header;
     internal NativeGtrtSessionView(Span<byte> bytes)
     {
         if (bytes.Length < Unsafe.SizeOf<NativeGtrtSessionHeader>())
@@ -229,7 +229,7 @@ internal ref partial struct NativeGtrtSessionView
             Fail(NativeGtrtFailureCode.InvalidMeshWorkspace);
     }
 
-    internal bool TryBeginPacket(scoped in NativeWorkItem claimedWork, int opaqueWordCount, int opaqueFaceCount, int transparentWordCount, int transparentFaceCount, out NativePacketWriteView packet)
+    internal bool TryBeginPacket(scoped ref readonly NativeWorkItem claimedWork, int opaqueWordCount, int opaqueFaceCount, int transparentWordCount, int transparentFaceCount, out NativePacketWriteView packet)
     {
         packet = default;
         if (claimedWork.Kind != NativeWorkKind.BuildChunkMesh || claimedWork.Epoch != State.SessionEpoch || (uint)claimedWork.RecordIndex >= (uint)Chunks.Length || opaqueWordCount < 0 || transparentWordCount < 0 || opaqueWordCount > int.MaxValue - transparentWordCount || (opaqueWordCount & 1) != 0 || (transparentWordCount & 1) != 0 || opaqueFaceCount < opaqueWordCount / 2 || transparentFaceCount < transparentWordCount / 2)
@@ -392,7 +392,7 @@ internal ref partial struct NativeGtrtSessionView
         return true;
     }
 
-    internal bool TryAbandonMesh(scoped in NativeWorkItem claimedWork)
+    internal bool TryAbandonMesh(scoped ref readonly NativeWorkItem claimedWork)
     {
         if (claimedWork.Kind != NativeWorkKind.BuildChunkMesh || claimedWork.Epoch != State.SessionEpoch || (uint)claimedWork.RecordIndex >= (uint)MeshJobs.Length)
         {
@@ -807,7 +807,7 @@ internal ref partial struct NativeGtrtSessionView
         }
     }
 
-    internal bool TryCompleteGeneration(scoped in NativeWorkItem claimedWork)
+    internal bool TryCompleteGeneration(scoped ref readonly NativeWorkItem claimedWork)
     {
         ref NativeGtrtSessionState state = ref State;
         if (claimedWork.Kind != NativeWorkKind.GenerateColumn || claimedWork.Epoch != state.SessionEpoch || (uint)claimedWork.RecordIndex >= (uint)Columns.Length)
@@ -858,7 +858,7 @@ internal ref partial struct NativeGtrtSessionView
         return released;
     }
 
-    internal bool TryAbandonGeneration(scoped in NativeWorkItem claimedWork)
+    internal bool TryAbandonGeneration(scoped ref readonly NativeWorkItem claimedWork)
     {
         if (claimedWork.Kind != NativeWorkKind.GenerateColumn || claimedWork.Epoch != State.SessionEpoch || (uint)claimedWork.RecordIndex >= (uint)GenerationJobs.Length)
         {
@@ -950,7 +950,7 @@ internal ref partial struct NativeGtrtSessionView
         return false;
     }
 
-    internal bool TryCompleteMesh(scoped in NativeWorkItem claimedWork)
+    internal bool TryCompleteMesh(scoped ref readonly NativeWorkItem claimedWork)
     {
         ref NativeGtrtSessionState state = ref State;
         if (claimedWork.Kind != NativeWorkKind.BuildChunkMesh || claimedWork.Epoch != state.SessionEpoch || (uint)claimedWork.RecordIndex >= (uint)MeshJobs.Length)
