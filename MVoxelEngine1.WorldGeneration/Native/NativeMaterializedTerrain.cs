@@ -655,9 +655,9 @@ internal static class NativeMaterializedTerrain
             return false;
         }
 
-        for (int index = 0; index < voxels.Length; index++)
+        foreach (ref readonly ushort blockId in voxels)
         {
-            if (!session.TryGetBlockDescriptor(voxels[index], out _))
+            if (!session.TryGetBlockDescriptor(blockId, out _))
             {
                 session.Fail(NativeGtrtFailureCode.InvalidMaterializedTerrain);
                 return false;
@@ -691,9 +691,9 @@ internal static class NativeMaterializedTerrain
             return false;
         }
 
-        for (int index = 0; index < palette.Length; index++)
+        foreach (ref readonly ushort blockId in palette)
         {
-            if (!session.TryGetBlockDescriptor(palette[index], out _))
+            if (!session.TryGetBlockDescriptor(blockId, out _))
             {
                 session.Fail(NativeGtrtFailureCode.InvalidMaterializedTerrain);
                 return false;

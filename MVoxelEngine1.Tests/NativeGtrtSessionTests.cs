@@ -940,8 +940,8 @@ public sealed class NativeGtrtSessionTests
         Action action)
     {
         var workers = new Task[workerCount];
-        for (int index = 0; index < workers.Length; index++)
-            workers[index] = Task.Run(action);
+        foreach (ref Task worker in workers.AsSpan())
+            worker = Task.Run(action, TestContext.Current.CancellationToken);
 
         Task.WaitAll(workers);
     }

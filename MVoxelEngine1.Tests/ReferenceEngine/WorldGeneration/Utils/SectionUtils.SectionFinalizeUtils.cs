@@ -268,8 +268,8 @@ namespace MVoxelEngine1.WorldGeneration.Utils
         // -------------------------------------------------------------------------------------------------
         private static void FusedNonEscalatedFinalize(Section sec, SectionBuildScratch scratch)
         {
-            const int S = Section.SECTION_SIZE;
-            int totalVoxels = S * S * S;
+            const int localSectionSize = Section.SECTION_SIZE;
+            int totalVoxels = localSectionSize * localSectionSize * localSectionSize;
             sec.VoxelCount = totalVoxels;
             int opaqueCount = 0; // opaque voxel count (exposure source)
             int transparentCount = 0; // ADDED: transparent voxel count
@@ -278,8 +278,8 @@ namespace MVoxelEngine1.WorldGeneration.Utils
             int adjZ = 0;
             bool boundsInit = false; // bounds now track ANY non‑air (opaque OR transparent)
             byte minX = 0, maxX = 0, minY = 0, maxY = 0, minZ = 0, maxZ = 0;
-            Span<ushort> prevRowOccOpaque = stackalloc ushort[S]; // opaque occupancy per column row (X slice) for Z adjacency
-            Span<ushort> curRowOccOpaque = stackalloc ushort[S];
+            Span<ushort> prevRowOccOpaque = stackalloc ushort[localSectionSize]; // opaque occupancy per column row (X slice) for Z adjacency
+            Span<ushort> curRowOccOpaque = stackalloc ushort[localSectionSize];
             prevRowOccOpaque.Clear();
             curRowOccOpaque.Clear();
             bool rebuildDistinct = scratch.DistinctDirty;
@@ -299,13 +299,13 @@ namespace MVoxelEngine1.WorldGeneration.Utils
             Span<ushort> columnTransparentMask = stackalloc ushort[COLUMN_COUNT];
             columnOpaqueMask.Clear();
             columnTransparentMask.Clear();
-            for (int z = 0; z < S; z++)
+            for (int z = 0; z < localSectionSize; z++)
             {
                 curRowOccOpaque.Clear();
                 ushort prevOccOpaqueInRow = 0;
-                for (int x = 0; x < S; x++)
+                for (int x = 0; x < localSectionSize; x++)
                 {
-                    int ci = (z * S) + x;
+                    int ci = (z * localSectionSize) + x;
                     ref readonly var col = ref scratch.GetReadonlyColumn(ci);
                     byte rc = col.RunCount;
                     if (rc == 0 || col.NonAir == 0)
@@ -494,7 +494,7 @@ namespace MVoxelEngine1.WorldGeneration.Utils
                 // Z adjacency for opaque only
                 if (z > 0)
                 {
-                    for (int x = 0; x < S; x++)
+                    for (int x = 0; x < localSectionSize; x++)
                     {
                         ushort a = curRowOccOpaque[x];
                         ushort b = prevRowOccOpaque[x];
@@ -529,12 +529,12 @@ namespace MVoxelEngine1.WorldGeneration.Utils
                     BuildTransparentFaceMasks(sec, sec.TransparentBits); // build transparent boundary masks
                 }
 
-                long lenL = S;
+                long lenL = localSectionSize;
                 long internalAdj = (lenL - 1) * lenL * lenL + lenL * (lenL - 1) * lenL + lenL * lenL * (lenL - 1);
                 sec.InternalExposure = uniformOpaque ? (int)(6L * totalVoxels - 2L * internalAdj) : 0;
                 sec.HasBounds = true;
                 sec.MinLX = sec.MinLY = sec.MinLZ = 0;
-                sec.MaxLX = sec.MaxLY = sec.MaxLZ = (byte)(S - 1);
+                sec.MaxLX = sec.MaxLY = sec.MaxLZ = (byte)(localSectionSize - 1);
                 sec.MetadataBuilt = true;
                 sec.StructuralDirty = false;
                 sec.IdMapDirty = false;
@@ -676,9 +676,8 @@ namespace MVoxelEngine1.WorldGeneration.Utils
                 Array.Clear(sec.BitData, 0, uintCount);
                 ulong[]? opaqueBits = opaqueCount > 0 ? new ulong[64] : null;
                 ulong[]? transparentBitsMask = transparentCount > 0 ? new ulong[64] : null;
-                for (int i = 0; i < activeColumnCount; i++)
+                foreach (ref readonly int ci in activeColumns[..activeColumnCount])
                 {
-                    int ci = activeColumns[i];
                     ref readonly var col = ref scratch.GetReadonlyColumn(ci);
                     int baseLi = ci << 4;
                     if (opaqueBits != null)
@@ -740,9 +739,8 @@ namespace MVoxelEngine1.WorldGeneration.Utils
                 var denseArr = RentDense();
                 ulong[]? opaqueBits = opaqueCount > 0 ? new ulong[64] : null;
                 ulong[]? transparentBitsMask = transparentCount > 0 ? new ulong[64] : null;
-                for (int i = 0; i < activeColumnCount; i++)
+                foreach (ref readonly int ci in activeColumns[..activeColumnCount])
                 {
-                    int ci = activeColumns[i];
                     ref readonly var col = ref scratch.GetReadonlyColumn(ci);
                     int baseLi = ci << 4;
                     void WriteRun(ushort id, int ys, int ye)

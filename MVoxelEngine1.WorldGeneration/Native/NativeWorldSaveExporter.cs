@@ -374,8 +374,8 @@ internal sealed class NativeWorldSaveExporter
 
         long footerPosition = stream.Position;
         stream.Position = offsetTablePosition;
-        for (int index = 0; index < offsets.Length; index++)
-            writer.Write(offsets[index]);
+        foreach (ref readonly uint offset in offsets)
+            writer.Write(offset);
         stream.Position = footerPosition;
         WriteFooter(
             ref view,
@@ -703,9 +703,9 @@ internal sealed class NativeWorldSaveExporter
             view.MaterializedSectionMaps.Slice(
                 chunk.SectionMapOffset,
                 view.SectionsPerChunk);
-        for (int index = 0; index < sectionMap.Length; index++)
+        foreach (ref readonly int sectionIndex in sectionMap)
         {
-            if (sectionMap[index] >= 0)
+            if (sectionIndex >= 0)
                 return false;
         }
         return true;
@@ -886,11 +886,11 @@ internal sealed class NativeWorldSaveExporter
         int opaque = 0;
         int transparent = 0;
         int empty = 0;
-        for (int index = 0; index < blocks.Length; index++)
+        foreach (ref readonly ushort blockId in blocks)
         {
             CountBlock(
                 ref view,
-                blocks[index],
+                blockId,
                 1,
                 ref opaque,
                 ref transparent,

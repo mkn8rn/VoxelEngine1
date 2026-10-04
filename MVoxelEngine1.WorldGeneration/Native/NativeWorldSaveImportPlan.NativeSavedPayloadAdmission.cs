@@ -170,10 +170,10 @@ internal sealed partial class NativeWorldSaveImportPlan
         finally
         {
             pendingPayload = null;
-            for (int index = 0; index < savedStreams.Length; index++)
+            foreach (ref FileStream? stream in savedStreams.AsSpan())
             {
-                savedStreams[index]?.Dispose();
-                savedStreams[index] = null;
+                stream?.Dispose();
+                stream = null;
             }
         }
     }
@@ -211,9 +211,8 @@ internal sealed partial class NativeWorldSaveImportPlan
     private void RollbackSourceImportsCore(scoped NativeLeaseView<byte> owner)
     {
         var view = new NativeGtrtSessionView(owner.AsSpan());
-        for (int candidate = 0; candidate < savedCandidateCount; candidate++)
+        foreach (int index in savedCandidates.AsSpan(0, savedCandidateCount))
         {
-            int index = savedCandidates[candidate];
             ref NativeMaterializedChunkRecord chunk = ref view.MaterializedChunks[index];
             chunk.State = NativeMaterializedTerrain.DeferredRecord;
             chunk.StorageKind = NativeChunkStorageKind.DeferredSaved;

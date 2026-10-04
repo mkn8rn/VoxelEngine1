@@ -332,7 +332,7 @@ namespace MVoxelEngine1.WorldGeneration.Utils
                 }
             }
             int N = 0;
-            for (int i = 0; i < 64; i++) N += BitOperations.PopCount(bits[i]);
+            foreach (ulong word in bits.AsSpan(0, 64)) N += BitOperations.PopCount(word);
             long internalAdj = adjX + adjZ + adjY;
             exposure = (int)(6L * N - 2L * internalAdj);
         }
@@ -346,7 +346,7 @@ namespace MVoxelEngine1.WorldGeneration.Utils
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void BuildFaceMasks(Section sec, ulong[]? occ)
         {
-            const int S = 16;
+            const int localSectionSize = 16;
             if (occ == null) return;
 
             static void EnsureAndClear([System.Diagnostics.CodeAnalysis.NotNull] ref ulong[]? arr)
@@ -363,14 +363,14 @@ namespace MVoxelEngine1.WorldGeneration.Utils
             EnsureAndClear(ref sec.FacePosZBits);
 
             // X faces (x = 0 and x = 15)  -> YZ plane (z,y)
-            for (int z = 0; z < S; z++)
+            for (int z = 0; z < localSectionSize; z++)
             {
                 int zBase256 = z * 256; // z * 16 * 16
-                for (int y = 0; y < S; y++)
+                for (int y = 0; y < localSectionSize; y++)
                 {
                     int liNeg = zBase256 + y;            // x=0
                     int liPos = zBase256 + 240 + y;      // x=15 -> (15 * 16) = 240
-                    int idxYZ = z * S + y;               // plane index
+                    int idxYZ = z * localSectionSize + y;               // plane index
                     int w = idxYZ >> 6; int b = idxYZ & 63;
 
                     if ((occ[liNeg >> 6] & (1UL << (liNeg & 63))) != 0UL)
@@ -381,19 +381,19 @@ namespace MVoxelEngine1.WorldGeneration.Utils
             }
 
             // Y faces (y = 0 and y = 15) -> XZ plane (x,z)
-            for (int x = 0; x < S; x++)
+            for (int x = 0; x < localSectionSize; x++)
             {
                 int xOffset16 = x * 16;
-                for (int z = 0; z < S; z++)
+                for (int z = 0; z < localSectionSize; z++)
                 {
-                    int ci = z * S + x;          // (z,x) pair inside XZ iteration for convenience
+                    int ci = z * localSectionSize + x;          // (z,x) pair inside XZ iteration for convenience
                     // Reconstruct li base for (z,x,y) ordering:
                     // li = ((z*16 + x)*16)+y = (z*256) + (x*16) + y
                     int baseZX = z * 256 + xOffset16;
 
                     int liNeg = baseZX + 0;      // y=0
                     int liPos = baseZX + 15;     // y=15
-                    int idxXZ = x * S + z;       // plane index mapping (x,z)
+                    int idxXZ = x * localSectionSize + z;       // plane index mapping (x,z)
                     int w = idxXZ >> 6; int b = idxXZ & 63;
 
                     if ((occ[liNeg >> 6] & (1UL << (liNeg & 63))) != 0UL)
@@ -404,14 +404,14 @@ namespace MVoxelEngine1.WorldGeneration.Utils
             }
 
             // Z faces (z = 0 and z = 15) -> XY plane (x,y)
-            for (int x = 0; x < S; x++)
+            for (int x = 0; x < localSectionSize; x++)
             {
                 int xOffset16 = x * 16;
-                for (int y = 0; y < S; y++)
+                for (int y = 0; y < localSectionSize; y++)
                 {
                     int liNeg = xOffset16 + y;                 // z=0
                     int liPos = 15 * 256 + xOffset16 + y;      // z=15 -> 15*256 = 3840
-                    int idxXY = x * S + y;                     // plane index (x,y)
+                    int idxXY = x * localSectionSize + y;                     // plane index (x,y)
                     int w = idxXY >> 6; int b = idxXY & 63;
 
                     if ((occ[liNeg >> 6] & (1UL << (liNeg & 63))) != 0UL)
@@ -425,7 +425,7 @@ namespace MVoxelEngine1.WorldGeneration.Utils
         {
             // Builds transparent boundary face masks (one 256-bit mask per face) using the transparent occupancy bitset.
             // Layout matches opaque face masks: indices map to 16x16 planes as documented in BuildFaceMasks.
-            const int S = 16; if (occ == null) return;
+            const int localSectionSize = 16; if (occ == null) return;
             static void EnsureAndClear([System.Diagnostics.CodeAnalysis.NotNull] ref ulong[]? arr) { if (arr == null) arr = new ulong[4]; else Array.Clear(arr); }
             EnsureAndClear(ref sec.TransparentFaceNegXBits);
             EnsureAndClear(ref sec.TransparentFacePosXBits);
@@ -434,37 +434,37 @@ namespace MVoxelEngine1.WorldGeneration.Utils
             EnsureAndClear(ref sec.TransparentFaceNegZBits);
             EnsureAndClear(ref sec.TransparentFacePosZBits);
             // X faces
-            for (int z = 0; z < S; z++)
+            for (int z = 0; z < localSectionSize; z++)
             {
                 int zBase256 = z * 256;
-                for (int y = 0; y < S; y++)
+                for (int y = 0; y < localSectionSize; y++)
                 {
                     int liNeg = zBase256 + y;            // x=0
                     int liPos = zBase256 + 240 + y;      // x=15
-                    int idxYZ = z * S + y; int w = idxYZ >> 6; int b = idxYZ & 63;
+                    int idxYZ = z * localSectionSize + y; int w = idxYZ >> 6; int b = idxYZ & 63;
                     if ((occ[liNeg >> 6] & (1UL << (liNeg & 63))) != 0UL) sec.TransparentFaceNegXBits[w] |= 1UL << b;
                     if ((occ[liPos >> 6] & (1UL << (liPos & 63))) != 0UL) sec.TransparentFacePosXBits[w] |= 1UL << b;
                 }
             }
             // Y faces
-            for (int x = 0; x < S; x++)
+            for (int x = 0; x < localSectionSize; x++)
             {
                 int xOffset16 = x * 16;
-                for (int z = 0; z < S; z++)
+                for (int z = 0; z < localSectionSize; z++)
                 {
                     int baseZX = z * 256 + xOffset16;
-                    int liNeg = baseZX + 0; int liPos = baseZX + 15; int idxXZ = x * S + z; int w = idxXZ >> 6; int b = idxXZ & 63;
+                    int liNeg = baseZX + 0; int liPos = baseZX + 15; int idxXZ = x * localSectionSize + z; int w = idxXZ >> 6; int b = idxXZ & 63;
                     if ((occ[liNeg >> 6] & (1UL << (liNeg & 63))) != 0UL) sec.TransparentFaceNegYBits[w] |= 1UL << b;
                     if ((occ[liPos >> 6] & (1UL << (liPos & 63))) != 0UL) sec.TransparentFacePosYBits[w] |= 1UL << b;
                 }
             }
             // Z faces
-            for (int x = 0; x < S; x++)
+            for (int x = 0; x < localSectionSize; x++)
             {
                 int xOffset16 = x * 16;
-                for (int y = 0; y < S; y++)
+                for (int y = 0; y < localSectionSize; y++)
                 {
-                    int liNeg = xOffset16 + y; int liPos = 15 * 256 + xOffset16 + y; int idxXY = x * S + y; int w = idxXY >> 6; int b = idxXY & 63;
+                    int liNeg = xOffset16 + y; int liPos = 15 * 256 + xOffset16 + y; int idxXY = x * localSectionSize + y; int w = idxXY >> 6; int b = idxXY & 63;
                     if ((occ[liNeg >> 6] & (1UL << (liNeg & 63))) != 0UL) sec.TransparentFaceNegZBits[w] |= 1UL << b;
                     if ((occ[liPos >> 6] & (1UL << (liPos & 63))) != 0UL) sec.TransparentFacePosZBits[w] |= 1UL << b;
                 }
@@ -631,9 +631,9 @@ namespace MVoxelEngine1.WorldGeneration.Utils
                 // Build palette anew
                 var palette = new List<ushort> { Section.AIR };
                 var lookup = new Dictionary<ushort, int> { { Section.AIR, 0 } };
-                for (int i = 0; i < dense.Length; i++)
+                foreach (ushort id in dense)
                 {
-                    ushort id = dense[i]; if (id == Section.AIR) continue;
+                    if (id == Section.AIR) continue;
                     if (!lookup.ContainsKey(id)) { lookup[id] = palette.Count; palette.Add(id); }
                 }
                 sec.Palette = palette; sec.PaletteLookup = lookup;

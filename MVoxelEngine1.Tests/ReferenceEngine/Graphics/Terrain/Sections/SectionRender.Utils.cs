@@ -162,8 +162,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             public TileIndexCache(int capacity = 2048)
             {
                 _cache = new uint[capacity];
-                for (int i = 0; i < _cache.Length; i++)
-                    _cache[i] = 0xFFFFFFFFu;
+                Array.Fill(_cache, 0xFFFFFFFFu);
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -189,8 +188,8 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
         private static int PopCountMask(ReadOnlySpan<ulong> mask)
         {
             int c = 0;
-            for (int i = 0; i < 64; i++)
-                c += BitOperations.PopCount(mask[i]);
+            foreach (ref readonly ulong word in mask[..64])
+                c += BitOperations.PopCount(word);
             return c;
         }
 

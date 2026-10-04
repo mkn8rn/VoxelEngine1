@@ -18,7 +18,7 @@ namespace MVoxelEngine1.Infrastructure.Managers
             string PreferString(string? console, string? env)
                 => !string.IsNullOrEmpty(console) ? console! : !string.IsNullOrEmpty(env) ? env! : string.Empty;
 
-            var flags = new ProgramFlags
+            var preparedFlags = new ProgramFlags
             {
                 game = PreferString(consoleFlags.game, envFlags.game),
                 gameDataDirectory = PreferString(consoleFlags.gameDataDirectory, envFlags.gameDataDirectory),
@@ -58,113 +58,113 @@ namespace MVoxelEngine1.Infrastructure.Managers
                 GCMode = PreferValue(consoleFlags.GCMode, envFlags.GCMode)
             };
 
-            if (!string.IsNullOrEmpty(flags.game))
-                Console.WriteLine($"Set game: {flags.game}");
-            if (!string.IsNullOrEmpty(flags.gameDataDirectory))
-                Console.WriteLine($"Set gameDataDirectory: {flags.gameDataDirectory}");
-            if (!string.IsNullOrEmpty(flags.worldName))
-                Console.WriteLine($"Set worldName: {flags.worldName}");
-            if (flags.seed.HasValue)
-                Console.WriteLine($"Set seed: {flags.seed.Value}");
-            if (!string.IsNullOrEmpty(flags.benchmarkOutput))
-                Console.WriteLine($"Set benchmarkOutput: {flags.benchmarkOutput}");
-            if (!string.IsNullOrEmpty(flags.allocationValidationOutput))
-                Console.WriteLine($"Set allocationValidationOutput: {flags.allocationValidationOutput}");
-            if (!string.IsNullOrEmpty(flags.graphicsBenchmarkOutput))
+            if (!string.IsNullOrEmpty(preparedFlags.game))
+                Console.WriteLine($"Set game: {preparedFlags.game}");
+            if (!string.IsNullOrEmpty(preparedFlags.gameDataDirectory))
+                Console.WriteLine($"Set gameDataDirectory: {preparedFlags.gameDataDirectory}");
+            if (!string.IsNullOrEmpty(preparedFlags.worldName))
+                Console.WriteLine($"Set worldName: {preparedFlags.worldName}");
+            if (preparedFlags.seed.HasValue)
+                Console.WriteLine($"Set seed: {preparedFlags.seed.Value}");
+            if (!string.IsNullOrEmpty(preparedFlags.benchmarkOutput))
+                Console.WriteLine($"Set benchmarkOutput: {preparedFlags.benchmarkOutput}");
+            if (!string.IsNullOrEmpty(preparedFlags.allocationValidationOutput))
+                Console.WriteLine($"Set allocationValidationOutput: {preparedFlags.allocationValidationOutput}");
+            if (!string.IsNullOrEmpty(preparedFlags.graphicsBenchmarkOutput))
             {
                 Console.WriteLine(
                     $"Set graphicsBenchmarkOutput: " +
-                    $"{flags.graphicsBenchmarkOutput}");
+                    $"{preparedFlags.graphicsBenchmarkOutput}");
             }
-            if (!string.IsNullOrEmpty(flags.faceManifestOutput))
-                Console.WriteLine($"Set faceManifestOutput: {flags.faceManifestOutput}");
-            if (!string.IsNullOrEmpty(flags.simulatedGpuUploadOutput))
-                Console.WriteLine($"Set simulatedGpuUploadOutput: {flags.simulatedGpuUploadOutput}");
-            if (!string.IsNullOrEmpty(flags.simulatedInput))
-                Console.WriteLine($"Set simulatedInput: {flags.simulatedInput}");
-            if (flags.simulatedFrameRate.HasValue)
-                Console.WriteLine($"Set simulatedFrameRate: {flags.simulatedFrameRate.Value}");
-            if (flags.simulatedGpuWriterDelayMilliseconds.HasValue)
-                Console.WriteLine($"Set simulatedGpuWriterDelayMilliseconds: {flags.simulatedGpuWriterDelayMilliseconds.Value}");
-            if (flags.simulatedGpuWriterFailAfterRecords.HasValue)
-                Console.WriteLine($"Set simulatedGpuWriterFailAfterRecords: {flags.simulatedGpuWriterFailAfterRecords.Value}");
-            if (flags.faceGenerationMode.HasValue)
-                Console.WriteLine($"Set faceGenerationMode: {flags.faceGenerationMode.Value}");
-            if (flags.windowWidth.HasValue)
-                Console.WriteLine($"Set windowWidth: {flags.windowWidth.Value}");
-            if (flags.windowHeight.HasValue)
-                Console.WriteLine($"Set windowHeight: {flags.windowHeight.Value}");
-            if (flags.useFacePooling.HasValue)
-                Console.WriteLine($"Set useFacePooling: {flags.useFacePooling.Value}");
-            if (flags.faceAmountToPool.HasValue)
-                Console.WriteLine($"Set faceAmountToPool: {flags.faceAmountToPool.Value}");
-            if (flags.worldGenWorkersPerCore.HasValue)
-                Console.WriteLine($"Set worldGenWorkersPerCore: {flags.worldGenWorkersPerCore.Value}");
-            if (flags.worldGenWorkersPerCoreInitial.HasValue)
-                Console.WriteLine($"Set worldGenWorkersPerCoreInitial: {flags.worldGenWorkersPerCoreInitial.Value}");
-            if (flags.meshRenderWorkersPerCore.HasValue)
-                Console.WriteLine($"Set meshRenderWorkersPerCore: {flags.meshRenderWorkersPerCore.Value}");
-            if (flags.meshRenderWorkersPerCoreInitial.HasValue)
-                Console.WriteLine($"Set meshRenderWorkersPerCoreInitial: {flags.meshRenderWorkersPerCoreInitial.Value}");
-            if (flags.renderStreamingIfAllowed.HasValue)
-                Console.WriteLine($"Set renderStreamingIfAllowed: {flags.renderStreamingIfAllowed.Value}");
-            if (flags.GCConcurrent.HasValue)
-                Console.WriteLine($"Set GCConcurrent: {flags.GCConcurrent.Value}");
-            if (flags.GCLatencyMode.HasValue)
-                Console.WriteLine($"Set GCLatencyMode: {flags.GCLatencyMode.Value}");
-            if (!string.IsNullOrEmpty(flags.GCHeapHardLimit))
-                Console.WriteLine($"Set GCHeapHardLimit: {flags.GCHeapHardLimit}");
-            if (!string.IsNullOrEmpty(flags.GCHeapAffinitizeMask))
-                Console.WriteLine($"Set GCHeapAffinitizeMask: {flags.GCHeapAffinitizeMask}");
-            if (flags.GCLargeObjectHeapCompactionMode.HasValue)
-                Console.WriteLine($"Set GCLargeObjectHeapCompactionMode: {flags.GCLargeObjectHeapCompactionMode.Value}");
-            if (!string.IsNullOrEmpty(flags.GCHeapSegmentSize))
-                Console.WriteLine($"Set GCHeapSegmentSize: {flags.GCHeapSegmentSize}");
-            if (!string.IsNullOrEmpty(flags.GCStress))
-                Console.WriteLine($"Set GCStress: {flags.GCStress}");
-            if (flags.GCLogEnabled.HasValue)
-                Console.WriteLine($"Set GCLogEnabled: {flags.GCLogEnabled.Value}");
-            if (!string.IsNullOrEmpty(flags.GCLogFile))
-                Console.WriteLine($"Set GCLogFile: {flags.GCLogFile}");
-            if (!string.IsNullOrEmpty(flags.GCHeapCount))
-                Console.WriteLine($"Set GCHeapCount: {flags.GCHeapCount}");
-            if (flags.GCMode.HasValue)
-                Console.WriteLine($"Set GCMode: {flags.GCMode.Value}");
+            if (!string.IsNullOrEmpty(preparedFlags.faceManifestOutput))
+                Console.WriteLine($"Set faceManifestOutput: {preparedFlags.faceManifestOutput}");
+            if (!string.IsNullOrEmpty(preparedFlags.simulatedGpuUploadOutput))
+                Console.WriteLine($"Set simulatedGpuUploadOutput: {preparedFlags.simulatedGpuUploadOutput}");
+            if (!string.IsNullOrEmpty(preparedFlags.simulatedInput))
+                Console.WriteLine($"Set simulatedInput: {preparedFlags.simulatedInput}");
+            if (preparedFlags.simulatedFrameRate.HasValue)
+                Console.WriteLine($"Set simulatedFrameRate: {preparedFlags.simulatedFrameRate.Value}");
+            if (preparedFlags.simulatedGpuWriterDelayMilliseconds.HasValue)
+                Console.WriteLine($"Set simulatedGpuWriterDelayMilliseconds: {preparedFlags.simulatedGpuWriterDelayMilliseconds.Value}");
+            if (preparedFlags.simulatedGpuWriterFailAfterRecords.HasValue)
+                Console.WriteLine($"Set simulatedGpuWriterFailAfterRecords: {preparedFlags.simulatedGpuWriterFailAfterRecords.Value}");
+            if (preparedFlags.faceGenerationMode.HasValue)
+                Console.WriteLine($"Set faceGenerationMode: {preparedFlags.faceGenerationMode.Value}");
+            if (preparedFlags.windowWidth.HasValue)
+                Console.WriteLine($"Set windowWidth: {preparedFlags.windowWidth.Value}");
+            if (preparedFlags.windowHeight.HasValue)
+                Console.WriteLine($"Set windowHeight: {preparedFlags.windowHeight.Value}");
+            if (preparedFlags.useFacePooling.HasValue)
+                Console.WriteLine($"Set useFacePooling: {preparedFlags.useFacePooling.Value}");
+            if (preparedFlags.faceAmountToPool.HasValue)
+                Console.WriteLine($"Set faceAmountToPool: {preparedFlags.faceAmountToPool.Value}");
+            if (preparedFlags.worldGenWorkersPerCore.HasValue)
+                Console.WriteLine($"Set worldGenWorkersPerCore: {preparedFlags.worldGenWorkersPerCore.Value}");
+            if (preparedFlags.worldGenWorkersPerCoreInitial.HasValue)
+                Console.WriteLine($"Set worldGenWorkersPerCoreInitial: {preparedFlags.worldGenWorkersPerCoreInitial.Value}");
+            if (preparedFlags.meshRenderWorkersPerCore.HasValue)
+                Console.WriteLine($"Set meshRenderWorkersPerCore: {preparedFlags.meshRenderWorkersPerCore.Value}");
+            if (preparedFlags.meshRenderWorkersPerCoreInitial.HasValue)
+                Console.WriteLine($"Set meshRenderWorkersPerCoreInitial: {preparedFlags.meshRenderWorkersPerCoreInitial.Value}");
+            if (preparedFlags.renderStreamingIfAllowed.HasValue)
+                Console.WriteLine($"Set renderStreamingIfAllowed: {preparedFlags.renderStreamingIfAllowed.Value}");
+            if (preparedFlags.GCConcurrent.HasValue)
+                Console.WriteLine($"Set GCConcurrent: {preparedFlags.GCConcurrent.Value}");
+            if (preparedFlags.GCLatencyMode.HasValue)
+                Console.WriteLine($"Set GCLatencyMode: {preparedFlags.GCLatencyMode.Value}");
+            if (!string.IsNullOrEmpty(preparedFlags.GCHeapHardLimit))
+                Console.WriteLine($"Set GCHeapHardLimit: {preparedFlags.GCHeapHardLimit}");
+            if (!string.IsNullOrEmpty(preparedFlags.GCHeapAffinitizeMask))
+                Console.WriteLine($"Set GCHeapAffinitizeMask: {preparedFlags.GCHeapAffinitizeMask}");
+            if (preparedFlags.GCLargeObjectHeapCompactionMode.HasValue)
+                Console.WriteLine($"Set GCLargeObjectHeapCompactionMode: {preparedFlags.GCLargeObjectHeapCompactionMode.Value}");
+            if (!string.IsNullOrEmpty(preparedFlags.GCHeapSegmentSize))
+                Console.WriteLine($"Set GCHeapSegmentSize: {preparedFlags.GCHeapSegmentSize}");
+            if (!string.IsNullOrEmpty(preparedFlags.GCStress))
+                Console.WriteLine($"Set GCStress: {preparedFlags.GCStress}");
+            if (preparedFlags.GCLogEnabled.HasValue)
+                Console.WriteLine($"Set GCLogEnabled: {preparedFlags.GCLogEnabled.Value}");
+            if (!string.IsNullOrEmpty(preparedFlags.GCLogFile))
+                Console.WriteLine($"Set GCLogFile: {preparedFlags.GCLogFile}");
+            if (!string.IsNullOrEmpty(preparedFlags.GCHeapCount))
+                Console.WriteLine($"Set GCHeapCount: {preparedFlags.GCHeapCount}");
+            if (preparedFlags.GCMode.HasValue)
+                Console.WriteLine($"Set GCMode: {preparedFlags.GCMode.Value}");
 
-            if (flags.GCLatencyMode.HasValue)
-                GCSettings.LatencyMode = (System.Runtime.GCLatencyMode)flags.GCLatencyMode.Value;
+            if (preparedFlags.GCLatencyMode.HasValue)
+                GCSettings.LatencyMode = (System.Runtime.GCLatencyMode)preparedFlags.GCLatencyMode.Value;
 
-            if (flags.GCLargeObjectHeapCompactionMode.HasValue)
-                GCSettings.LargeObjectHeapCompactionMode = (System.Runtime.GCLargeObjectHeapCompactionMode)flags.GCLargeObjectHeapCompactionMode.Value;
+            if (preparedFlags.GCLargeObjectHeapCompactionMode.HasValue)
+                GCSettings.LargeObjectHeapCompactionMode = (System.Runtime.GCLargeObjectHeapCompactionMode)preparedFlags.GCLargeObjectHeapCompactionMode.Value;
 
-            if (flags.GCMode.HasValue)
-                Environment.SetEnvironmentVariable("COMPlus_gcServer", ((int)flags.GCMode.Value).ToString(System.Globalization.CultureInfo.CurrentCulture));
+            if (preparedFlags.GCMode.HasValue)
+                Environment.SetEnvironmentVariable("COMPlus_gcServer", ((int)preparedFlags.GCMode.Value).ToString(System.Globalization.CultureInfo.CurrentCulture));
 
-            if (flags.GCConcurrent.HasValue)
-                Environment.SetEnvironmentVariable("COMPlus_GCConcurrent", ((int)flags.GCConcurrent.Value).ToString(System.Globalization.CultureInfo.CurrentCulture));
+            if (preparedFlags.GCConcurrent.HasValue)
+                Environment.SetEnvironmentVariable("COMPlus_GCConcurrent", ((int)preparedFlags.GCConcurrent.Value).ToString(System.Globalization.CultureInfo.CurrentCulture));
 
-            if (flags.GCLogEnabled.HasValue)
-                Environment.SetEnvironmentVariable("COMPlus_GCLogEnabled", ((int)flags.GCLogEnabled.Value).ToString(System.Globalization.CultureInfo.CurrentCulture));
+            if (preparedFlags.GCLogEnabled.HasValue)
+                Environment.SetEnvironmentVariable("COMPlus_GCLogEnabled", ((int)preparedFlags.GCLogEnabled.Value).ToString(System.Globalization.CultureInfo.CurrentCulture));
 
-            if (!string.IsNullOrEmpty(flags.GCHeapHardLimit))
-                Environment.SetEnvironmentVariable("COMPlus_GCHeapHardLimit", flags.GCHeapHardLimit);
+            if (!string.IsNullOrEmpty(preparedFlags.GCHeapHardLimit))
+                Environment.SetEnvironmentVariable("COMPlus_GCHeapHardLimit", preparedFlags.GCHeapHardLimit);
 
-            if (!string.IsNullOrEmpty(flags.GCHeapAffinitizeMask))
-                Environment.SetEnvironmentVariable("COMPlus_GCHeapAffinitizeMask", flags.GCHeapAffinitizeMask);
+            if (!string.IsNullOrEmpty(preparedFlags.GCHeapAffinitizeMask))
+                Environment.SetEnvironmentVariable("COMPlus_GCHeapAffinitizeMask", preparedFlags.GCHeapAffinitizeMask);
 
-            if (!string.IsNullOrEmpty(flags.GCHeapSegmentSize))
-                Environment.SetEnvironmentVariable("COMPlus_GCHeapSegmentSize", flags.GCHeapSegmentSize);
+            if (!string.IsNullOrEmpty(preparedFlags.GCHeapSegmentSize))
+                Environment.SetEnvironmentVariable("COMPlus_GCHeapSegmentSize", preparedFlags.GCHeapSegmentSize);
 
-            if (!string.IsNullOrEmpty(flags.GCStress))
-                Environment.SetEnvironmentVariable("COMPlus_GCStress", flags.GCStress);
+            if (!string.IsNullOrEmpty(preparedFlags.GCStress))
+                Environment.SetEnvironmentVariable("COMPlus_GCStress", preparedFlags.GCStress);
 
-            if (!string.IsNullOrEmpty(flags.GCLogFile))
-                Environment.SetEnvironmentVariable("COMPlus_GCLogFile", flags.GCLogFile);
+            if (!string.IsNullOrEmpty(preparedFlags.GCLogFile))
+                Environment.SetEnvironmentVariable("COMPlus_GCLogFile", preparedFlags.GCLogFile);
 
-            if (!string.IsNullOrEmpty(flags.GCHeapCount))
-                Environment.SetEnvironmentVariable("COMPlus_GCHeapCount", flags.GCHeapCount);
+            if (!string.IsNullOrEmpty(preparedFlags.GCHeapCount))
+                Environment.SetEnvironmentVariable("COMPlus_GCHeapCount", preparedFlags.GCHeapCount);
 
-            FlagManager.flags = flags;
+            FlagManager.flags = preparedFlags;
         }
     }
 }

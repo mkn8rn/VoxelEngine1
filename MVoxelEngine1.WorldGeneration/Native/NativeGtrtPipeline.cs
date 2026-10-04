@@ -152,13 +152,13 @@ public sealed class NativeGtrtPipeline : IDisposable
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(runtimeGeneration, nameof(runtimeGenerationWorkerCount));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(runtimeMesh, nameof(runtimeMeshWorkerCount));
         int diameter = checked(settings.lod1RenderDistance * 2 + 1);
-        int requiredPacketCount = checked(diameter * diameter * diameter);
-        NativeGameSnapshot? game = null;
-        NativeGtrtSession? session = null;
-        NativeGtrtWorkerPool? workers = null;
+        int preparedRequiredPacketCount = checked(diameter * diameter * diameter);
+        NativeGameSnapshot? preparedGame = null;
+        NativeGtrtSession? preparedSession = null;
+        NativeGtrtWorkerPool? preparedWorkers = null;
         try
         {
-            game = NativeGameSnapshot.Create(textureAtlas);
+            preparedGame = NativeGameSnapshot.Create(textureAtlas);
             int sectionCountX = DivideRoundUp(settings.chunkMaxX, VoxelSection.Size);
             int sectionCountY = DivideRoundUp(settings.chunkMaxY, VoxelSection.Size);
             int sectionCountZ = DivideRoundUp(settings.chunkMaxZ, VoxelSection.Size);
@@ -166,16 +166,16 @@ public sealed class NativeGtrtPipeline : IDisposable
             int materializedChunkCapacity = checked(NativeGtrtSessionLayout.DefaultMaterializedChunkCapacity + (savePlan?.ChunkCount ?? 0));
             int materializedSectionCapacity = editableSectionCapacity;
             int materializedRawSectionCapacity = NativeGtrtSessionLayout.DefaultMaterializedChunkCapacity;
-            session = NativeGtrtSession.Create(settings, game, Math.Max(generationWorkerCount, runtimeGeneration), Math.Max(meshWorkerCount, runtimeMesh), materializedChunkCapacity, materializedSectionCapacity, materializedRawSectionCapacity, materializedPaletteCapacity: 0, materializedPackedWordCapacity: 0);
-            savePlan?.PrepareLazyImport(session);
-            workers = new NativeGtrtWorkerPool(session, generationWorkerCount, meshWorkerCount, streamGeneration, runtimeGeneration, runtimeMesh);
-            return new NativeGtrtPipeline(game, session, workers, requiredPacketCount, settings, savePublisher, savePlan);
+            preparedSession = NativeGtrtSession.Create(settings, preparedGame, Math.Max(generationWorkerCount, runtimeGeneration), Math.Max(meshWorkerCount, runtimeMesh), materializedChunkCapacity, materializedSectionCapacity, materializedRawSectionCapacity, materializedPaletteCapacity: 0, materializedPackedWordCapacity: 0);
+            savePlan?.PrepareLazyImport(preparedSession);
+            preparedWorkers = new NativeGtrtWorkerPool(preparedSession, generationWorkerCount, meshWorkerCount, streamGeneration, runtimeGeneration, runtimeMesh);
+            return new NativeGtrtPipeline(preparedGame, preparedSession, preparedWorkers, preparedRequiredPacketCount, settings, savePublisher, savePlan);
         }
         catch
         {
-            workers?.Dispose();
-            session?.Dispose();
-            game?.Dispose();
+            preparedWorkers?.Dispose();
+            preparedSession?.Dispose();
+            preparedGame?.Dispose();
             throw;
         }
     }

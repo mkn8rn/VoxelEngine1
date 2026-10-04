@@ -39,18 +39,16 @@ public sealed class NativeReplacementRuleTests
     {
         using TestWorkspace workspace = TestPaths.CreateWorkspace();
         Configure(workspace);
-        File.WriteAllText(RulesPath(workspace), """
-            [
-              { "generation_type": "SimpleReplacement", "base_blocks_to_replace": ["Gas"],
-                "block_type_id": "Water", "priority": 1, "absolute_min_ylevel": 3, "absolute_max_ylevel": 3 },
-              { "generation_type": "InlineReplacement", "base_blocks_to_replace": ["Stone"],
-                "block_type_id": "LimeWhole", "priority": 2 },
-              { "generation_type": "InlineReplacement", "base_blocks_to_replace": ["Stone"],
-                "block_type_id": "RockWhole", "priority": 2 },
-              { "generation_type": "SimpleReplacement", "base_blocks_to_replace": [], "blocks_to_replace": [256],
-                "block_type_id": "Gas", "priority": -100, "absolute_min_ylevel": 2, "absolute_max_ylevel": 3 }
-            ]
-            """);
+        File.WriteAllText(RulesPath(workspace), "[\n" +
+            "  { \"generation_type\": \"SimpleReplacement\", \"base_blocks_to_replace\": [\"Gas\"],\n" +
+            "    \"block_type_id\": \"Water\", \"priority\": 1, \"absolute_min_ylevel\": 3, \"absolute_max_ylevel\": 3 },\n" +
+            "  { \"generation_type\": \"InlineReplacement\", \"base_blocks_to_replace\": [\"Stone\"],\n" +
+            "    \"block_type_id\": \"LimeWhole\", \"priority\": 2 },\n" +
+            "  { \"generation_type\": \"InlineReplacement\", \"base_blocks_to_replace\": [\"Stone\"],\n" +
+            "    \"block_type_id\": \"RockWhole\", \"priority\": 2 },\n" +
+            "  { \"generation_type\": \"SimpleReplacement\", \"base_blocks_to_replace\": [], \"blocks_to_replace\": [256],\n" +
+            "    \"block_type_id\": \"Gas\", \"priority\": -100, \"absolute_min_ylevel\": 2, \"absolute_max_ylevel\": 3 }\n" +
+            "]");
         using NativeWorld world = CreateWorld(workspace);
         Assert.Equal((ushort)256, world.GetBlock(0, 0, 0));
         Assert.Equal((ushort)256, world.GetBlock(0, 1, 0));
@@ -65,14 +63,12 @@ public sealed class NativeReplacementRuleTests
     {
         using TestWorkspace workspace = TestPaths.CreateWorkspace();
         Configure(workspace);
-        File.WriteAllText(RulesPath(workspace), """
-            [
-              { "generation_type": "InlineReplacement", "base_blocks_to_replace": ["Soil"],
-                "block_type_id": "Rendzina", "priority": 1 },
-              { "generation_type": "SimpleReplacement", "base_blocks_to_replace": ["Soil"],
-                "block_type_id": "Gas", "priority": 1, "relative_min_depth": 2, "relative_max_depth": 4 }
-            ]
-            """);
+        File.WriteAllText(RulesPath(workspace), "[\n" +
+            "  { \"generation_type\": \"InlineReplacement\", \"base_blocks_to_replace\": [\"Soil\"],\n" +
+            "    \"block_type_id\": \"Rendzina\", \"priority\": 1 },\n" +
+            "  { \"generation_type\": \"SimpleReplacement\", \"base_blocks_to_replace\": [\"Soil\"],\n" +
+            "    \"block_type_id\": \"Gas\", \"priority\": 1, \"relative_min_depth\": 2, \"relative_max_depth\": 4 }\n" +
+            "]");
         using NativeWorld world = CreateWorld(workspace);
         for (int x = -4; x < 8; x++)
         {
@@ -105,10 +101,8 @@ public sealed class NativeReplacementRuleTests
     {
         using TestWorkspace workspace = TestPaths.CreateWorkspace();
         Configure(workspace);
-        File.WriteAllText(RulesPath(workspace), """
-            [{ "generation_type": "InlineReplacement", "base_blocks_to_replace": ["Stone"],
-               "block_type_id": "LimeWhole", "priority": 1, $filter }]
-            """.Replace("$filter", filter, StringComparison.Ordinal));
+        File.WriteAllText(RulesPath(workspace), "[{ \"generation_type\": \"InlineReplacement\", \"base_blocks_to_replace\": [\"Stone\"],\n" +
+            "   \"block_type_id\": \"LimeWhole\", \"priority\": 1, $filter }]".Replace("$filter", filter, StringComparison.Ordinal));
         InvalidOperationException error = Assert.Throws<InvalidOperationException>(() => LoadGame(workspace));
         Assert.Contains(message, error.Message, StringComparison.OrdinalIgnoreCase);
     }

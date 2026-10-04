@@ -370,8 +370,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                         {
                             uniformTransparentBits = new ulong[64];
                             // Set all 4096 bits -> each ulong to all ones
-                            for (int w = 0; w < 64; w++)
-                                uniformTransparentBits[w] = ulong.MaxValue;
+                            uniformTransparentBits.AsSpan(0, 64).Fill(ulong.MaxValue);
                         }
 
                         // Dominant transparent id detection (simple heuristic >=90% of transparent voxels) for multi-packed / packed representations.

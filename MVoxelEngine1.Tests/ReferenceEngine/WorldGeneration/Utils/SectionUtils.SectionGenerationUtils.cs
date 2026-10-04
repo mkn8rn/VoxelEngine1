@@ -432,9 +432,8 @@ namespace MVoxelEngine1.WorldGeneration.Utils
                     int C = filledColumns;
                     int fastNonAir = C * 16;
                     int adj2D = 0;
-                    for (int z = 0; z < S; z++)
+                    foreach (ref readonly ushort m in rowMask[..S])
                     {
-                        ushort m = rowMask[z];
                         if (m != 0)
                             adj2D += BitOperations.PopCount((uint)(m & (m << 1)));
                     }

@@ -43,7 +43,7 @@ namespace MVoxelEngine1.Graphics.Textures
         }
 
         private static Task<List<RawImage>>? preloadTask; // file IO + decode (no GL)
-        private static readonly object preloadLock = new();
+        private static readonly System.Threading.Lock preloadLock = new();
         private static volatile bool atlasBuilt;
         private static BlockTextureAtlas? instance; // lazy-built when GL upload occurs
         public static void BeginAsyncIOPreload()

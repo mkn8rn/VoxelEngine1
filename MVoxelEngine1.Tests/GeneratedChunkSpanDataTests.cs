@@ -717,9 +717,9 @@ namespace MVoxelEngine1.Tests
         private static BlockColumnProfile[] CreateColumns()
         {
             var columns = new BlockColumnProfile[16 * 16];
-            for (int index = 0; index < columns.Length; index++)
+            foreach (ref BlockColumnProfile column in columns.AsSpan())
             {
-                columns[index] = new BlockColumnProfile
+                column = new BlockColumnProfile
                 {
                     StoneStart = 0,
                     StoneEnd = 4,

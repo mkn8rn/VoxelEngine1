@@ -263,7 +263,8 @@ namespace MVoxelEngine1.Infrastructure.Managers
             int sectionCountY = chunkMaxY / sectionSize;
             var buckets = new int[sectionCountY][]; // fill lazily
             var tempLists = new List<int>[sectionCountY];
-            for (int i=0;i<sectionCountY;i++) tempLists[i] = new List<int>();
+            foreach (ref List<int> bucket in tempLists.AsSpan())
+                bucket = new List<int>();
             for (int ri=0; ri<compiled.Count; ri++)
             {
                 var cr = compiled[ri];

@@ -5,7 +5,7 @@ namespace MVoxelEngine1.Graphics.Terrain
 {
     internal sealed class ChunkRenderUploadRetention : IDisposable
     {
-        private readonly object gate = new();
+        private readonly System.Threading.Lock gate = new();
         private ChunkRenderUploadData? owner;
         internal ChunkRenderUploadRetention(ChunkRenderUploadData owner)
         {

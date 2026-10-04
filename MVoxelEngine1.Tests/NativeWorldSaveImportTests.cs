@@ -1195,9 +1195,9 @@ public sealed class NativeWorldSaveImportTests
                     Assert.InRange(reader.Z, 0, 15);
                     directionCounts[reader.Direction]++;
                 }
-                for (int direction = 0; direction < 6; direction++)
+                foreach (ref readonly int count in directionCounts[..6])
                 {
-                    Assert.Equal(256, directionCounts[direction]);
+                    Assert.Equal(256, count);
                 }
             });
         Assert.Equal(1, consumed);

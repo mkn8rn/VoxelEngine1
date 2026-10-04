@@ -23,9 +23,9 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             if (plane.Length < wordCount)
                 return false;
             // all full words must be 0xFFFFFFFFFFFFFFFF
-            for (int i = 0; i < wordCount - 1; i++)
+            foreach (ulong word in plane.AsSpan(0, wordCount - 1))
             {
-                if (plane[i] != fullWord)
+                if (word != fullWord)
                     return false;
             }
 

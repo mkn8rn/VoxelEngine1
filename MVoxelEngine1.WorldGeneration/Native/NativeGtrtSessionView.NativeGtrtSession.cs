@@ -455,9 +455,9 @@ internal readonly ref partial struct NativeGtrtSessionView
             }
 
             Span<NativeMeshWorkspaceRecord> workspaces = MeshWorkspaces;
-            for (int index = 0; index < workspaces.Length; index++)
+            foreach (ref NativeMeshWorkspaceRecord workspace in workspaces)
             {
-                if (Volatile.Read(ref workspaces[index].State) != 0)
+                if (Volatile.Read(ref workspace.State) != 0)
                     return false;
             }
 
@@ -478,11 +478,11 @@ internal readonly ref partial struct NativeGtrtSessionView
                 }
             }
 
-            for (int index = 0; index < packets.Length; index++)
+            foreach (ref NativeRenderPacketRecord packet in packets)
             {
-                if (ReadState(ref packets[index].State) == NativeRenderPacketState.Retired)
+                if (ReadState(ref packet.State) == NativeRenderPacketState.Retired)
                 {
-                    packets[index] = default;
+                    packet = default;
                 }
             }
 
@@ -655,23 +655,23 @@ internal readonly ref partial struct NativeGtrtSessionView
         if (Volatile.Read(ref state.ClaimedGenerationCount) != 0 || Volatile.Read(ref state.ClaimedMeshCount) != 0)
             return false;
         Span<NativeGenerationWorkspaceRecord> generationWorkspaces = GenerationWorkspaces;
-        for (int index = 0; index < generationWorkspaces.Length; index++)
+        foreach (ref NativeGenerationWorkspaceRecord workspace in generationWorkspaces)
         {
-            if (Volatile.Read(ref generationWorkspaces[index].State) != 0)
+            if (Volatile.Read(ref workspace.State) != 0)
                 return false;
         }
 
         Span<NativeMeshWorkspaceRecord> meshWorkspaces = MeshWorkspaces;
-        for (int index = 0; index < meshWorkspaces.Length; index++)
+        foreach (ref NativeMeshWorkspaceRecord workspace in meshWorkspaces)
         {
-            if (Volatile.Read(ref meshWorkspaces[index].State) != 0)
+            if (Volatile.Read(ref workspace.State) != 0)
                 return false;
         }
 
         Span<NativeRenderPacketRecord> packets = Packets;
-        for (int index = 0; index < packets.Length; index++)
+        foreach (ref NativeRenderPacketRecord packet in packets)
         {
-            NativeRenderPacketState packetState = ReadState(ref packets[index].State);
+            NativeRenderPacketState packetState = ReadState(ref packet.State);
             if (packetState == NativeRenderPacketState.Empty || packetState == NativeRenderPacketState.Retired)
             {
                 continue;
@@ -685,7 +685,7 @@ internal readonly ref partial struct NativeGtrtSessionView
                 return false;
             }
 
-            if (!TryRetirePacket(packets[index].ChunkIndex))
+            if (!TryRetirePacket(packet.ChunkIndex))
                 return false;
         }
 

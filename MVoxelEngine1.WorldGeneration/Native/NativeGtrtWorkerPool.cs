@@ -237,7 +237,7 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
     private void DisposeWaitHandles()
     {
         foreach (NativeGtrtWorker worker in workers)
-            worker.DisposeStartSignal();
+            worker.Dispose();
         generationCompletionGate.Dispose();
         publicationGate.Dispose();
         armedGate.Dispose();
@@ -325,7 +325,7 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
         Mesh
     }
 
-    private sealed class NativeGtrtWorker
+    private sealed class NativeGtrtWorker : IDisposable
     {
         private readonly NativeGtrtWorkerPool owner;
         private readonly NativeGtrtSession session;
@@ -362,7 +362,7 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
         }
 
         internal void Signal() => startSignal.Set();
-        internal void DisposeStartSignal() => startSignal.Dispose();
+        public void Dispose() => startSignal.Dispose();
         internal bool Join(TimeSpan timeout) => !started || thread.Join(timeout);
         private void Run()
         {

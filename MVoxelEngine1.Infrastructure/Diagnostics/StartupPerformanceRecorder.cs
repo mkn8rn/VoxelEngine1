@@ -11,7 +11,7 @@ namespace MVoxelEngine1.Infrastructure.Diagnostics
 
     private static readonly System.Text.Json.JsonSerializerOptions EvidenceJsonOptions0 = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = true };
         private const long UnrecordedMilliseconds = -1;
-        private static readonly object Sync = new();
+        private static readonly System.Threading.Lock Sync = new();
         private static Stopwatch? timer;
         private static long initialGenerationStartTimestamp;
         private static long initialChunkMeshBuildStartTimestamp;

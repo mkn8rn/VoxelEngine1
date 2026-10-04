@@ -95,10 +95,10 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
         ArgumentNullException.ThrowIfNull(textureAtlas);
         var loader = new WorldLoader();
         loader.ChooseWorld(FlagManager.flags.worldName, FlagManager.flags.seed);
-        string quadsDirectory = Path.Combine(loader.currentWorldSaveDirectory, loader.RegionID.ToString(), "quads");
-        NativeWorldSaveImportPlan savePlan = NativeWorldSaveImportPlan.Create(quadsDirectory, GameManager.settings);
-        NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(textureAtlas, savePlan);
-        NativeWorld world = CreateOwned(pipeline, loader.seed, rendererFactory, quadsDirectory, allocationMonitor);
+        string preparedQuadsDirectory = Path.Combine(loader.currentWorldSaveDirectory, loader.RegionID.ToString(), "quads");
+        NativeWorldSaveImportPlan savePlan = NativeWorldSaveImportPlan.Create(preparedQuadsDirectory, GameManager.settings);
+        NativeGtrtPipeline preparedPipeline = NativeGtrtPipeline.Create(textureAtlas, savePlan);
+        NativeWorld world = CreateOwned(preparedPipeline, loader.seed, rendererFactory, preparedQuadsDirectory, allocationMonitor);
         world.ID = loader.ID;
         world.RegionID = loader.RegionID;
         return world;
@@ -196,11 +196,11 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
             throw new InvalidOperationException("A headless world cannot execute OpenGL rendering.");
         ChunkRender.ProcessPendingDeletes();
         GL.DepthMask(true);
-        for (int index = 0; index < currentRenderers.Length; index++)
-            currentRenderers[index]?.RenderOpaque(program);
+        foreach (INativeChunkRenderer? renderer in currentRenderers)
+            renderer?.RenderOpaque(program);
         GL.DepthMask(false);
-        for (int index = 0; index < currentRenderers.Length; index++)
-            currentRenderers[index]?.RenderTransparent(program);
+        foreach (INativeChunkRenderer? renderer in currentRenderers)
+            renderer?.RenderTransparent(program);
         GL.DepthMask(true);
     }
 
@@ -418,10 +418,10 @@ public sealed class NativeWorld : IDisposable, IPlayerChunkPositionSink
     private static Exception? ReleaseRendererSet(INativeChunkRenderer? [] renderers)
     {
         Exception? failure = null;
-        for (int index = 0; index < renderers.Length; index++)
+        foreach (ref INativeChunkRenderer? slot in renderers.AsSpan())
         {
-            INativeChunkRenderer? renderer = renderers[index];
-            renderers[index] = null;
+            INativeChunkRenderer? renderer = slot;
+            slot = null;
             if (renderer is null)
                 continue;
             try

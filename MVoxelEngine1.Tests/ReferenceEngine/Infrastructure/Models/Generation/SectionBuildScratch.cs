@@ -43,13 +43,13 @@ namespace MVoxelEngine1.Infrastructure.Models.Generation
             {
                 // Rare wrap (every 65k resets). Do a full clear to avoid stale columns misread.
                 Array.Clear(_columnStamps, 0, _columnStamps.Length);
-                for (int i = 0; i < COLUMN_COUNT; i++)
+                foreach (ref ColumnData column in Columns.AsSpan(0, COLUMN_COUNT))
                 {
-                    Columns[i].RunCount = 0; // ensure consistent
-                    Columns[i].Escalated = null;
-                    Columns[i].OccMask = 0;
-                    Columns[i].NonAir = 0;
-                    Columns[i].AdjY = 0;
+                    column.RunCount = 0; // ensure consistent
+                    column.Escalated = null;
+                    column.OccMask = 0;
+                    column.NonAir = 0;
+                    column.AdjY = 0;
                 }
             }
         }

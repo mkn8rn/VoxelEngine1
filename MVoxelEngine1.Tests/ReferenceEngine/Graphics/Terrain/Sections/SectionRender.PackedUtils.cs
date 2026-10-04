@@ -49,8 +49,8 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
         private static int PopCountMask(Span<ulong> mask)
         {
             int c = 0;
-            for (int i = 0; i < 64; i++)
-                c += BitOperations.PopCount(mask[i]);
+            foreach (ref readonly ulong word in mask[..64])
+                c += BitOperations.PopCount(word);
             return c;
         }
 

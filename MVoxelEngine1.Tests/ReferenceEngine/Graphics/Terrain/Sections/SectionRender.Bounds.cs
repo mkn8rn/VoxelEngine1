@@ -412,9 +412,8 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             ref SectionPrerenderDesc backSec = ref hasBack ? ref allSecs[SecIndex(sx, sy, sz - 1, syCount, szCount)] : ref desc;
             bool hasFront = sz + 1 < szCount;
             ref SectionPrerenderDesc frontSec = ref hasFront ? ref allSecs[SecIndex(sx, sy, sz + 1, syCount, szCount)] : ref desc;
-            for (int i = 0; i < _faces.Length; i++)
+            foreach (ref readonly var meta in _faces.AsSpan())
             {
-                ref readonly var meta = ref _faces[i];
                 if (skipDir[meta.FaceDir])
                     continue; // skip fully occluded face
                 // Check bounds gating for this axis
@@ -681,8 +680,8 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                 return 0;
             int occluded = 0;
             int neededWords = 4; // 256 bits -> 4 * 64
-            for (int i = 0; i < mask.Length && i < neededWords; i++)
-                occluded += BitOperations.PopCount(mask[i]);
+            foreach (ulong word in mask.AsSpan(0, Math.Min(mask.Length, neededWords)))
+                occluded += BitOperations.PopCount(word);
             return occluded;
         }
 
