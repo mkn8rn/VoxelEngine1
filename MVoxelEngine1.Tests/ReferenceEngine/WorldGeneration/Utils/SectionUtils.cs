@@ -332,7 +332,7 @@ namespace MVoxelEngine1.WorldGeneration.Utils
                 }
             }
             int N = 0;
-            foreach (ulong word in bits.AsSpan(0, 64)) N += BitOperations.PopCount(word);
+            foreach (ref readonly ulong word in bits.AsSpan(0, 64)) N += BitOperations.PopCount(word);
             long internalAdj = adjX + adjZ + adjY;
             exposure = (int)(6L * N - 2L * internalAdj);
         }

@@ -39,9 +39,17 @@ internal sealed partial class NativeWorldSaveImportPlan
             return;
         foreach (SavedFile file in files)
         {
-            using FileStream stream = OpenRead(file.Path);
-            VerifySavedFile(stream, file);
-            ValidateFile(stream, file, session);
+            FileStream? stream = null;
+            try
+            {
+                stream = OpenRead(file.Path);
+                VerifySavedFile(stream, file);
+                ValidateFile(stream, file, session);
+            }
+            finally
+            {
+                stream?.Dispose();
+            }
         }
 
         ReserveSavedMetadata(session);
@@ -211,7 +219,7 @@ internal sealed partial class NativeWorldSaveImportPlan
     private void RollbackSourceImportsCore(scoped NativeLeaseView<byte> owner)
     {
         var view = new NativeGtrtSessionView(owner.AsSpan());
-        foreach (int index in savedCandidates.AsSpan(0, savedCandidateCount))
+        foreach (ref readonly int index in savedCandidates.AsSpan(0, savedCandidateCount))
         {
             ref NativeMaterializedChunkRecord chunk = ref view.MaterializedChunks[index];
             chunk.State = NativeMaterializedTerrain.DeferredRecord;

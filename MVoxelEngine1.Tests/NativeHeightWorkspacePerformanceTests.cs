@@ -84,10 +84,10 @@ namespace MVoxelEngine1.Tests
             {
                 int capturedWorkerIndex = workerIndex;
                 workers[workerIndex] = Task.Run(
-                    () => workerAction(capturedWorkerIndex));
+                    () => workerAction(capturedWorkerIndex), TestContext.Current.CancellationToken);
             }
 
-            Task.WaitAll(workers);
+            Task.WaitAll(workers, TestContext.Current.CancellationToken);
             stopwatch.Stop();
             ulong[] checksums = workers
                 .Select(worker => worker.Result)
@@ -159,7 +159,7 @@ namespace MVoxelEngine1.Tests
                         MapSize,
                         MapSize,
                         values),
-                    values => ConsumeHeights(checksum, values));
+                    values => ConsumeHeights(checksum, values), TestContext.Current.CancellationToken);
             }
 
             return checksum;

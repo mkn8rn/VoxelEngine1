@@ -127,9 +127,20 @@ public sealed class NativeReplacementRuleTests
         LoadGame(workspace);
         var atlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
         ChunkRender.terrainTextureAtlas = atlas;
-        return NativeWorld.CreateForTesting(NativeGtrtPipeline.Create(atlas, GameManager.settings, 2, 2),
-            123456, static (in NativeChunkRenderPacketDescriptor descriptor,
-                ReadOnlySpan<uint> opaque, ReadOnlySpan<uint> transparent) => null);
+        NativeGtrtPipeline? pipeline = null;
+        try
+        {
+            pipeline = NativeGtrtPipeline.Create(atlas, GameManager.settings, 2, 2);
+            NativeWorld world = NativeWorld.CreateForTesting(pipeline,
+                123456, static (in NativeChunkRenderPacketDescriptor descriptor,
+                    ReadOnlySpan<uint> opaque, ReadOnlySpan<uint> transparent) => null);
+            pipeline = null;
+            return world;
+        }
+        finally
+        {
+            pipeline?.Dispose();
+        }
     }
 
     private static void LoadGame(TestWorkspace workspace)

@@ -153,7 +153,7 @@ public sealed class NativeGtrtWorkerPoolTests
         LoadDefaultGame();
         var atlas = new BlockTextureAtlas(
             BlockTextureAtlasUploadMode.SimulatedGpuUpload);
-        NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(
+        using NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(
             atlas,
             CreateSmallSettings(),
             generationWorkerCount: 2,

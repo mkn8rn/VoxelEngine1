@@ -213,7 +213,7 @@ namespace MVoxelEngine1.Application.Simulation
             }
             finally
             {
-                writerFailureCancellation.Cancel();
+                await writerFailureCancellation.CancelAsync().ConfigureAwait(false);
                 records.Writer.TryComplete();
                 try
                 {
@@ -250,7 +250,7 @@ namespace MVoxelEngine1.Application.Simulation
         {
             try
             {
-                while (records.Reader.WaitToReadAsync().AsTask().GetAwaiter().GetResult())
+                while (records.Reader.WaitToReadAsync(writerFailureCancellation.Token).AsTask().GetAwaiter().GetResult())
                 {
                     while (records.Reader.TryRead(out QueuedRecord? queued))
                     {

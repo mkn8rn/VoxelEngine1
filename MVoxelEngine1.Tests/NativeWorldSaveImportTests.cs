@@ -30,7 +30,7 @@ public sealed class NativeWorldSaveImportTests
                 new ChunkFixture(9, 0, 0, [SectionFixture.Raw(raw)])], 1, 1, 1);
         NativeWorldSaveImportPlan plan = NativeWorldSaveImportPlan.Create(workspace.QuadsDirectory, settings);
         var atlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
-        NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(atlas, settings, 2, 2, savePlan: plan);
+        using NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(atlas, settings, 2, 2, savePlan: plan);
         using NativeWorld world = NativeWorld.CreateForTesting(pipeline, 123456, NullRenderer);
         plan.BeforeDeferredImportForTesting = candidate =>
         {
@@ -70,7 +70,7 @@ public sealed class NativeWorldSaveImportTests
         NativeWorldSaveImportPlan plan = NativeWorldSaveImportPlan.Create(workspace.QuadsDirectory, settings);
         Assert.Equal(101, plan.RawSectionCount);
         var atlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
-        NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(atlas, settings, 2, 2, savePlan: plan);
+        using NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(atlas, settings, 2, 2, savePlan: plan);
         using NativeWorld world = NativeWorld.CreateForTesting(pipeline, 123456, NullRenderer);
         Assert.Equal((1, 100), SavedPayloadCounts(pipeline));
         pipeline.InspectState(owner =>
@@ -97,7 +97,7 @@ public sealed class NativeWorldSaveImportTests
                 new ChunkFixture(0, 100, 0, [SectionFixture.Raw(raw)])], 1, 1, 1);
         NativeWorldSaveImportPlan plan = NativeWorldSaveImportPlan.Create(workspace.QuadsDirectory, settings);
         var atlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
-        NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(atlas, settings, 2, 2, savePlan: plan);
+        using NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(atlas, settings, 2, 2, savePlan: plan);
         using var allocationScope = new NoGcAllocationScope();
         using NativeWorld world = NativeWorld.CreateForTesting(pipeline, 123456, NullRenderer);
         Assert.Equal((1, 2), SavedPayloadCounts(pipeline));
@@ -121,7 +121,7 @@ public sealed class NativeWorldSaveImportTests
                 new ChunkFixture(8, 0, 0, [SectionFixture.Uniform(WaterId)], 65, 87)], 1, 1, 1);
         NativeWorldSaveImportPlan plan = NativeWorldSaveImportPlan.Create(workspace.QuadsDirectory, settings);
         var atlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
-        NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(atlas, settings, 2, 2, savePlan: plan);
+        using NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(atlas, settings, 2, 2, savePlan: plan);
         using NativeWorld world = NativeWorld.CreateForTesting(pipeline, 123456, NullRenderer, workspace.QuadsDirectory);
         Assert.Equal((1, 1), SavedPayloadCounts(pipeline));
         Assert.True(world.SetBlock(0, 0, 0, CustomTransparentBlockId));
@@ -151,7 +151,7 @@ public sealed class NativeWorldSaveImportTests
                 new ChunkFixture(8, 0, 0, [SectionFixture.Uniform(WaterId)])], 1, 1, 1);
         NativeWorldSaveImportPlan plan = NativeWorldSaveImportPlan.Create(workspace.QuadsDirectory, settings);
         var atlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
-        NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(atlas, settings, 2, 2, savePlan: plan);
+        using NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(atlas, settings, 2, 2, savePlan: plan);
         using NativeWorld world = NativeWorld.CreateForTesting(pipeline, 123456, NullRenderer);
         string path = Directory.GetFiles(workspace.QuadsDirectory, "quad*x*.bin").Single();
         byte[] original = File.ReadAllBytes(path);
@@ -1097,13 +1097,14 @@ public sealed class NativeWorldSaveImportTests
                 settings);
         var firstAtlas = new BlockTextureAtlas(
             BlockTextureAtlasUploadMode.SimulatedGpuUpload);
-        using (NativeWorld firstWorld = NativeWorld.CreateForTesting(
-                   NativeGtrtPipeline.Create(
+        using NativeGtrtPipeline ownedPipeline5 = NativeGtrtPipeline.Create(
                        firstAtlas,
                        settings,
                        generationWorkerCount: 1,
                        meshWorkerCount: 1,
-                       savePlan: firstPlan),
+                       savePlan: firstPlan);
+        using (NativeWorld firstWorld = NativeWorld.CreateForTesting(
+                   ownedPipeline5,
                    seed: 123456,
                    NullRenderer,
                    workspace.QuadsDirectory))
@@ -1126,13 +1127,14 @@ public sealed class NativeWorldSaveImportTests
                 settings);
         var secondAtlas = new BlockTextureAtlas(
             BlockTextureAtlasUploadMode.SimulatedGpuUpload);
-        using NativeWorld secondWorld = NativeWorld.CreateForTesting(
-            NativeGtrtPipeline.Create(
+        using NativeGtrtPipeline ownedPipeline6 = NativeGtrtPipeline.Create(
                 secondAtlas,
                 settings,
                 generationWorkerCount: 1,
                 meshWorkerCount: 1,
-                savePlan: secondPlan),
+                savePlan: secondPlan);
+        using NativeWorld secondWorld = NativeWorld.CreateForTesting(
+            ownedPipeline6,
             seed: 123456,
             NullRenderer,
             workspace.QuadsDirectory);

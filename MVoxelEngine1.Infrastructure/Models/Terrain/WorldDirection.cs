@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 
 namespace MVoxelEngine1.Infrastructure.Models.Terrain
 {
-    public enum WorldDirection : byte
+    public enum WorldDirection
     {
         North,
         NorthEast,

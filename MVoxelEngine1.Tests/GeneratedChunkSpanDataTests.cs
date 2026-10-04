@@ -415,8 +415,8 @@ namespace MVoxelEngine1.Tests
                 waterBlockId: (ushort)BaseBlockType.Water);
             ChunkPrerenderData prerenderData = CreatePrerenderData(source);
             ReferenceChunkRender.terrainTextureAtlas = atlas;
-            var pool = new PackedFaceNativePool();
-            var renderer = new ReferenceChunkRender(
+            using var pool = new PackedFaceNativePool();
+            using var renderer = new ReferenceChunkRender(
                 prerenderData,
                 FaceGenerationMode.Optimized,
                 null,

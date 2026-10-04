@@ -69,10 +69,11 @@ public sealed class NativeWorldTests
             }
             return null;
         }
+        using NativeGtrtPipeline ownedPipeline0 = NativeGtrtPipeline.Create(atlas, CreateSmallSettings(), 2, 2,
+                runtimeGenerationWorkerCount: 5, runtimeMeshWorkerCount: 1);
 
         using NativeWorld world = NativeWorld.CreateForTesting(
-            NativeGtrtPipeline.Create(atlas, CreateSmallSettings(), 2, 2,
-                runtimeGenerationWorkerCount: 5, runtimeMeshWorkerCount: 1),
+            ownedPipeline0,
             123456, CreateRenderer, allocationMonitor: monitor);
         NativeGtrtAllocationEvidence evidence = monitor.Capture();
 
@@ -102,8 +103,9 @@ public sealed class NativeWorldTests
         LoadDefaultGame();
         var atlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
         var factory = new TrackingRendererFactory();
+        using NativeGtrtPipeline ownedPipeline1 = NativeGtrtPipeline.Create(atlas, CreateSmallSettings(), 2, 2);
         using NativeWorld world = NativeWorld.CreateForTesting(
-            NativeGtrtPipeline.Create(atlas, CreateSmallSettings(), 2, 2),
+            ownedPipeline1,
             123456, factory.Create);
         var first = new HashSet<long>();
         world.InspectRenderPackets((in NativeChunkRenderPacketDescriptor descriptor,
@@ -144,8 +146,9 @@ public sealed class NativeWorldTests
         LoadDefaultGame();
         var atlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
         var factory = new TrackingRendererFactory();
+        using NativeGtrtPipeline ownedPipeline2 = NativeGtrtPipeline.Create(atlas, CreateSmallSettings(), 2, 2);
         using NativeWorld world = NativeWorld.CreateForTesting(
-            NativeGtrtPipeline.Create(atlas, CreateSmallSettings(), 2, 2),
+            ownedPipeline2,
             123456, factory.Create);
         Assert.Throws<IOException>(() => world.InspectRenderPackets(
             (in NativeChunkRenderPacketDescriptor descriptor,
@@ -165,7 +168,7 @@ public sealed class NativeWorldTests
         LoadDefaultGame();
         var atlas = new BlockTextureAtlas(
             BlockTextureAtlasUploadMode.SimulatedGpuUpload);
-        NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(
+        using NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(
             atlas,
             CreateSmallSettings(),
             generationWorkerCount: 3,
@@ -201,7 +204,7 @@ public sealed class NativeWorldTests
         LoadDefaultGame();
         var atlas = new BlockTextureAtlas(
             BlockTextureAtlasUploadMode.SimulatedGpuUpload);
-        NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(
+        using NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(
             atlas,
             CreateSmallSettings(),
             generationWorkerCount: 2,
@@ -243,7 +246,7 @@ public sealed class NativeWorldTests
         LoadDefaultGame();
         var atlas = new BlockTextureAtlas(
             BlockTextureAtlasUploadMode.SimulatedGpuUpload);
-        NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(
+        using NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(
             atlas,
             CreateSmallSettings(),
             generationWorkerCount: 2,
@@ -274,13 +277,14 @@ public sealed class NativeWorldTests
             BlockTextureAtlasUploadMode.SimulatedGpuUpload);
         var firstFactory = new TrackingRendererFactory();
         string editedIdentity;
-        using (NativeWorld firstWorld = NativeWorld.CreateForTesting(
-                   NativeGtrtPipeline.Create(
+        using NativeGtrtPipeline ownedPipeline6 = NativeGtrtPipeline.Create(
                        atlas,
                        settings,
                        generationWorkerCount: 2,
                        meshWorkerCount: 2,
-                       streamGeneration: true),
+                       streamGeneration: true);
+        using (NativeWorld firstWorld = NativeWorld.CreateForTesting(
+                   ownedPipeline6,
                    seed: 123456,
                    firstFactory.Create,
                    workspace.QuadsDirectory))
@@ -319,7 +323,7 @@ public sealed class NativeWorldTests
         GameSettings settings = CreateSmallSettings();
         using var workspace = new SaveWorkspace();
         var atlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
-        NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(atlas, settings, 2, 2, streamGeneration: true);
+        using NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(atlas, settings, 2, 2, streamGeneration: true);
         using (NativeWorld world = NativeWorld.CreateForTesting(pipeline, 123456,
             new TrackingRendererFactory().Create, workspace.QuadsDirectory))
         {
@@ -350,8 +354,9 @@ public sealed class NativeWorldTests
         NativeWorldSaveImportPlan plan = NativeWorldSaveImportPlan.Create(workspace.QuadsDirectory, settings);
         Assert.Equal(80, plan.ChunkCount);
         var reloadAtlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
+        using NativeGtrtPipeline ownedPipeline8 = NativeGtrtPipeline.Create(reloadAtlas, settings, 2, 2, savePlan: plan);
         using NativeWorld reloaded = NativeWorld.CreateForTesting(
-            NativeGtrtPipeline.Create(reloadAtlas, settings, 2, 2, savePlan: plan), 123456,
+            ownedPipeline8, 123456,
             new TrackingRendererFactory().Create);
         for (int chunkX = -40; chunkX < 40; chunkX++)
         {
@@ -366,8 +371,9 @@ public sealed class NativeWorldTests
         LoadDefaultGame();
         var atlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
         var factory = new TrackingRendererFactory();
+        using NativeGtrtPipeline ownedPipeline9 = NativeGtrtPipeline.Create(atlas, CreateSmallSettings(), 2, 2);
         using NativeWorld world = NativeWorld.CreateForTesting(
-            NativeGtrtPipeline.Create(atlas, CreateSmallSettings(), 2, 2), 123456, factory.Create);
+            ownedPipeline9, 123456, factory.Create);
         string before = factory.LiveBankIdentity;
         Assert.Throws<InvalidOperationException>(() => world.SetBlock(0, 0, 0, ushort.MaxValue));
         Assert.Throws<InvalidOperationException>(() => world.SetBlock(400, 0, 0, CustomTransparentBlockId));
@@ -395,7 +401,7 @@ public sealed class NativeWorldTests
         var atlas = new BlockTextureAtlas(
             BlockTextureAtlasUploadMode.SimulatedGpuUpload);
         var factory = new TrackingRendererFactory();
-        NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(atlas, CreateSmallSettings(), 2, 2, streamGeneration: true);
+        using NativeGtrtPipeline pipeline = NativeGtrtPipeline.Create(atlas, CreateSmallSettings(), 2, 2, streamGeneration: true);
         using NativeWorld world = NativeWorld.CreateForTesting(
             pipeline,
             seed: 123456,
@@ -431,12 +437,13 @@ public sealed class NativeWorldTests
         var atlas = new BlockTextureAtlas(
             BlockTextureAtlasUploadMode.SimulatedGpuUpload);
         var factory = new TrackingRendererFactory();
-        using NativeWorld world = NativeWorld.CreateForTesting(
-            NativeGtrtPipeline.Create(
+        using NativeGtrtPipeline ownedPipeline11 = NativeGtrtPipeline.Create(
                 atlas,
                 CreateSmallSettings(),
                 generationWorkerCount: 2,
-                meshWorkerCount: 2),
+                meshWorkerCount: 2);
+        using NativeWorld world = NativeWorld.CreateForTesting(
+            ownedPipeline11,
             seed: 123456,
             factory.Create);
         string initialIdentity = factory.LiveBankIdentity;
@@ -481,13 +488,14 @@ public sealed class NativeWorldTests
                 throw new IOException("Requested atomic save publication failure.");
             NativeWorldSaveExporter.PublishAtomicFile(temporaryPath, finalPath);
         }
-        using NativeWorld world = NativeWorld.CreateForTesting(
-            NativeGtrtPipeline.Create(
+        using NativeGtrtPipeline ownedPipeline12 = NativeGtrtPipeline.Create(
                 atlas,
                 settings,
                 generationWorkerCount: 2,
                 meshWorkerCount: 2,
-                savePublisher: PublishSave),
+                savePublisher: PublishSave);
+        using NativeWorld world = NativeWorld.CreateForTesting(
+            ownedPipeline12,
             seed: 123456,
             factory.Create,
             workspace.QuadsDirectory);
@@ -541,13 +549,14 @@ public sealed class NativeWorldTests
         Assert.Equal(2, plan.ChunkCount);
         var reloadAtlas = new BlockTextureAtlas(
             BlockTextureAtlasUploadMode.SimulatedGpuUpload);
-        using NativeWorld reloaded = NativeWorld.CreateForTesting(
-            NativeGtrtPipeline.Create(
+        using NativeGtrtPipeline ownedPipeline13 = NativeGtrtPipeline.Create(
                 reloadAtlas,
                 settings,
                 generationWorkerCount: 2,
                 meshWorkerCount: 2,
-                savePlan: plan),
+                savePlan: plan);
+        using NativeWorld reloaded = NativeWorld.CreateForTesting(
+            ownedPipeline13,
             seed: 123456,
             new TrackingRendererFactory().Create);
         Assert.Equal(
@@ -646,7 +655,7 @@ public sealed class NativeWorldTests
             renderers.Count(renderer => !renderer.IsDisposed);
 
         internal string LiveBankIdentity => string.Join(
-            "|",
+            '|',
             renderers
                 .Where(renderer => !renderer.IsDisposed)
                 .Select(renderer => renderer.Identity)
@@ -807,14 +816,15 @@ public sealed class NativeWorldTests
         var secondAtlas = new BlockTextureAtlas(
             BlockTextureAtlasUploadMode.SimulatedGpuUpload);
         var secondFactory = new TrackingRendererFactory();
-        using NativeWorld secondWorld = NativeWorld.CreateForTesting(
-            NativeGtrtPipeline.Create(
+        using NativeGtrtPipeline ownedPipeline14 = NativeGtrtPipeline.Create(
                 secondAtlas,
                 settings,
                 generationWorkerCount: 2,
                 meshWorkerCount: 2,
                 streamGeneration: true,
-                savePlan: plan),
+                savePlan: plan);
+        using NativeWorld secondWorld = NativeWorld.CreateForTesting(
+            ownedPipeline14,
             seed: 123456,
             secondFactory.Create,
             workspace.QuadsDirectory);

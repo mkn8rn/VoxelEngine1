@@ -943,7 +943,7 @@ public sealed class NativeGtrtSessionTests
         foreach (ref Task worker in workers.AsSpan())
             worker = Task.Run(action, TestContext.Current.CancellationToken);
 
-        Task.WaitAll(workers);
+        Task.WaitAll(workers, TestContext.Current.CancellationToken);
     }
 
     private static void ValidateNativeSessionOwnsInitializedGridJobsProfilesAndSeedEvidence(global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSession session)

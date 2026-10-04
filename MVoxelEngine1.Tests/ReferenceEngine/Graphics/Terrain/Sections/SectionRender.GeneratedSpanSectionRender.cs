@@ -56,15 +56,15 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                 using NativeBuilder<uint> opaqueRectangles = new(preLease: writer.OpaqueWordCount);
                 using NativeBuilder<uint> transparentRectangles = new(preLease: writer.TransparentWordCount);
                 if (writer.OpaqueWordCount != 0)
-                    opaqueRectangles.Append(writer.OpaqueWords);
+                    opaqueRectangles.Append(writer.OpaqueWords, Xunit.TestContext.Current.CancellationToken);
                 if (writer.TransparentWordCount != 0)
-                    transparentRectangles.Append(writer.TransparentWords);
+                    transparentRectangles.Append(writer.TransparentWords, Xunit.TestContext.Current.CancellationToken);
                 NativeTransfer<uint>? opaque = null;
                 NativeTransfer<uint>? transparent = null;
                 try
                 {
-                    opaque = opaqueRectangles.Complete();
-                    transparent = transparentRectangles.Complete();
+                    opaque = opaqueRectangles.Complete(Xunit.TestContext.Current.CancellationToken);
+                    transparent = transparentRectangles.Complete(Xunit.TestContext.Current.CancellationToken);
                     result = new FaceRectangleMeshData(writer.OpaqueFaceCount, NativeTransfer<uint>.Move(ref opaque), writer.TransparentFaceCount, NativeTransfer<uint>.Move(ref transparent));
                 }
                 finally

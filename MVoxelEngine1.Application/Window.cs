@@ -99,6 +99,19 @@ namespace MVoxelEngine1.Application
             CursorState = CursorState.Grabbed;
         }
 
+        protected override void Dispose(bool disposing)
+        {
+            try
+            {
+                if (disposing)
+                    world?.Dispose();
+            }
+            finally
+            {
+                base.Dispose(disposing);
+            }
+        }
+
         protected override void OnUnload()
         {
             world?.Dispose();

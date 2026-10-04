@@ -206,7 +206,7 @@ namespace MVoxelEngine1.Tests
                         }
                     }
                     return 0;
-                });
+                }, TestContext.Current.CancellationToken);
         }
 
         [Fact(Explicit = true, Timeout = 180_000)]
@@ -235,10 +235,10 @@ namespace MVoxelEngine1.Tests
                 int capturedWorkerIndex = workerIndex;
                 workers[workerIndex] = Task.Run(() => RunNoiseWorker(
                     capturedWorkerIndex,
-                    cached));
+                    cached), TestContext.Current.CancellationToken);
             }
 
-            Task.WaitAll(workers);
+            Task.WaitAll(workers, TestContext.Current.CancellationToken);
             stopwatch.Stop();
             long checksum = 0;
             foreach (Task<long> worker in workers)

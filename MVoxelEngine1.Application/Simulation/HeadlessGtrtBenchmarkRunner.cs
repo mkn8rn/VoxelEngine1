@@ -32,7 +32,7 @@ namespace MVoxelEngine1.Application.Simulation
                 pipeline.GenerationToRenderMilliseconds ??
                 throw new InvalidOperationException(
                     "The headless GTRT endpoint was not recorded.");
-            Console.WriteLine(FormattableString.Invariant(
+            Console.WriteLine(string.Create(System.Globalization.CultureInfo.InvariantCulture,
                 $"Generation to Render time (GTRT): {generationToRender:R} ms."));
             Console.WriteLine(
                 $"[World] Initial generation complete in " +

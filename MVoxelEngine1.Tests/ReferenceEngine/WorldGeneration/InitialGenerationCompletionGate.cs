@@ -22,7 +22,7 @@ namespace MVoxelEngine1.WorldGeneration
                 if (isComplete())
                     return;
 
-                stateChanged.Wait();
+                stateChanged.Wait(Xunit.TestContext.Current.CancellationToken);
             }
         }
 

@@ -680,7 +680,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                 return 0;
             int occluded = 0;
             int neededWords = 4; // 256 bits -> 4 * 64
-            foreach (ulong word in mask.AsSpan(0, Math.Min(mask.Length, neededWords)))
+            foreach (ref readonly ulong word in mask.AsSpan(0, Math.Min(mask.Length, neededWords)))
                 occluded += BitOperations.PopCount(word);
             return occluded;
         }

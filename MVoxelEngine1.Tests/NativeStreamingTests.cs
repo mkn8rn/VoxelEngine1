@@ -103,8 +103,9 @@ public sealed class NativeStreamingTests
         using TestWorkspace workspace = Configure();
         var atlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
         ChunkRender.terrainTextureAtlas = atlas;
+        using NativeGtrtPipeline ownedPipeline0 = NativeGtrtPipeline.Create(atlas, GameManager.settings, 2, 2);
         using NativeWorld world = NativeWorld.CreateForTesting(
-            NativeGtrtPipeline.Create(atlas, GameManager.settings, 2, 2), 123456, HeadlessRenderer);
+            ownedPipeline0, 123456, HeadlessRenderer);
         var original = CapturePackets(world);
         Assert.True(world.SetBlock(1, 1, 1, 256));
         Assert.Equal(new NativeStreamingStatistics(0, 25, 1, 26), world.StreamingStatistics);

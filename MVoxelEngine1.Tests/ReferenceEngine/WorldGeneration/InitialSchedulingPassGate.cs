@@ -14,7 +14,7 @@ namespace MVoxelEngine1.WorldGeneration
 
         public void WaitUntilCompleted()
         {
-            completed.Wait();
+            completed.Wait(Xunit.TestContext.Current.CancellationToken);
         }
 
         public void Dispose()

@@ -154,7 +154,7 @@ namespace MVoxelEngine1.Graphics.Textures
 
             // Build tile set (include fallback/missing if not already)
             var byName = new Dictionary<string, RawImage>(StringComparer.OrdinalIgnoreCase);
-            foreach (var ri in preloaded)
+            foreach (ref readonly var ri in System.Runtime.InteropServices.CollectionsMarshal.AsSpan(preloaded))
             {
                 if (ri.Width != GameManager.settings.blockTileWidth || ri.Height != GameManager.settings.blockTileHeight || ri.Data == null)
                     continue; // skip invalid; we will supply fallback later if requested
@@ -184,7 +184,7 @@ namespace MVoxelEngine1.Graphics.Textures
             }
 
             // Determine final list order (stable order for determinism)
-            var textureNames = byName.Keys.OrderBy(n => n, StringComparer.Ordinal).ToList();
+            var textureNames = byName.Keys.Order(StringComparer.Ordinal).ToList();
             int textureCount = textureNames.Count;
             tilesX = (int)Math.Ceiling(Math.Sqrt(textureCount));
             tilesY = (int)Math.Ceiling((double)textureCount / tilesX);
@@ -200,7 +200,7 @@ namespace MVoxelEngine1.Graphics.Textures
             currentX = 0;
             currentY = 0;
             textureCoordinates.Clear();
-            foreach (var name in textureNames)
+            foreach (var name in System.Runtime.InteropServices.CollectionsMarshal.AsSpan(textureNames))
             {
                 var ri = byName[name];
                 if (currentX + ri.Width > atlasWidth)

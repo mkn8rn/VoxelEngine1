@@ -183,6 +183,22 @@ internal sealed partial class NativeGtrtSession : IDisposable
         finally
         {
             storage = null;
+            try
+            {
+                pendingGrowthStorage?.Dispose();
+            }
+            finally
+            {
+                pendingGrowthStorage = null;
+                try
+                {
+                    previousGrowthStorage?.Dispose();
+                }
+                finally
+                {
+                    previousGrowthStorage = null;
+                }
+            }
         }
     }
 

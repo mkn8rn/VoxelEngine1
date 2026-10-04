@@ -546,8 +546,7 @@ public sealed class NativeGtrtPipeline : IDisposable
             }
 
             packetConsumptionCompleted = true;
-            if (packetConsumerFailure is not null)
-                ExceptionDispatchInfo.Capture(packetConsumerFailure).Throw();
+            ThrowIfPacketConsumerFailed();
             if (consumedPacketCount != requiredPacketCount)
             {
                 throw new InvalidOperationException("The native packet scan did not consume every packet.");
@@ -703,6 +702,12 @@ public sealed class NativeGtrtPipeline : IDisposable
         }
     }
 
+    private void ThrowIfPacketConsumerFailed()
+    {
+        if (packetConsumerFailure is not null)
+            ExceptionDispatchInfo.Capture(packetConsumerFailure).Throw();
+    }
+
     private void ConsumePackets(scoped NativeLeaseView<byte> owner)
     {
         NativeChunkRenderPacketAction consumer = pendingPacketConsumer ?? throw new InvalidOperationException("The native packet consumer is not set.");
@@ -718,6 +723,8 @@ public sealed class NativeGtrtPipeline : IDisposable
                 continue;
             }
 
+            Exception? packetFailure = null;
+            bool retirementSucceeded = retained;
             try
             {
                 NativeRenderPacketRecord record = packet.Record;
@@ -735,15 +742,21 @@ public sealed class NativeGtrtPipeline : IDisposable
                     }
                 }
             }
+            catch (Exception exception)
+            {
+                packetFailure = exception;
+            }
             finally
             {
-                if (!retained && !view.TryRetirePacket(chunkIndex))
-                {
-                    throw new InvalidOperationException("The native render packet could not retire.");
-                }
-
-                retiredPacketCount++;
+                retirementSucceeded = retained || view.TryRetirePacket(chunkIndex);
+                if (retirementSucceeded)
+                    retiredPacketCount++;
             }
+
+            if (!retirementSucceeded)
+                throw new InvalidOperationException("The native render packet could not retire.");
+            if (packetFailure is not null)
+                ExceptionDispatchInfo.Capture(packetFailure).Throw();
         }
     }
 
