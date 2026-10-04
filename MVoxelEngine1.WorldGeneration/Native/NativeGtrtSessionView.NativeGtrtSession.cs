@@ -11,7 +11,9 @@ internal readonly ref partial struct NativeGtrtSessionView
 {
     private readonly Span<byte> bytes;
     private readonly NativeGtrtSessionHeader header;
-    internal NativeGtrtSessionView(Span<byte> bytes)
+    private readonly NativeGameSnapshotView gameSnapshot;
+    private readonly bool gameSnapshotCached;
+    internal NativeGtrtSessionView(Span<byte> bytes, bool gameSnapshotInitialization = false)
     {
         if (bytes.Length < Unsafe.SizeOf<NativeGtrtSessionHeader>())
         {
@@ -52,6 +54,9 @@ internal readonly ref partial struct NativeGtrtSessionView
         ValidateRange<uint>(header.PacketWordOffset, header.PacketWordCapacity);
         ValidateRange<NativeReadySlot>(header.MeshReadyOffset, header.RequiredChunkCount);
         ValidateRange<byte>(header.GameSnapshotOffset, header.GameSnapshotByteCount);
+        gameSnapshotCached = !gameSnapshotInitialization && header.GameSnapshotByteCount != 0;
+        gameSnapshot = gameSnapshotCached ?
+            new NativeGameSnapshotView(bytes.Slice(header.GameSnapshotOffset, header.GameSnapshotByteCount)) : default;
     }
 
     internal ref NativeGtrtSessionState State => ref ReadRange<NativeGtrtSessionState>(header.StateOffset, 1)[0];
@@ -75,7 +80,7 @@ internal readonly ref partial struct NativeGtrtSessionView
     internal Span<uint> PacketWords => ReadRange<uint>(header.PacketWordOffset, header.PacketWordCapacity);
     internal Span<NativeReadySlot> MeshReadySlots => ReadRange<NativeReadySlot>(header.MeshReadyOffset, header.RequiredChunkCount);
     internal Span<byte> GameSnapshotBytes => ReadRange<byte>(header.GameSnapshotOffset, header.GameSnapshotByteCount);
-    internal NativeGameSnapshotView GameSnapshot => new(GameSnapshotBytes);
+    internal NativeGameSnapshotView GameSnapshot => gameSnapshotCached ? gameSnapshot : new(GameSnapshotBytes);
     internal bool HasGameSnapshot => header.GameSnapshotByteCount != 0;
 
     internal bool TryGetBlockDescriptor(ushort blockId, out NativeBlockDescriptor descriptor)

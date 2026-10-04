@@ -17,6 +17,62 @@ public sealed class NativeGeneratedMeshTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public void UniformChunksBesidePartialProfilesMatchEveryNaiveVoxelFace(bool transparent)
+    {
+        NativeTerrainMaterialSet materials = transparent ? new NativeTerrainMaterialSet(
+            CreateTransparentMaterial(BaseBlockType.Stone), CreateTransparentMaterial(BaseBlockType.Soil),
+            CreateTransparentMaterial(BaseBlockType.Water)) : NativeTerrainMaterialSet.CreateConventional();
+        var layout = new NativeGtrtSessionLayout(16, 16, 16, 0, materials,
+            generationWorkerCount: 1, meshWorkerCount: 1, packetWordCapacity: 65_536);
+        using NativeGtrtSession session = NativeGtrtSession.Create(layout);
+        session.PublishSeed(123456);
+        session.Access(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            PrepareUniformSourceAndPartialNeighbors(ref view);
+            Assert.True(NativeUniformChunkMesh.TryGetUniformBlock(ref view, 0, 0, 0, out ushort source));
+            Assert.Equal(materials.Stone.Id, source);
+            Assert.True(view.TryClaimMesh(out NativeWorkItem work));
+            Assert.True(NativeGeneratedMesh.TryBuild(ref view, in work, 0));
+            Assert.True(view.TryReadPacket(work.RecordIndex, out NativePacketReadView packet));
+            AssertPacketMatchesNaiveFaces(ref view, work.RecordIndex, in packet);
+            Assert.Equal(0, view.State.FailureCode);
+        });
+    }
+
+    private static void PrepareUniformSourceAndPartialNeighbors(scoped ref NativeGtrtSessionView view)
+    {
+        while (view.TryClaimGeneration(out NativeWorkItem work))
+        {
+            ref NativeColumnRecord column = ref view.Columns[work.RecordIndex];
+            bool center = column.ChunkX == 0 && column.ChunkZ == 0;
+            var summary = NativeColumnSummary.CreateEmpty();
+            int index = 0;
+            foreach (ref BlockColumnProfile profile in view.GetColumnProfiles(work.RecordIndex))
+            {
+                int variation = index++ % 12;
+                int stoneEnd = center ? 15 + (variation % 3 == 0 ? 5 : 0) : 8 + variation;
+                profile = new BlockColumnProfile
+                {
+                    StoneStart = center ? 0 : variation % 3,
+                    StoneEnd = stoneEnd,
+                    SoilStart = stoneEnd + 1,
+                    SoilEnd = stoneEnd + 3,
+                    WaterStart = stoneEnd + 4,
+                    WaterEnd = 30
+                };
+                summary.Add(in profile);
+            }
+            view.ColumnSummaries[work.RecordIndex] = summary;
+            column.SummaryComputed = 1;
+            column.GenerationEpoch = work.Epoch;
+            Assert.True(view.TryCompleteGeneration(in work));
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public void TransparentProfileIntervalsMatchEveryNaiveVoxelFace(bool computeSummaries)
     {
         var materials = new NativeTerrainMaterialSet(

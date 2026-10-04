@@ -212,7 +212,9 @@ internal sealed partial class NativeGtrtSession : IDisposable
 
     private void InitializeGameSnapshotCore(scoped NativeLeaseView<byte> owner)
     {
-        var view = new NativeGtrtSessionView(owner.AsSpan());
+        // This is the only borrow that writes the snapshot before publication.
+        // Its post-copy access validates the completed bytes; subsequent borrows cache that view.
+        var view = new NativeGtrtSessionView(owner.AsSpan(), gameSnapshotInitialization: true);
         if (view.State.PublicationState != 0 || pendingGameSnapshot is null || pendingGameSnapshot.Length != view.GameSnapshotBytes.Length)
         {
             throw new InvalidOperationException("The native game snapshot cannot be initialized.");

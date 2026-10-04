@@ -74,6 +74,13 @@ internal static class NativeUniformChunkMesh
                 continue;
             }
             Span<int> faces = scratch.Slice(0, checked(uSize * vSize));
+            if (NativeUniformProfileBoundary.TryFill(ref session, chunk, direction, normal,
+                    uSize, vSize, source, opaque, faces))
+            {
+                if (!NativeVoxelMesh.TryEmitMask(ref session, faces, uSize, vSize, direction, normal, ref writer))
+                    return false;
+                continue;
+            }
             for (int v = 0; v < vSize; v++)
             for (int u = 0; u < uSize; u++)
             {
