@@ -1,3 +1,4 @@
+using MVoxelEngine1.Infrastructure.Resources;
 using MVoxelEngine1.Application.Gameplay;
 using MVoxelEngine1.Graphics.Terrain;
 using MVoxelEngine1.Graphics.Textures;
@@ -21,15 +22,15 @@ namespace MVoxelEngine1.Application.Simulation
         {
             GameDataStartup.Load();
 
-            Console.WriteLine("Texture atlases initializing.");
+            Console.WriteLine(EngineMessages.InitializingTextureAtlases);
             var textureAtlas = new BlockTextureAtlas(BlockTextureAtlasUploadMode.SimulatedGpuUpload);
             ChunkRender.terrainTextureAtlas = textureAtlas;
 
             using var world = CreateNativeWorld(textureAtlas);
-            Console.WriteLine("Face generation mode: Optimized.");
+            Console.WriteLine(EngineMessages.OptimizedFaceMode);
             if (FlagManager.flags.faceGenerationMode == FaceGenerationMode.Reference)
-                Console.WriteLine("Reference face validation enabled.");
-            Console.WriteLine("Initializing player.");
+                Console.WriteLine(EngineMessages.ReferenceValidationEnabled);
+            Console.WriteLine(EngineMessages.InitializingPlayer);
             var player = new Player(world);
             world.PlayerChunkPosition = (0, 0, 0);
             int windowWidth = FlagManager.flags.windowWidth
@@ -52,7 +53,7 @@ namespace MVoxelEngine1.Application.Simulation
             try
             {
 
-            Console.WriteLine("Simulated GPU upload mode started without an OpenTK window.");
+            Console.WriteLine(EngineMessages.SimulatedUploadStarted);
             long frameIndex = 0;
             double simulationElapsedSeconds = 0;
             SimulatedRenderFrameState frame = output.RenderFrame(

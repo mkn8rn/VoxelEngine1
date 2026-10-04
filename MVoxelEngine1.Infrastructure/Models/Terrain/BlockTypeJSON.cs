@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 
 namespace MVoxelEngine1.Infrastructure.Models.Terrain
 {
-    public struct BlockTypeJSON
+    public record struct BlockTypeJSON
     {
         public ushort? ID { get; set; }
         public required string Name { get; set; }

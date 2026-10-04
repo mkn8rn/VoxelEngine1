@@ -1,3 +1,4 @@
+using MVoxelEngine1.Infrastructure.Resources;
 using MVoxelEngine1.Graphics.Terrain;
 using MVoxelEngine1.Graphics.Textures;
 using MVoxelEngine1.Infrastructure.Diagnostics;
@@ -13,7 +14,7 @@ namespace MVoxelEngine1.Application.Simulation
         {
             GameDataStartup.Load();
 
-            Console.WriteLine("Texture atlases initializing.");
+            Console.WriteLine(EngineMessages.InitializingTextureAtlases);
             var textureAtlas = new BlockTextureAtlas(
                 BlockTextureAtlasUploadMode.SimulatedGpuUpload);
             ChunkRender.terrainTextureAtlas = textureAtlas;

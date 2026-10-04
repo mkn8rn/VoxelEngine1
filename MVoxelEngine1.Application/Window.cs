@@ -1,3 +1,4 @@
+using MVoxelEngine1.Infrastructure.Resources;
 using MVoxelEngine1.Application.Gameplay;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
@@ -70,11 +71,11 @@ namespace MVoxelEngine1.Application
             base.OnLoad();
             blockDataLoader = GameDataStartup.Load();
             // Initialize the Texture Atlases
-            Console.WriteLine("Texture atlases initializing.");
+            Console.WriteLine(EngineMessages.InitializingTextureAtlases);
             blockTextureAtlas = new BlockTextureAtlas() ?? throw new Exception("blockTextureAtlas is null");
             ChunkRender.terrainTextureAtlas = blockTextureAtlas ?? throw new Exception("terrainTextureAtlas is null");
             // Initialize the Shaders
-            Console.WriteLine("Shaders initializing.");
+            Console.WriteLine(EngineMessages.InitializingShaders);
             shaderProgram = new ShaderProgram("Default.vert", "Default.frag") ?? throw new Exception("shaderProgram is null");
             // Bind the texture atlas
             int textureLocation = GL.GetUniformLocation(shaderProgram.ID, "textureAtlas");
@@ -83,12 +84,12 @@ namespace MVoxelEngine1.Application
             // Initialize the World rendering
             world = NativeWorld.CreateOpenGl(blockTextureAtlas);
             // Initialize the Player (and its Camera)
-            Console.WriteLine("Initializing player.");
+            Console.WriteLine(EngineMessages.InitializingPlayer);
             player = new Player(world) ?? throw new Exception("player is null");
             // Initialize player chunk position explicitly (already done in Player ctor but keep explicit for clarity)
             world.PlayerChunkPosition = (0, 0, 0);
             // Enabling OpenGL options
-            Console.WriteLine("Enabling OpenGL options.");
+            Console.WriteLine(EngineMessages.EnablingOpenGl);
             GL.Enable(EnableCap.DepthTest);
             GL.FrontFace(FrontFaceDirection.Cw);
             GL.Enable(EnableCap.CullFace);

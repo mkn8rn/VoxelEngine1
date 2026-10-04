@@ -1,3 +1,4 @@
+using MVoxelEngine1.Infrastructure.Resources;
 using MVoxelEngine1.Graphics.Models;
 using MVoxelEngine1.Infrastructure.Loaders;
 using MVoxelEngine1.Infrastructure.Managers;
@@ -228,7 +229,7 @@ namespace MVoxelEngine1.Graphics.Textures
         public BlockTextureAtlas(BlockTextureAtlasUploadMode uploadMode = BlockTextureAtlasUploadMode.OpenGl)
         {
             this.uploadMode = uploadMode;
-            Console.WriteLine(uploadMode == BlockTextureAtlasUploadMode.OpenGl ? "Generating terrain texture atlas." : "Generating terrain texture atlas for simulated GPU upload.");
+            Console.WriteLine(uploadMode == BlockTextureAtlasUploadMode.OpenGl ? EngineMessages.GeneratingTextureAtlas : EngineMessages.GeneratingSimulatedTextureAtlas);
             var baseTextureFiles = Directory.GetFiles(GameManager.settings.assetsBaseBlockTexturesDirectory, "*" + GameManager.settings.textureFileExtension);
             var textureFiles = Directory.GetFiles(GameManager.settings.assetsBlockTexturesDirectory, "*" + GameManager.settings.textureFileExtension);
             int baseTextureCount = baseTextureFiles.Length;
@@ -252,14 +253,14 @@ namespace MVoxelEngine1.Graphics.Textures
             StbImage.stbi_set_flip_vertically_on_load(1);
             fallbackTexture = LoadImage(GameManager.settings.assetsBaseBlockTexturesDirectory + fallbackTextureName + GameManager.settings.textureFileExtension);
             missingTexture = LoadImage(GameManager.settings.assetsBaseBlockTexturesDirectory + missingTextureName + GameManager.settings.textureFileExtension);
-            Console.WriteLine($"Loading base textures to atlas.");
+            Console.WriteLine(EngineMessages.LoadingBaseTextures);
             LoadTextureIntoAtlas(baseTextureFiles);
-            Console.WriteLine($"Loading other textures to atlas.");
+            Console.WriteLine(EngineMessages.LoadingOtherTextures);
             LoadTextureIntoAtlas(textureFiles);
             InitializeBlockTypeUVCoordinates();
             MapTextureCoordinates();
             int emptyTiles = tilesX * tilesY - textureCount;
-            Console.WriteLine($"Atlas finished generating.");
+            Console.WriteLine(EngineMessages.TextureAtlasGenerated);
             Console.WriteLine($"Atlas total width: {atlasWidth}");
             Console.WriteLine($"Atlas total height: {atlasHeight}");
             Console.WriteLine($"Number of textures loaded: {textureCount}");
@@ -334,7 +335,7 @@ namespace MVoxelEngine1.Graphics.Textures
 
         private void MapTextureCoordinates()
         {
-            Console.WriteLine($"Mapping texture coordinates.");
+            Console.WriteLine(EngineMessages.MappingTextures);
             foreach (var bt in TerrainLoader.allBlockTypeObjects)
             {
                 if (!blockTypeUVCoordinates.TryGetValue(bt.ID, out var faceDict))

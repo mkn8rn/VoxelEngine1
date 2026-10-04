@@ -1,4 +1,5 @@
-﻿using MVoxelEngine1.Infrastructure.Managers;
+using MVoxelEngine1.Infrastructure.Resources;
+using MVoxelEngine1.Infrastructure.Managers;
 using MVoxelEngine1.Infrastructure.Models.Terrain;
 using System;
 using System.Collections.Generic;
@@ -47,7 +48,7 @@ namespace MVoxelEngine1.Infrastructure.Loaders
 
         public TerrainLoader()
         {
-            Console.WriteLine("Terrain data loading.");
+            Console.WriteLine(EngineMessages.TerrainLoading);
 
             LoadBaseBlockType();
             LoadOtherBlockTypes();
@@ -56,7 +57,7 @@ namespace MVoxelEngine1.Infrastructure.Loaders
             InitializeLiquidBlocks();
             BuildLiquidLookup();
 
-            Console.WriteLine("Terrain data finished loading.");
+            Console.WriteLine(EngineMessages.TerrainLoaded);
             Console.WriteLine($"Total block types (including base): {allBlockTypes.Count}");
         }
 
@@ -224,7 +225,7 @@ namespace MVoxelEngine1.Infrastructure.Loaders
             string[] txtFiles = Directory.GetFiles(dir, "*.txt", SearchOption.TopDirectoryOnly);
             if (txtFiles.Length == 0)
             {
-                Console.WriteLine("No custom block type files found.");
+                Console.WriteLine(EngineMessages.NoCustomBlockFiles);
                 return;
             }
 

@@ -1,3 +1,4 @@
+using MVoxelEngine1.Infrastructure.Resources;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -132,7 +133,7 @@ namespace MVoxelEngine1.Infrastructure.Managers
                 return gameFolders[0];
             }
 
-            Console.WriteLine("Select a game to load:");
+            Console.WriteLine(EngineMessages.SelectGame);
             for (int i = 0; i < orderedFolders.Count; i++)
             {
                 Console.WriteLine($"{i + 1}: {Path.GetFileName(orderedFolders[i])}");
@@ -145,7 +146,7 @@ namespace MVoxelEngine1.Infrastructure.Managers
                 {
                     return orderedFolders[selectedIndex - 1];
                 }
-                Console.WriteLine("Invalid input. Please try again.");
+                Console.WriteLine(EngineMessages.InvalidInput);
             }
         }
     }

@@ -1,4 +1,4 @@
-﻿using MVoxelEngine1.Infrastructure.Models.Terrain;
+using MVoxelEngine1.Infrastructure.Models.Terrain;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -9,8 +9,10 @@ namespace MVoxelEngine1.Infrastructure.Models.Generation.Biomes
 {
     public class InlineReplacementRule
     {
-        public required List<BaseBlockType> base_blocks_to_replace { get; set; }
-        public required BlockType block_type { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("base_blocks_to_replace")]
+        public required List<BaseBlockType> BaseBlocksToReplace { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("block_type")]
+        public required BlockType BlockType { get; set; }
         public required int priority { get; set; }
 
         public required int? microbiomeId { get; set; }

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 
 namespace MVoxelEngine1.Infrastructure.Models.Generation.Biomes
 {
-    public struct MicrobiomeJSON
+    public record struct MicrobiomeJSON
     {
         // Placeholder for future microbiome-specific parameters.
         public int id { get; set; }

@@ -1,0 +1,93 @@
+<?xml version='1.0' encoding='utf-8'?>
+<root>
+  <resheader name="resmimetype">
+    <value>text/microsoft-resx</value>
+  </resheader>
+  <resheader name="version">
+    <value>2.0</value>
+  </resheader>
+  <data name="SelectWorld" xml:space="preserve">
+    <value>Please select a world:</value>
+  </data>
+  <data name="GenerateNewWorld" xml:space="preserve">
+    <value>0. Generate a new world</value>
+  </data>
+  <data name="EnterWorldName" xml:space="preserve">
+    <value>Please enter a world name:</value>
+  </data>
+  <data name="WorldNameLatinOnly" xml:space="preserve">
+    <value>The world name must contain only Latin alphabet characters.</value>
+  </data>
+  <data name="WorldNameInUse" xml:space="preserve">
+    <value>The world name is already in use.</value>
+  </data>
+  <data name="EnterWorldSeed" xml:space="preserve">
+    <value>Please enter a world seed:</value>
+  </data>
+  <data name="WorldSeedInteger" xml:space="preserve">
+    <value>The world seed must be an integer.</value>
+  </data>
+  <data name="TerrainLoading" xml:space="preserve">
+    <value>Terrain data loading.</value>
+  </data>
+  <data name="TerrainLoaded" xml:space="preserve">
+    <value>Terrain data finished loading.</value>
+  </data>
+  <data name="SelectGame" xml:space="preserve">
+    <value>Select a game to load:</value>
+  </data>
+  <data name="InvalidInput" xml:space="preserve">
+    <value>Invalid input. Please try again.</value>
+  </data>
+  <data name="NoCustomBlockFiles" xml:space="preserve">
+    <value>No custom block type files found.</value>
+  </data>
+  <data name="GeneratingTextureAtlas" xml:space="preserve">
+    <value>Generating terrain texture atlas.</value>
+  </data>
+  <data name="GeneratingSimulatedTextureAtlas" xml:space="preserve">
+    <value>Generating terrain texture atlas for simulated GPU upload.</value>
+  </data>
+  <data name="LoadingBaseTextures" xml:space="preserve">
+    <value>Loading base textures to atlas.</value>
+  </data>
+  <data name="LoadingOtherTextures" xml:space="preserve">
+    <value>Loading other textures to atlas.</value>
+  </data>
+  <data name="TextureAtlasGenerated" xml:space="preserve">
+    <value>Atlas finished generating.</value>
+  </data>
+  <data name="MappingTextures" xml:space="preserve">
+    <value>Mapping texture coordinates.</value>
+  </data>
+  <data name="InitializingGameManager" xml:space="preserve">
+    <value>Game manager initializing.</value>
+  </data>
+  <data name="InitializingDataLoaders" xml:space="preserve">
+    <value>Data loaders initializing.</value>
+  </data>
+  <data name="LoadingBiomes" xml:space="preserve">
+    <value>Biomes loading.</value>
+  </data>
+  <data name="InitializingTextureAtlases" xml:space="preserve">
+    <value>Texture atlases initializing.</value>
+  </data>
+  <data name="InitializingShaders" xml:space="preserve">
+    <value>Shaders initializing.</value>
+  </data>
+  <data name="InitializingPlayer" xml:space="preserve">
+    <value>Initializing player.</value>
+  </data>
+  <data name="EnablingOpenGl" xml:space="preserve">
+    <value>Enabling OpenGL options.</value>
+  </data>
+  <data name="OptimizedFaceMode" xml:space="preserve">
+    <value>Face generation mode: Optimized.</value>
+  </data>
+  <data name="ReferenceValidationEnabled" xml:space="preserve">
+    <value>Reference face validation enabled.</value>
+  </data>
+  <data name="SimulatedUploadStarted" xml:space="preserve">
+    <value>Simulated GPU upload mode started without an OpenTK window.</value>
+  </data>
+</root>

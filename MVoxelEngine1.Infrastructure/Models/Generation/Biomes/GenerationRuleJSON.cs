@@ -1,4 +1,4 @@
-﻿using MVoxelEngine1.Infrastructure.Models.Generation;
+using MVoxelEngine1.Infrastructure.Models.Generation;
 using MVoxelEngine1.Infrastructure.Models.Terrain;
 using System;
 using System.Collections.Generic;
@@ -8,28 +8,39 @@ using System.Threading.Tasks;
 
 namespace MVoxelEngine1.Infrastructure.Models.Generation.Biomes
 {
-    public struct GenerationRuleJSON
+    public record struct GenerationRuleJSON
     {
         // Required
-        public required GenerationType generation_type { get; set; }
-        public required List<string> base_blocks_to_replace { get; set; }
-        public required string block_type_id { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("generation_type")]
+        public required GenerationType GenerationType { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("base_blocks_to_replace")]
+        public required List<string> BaseBlocksToReplace { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("block_type_id")]
+        public required string BlockTypeId { get; set; }
         public required int priority { get; set; }
 
         // Target blocks (for after inline rules)
-        public List<ushort>? blocks_to_replace { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("blocks_to_replace")]
+        public List<ushort>? BlocksToReplace { get; set; }
 
         // Biome parameters
-        public int? microbiome_id { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("microbiome_id")]
+        public int? MicrobiomeId { get; set; }
 
         // Depth parameters
-        public int? absolute_min_ylevel { get; set; }
-        public int? absolute_max_ylevel { get; set; }
-        public int? relative_min_depth { get; set; }
-        public int? relative_max_depth { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("absolute_min_ylevel")]
+        public int? AbsoluteMinYLevel { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("absolute_max_ylevel")]
+        public int? AbsoluteMaxYLevel { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("relative_min_depth")]
+        public int? RelativeMinDepth { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("relative_max_depth")]
+        public int? RelativeMaxDepth { get; set; }
 
         // Noise parameters
-        public double? fill_proportion { get; set; }
-        public NoiseType? noise_type { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("fill_proportion")]
+        public double? FillProportion { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("noise_type")]
+        public NoiseType? NoiseType { get; set; }
     }
 }

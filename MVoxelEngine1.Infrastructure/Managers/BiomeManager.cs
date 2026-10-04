@@ -92,26 +92,26 @@ namespace MVoxelEngine1.Infrastructure.Managers
 
                         foreach (var rule in rules)
                         {
-                            if (rule.generation_type is not (GenerationType.InlineReplacement or GenerationType.SimpleReplacement))
-                                throw new NotSupportedException($"Generation type '{rule.generation_type}' is not supported.");
-                            if (rule.microbiome_id is not null || rule.noise_type is not null ||
-                                rule.fill_proportion is not (null or 1))
+                            if (rule.GenerationType is not (GenerationType.InlineReplacement or GenerationType.SimpleReplacement))
+                                throw new NotSupportedException($"Generation type '{rule.GenerationType}' is not supported.");
+                            if (rule.MicrobiomeId is not null || rule.NoiseType is not null ||
+                                rule.FillProportion is not (null or 1))
                                 throw new NotSupportedException("Replacement microbiome and noise filters are not implemented.");
-                            if (rule.absolute_min_ylevel > rule.absolute_max_ylevel ||
-                                rule.relative_min_depth > rule.relative_max_depth ||
-                                rule.relative_min_depth < 0 || rule.relative_max_depth < 0)
+                            if (rule.AbsoluteMinYLevel > rule.AbsoluteMaxYLevel ||
+                                rule.RelativeMinDepth > rule.RelativeMaxDepth ||
+                                rule.RelativeMinDepth < 0 || rule.RelativeMaxDepth < 0)
                                 throw new InvalidDataException("Replacement rule bounds are invalid.");
 
                             // Resolve target block type 
-                            var targetBlock = ResolveBlockType(rule.block_type_id);
+                            var targetBlock = ResolveBlockType(rule.BlockTypeId);
                             if (targetBlock == null)
-                                throw new Exception($"Rule references unknown block_type_id '{rule.block_type_id}'");
+                                throw new Exception($"Rule references unknown block_type_id '{rule.BlockTypeId}'");
 
                             // Build list of base block types to replace
                             var baseList = new List<BaseBlockType>();
-                            if (rule.base_blocks_to_replace != null && rule.base_blocks_to_replace.Count > 0)
+                            if (rule.BaseBlocksToReplace != null && rule.BaseBlocksToReplace.Count > 0)
                             {
-                                foreach (var token in rule.base_blocks_to_replace)
+                                foreach (var token in rule.BaseBlocksToReplace)
                                 {
                                     if (string.IsNullOrWhiteSpace(token)) continue;
                                     if (TryResolveBaseBlockType(token, out var bbt))
@@ -133,10 +133,10 @@ namespace MVoxelEngine1.Infrastructure.Managers
 
                             // Specific block IDs to replace
                             var blockList = new List<BlockType>();
-                            if (rule.blocks_to_replace != null && rule.blocks_to_replace.Count > 0)
+                            if (rule.BlocksToReplace != null && rule.BlocksToReplace.Count > 0)
                             {
                                 // Derive block types from specific block IDs
-                                foreach (var btId in rule.blocks_to_replace)
+                                foreach (var btId in rule.BlocksToReplace)
                                 {
                                     var blockType = TerrainLoader.allBlockTypeObjects.Find(b => b.ID == btId);
                                     if (blockType == null)
@@ -148,16 +148,16 @@ namespace MVoxelEngine1.Infrastructure.Managers
 
                             var simpleRule = new SimpleReplacementRule
                             {
-                                GenerationType = rule.generation_type,
-                                RelativeMinDepth = rule.relative_min_depth,
-                                RelativeMaxDepth = rule.relative_max_depth,
-                                base_blocks_to_replace = baseList,
-                                blocks_to_replace = blockList,
-                                block_type = targetBlock,
+                                GenerationType = rule.GenerationType,
+                                RelativeMinDepth = rule.RelativeMinDepth,
+                                RelativeMaxDepth = rule.RelativeMaxDepth,
+                                BaseBlocksToReplace = baseList,
+                                BlocksToReplace = blockList,
+                                BlockType = targetBlock,
                                 priority = rule.priority,
-                                microbiomeId = rule.microbiome_id,
-                                absoluteMinYlevel = rule.absolute_min_ylevel,
-                                absoluteMaxYlevel = rule.absolute_max_ylevel
+                                microbiomeId = rule.MicrobiomeId,
+                                absoluteMinYlevel = rule.AbsoluteMinYLevel,
+                                absoluteMaxYlevel = rule.AbsoluteMaxYLevel
                             };
                             simpleReplacementRules.Add(simpleRule);
                         }
@@ -180,15 +180,15 @@ namespace MVoxelEngine1.Infrastructure.Managers
                 {
                     id = biomeJson.id,
                     name = biomeJson.name,
-                    stoneMinYLevel = biomeJson.stone_min_ylevel,
-                    stoneMaxYLevel = biomeJson.stone_max_ylevel,
-                    stoneMinDepth = biomeJson.stone_min_depth,
-                    stoneMaxDepth = biomeJson.stone_max_depth,
-                    soilMinYLevel = biomeJson.soil_min_ylevel,
-                    soilMaxYLevel = biomeJson.soil_max_ylevel,
-                    soilMinDepth = biomeJson.soil_min_depth,
-                    soilMaxDepth = biomeJson.soil_max_depth,
-                    waterLevel = biomeJson.water_level,
+                    stoneMinYLevel = biomeJson.StoneMinYLevel,
+                    stoneMaxYLevel = biomeJson.StoneMaxYLevel,
+                    stoneMinDepth = biomeJson.StoneMinDepth,
+                    stoneMaxDepth = biomeJson.StoneMaxDepth,
+                    soilMinYLevel = biomeJson.SoilMinYLevel,
+                    soilMaxYLevel = biomeJson.SoilMaxYLevel,
+                    soilMinDepth = biomeJson.SoilMinDepth,
+                    soilMaxDepth = biomeJson.SoilMaxDepth,
+                    waterLevel = biomeJson.WaterLevel,
                     microbiomes = microbiomesList,
                     simpleReplacements = simpleReplacementRules
                 };
@@ -222,9 +222,9 @@ namespace MVoxelEngine1.Infrastructure.Managers
             {
                 // Build specific id array
                 var idList = new List<ushort>();
-                if (r.blocks_to_replace != null)
+                if (r.BlocksToReplace != null)
                 {
-                    foreach (var bt in r.blocks_to_replace)
+                    foreach (var bt in r.BlocksToReplace)
                     {
                         if (bt != null) idList.Add(bt.ID);
                     }
@@ -232,9 +232,9 @@ namespace MVoxelEngine1.Infrastructure.Managers
                 idList.Sort();
                 // Build base type mask
                 uint mask = 0u;
-                if (r.base_blocks_to_replace != null)
+                if (r.BaseBlocksToReplace != null)
                 {
-                    foreach (var bb in r.base_blocks_to_replace)
+                    foreach (var bb in r.BaseBlocksToReplace)
                     {
                         mask |= 1u << (int)bb;
                     }
@@ -242,7 +242,7 @@ namespace MVoxelEngine1.Infrastructure.Managers
                 int minY = r.absoluteMinYlevel ?? int.MinValue;
                 int maxY = r.absoluteMaxYlevel ?? int.MaxValue;
                 var compiledRule = new CompiledSimpleReplacementRule(
-                    r.block_type.ID,
+                    r.BlockType.ID,
                     idList.ToArray(),
                     mask,
                     minY,

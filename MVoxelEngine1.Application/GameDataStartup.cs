@@ -1,3 +1,4 @@
+using MVoxelEngine1.Infrastructure.Resources;
 using MVoxelEngine1.Infrastructure.Diagnostics;
 using MVoxelEngine1.Infrastructure.Loaders;
 using MVoxelEngine1.Infrastructure.Managers;
@@ -8,16 +9,16 @@ namespace MVoxelEngine1.Application
     {
         public static TerrainLoader Load()
         {
-            Console.WriteLine("Game manager initializing.");
+            Console.WriteLine(EngineMessages.InitializingGameManager);
             GameManager.Initialize();
 
             string game = GameManager.SelectGameFolder(FlagManager.flags.game);
             GameManager.LoadGameDefaultSettings(game);
 
-            Console.WriteLine("Data loaders initializing.");
+            Console.WriteLine(EngineMessages.InitializingDataLoaders);
             var terrainLoader = new TerrainLoader();
 
-            Console.WriteLine("Biomes loading.");
+            Console.WriteLine(EngineMessages.LoadingBiomes);
             BiomeManager.LoadAllBiomes();
             Console.WriteLine($"Loaded {BiomeManager.Biomes.Count} biome(s).");
             StartupPerformanceRecorder.RecordGameLoaded();

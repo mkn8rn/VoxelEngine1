@@ -1,3 +1,4 @@
+using MVoxelEngine1.Infrastructure.Resources;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Diagnostics;
@@ -29,7 +30,7 @@ namespace MVoxelEngine1.Application.Simulation
         {
             GameDataStartup.Load();
 
-            Console.WriteLine("Texture atlases initializing.");
+            Console.WriteLine(EngineMessages.InitializingTextureAtlases);
             var textureAtlas = new BlockTextureAtlas(
                 BlockTextureAtlasUploadMode.SimulatedGpuUpload);
             ChunkRender.terrainTextureAtlas = textureAtlas;

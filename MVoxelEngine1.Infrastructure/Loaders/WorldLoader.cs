@@ -1,3 +1,4 @@
+using MVoxelEngine1.Infrastructure.Resources;
 using MVoxelEngine1.Infrastructure.Managers;
 
 namespace MVoxelEngine1.Infrastructure.Loaders
@@ -35,8 +36,8 @@ namespace MVoxelEngine1.Infrastructure.Loaders
                 return;
             }
 
-            Console.WriteLine("Please select a world:");
-            Console.WriteLine("0. Generate a new world");
+            Console.WriteLine(EngineMessages.SelectWorld);
+            Console.WriteLine(EngineMessages.GenerateNewWorld);
 
             List<string> worldSaveNames = worldSaves.Values.ToList();
             for (int index = 0; index < worldSaveNames.Count; index++)
@@ -131,17 +132,17 @@ namespace MVoxelEngine1.Infrastructure.Loaders
         {
             while (true)
             {
-                Console.WriteLine("Please enter a world name:");
+                Console.WriteLine(EngineMessages.EnterWorldName);
                 string? input = Console.ReadLine();
                 if (!IsLatinAlphabet(input))
                 {
-                    Console.WriteLine("The world name must contain only Latin alphabet characters.");
+                    Console.WriteLine(EngineMessages.WorldNameLatinOnly);
                     continue;
                 }
 
                 if (worldSaves.Values.Contains(input!, StringComparer.OrdinalIgnoreCase))
                 {
-                    Console.WriteLine("The world name is already in use.");
+                    Console.WriteLine(EngineMessages.WorldNameInUse);
                     continue;
                 }
 
@@ -152,13 +153,13 @@ namespace MVoxelEngine1.Infrastructure.Loaders
 
         public void GetWorldSeed()
         {
-            Console.WriteLine("Please enter a world seed:");
+            Console.WriteLine(EngineMessages.EnterWorldSeed);
             string? input = Console.ReadLine();
             int parsedSeed;
 
             while (!int.TryParse(input, out parsedSeed))
             {
-                Console.WriteLine("The world seed must be an integer.");
+                Console.WriteLine(EngineMessages.WorldSeedInteger);
                 input = Console.ReadLine();
             }
 
