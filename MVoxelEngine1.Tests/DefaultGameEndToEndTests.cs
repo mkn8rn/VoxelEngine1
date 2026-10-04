@@ -478,7 +478,7 @@ namespace MVoxelEngine1.Tests
                 output,
                 $"{Regex.Escape(prefix)}(?<milliseconds>[0-9]+) ms\\.");
             Assert.True(match.Success, $"Console timing was not found for '{prefix}'. Output: {Tail(output)}");
-            return long.Parse(match.Groups["milliseconds"].Value);
+            return long.Parse(match.Groups["milliseconds"].Value,System.Globalization.CultureInfo.CurrentCulture);
         }
 
         private static double ReadConsoleDoubleTiming(string output, string prefix)

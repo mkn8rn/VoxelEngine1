@@ -25,10 +25,7 @@ internal readonly struct NativeGtrtSessionLayout
         ArgumentOutOfRangeException.ThrowIfNegative(gameSnapshotByteCount);
         ArgumentOutOfRangeException.ThrowIfNegative(materializedChunkCapacity);
         ArgumentOutOfRangeException.ThrowIfNegative(materializedSectionCapacity);
-        if (materializedRawSectionCapacity < -1)
-        {
-            throw new ArgumentOutOfRangeException(nameof(materializedRawSectionCapacity));
-        }
+        ArgumentOutOfRangeException.ThrowIfLessThan(materializedRawSectionCapacity, -1);
 
         ArgumentOutOfRangeException.ThrowIfNegative(materializedPaletteCapacity);
         ArgumentOutOfRangeException.ThrowIfNegative(materializedPackedWordCapacity);

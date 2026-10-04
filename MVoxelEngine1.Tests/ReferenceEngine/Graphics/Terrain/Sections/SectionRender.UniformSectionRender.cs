@@ -9,7 +9,7 @@ using MVoxelEngine1.Infrastructure.Loaders;
 
 namespace MVoxelEngine1.Graphics.Terrain.Sections
 {
-    internal partial class SectionRender
+    internal sealed partial class SectionRender
     {
         // Face classification state (fast-path stratification pre-pass)
         private enum FaceState : byte

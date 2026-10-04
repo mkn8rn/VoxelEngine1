@@ -155,7 +155,7 @@ public sealed class NativeGtrtSessionTests
                         view.MeshJobs[index].State);
                 }
 
-                foreach (var profile in view.Profiles)
+                foreach (ref readonly var profile in view.Profiles)
                 {
                     Assert.Equal(-1, profile.StoneStart);
                     Assert.Equal(-1, profile.StoneEnd);

@@ -307,7 +307,7 @@ public sealed class NativeWorldSaveImportTests
             Assert.Equal(6, view.State.MaterializedPaletteCursor);
             Assert.Equal(384, view.State.MaterializedPackedWordCursor);
             int packedSectionCount = 0;
-            foreach (NativeMaterializedSectionRecord section in
+            foreach (ref readonly NativeMaterializedSectionRecord section in
                      view.MaterializedSections)
             {
                 if (section.StorageKind == NativeSectionStorageKind.Packed)

@@ -57,7 +57,7 @@ namespace MVoxelEngine1.Infrastructure.Loaders
                 throw new InvalidOperationException("World selection is outside the valid range.");
 
             string selectedWorld = worldSaveNames[selectedWorldIndex - 1];
-            Guid selectedWorldId = worldSaves.First(item => item.Value == selectedWorld).Key;
+            Guid selectedWorldId = worldSaves.First(item => string.Equals(item.Value, selectedWorld, StringComparison.Ordinal)).Key;
             LoadWorldSave(selectedWorldId);
         }
 
@@ -166,7 +166,7 @@ namespace MVoxelEngine1.Infrastructure.Loaders
             seed = parsedSeed;
         }
 
-        public bool IsLatinAlphabet(string? input)
+        public static bool IsLatinAlphabet(string? input)
         {
             if (string.IsNullOrWhiteSpace(input))
                 return false;
@@ -194,7 +194,7 @@ namespace MVoxelEngine1.Infrastructure.Loaders
                 ID.ToString(),
                 RegionID.ToString(),
                 worldName,
-                seed.ToString()
+                seed.ToString(System.Globalization.CultureInfo.CurrentCulture)
             });
 
             CreateRegionDirectories(worldRoot);

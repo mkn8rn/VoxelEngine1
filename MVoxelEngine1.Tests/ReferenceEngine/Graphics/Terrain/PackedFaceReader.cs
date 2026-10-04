@@ -3,5 +3,5 @@ using Supprocom.NativeAllocationManagement;
 
 namespace MVoxelEngine1.Graphics.Terrain
 {
-    public delegate TResult PackedFaceReader<TResult>(ReadOnlySpan<uint> rectangles);
+    internal delegate TResult PackedFaceReader<TResult>(ReadOnlySpan<uint> rectangles);
 }

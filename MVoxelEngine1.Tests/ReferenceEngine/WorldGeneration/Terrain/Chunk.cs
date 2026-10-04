@@ -16,7 +16,7 @@ using MVoxelEngine1.Infrastructure.Loaders;
 
 namespace MVoxelEngine1.WorldGeneration.Terrain
 {
-    internal partial class Chunk
+    internal sealed partial class Chunk
     {
         // Optional uniform override supplied by batch classification to skip normal span derivation path.
         internal enum UniformOverride { None = 0, AllAir, AllStone, AllSoil, AllWater } // AllWater added for slabs fully submerged between surface+1 and cached water level
@@ -294,7 +294,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
             return sec;
         }
 
-        public void LocalToSection(int lx, int ly, int lz,
+        public static void LocalToSection(int lx, int ly, int lz,
             out int sx, out int sy, out int sz,
             out int ox, out int oy, out int oz)
         {

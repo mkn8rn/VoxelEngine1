@@ -102,7 +102,7 @@ public sealed class NativeGameSnapshotTests
                 Assert.Equal(source.soilMaxDepth, descriptor.SoilMaxDepth);
                 Assert.Equal(source.waterLevel, descriptor.WaterLevel);
                 Assert.Equal(
-                    source.compiledSimpleReplacementRules.Length,
+                    source.compiledSimpleReplacementRules.Count,
                     descriptor.ReplacementRuleCount);
             }
 

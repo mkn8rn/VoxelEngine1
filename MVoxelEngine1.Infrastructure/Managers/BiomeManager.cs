@@ -80,7 +80,7 @@ namespace MVoxelEngine1.Infrastructure.Managers
                     {
                         string rulesJsonText = File.ReadAllText(generationRulesPath);
                         if (string.IsNullOrWhiteSpace(rulesJsonText))
-                            throw new Exception("GenerationRules.txt is empty");
+                            throw new InvalidOperationException("GenerationRules.txt is empty");
 
                         // Preprocess to allow unquoted identifiers (e.g., Stone, Soil, LimeWhole) by mapping them to numeric IDs.
                         // This keeps the on-disk format human-readable while reusing existing numeric-based JSON model.
@@ -88,7 +88,7 @@ namespace MVoxelEngine1.Infrastructure.Managers
 
                         var rules = JsonSerializer.Deserialize<List<GenerationRuleJSON>>(processedText, jsonOptions);
                         if (rules == null)
-                            throw new Exception("Deserialized rules list is null");
+                            throw new InvalidOperationException("Deserialized rules list is null");
 
                         foreach (var rule in rules)
                         {
@@ -105,7 +105,7 @@ namespace MVoxelEngine1.Infrastructure.Managers
                             // Resolve target block type 
                             var targetBlock = ResolveBlockType(rule.BlockTypeId);
                             if (targetBlock == null)
-                                throw new Exception($"Rule references unknown block_type_id '{rule.BlockTypeId}'");
+                                throw new InvalidOperationException($"Rule references unknown block_type_id '{rule.BlockTypeId}'");
 
                             // Build list of base block types to replace
                             var baseList = new List<BaseBlockType>();
@@ -408,7 +408,7 @@ namespace MVoxelEngine1.Infrastructure.Managers
 
             // Build lookup maps (case-insensitive)
             var baseTypeMap = new Dictionary<string, ushort>(StringComparer.OrdinalIgnoreCase);
-            foreach (BaseBlockType bt in Enum.GetValues(typeof(BaseBlockType)))
+            foreach (BaseBlockType bt in Enum.GetValues<BaseBlockType>())
             {
                 baseTypeMap[bt.ToString()] = (ushort)bt;
             }
@@ -458,12 +458,12 @@ namespace MVoxelEngine1.Infrastructure.Managers
                     }
                     if (baseTypeMap.TryGetValue(token, out ushort baseId))
                     {
-                        sb.Append(baseId.ToString());
+                        sb.Append(baseId.ToString(System.Globalization.CultureInfo.CurrentCulture));
                         continue;
                     }
                     if (blockTypeMap.TryGetValue(token, out ushort blockId))
                     {
-                        sb.Append(blockId.ToString());
+                        sb.Append(blockId.ToString(System.Globalization.CultureInfo.CurrentCulture));
                         continue;
                     }
                     // Unknown identifier: leave unchanged so downstream error surfaces with context.

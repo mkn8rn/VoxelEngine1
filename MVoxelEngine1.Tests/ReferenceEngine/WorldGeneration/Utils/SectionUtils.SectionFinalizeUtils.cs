@@ -19,8 +19,6 @@ namespace MVoxelEngine1.WorldGeneration.Utils
         private static readonly ConcurrentBag<ulong[]> _occupancyPool = new();
         private static readonly ConcurrentBag<ushort[]> _densePool = new();
         private static readonly ConcurrentDictionary<ulong, List<ushort>> SharedGenerationPalettes = new();
-        // Pool for escalated per-column 16-length voxel arrays
-        private static readonly ConcurrentBag<ushort[]> _escalatedColumnPool = new();
         // -------------------------------------------------------------------------------------------------
         // RentBitData – rents a uint[] array of at least the requested length.
         // Used for Packed or MultiPacked representations.

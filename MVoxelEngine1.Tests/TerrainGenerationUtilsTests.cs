@@ -359,7 +359,7 @@ namespace MVoxelEngine1.Tests
 
         private static long ConsumeNoise(long checksum, ReadOnlySpan<float> values)
         {
-            foreach (float value in values)
+            foreach (ref readonly float value in values)
             {
                 checksum = unchecked(
                     checksum + BitConverter.SingleToInt32Bits(value));

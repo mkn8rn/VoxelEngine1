@@ -21,11 +21,11 @@ using System.Diagnostics;
 
 namespace MVoxelEngine1.Graphics.Terrain
 {
-    public partial class ChunkRender : INativeChunkRenderer
+    public sealed partial class ChunkRender : INativeChunkRenderer
     {
         private static readonly ConcurrentQueue<ChunkRender> pendingDeletion = new();
 
-        private bool isBuilt = false;
+        private bool isBuilt;
         private Vector3 chunkWorldPosition;
 
         private int opaqueFaceCount;

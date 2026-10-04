@@ -13,14 +13,13 @@ using MVoxelEngine1.Infrastructure.Models.Simulation;
 
 namespace MVoxelEngine1.Application.Gameplay
 {
-    internal class Player
+    internal sealed class Player
     {
         private PlayerState playerMode;
         public Vector3 position = Vector3.Zero;
         public Vector3 velocity = Vector3.Zero;
         public Vector3 direction = -Vector3.UnitZ; // Facing forward
         internal const float MovementSpeed = 60f;
-        private float jumpStrength = 5f;
         public Camera camera;
         private readonly IPlayerChunkPositionSink world;
         // Cache last reported chunk to avoid redundant property sets

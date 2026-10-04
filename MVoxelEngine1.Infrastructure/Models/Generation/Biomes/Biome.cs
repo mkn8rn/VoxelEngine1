@@ -1,4 +1,4 @@
-﻿namespace MVoxelEngine1.Infrastructure.Models.Generation.Biomes
+namespace MVoxelEngine1.Infrastructure.Models.Generation.Biomes
 {
     public class Biome
     {
@@ -17,8 +17,8 @@
         public required IList<SimpleReplacementRule> simpleReplacements { get; init; }
 
         // --- Added precompiled rule data (immutable once built) ---------------------------------
-        public CompiledSimpleReplacementRule[] compiledSimpleReplacementRules { get; internal set; } = Array.Empty<CompiledSimpleReplacementRule>();
+        public IReadOnlyList<CompiledSimpleReplacementRule> compiledSimpleReplacementRules { get; internal set; } = Array.Empty<CompiledSimpleReplacementRule>();
         // Bucketed by section Y index (for 16-high sections). Each entry holds indices into compiledSimpleReplacementRules.
-        public int[][] sectionYRuleBuckets { get; internal set; } = Array.Empty<int[]>();
+        public IReadOnlyList<int[]> sectionYRuleBuckets { get; internal set; } = Array.Empty<int[]>();
     }
 }

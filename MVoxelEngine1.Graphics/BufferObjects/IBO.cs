@@ -54,7 +54,7 @@ namespace MVoxelEngine1.Graphics.BufferObjects
         // Bind this index buffer.
         public void Bind() => GL.BindBuffer(BufferTarget.ElementArrayBuffer, ID);
         // Unbind any index buffer.
-        public void Unbind() => GL.BindBuffer(BufferTarget.ElementArrayBuffer, 0);
+        public static void Unbind() => GL.BindBuffer(BufferTarget.ElementArrayBuffer, 0);
         // Delete the GL buffer.
         public void Delete() => GL.DeleteBuffer(ID);
     }

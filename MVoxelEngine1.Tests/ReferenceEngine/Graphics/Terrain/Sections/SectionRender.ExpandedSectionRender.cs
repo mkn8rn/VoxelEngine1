@@ -8,7 +8,7 @@ using MVoxelEngine1.Infrastructure.Loaders;
 
 namespace MVoxelEngine1.Graphics.Terrain.Sections
 {
-    internal partial class SectionRender
+    internal sealed partial class SectionRender
     {
     // Removed until later re-implementation
     }

@@ -118,8 +118,7 @@ internal sealed partial class NativeGtrtSession : IDisposable
         pendingCenterChunkY = centerChunkY;
         pendingCenterChunkZ = centerChunkZ;
         runPrepared = false;
-        if (storage is null)
-            throw new ObjectDisposedException(nameof(NativeGtrtSession));
+        ObjectDisposedException.ThrowIf(storage is null, this);
         storage.Access(prepareRunAction);
         if (!runPrepared)
         {
@@ -132,8 +131,7 @@ internal sealed partial class NativeGtrtSession : IDisposable
         pendingGameSnapshot = gameSnapshot;
         try
         {
-            if (storage is null)
-                throw new ObjectDisposedException(nameof(NativeGtrtSession));
+            ObjectDisposedException.ThrowIf(storage is null, this);
             storage.Access(initializeGameSnapshotAction);
         }
         finally
@@ -145,8 +143,7 @@ internal sealed partial class NativeGtrtSession : IDisposable
     internal void Access(NativeLeaseAction<byte> action)
     {
         ArgumentNullException.ThrowIfNull(action);
-        if (storage is null)
-            throw new ObjectDisposedException(nameof(NativeGtrtSession));
+        ObjectDisposedException.ThrowIf(storage is null, this);
         storage.Access(action);
     }
 

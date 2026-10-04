@@ -6,8 +6,8 @@ using System.Threading.Tasks;
 
 namespace MVoxelEngine1.Graphics.Terrain.Sections
 {
-    internal partial class SectionRender
+    internal sealed partial class SectionRender
     {
-        private bool EmitEmptySectionInstances() => true; // nothing to emit
+        private static bool EmitEmptySectionInstances() => true; // nothing to emit
     }
 }

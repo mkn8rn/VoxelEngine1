@@ -34,7 +34,7 @@ namespace MVoxelEngine1.Graphics
             GL.DeleteShader(fragmentShader);
         }
 
-        private void CheckShaderCompileStatus(int shader)
+        private static void CheckShaderCompileStatus(int shader)
         {
             GL.GetShader(shader, ShaderParameter.CompileStatus, out int status);
             if (status == (int)All.False)
@@ -44,7 +44,7 @@ namespace MVoxelEngine1.Graphics
             }
         }
 
-        private void CheckProgramLinkStatus(int program)
+        private static void CheckProgramLinkStatus(int program)
         {
             GL.GetProgram(program, GetProgramParameterName.LinkStatus, out int status);
             if (status == (int)All.False)
@@ -59,7 +59,7 @@ namespace MVoxelEngine1.Graphics
             GL.UseProgram(ID);
         }
 
-        public void Unbind()
+        public static void Unbind()
         {
             GL.UseProgram(0);
         }

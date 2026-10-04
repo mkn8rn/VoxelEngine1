@@ -8,7 +8,7 @@ using MVoxelEngine1.Infrastructure.Loaders;
 
 namespace MVoxelEngine1.Graphics.Terrain.Sections
 {
-    internal partial class SectionRender
+    internal sealed partial class SectionRender
     {
         /// Emits face instances for a Packed single‑id section (Kind==4) with a single non‑air block id (palette[1]).
         /// Preconditions:

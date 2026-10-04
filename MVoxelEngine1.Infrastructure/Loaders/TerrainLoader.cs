@@ -28,8 +28,6 @@ namespace MVoxelEngine1.Infrastructure.Loaders
         // Always length 65536 (full ushort domain) to avoid bounds checks.
         private static readonly bool[] NonOpaqueLut = new bool[65536];
         private static readonly bool[] LiquidLut = new bool[65536];
-        private static readonly bool[] SolidLut = new bool[65536];
-        private static readonly bool[] GasLut = new bool[65536];
 
         // Liquid blocks.
         private static HashSet<BlockType> liquidBlocks = [];
@@ -172,7 +170,7 @@ namespace MVoxelEngine1.Infrastructure.Loaders
         internal static void LoadBaseBlockType()
         {
             // Base enum block types occupy the reserved ID range starting at 0.
-            foreach (BaseBlockType baseType in Enum.GetValues(typeof(BaseBlockType)))
+            foreach (BaseBlockType baseType in Enum.GetValues<BaseBlockType>())
             {
                 ushort id = (ushort)baseType; // authoritative ID for the base block
                 if (id >= FIRST_CUSTOM_BLOCK_ID)
@@ -217,7 +215,7 @@ namespace MVoxelEngine1.Infrastructure.Loaders
             }
         }
 
-        internal void LoadOtherBlockTypes()
+        internal static void LoadOtherBlockTypes()
         {
             string dir = GameManager.settings.dataBlockTypesDirectory;
             if (!Directory.Exists(dir))
@@ -259,23 +257,18 @@ namespace MVoxelEngine1.Infrastructure.Loaders
                         skippedFiles.Add((Path.GetFileName(txtFile), "Empty file"));
                         continue;
                     }
-                    BlockTypeJSON? parsed = JsonSerializer.Deserialize<BlockTypeJSON>(jsonText, jsonOptions);
-                    if (parsed == null)
-                    {
-                        skippedFiles.Add((Path.GetFileName(txtFile), "Deserialize returned null"));
-                        continue;
-                    }
-                    if (string.IsNullOrWhiteSpace(parsed.Value.Name))
+                    BlockTypeJSON parsed = JsonSerializer.Deserialize<BlockTypeJSON>(jsonText, jsonOptions);
+                    if (string.IsNullOrWhiteSpace(parsed.Name))
                     {
                         skippedFiles.Add((Path.GetFileName(txtFile), "Missing Name"));
                         continue;
                     }
-                    if (parsed.Value.ID.HasValue)
-                        explicitIdList.Add((parsed.Value, txtFile));
+                    if (parsed.ID.HasValue)
+                        explicitIdList.Add((parsed, txtFile));
                     else
-                        autoIdList.Add((parsed.Value, txtFile));
+                        autoIdList.Add((parsed, txtFile));
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or ArgumentException or InvalidOperationException)
                 {
                     skippedFiles.Add((Path.GetFileName(txtFile), "Exception: " + ex.Message));
                 }
@@ -326,7 +319,7 @@ namespace MVoxelEngine1.Infrastructure.Loaders
                     RegisterRuntimeBlock(rt, file);
                     explicitAssigned.Add((rt.Name, rt.ID));
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or ArgumentException or InvalidOperationException)
                 {
                     skippedFiles.Add((Path.GetFileName(file), "Explicit ID failed: " + ex.Message));
                 }
@@ -368,7 +361,7 @@ namespace MVoxelEngine1.Infrastructure.Loaders
                     RegisterRuntimeBlock(rt, file);
                     autoAssigned.Add((rt.Name, rt.ID));
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or ArgumentException or InvalidOperationException)
                 {
                     skippedFiles.Add((Path.GetFileName(file), "Auto ID failed: " + ex.Message));
                 }

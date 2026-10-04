@@ -1,4 +1,4 @@
-﻿using OpenTK.Mathematics;
+using OpenTK.Mathematics;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 
 namespace MVoxelEngine1.Application.Gameplay
 {
-    internal class Camera
+    internal sealed class Camera
     {
         public Vector3 position = Vector3.Zero;
         public Vector3 front = -Vector3.UnitZ;
@@ -26,7 +26,7 @@ namespace MVoxelEngine1.Application.Gameplay
             return Matrix4.LookAt(position, position + front, up);
         }
 
-        public Matrix4 GetProjectionMatrix(float aspectRatio)
+        public static Matrix4 GetProjectionMatrix(float aspectRatio)
         {
             return Matrix4.CreatePerspectiveFieldOfView(MathHelper.DegreesToRadians(45.0f), aspectRatio, 0.1f, 1600000.0f);
         }

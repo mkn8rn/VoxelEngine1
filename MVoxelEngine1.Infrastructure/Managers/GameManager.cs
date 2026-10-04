@@ -58,11 +58,11 @@ namespace MVoxelEngine1.Infrastructure.Managers
             gameDirectory = Path.GetFullPath(gameDirectory);
             string defaultsPath = Path.Combine(gameDirectory, "Defaults.txt"); // still using .txt extension
             if (!File.Exists(defaultsPath))
-                throw new Exception($"Defaults.txt not found in {gameDirectory}");
+                throw new InvalidOperationException($"Defaults.txt not found in {gameDirectory}");
 
             string json = File.ReadAllText(defaultsPath);
             if (string.IsNullOrWhiteSpace(json))
-                throw new Exception("Game Defaults JSON is empty.");
+                throw new InvalidOperationException("Game Defaults JSON is empty.");
 
             GameSettings? loaded;
             try
@@ -71,10 +71,10 @@ namespace MVoxelEngine1.Infrastructure.Managers
             }
             catch (Exception ex)
             {
-                throw new Exception($"Failed to deserialize game Defaults.txt: {ex.Message}");
+                throw new InvalidOperationException($"Failed to deserialize game Defaults.txt: {ex.Message}");
             }
             if (loaded == null)
-                throw new Exception("Deserialization returned null GameSettings.");
+                throw new InvalidOperationException("Deserialization returned null GameSettings.");
 
             // Post-process: ensure required directory paths are rooted relative to the game folder.
             loaded.gameDataDirectory = gameDataRoot;

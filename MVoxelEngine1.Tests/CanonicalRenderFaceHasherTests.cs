@@ -59,7 +59,7 @@ namespace MVoxelEngine1.Tests
                 mutations,
                 mutation => Assert.NotEqual(
                     baseline,
-                    CanonicalRenderFaceHasher.Hash(new[] { mutation }).Sha256));
+                    CanonicalRenderFaceHasher.Hash(new[] { mutation }).Sha256,StringComparer.Ordinal));
         }
 
         [Fact]
@@ -69,7 +69,7 @@ namespace MVoxelEngine1.Tests
                 () => CanonicalRenderFaceHasher.Hash(
                     new[] { TransparentFace, TransparentFace }));
 
-            Assert.Contains("Duplicate canonical face", exception.Message);
+            Assert.Contains("Duplicate canonical face", exception.Message,StringComparison.Ordinal);
         }
 
         [Fact]
@@ -104,8 +104,8 @@ namespace MVoxelEngine1.Tests
                 "223AC9D384975B1A24462DE473648AFDA06BD9CC7EECC205E45792B808497BF3",
                 "3442DAA2B541F72C2B3DDA88F4ACE33A63B108F9CC6A7665BADFC4EE80669C0D"
             ];
-            Assert.Equal(opaqueDirections, digest.OpaqueDirections.Select(static direction => direction.Sha256));
-            Assert.Equal(transparentDirections, digest.TransparentDirections.Select(static direction => direction.Sha256));
+            Assert.Equal(opaqueDirections, digest.OpaqueDirections.Select(static direction => direction.Sha256),StringComparer.Ordinal);
+            Assert.Equal(transparentDirections, digest.TransparentDirections.Select(static direction => direction.Sha256),StringComparer.Ordinal);
         }
 
         [Fact]

@@ -32,7 +32,7 @@ public sealed class NativeReferenceFaceGeneratorTests
         pipeline.InspectState(owner =>
         {
             var view = new NativeGtrtSessionView(owner.AsSpan());
-            foreach (NativeColumnRecord column in view.Columns)
+            foreach (ref readonly NativeColumnRecord column in view.Columns)
             {
                 Span<BlockColumnProfile> profiles = view.GetColumnProfiles(view.GetColumnIndex(column.ChunkX, column.ChunkZ));
                 for (int x = 0; x < view.ChunkSizeX; x++)

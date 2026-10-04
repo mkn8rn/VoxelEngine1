@@ -11,7 +11,7 @@ using MVoxelEngine1.Infrastructure.Loaders; // for TerrainLoader.IsOpaque
 
 namespace MVoxelEngine1.Graphics.Terrain.Sections
 {
-    internal partial class SectionRender
+    internal sealed partial class SectionRender
     {
         // Unified face descriptor used by both uniform emission and boundary reinsertion paths.
         // Axis: 0=X,1=Y,2=Z. Negative indicates -axis face. (Dx,Dy,Dz) point to neighbor section offset.
@@ -675,7 +675,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
 
         // Neighbor mask popcount (occluded cells) for predicted capacity. Guard length to plane size (<=256 bits).
         // Masks operate over opaque-only bits.
-        int MaskOcclusionCount(ulong[] mask)
+        static int MaskOcclusionCount(ulong[] mask)
         {
             if (mask == null)
                 return 0;
@@ -688,7 +688,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
 
         // Helper for world-edge plane quick skip if fully occluded in the SxS window. Plane bits represent opaque voxels only.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        bool IsWorldPlaneFullySet(ulong[]? plane, int startA, int startB, int countA, int countB, int strideB)
+        static bool IsWorldPlaneFullySet(ulong[]? plane, int startA, int startB, int countA, int countB, int strideB)
         {
             if (plane == null)
                 return false;
@@ -713,7 +713,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
         }
 
         // Count visible cells for world boundary face (used for capacity prediction). Plane bits represent opaque voxels only.
-        int CountVisibleWorldBoundary(ulong[]? plane, int startA, int startB, int countA, int countB, int strideB)
+        static int CountVisibleWorldBoundary(ulong[]? plane, int startA, int startB, int countA, int countB, int strideB)
         {
             int total = countA * countB;
             if (total <= 0)

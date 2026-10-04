@@ -44,7 +44,7 @@ namespace MVoxelEngine1.Tests
 
             Assert.Equal(0, result.ExitCode);
             Assert.False(result.WindowObserved);
-            Assert.Contains("Reference face validation enabled.", result.StandardOutput);
+            Assert.Contains("Reference face validation enabled.", result.StandardOutput,StringComparison.Ordinal);
             Assert.True(File.Exists(outputPath));
 
             using JsonDocument document = JsonDocument.Parse(File.ReadAllText(outputPath));
@@ -54,7 +54,7 @@ namespace MVoxelEngine1.Tests
 
             JsonElement[] uploads = root.GetProperty("events")
                 .EnumerateArray()
-                .Where(element => element.GetProperty("type").GetString() == "simulatedGpuUpload")
+                .Where(element => string.Equals(element.GetProperty("type").GetString(), "simulatedGpuUpload", StringComparison.Ordinal))
                 .ToArray();
             Assert.NotEmpty(uploads);
             Assert.All(

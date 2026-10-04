@@ -8,12 +8,11 @@ using MVoxelEngine1.Infrastructure.Loaders;
 
 namespace MVoxelEngine1.Graphics.Terrain.Sections
 {
-    internal partial class SectionRender
+    internal sealed partial class SectionRender
     {
         private readonly ChunkPrerenderData data;
         private readonly BlockTextureAtlas atlas;
         private readonly PackedFaceNativePool packedFacePool;
-        private const ushort EMPTY = 0;
         // Cache to avoid repeated atlas UV -> tile lookups in fallback / generic emission paths.
         private readonly TileIndexCache _fallbackTileCache;
 

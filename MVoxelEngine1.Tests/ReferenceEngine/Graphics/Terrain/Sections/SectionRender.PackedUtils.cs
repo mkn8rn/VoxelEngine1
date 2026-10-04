@@ -7,7 +7,7 @@ using System.Numerics;
 
 namespace MVoxelEngine1.Graphics.Terrain.Sections
 {
-    internal partial class SectionRender
+    internal sealed partial class SectionRender
     {
         // Fallback zero mask used when an occupancy/opaque mask is absent.
         private static readonly ulong[] _zeroMask64 = new ulong[64];
@@ -122,7 +122,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
         //  - uniformId == 0 : use decodeVoxel to decode per-voxel id; skip non-opaque or zero ids.
         // decodeVoxel is only used when per-voxel decode is required.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void EmitOpaqueMasks(ref SectionPrerenderDesc localDesc, int baseX, int baseY, int baseZ, ReadOnlySpan<ulong> faceMask, byte faceDir, ushort uniformId, Func<int, int, int, ushort>? decodeVoxel, Func<ushort, byte, uint> tileProvider, List<byte> offsets, List<uint> tilesOut, List<byte> faceDirs)
+        private static void EmitOpaqueMasks(ref SectionPrerenderDesc localDesc, int baseX, int baseY, int baseZ, ReadOnlySpan<ulong> faceMask, byte faceDir, ushort uniformId, Func<int, int, int, ushort>? decodeVoxel, Func<ushort, byte, uint> tileProvider, List<byte> offsets, List<uint> tilesOut, List<byte> faceDirs)
         {
             EnsureLiDecode();
             for (int w = 0; w < 64; w++)

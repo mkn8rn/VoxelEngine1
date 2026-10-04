@@ -25,12 +25,12 @@ internal sealed class NativeReferenceFaceGenerator
                 continue;
             NativeBiomeDescriptor biome = game.Biomes[column.BiomeIndex];
             bool constant = true;
-            foreach (NativeReplacementRule rule in game.ReplacementRules.Slice(biome.ReplacementRuleOffset, biome.ReplacementRuleCount))
+            foreach (ref readonly NativeReplacementRule rule in game.ReplacementRules.Slice(biome.ReplacementRuleOffset, biome.ReplacementRuleCount))
                 constant &= rule.MinY == int.MinValue && rule.MaxY == int.MaxValue &&
                     rule.RelativeMinDepth == int.MinValue && rule.RelativeMaxDepth == int.MaxValue;
             constant &= ApplyRules(ref game, in biome, 0, 0, 0) == 0;
             int minimum = int.MaxValue, maximum = int.MinValue;
-            foreach (BlockColumnProfile profile in view.GetColumnProfiles(i))
+            foreach (ref readonly BlockColumnProfile profile in view.GetColumnProfiles(i))
             {
                 Include(profile.StoneStart, profile.StoneEnd, ref minimum, ref maximum);
                 Include(profile.SoilStart, profile.SoilEnd, ref minimum, ref maximum);
@@ -183,7 +183,7 @@ internal sealed class NativeReferenceFaceGenerator
         if (top < generated.MinimumStart || bottom > generated.MaximumEnd)
             return true;
         bool first = true;
-        foreach (BlockColumnProfile profile in view.GetColumnProfiles(column))
+        foreach (ref readonly BlockColumnProfile profile in view.GetColumnProfiles(column))
         {
             if (!UniformProfile(in profile, in generated, bottom, top, out ushort candidate))
                 return false;
@@ -315,7 +315,7 @@ internal sealed class NativeReferenceFaceGenerator
         ushort original, int y, int surface)
     {
         ushort result = original;
-        foreach (NativeReplacementRule rule in game.ReplacementRules.Slice(biome.ReplacementRuleOffset, biome.ReplacementRuleCount))
+        foreach (ref readonly NativeReplacementRule rule in game.ReplacementRules.Slice(biome.ReplacementRuleOffset, biome.ReplacementRuleCount))
         {
             long depth = (long)surface - y;
             if (y < rule.MinY || y > rule.MaxY ||
@@ -324,7 +324,7 @@ internal sealed class NativeReferenceFaceGenerator
                 continue;
             ushort candidate = rule.GenerationType == GenerationType.InlineReplacement ? original : result;
             bool matches = (rule.BaseTypeBitMask & (1u << game.Blocks[candidate].BaseType)) != 0;
-            foreach (ushort id in game.SpecificBlockIds.Slice(rule.SpecificIdOffset, rule.SpecificIdCount))
+            foreach (ref readonly ushort id in game.SpecificBlockIds.Slice(rule.SpecificIdOffset, rule.SpecificIdCount))
                 matches |= id == candidate;
             if (matches)
                 result = rule.ReplacementId;

@@ -12,7 +12,7 @@ using MVoxelEngine1.WorldGeneration.Utils;
 
 namespace MVoxelEngine1.WorldGeneration.Terrain
 {
-    internal partial class Chunk
+    internal sealed partial class Chunk
     {
         // Cheaply set per-face solidity flags using cached boundary plane bitsets
         private static bool PlaneIsFull(ulong[]? plane, int wordCount, ulong fullWord, ulong lastMask)

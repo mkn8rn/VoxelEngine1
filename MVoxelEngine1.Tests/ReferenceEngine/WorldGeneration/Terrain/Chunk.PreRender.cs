@@ -15,7 +15,7 @@ using MVoxelEngine1.WorldGeneration.Utils;
 
 namespace MVoxelEngine1.WorldGeneration.Terrain
 {
-    internal partial class Chunk
+    internal sealed partial class Chunk
     {
         // ----- Added plane caches for pre-render handoff -----
         // Layouts:
@@ -41,20 +41,19 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
         internal ushort[]? TransparentPlaneNegZ; // transparent ids along -Z boundary
         internal ushort[]? TransparentPlanePosZ; // transparent ids along +Z boundary
         // Neighbor plane caches (populated by WorldResources just before BuildRender)
-        internal ulong[]? NeighborPlaneNegXFace = null; // neighbor at -X (+X face of neighbor)
-        internal ulong[]? NeighborPlanePosXFace = null; // neighbor at +X (-X face of neighbor)
-        internal ulong[]? NeighborPlaneNegYFace = null; // neighbor at -Y (+Y face)
-        internal ulong[]? NeighborPlanePosYFace = null; // neighbor at +Y (-Y face)
-        internal ulong[]? NeighborPlaneNegZFace = null; // neighbor at -Z (+Z face)
-        internal ulong[]? NeighborPlanePosZFace = null; // neighbor at +Z (-Z face)
+        internal ulong[]? NeighborPlaneNegXFace { get; set; } // neighbor at -X (+X face of neighbor)
+        internal ulong[]? NeighborPlanePosXFace { get; set; } // neighbor at +X (-X face of neighbor)
+        internal ulong[]? NeighborPlaneNegYFace { get; set; } // neighbor at -Y (+Y face)
+        internal ulong[]? NeighborPlanePosYFace { get; set; } // neighbor at +Y (-Y face)
+        internal ulong[]? NeighborPlaneNegZFace { get; set; } // neighbor at -Z (+Z face)
+        internal ulong[]? NeighborPlanePosZFace { get; set; } // neighbor at +Z (-Z face)
         // Neighbor transparent boundary id maps (mirroring opaque neighbor plane conventions)
-        internal ushort[]? NeighborTransparentPlaneNegXFace = null; // neighbor -X +X transparent ids
-        internal ushort[]? NeighborTransparentPlanePosXFace = null; // neighbor +X -X transparent ids
-        internal ushort[]? NeighborTransparentPlaneNegYFace = null; // neighbor -Y +Y transparent ids
-        internal ushort[]? NeighborTransparentPlanePosYFace = null; // neighbor +Y -Y transparent ids
-        internal ushort[]? NeighborTransparentPlaneNegZFace = null; // neighbor -Z +Z transparent ids
-        internal ushort[]? NeighborTransparentPlanePosZFace = null; // neighbor +Z -Z transparent ids
-        const int S = Section.SECTION_SIZE;
+        internal ushort[]? NeighborTransparentPlaneNegXFace { get; set; } // neighbor -X +X transparent ids
+        internal ushort[]? NeighborTransparentPlanePosXFace { get; set; } // neighbor +X -X transparent ids
+        internal ushort[]? NeighborTransparentPlaneNegYFace { get; set; } // neighbor -Y +Y transparent ids
+        internal ushort[]? NeighborTransparentPlanePosYFace { get; set; } // neighbor +Y -Y transparent ids
+        internal ushort[]? NeighborTransparentPlaneNegZFace { get; set; } // neighbor -Z +Z transparent ids
+        internal ushort[]? NeighborTransparentPlanePosZFace { get; set; } // neighbor +Z -Z transparent ids
         static void SetPlaneBit(ulong[]? plane, int index)
         {
             if (plane == null)

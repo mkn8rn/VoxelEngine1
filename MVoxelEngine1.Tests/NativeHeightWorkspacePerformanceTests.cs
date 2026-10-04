@@ -220,7 +220,7 @@ namespace MVoxelEngine1.Tests
             ulong checksum,
             ReadOnlySpan<float> values)
         {
-            foreach (float value in values)
+            foreach (ref readonly float value in values)
             {
                 checksum ^= unchecked((uint)BitConverter.SingleToInt32Bits(value));
                 checksum *= FnvPrime;

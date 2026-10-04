@@ -31,7 +31,7 @@ namespace MVoxelEngine1.Infrastructure.Flags
             foreach (var line in File.ReadAllLines(EnvFilePath))
             {
                 var trimmed = line.Trim();
-                if (string.IsNullOrEmpty(trimmed) || trimmed.StartsWith("#"))
+                if (string.IsNullOrEmpty(trimmed) || trimmed.StartsWith("#",StringComparison.Ordinal))
                     continue;
                 var parts = trimmed.Split('=', 2);
                 if (parts.Length == 2)

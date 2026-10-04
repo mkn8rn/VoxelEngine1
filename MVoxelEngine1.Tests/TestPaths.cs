@@ -16,7 +16,7 @@ namespace MVoxelEngine1.Tests
             }
         }
 
-        private static string GetMetadata(string key) => typeof(TestPaths).Assembly.GetCustomAttributes<AssemblyMetadataAttribute>().Single(attribute => attribute.Key == key).Value ?? throw new InvalidOperationException($"Missing build metadata: {key}.");
+        private static string GetMetadata(string key) => typeof(TestPaths).Assembly.GetCustomAttributes<AssemblyMetadataAttribute>().Single(attribute => string.Equals(attribute.Key, key, StringComparison.Ordinal)).Value ?? throw new InvalidOperationException($"Missing build metadata: {key}.");
         public static TestWorkspace CreateWorkspace()
         {
             string root = Path.Combine(Path.GetTempPath(), "MVoxelEngine1.Tests", Guid.NewGuid().ToString("N"));

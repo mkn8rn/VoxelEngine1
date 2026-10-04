@@ -24,8 +24,8 @@ namespace MVoxelEngine1.Tests
                 information?.InformationalVersion);
             Assert.Contains(
                 assembly.GetCustomAttributes<AssemblyMetadataAttribute>(),
-                metadata => metadata.Key == "RepositoryCommit" &&
-                    metadata.Value == RepositoryCommit);
+                metadata => string.Equals(metadata.Key, "RepositoryCommit", StringComparison.Ordinal) &&
+                    string.Equals(metadata.Value, RepositoryCommit, StringComparison.Ordinal));
         }
 
         [Fact]

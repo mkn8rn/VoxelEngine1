@@ -9,7 +9,7 @@ using System.Numerics;
 
 namespace MVoxelEngine1.Graphics.Terrain.Sections
 {
-    internal partial class SectionRender
+    internal sealed partial class SectionRender
     {
         /// Emits face instances for a MultiPacked section (Kind==5) with multiple block ids 
         /// (opaque + transparent) in packed storage.

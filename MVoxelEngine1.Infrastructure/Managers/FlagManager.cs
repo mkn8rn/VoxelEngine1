@@ -138,13 +138,13 @@ namespace MVoxelEngine1.Infrastructure.Managers
                 GCSettings.LargeObjectHeapCompactionMode = (System.Runtime.GCLargeObjectHeapCompactionMode)flags.GCLargeObjectHeapCompactionMode.Value;
 
             if (flags.GCMode.HasValue)
-                Environment.SetEnvironmentVariable("COMPlus_gcServer", ((int)flags.GCMode.Value).ToString());
+                Environment.SetEnvironmentVariable("COMPlus_gcServer", ((int)flags.GCMode.Value).ToString(System.Globalization.CultureInfo.CurrentCulture));
 
             if (flags.GCConcurrent.HasValue)
-                Environment.SetEnvironmentVariable("COMPlus_GCConcurrent", ((int)flags.GCConcurrent.Value).ToString());
+                Environment.SetEnvironmentVariable("COMPlus_GCConcurrent", ((int)flags.GCConcurrent.Value).ToString(System.Globalization.CultureInfo.CurrentCulture));
 
             if (flags.GCLogEnabled.HasValue)
-                Environment.SetEnvironmentVariable("COMPlus_GCLogEnabled", ((int)flags.GCLogEnabled.Value).ToString());
+                Environment.SetEnvironmentVariable("COMPlus_GCLogEnabled", ((int)flags.GCLogEnabled.Value).ToString(System.Globalization.CultureInfo.CurrentCulture));
 
             if (!string.IsNullOrEmpty(flags.GCHeapHardLimit))
                 Environment.SetEnvironmentVariable("COMPlus_GCHeapHardLimit", flags.GCHeapHardLimit);

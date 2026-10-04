@@ -80,7 +80,7 @@ namespace MVoxelEngine1.Graphics.BufferObjects
         }
 
         // Unbind any VBO from GL_ARRAY_BUFFER target.
-        public void Unbind()
+        public static void Unbind()
         {
             GL.BindBuffer(BufferTarget.ArrayBuffer, 0);
         }

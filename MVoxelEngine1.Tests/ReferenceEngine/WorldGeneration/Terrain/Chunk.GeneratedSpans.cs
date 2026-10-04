@@ -3,7 +3,7 @@ using MVoxelEngine1.Infrastructure.Models.Generation;
 
 namespace MVoxelEngine1.WorldGeneration.Terrain
 {
-    internal partial class Chunk
+    internal sealed partial class Chunk
     {
         private void BuildGeneratedSpanBoundaryPlanes()
         {

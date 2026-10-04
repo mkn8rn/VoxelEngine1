@@ -13,7 +13,7 @@ using MVoxelEngine1.Infrastructure.Models.Simulation;
 
 namespace MVoxelEngine1.Application.Gameplay
 {
-    public enum PlayerState
+    internal enum PlayerState
     {
         Spectator,
         Alive

@@ -11,7 +11,7 @@ using System.Runtime.CompilerServices;
 
 namespace MVoxelEngine1.Graphics.Terrain.Sections
 {
-    internal partial class SectionRender
+    internal sealed partial class SectionRender
     {
         // Precomputed boundary masks for 16x16x16 section (column-major layout: li = ((z*16 + x)*16)+y )
         private static readonly ulong[] _maskX0 = new ulong[64];
@@ -26,9 +26,6 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
         private static byte[] _lyFromLi = [];
         private static byte[] _lzFromLi = [];
         private static bool _liDecodeInit;
-        // Optional prebuilt vertex patterns (currently unused in this method)
-        private static byte[][] _faceVertexBytes = []; // index by (int)Faces
-        private static bool _faceVertexInit;
         // Shared constants for 16x16x16 sections
         // Note: linear index li = ((z * 16 + x) * 16) + y (column-major in Y)
         internal const int SECTION_SIZE = 16;

@@ -88,7 +88,7 @@ namespace MVoxelEngine1.Tests
             Assert.Equal(writer.ID, Guid.Parse(lines[0]));
             Assert.Equal(writer.RegionID, Guid.Parse(lines[1]));
             Assert.Equal("RoundTrip", lines[2]);
-            Assert.Equal(123456, int.Parse(lines[3]));
+            Assert.Equal(123456, int.Parse(lines[3],System.Globalization.CultureInfo.CurrentCulture));
 
             var reader = new WorldLoader();
             reader.LoadWorldSave(writer.ID);

@@ -28,7 +28,7 @@ namespace MVoxelEngine1.Tests
                 TestPaths.ResultsRoot,
                 "face-manifests");
             Directory.CreateDirectory(resultsDirectory);
-            string runId = DateTime.UtcNow.ToString("yyyyMMddTHHmmssfffZ");
+            string runId = DateTime.UtcNow.ToString("yyyyMMddTHHmmssfffZ",System.Globalization.CultureInfo.CurrentCulture);
             string referencePath = Path.Combine(
                 resultsDirectory,
                 $"reference-seed-123456-{runId}.json");
@@ -143,7 +143,7 @@ namespace MVoxelEngine1.Tests
                 TestPaths.ResultsRoot,
                 "face-manifests");
             Directory.CreateDirectory(resultsDirectory);
-            string runId = DateTime.UtcNow.ToString("yyyyMMddTHHmmssfffZ");
+            string runId = DateTime.UtcNow.ToString("yyyyMMddTHHmmssfffZ",System.Globalization.CultureInfo.CurrentCulture);
             string referencePath = Path.Combine(
                 resultsDirectory,
                 $"reference-movement-seed-123456-{runId}.json");

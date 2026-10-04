@@ -27,9 +27,9 @@ public sealed class NativeWorldTests
             "MVoxelEngine1.Application",
             "Window.cs");
         string source = File.ReadAllText(windowPath);
-        Assert.Contains("NativeWorld world", source);
-        Assert.Contains("NativeWorld.CreateOpenGl", source);
-        Assert.DoesNotContain("new World(", source);
+        Assert.Contains("NativeWorld world", source,StringComparison.Ordinal);
+        Assert.Contains("NativeWorld.CreateOpenGl", source,StringComparison.Ordinal);
+        Assert.DoesNotContain("new World(", source,StringComparison.Ordinal);
     }
 
     [Fact]
@@ -298,7 +298,7 @@ public sealed class NativeWorldTests
                 CustomTransparentBlockId,
                 firstWorld.GetBlock(-1, 0, -1));
             editedIdentity = firstFactory.LiveBankIdentity;
-            Assert.NotEqual(initialIdentity, editedIdentity);
+            Assert.NotEqual(initialIdentity, editedIdentity,StringComparer.Ordinal);
             int createdAfterEdit = firstFactory.CreatedCount;
             Assert.False(firstWorld.SetBlock(
                 -1,
@@ -486,7 +486,7 @@ public sealed class NativeWorldTests
             world.GetBlock(-1, 0, -1));
         Assert.Equal(27, factory.LiveRendererCount);
         string editedIdentity = factory.LiveBankIdentity;
-        Assert.NotEqual(initialIdentity, editedIdentity);
+        Assert.NotEqual(initialIdentity, editedIdentity,StringComparer.Ordinal);
 
         factory.FailDisposeAtCreation = int.MaxValue;
         world.PlayerChunkPosition = (1, 0, 0);

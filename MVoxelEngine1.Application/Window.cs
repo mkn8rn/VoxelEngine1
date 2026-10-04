@@ -23,7 +23,7 @@ using MVoxelEngine1.WorldGeneration.Native;
 
 namespace MVoxelEngine1.Application
 {
-    public class Window : GameWindow
+    internal sealed class Window : GameWindow
     {
         // render pipeline
         NativeWorld world = null!;
@@ -49,7 +49,7 @@ namespace MVoxelEngine1.Application
             LoadEnvironmentDefaultSettings();
             if (FlagManager.flags.windowWidth == null || FlagManager.flags.windowHeight == null)
             {
-                throw new Exception("windowWidth or windowHeight flag is null.");
+                throw new InvalidOperationException("windowWidth or windowHeight flag is null.");
             }
 
             windowWidth = FlagManager.flags.windowWidth.Value;
@@ -72,11 +72,11 @@ namespace MVoxelEngine1.Application
             blockDataLoader = GameDataStartup.Load();
             // Initialize the Texture Atlases
             Console.WriteLine(EngineMessages.InitializingTextureAtlases);
-            blockTextureAtlas = new BlockTextureAtlas() ?? throw new Exception("blockTextureAtlas is null");
-            ChunkRender.terrainTextureAtlas = blockTextureAtlas ?? throw new Exception("terrainTextureAtlas is null");
+            blockTextureAtlas = new BlockTextureAtlas();
+            ChunkRender.terrainTextureAtlas = blockTextureAtlas;
             // Initialize the Shaders
             Console.WriteLine(EngineMessages.InitializingShaders);
-            shaderProgram = new ShaderProgram("Default.vert", "Default.frag") ?? throw new Exception("shaderProgram is null");
+            shaderProgram = new ShaderProgram("Default.vert", "Default.frag");
             // Bind the texture atlas
             int textureLocation = GL.GetUniformLocation(shaderProgram.ID, "textureAtlas");
             GL.Uniform1(textureLocation, 0);
@@ -85,7 +85,7 @@ namespace MVoxelEngine1.Application
             world = NativeWorld.CreateOpenGl(blockTextureAtlas);
             // Initialize the Player (and its Camera)
             Console.WriteLine(EngineMessages.InitializingPlayer);
-            player = new Player(world) ?? throw new Exception("player is null");
+            player = new Player(world);
             // Initialize player chunk position explicitly (already done in Player ctor but keep explicit for clarity)
             world.PlayerChunkPosition = (0, 0, 0);
             // Enabling OpenGL options
@@ -114,7 +114,7 @@ namespace MVoxelEngine1.Application
             // transformation matrices
             Matrix4 model = Matrix4.Identity;
             Matrix4 view = player.camera.GetViewMatrix();
-            Matrix4 projection = player.camera.GetProjectionMatrix((float)windowWidth / windowHeight);
+            Matrix4 projection = Camera.GetProjectionMatrix((float)windowWidth / windowHeight);
             int modelLocation = GL.GetUniformLocation(shaderProgram.ID, "model");
             int viewLocation = GL.GetUniformLocation(shaderProgram.ID, "view");
             int projectionLocation = GL.GetUniformLocation(shaderProgram.ID, "projection");
@@ -150,9 +150,9 @@ namespace MVoxelEngine1.Application
         {
             ProgramFlags flags = FlagManager.flags;
             if (flags.windowWidth == null)
-                throw new Exception("windowWidth flag is null.");
+                throw new InvalidOperationException("windowWidth flag is null.");
             if (flags.windowHeight == null)
-                throw new Exception("windowHeight flag is null.");
+                throw new InvalidOperationException("windowHeight flag is null.");
             windowWidth = flags.windowWidth.Value;
             windowHeight = flags.windowHeight.Value;
         }

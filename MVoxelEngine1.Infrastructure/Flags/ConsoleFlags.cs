@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -17,11 +17,11 @@ namespace MVoxelEngine1.Infrastructure.Flags
             for (int i = 0; i < args.Length; i++)
             {
                 var current = args[i];
-                if (!current.StartsWith("--"))
+                if (!current.StartsWith("--",StringComparison.Ordinal))
                     continue;
                 var name = current.Substring(2); // strip leading dashes
                 // Expect a value unless next token is also a flag or missing
-                if (i + 1 < args.Length && !args[i + 1].StartsWith("--"))
+                if (i + 1 < args.Length && !args[i + 1].StartsWith("--",StringComparison.Ordinal))
                 {
                     var value = args[i + 1];
                     FlagDescriptors.Apply(flags, name, value);

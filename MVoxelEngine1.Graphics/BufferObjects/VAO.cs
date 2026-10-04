@@ -74,7 +74,7 @@ namespace MVoxelEngine1.Graphics.BufferObjects
         }
 
         // Unbind any VAO.
-        public void Unbind()
+        public static void Unbind()
         {
             GL.BindVertexArray(0);
         }

@@ -17,7 +17,7 @@ namespace MVoxelEngine1.Tests
                 TestPaths.ResultsRoot,
                 "simulated-gpu-uploads");
             Directory.CreateDirectory(resultsDirectory);
-            string timestamp = DateTime.UtcNow.ToString("yyyyMMddTHHmmssfffZ");
+            string timestamp = DateTime.UtcNow.ToString("yyyyMMddTHHmmssfffZ",System.Globalization.CultureInfo.CurrentCulture);
             string outputPath = Path.Combine(resultsDirectory, $"slow-writer-seed-123456-{timestamp}.json");
             ProcessStartInfo startInfo = SimulatedGpuUploadTestSupport.CreateStartInfo(
                 workspace,
@@ -126,7 +126,7 @@ namespace MVoxelEngine1.Tests
             SimulatedGpuUploadTestSupport.AssertCompleteOrderedStream(root);
             JsonElement[] events = root.GetProperty("events").EnumerateArray().ToArray();
             JsonElement[] uploads = events
-                .Where(element => element.GetProperty("type").GetString() == "simulatedGpuUpload")
+                .Where(element => string.Equals(element.GetProperty("type").GetString(), "simulatedGpuUpload", StringComparison.Ordinal))
                 .ToArray();
             JsonElement[] transparentUploads = uploads
                 .Where(upload => upload.GetProperty("transparentFaceCount").GetInt32() > 0)
@@ -158,15 +158,15 @@ namespace MVoxelEngine1.Tests
             foreach (JsonElement streamEvent in events)
             {
                 string type = streamEvent.GetProperty("type").GetString()!;
-                if (type == "simulatedGpuUpload")
+                if (string.Equals(type, "simulatedGpuUpload", StringComparison.Ordinal))
                 {
                     activeUploads.Add(streamEvent.GetProperty("renderDataId").GetInt64());
                 }
-                else if (type == "simulatedGpuDeletion")
+                else if (string.Equals(type, "simulatedGpuDeletion", StringComparison.Ordinal))
                 {
                     activeUploads.Remove(streamEvent.GetProperty("renderDataId").GetInt64());
                 }
-                else if (type == "renderFrame")
+                else if (string.Equals(type, "renderFrame", StringComparison.Ordinal))
                 {
                     foreach (JsonElement idElement in streamEvent
                         .GetProperty("transparentDrawRenderDataIds")

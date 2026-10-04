@@ -27,8 +27,7 @@ namespace MVoxelEngine1.Graphics.Terrain
             if ((uint)(extentV - 1) > byte.MaxValue)
                 throw new ArgumentOutOfRangeException(nameof(extentV));
             // The runtime atlas uses byte UV coordinates, so its linear tile identity fits in 16 bits.
-            if (tileIndex > ushort.MaxValue)
-                throw new ArgumentOutOfRangeException(nameof(tileIndex));
+            ArgumentOutOfRangeException.ThrowIfGreaterThan(tileIndex, ushort.MaxValue);
             return (uint)(extentU - 1) | ((uint)(extentV - 1) << 8) | (tileIndex << 16);
         }
 

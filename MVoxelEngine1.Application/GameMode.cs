@@ -22,7 +22,7 @@ using MVoxelEngine1.WorldGeneration.Native;
 
 namespace MVoxelEngine1.Application
 {
-    public enum GameMode
+    internal enum GameMode
     {
         Menu,
         Survival,

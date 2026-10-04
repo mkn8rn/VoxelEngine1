@@ -107,7 +107,7 @@ internal sealed partial class NativeGtrtSession
         ref NativeGtrtSessionState state = ref view.State;
         if (state.TransactionOpen != 0 || state.ClaimedGenerationCount != 0 || state.ClaimedMeshCount != 0 || state.PacketConsumerCount != 0 || state.DisposalState != 0 || state.PacketAllocationLock != 0)
             throw new InvalidOperationException("Native storage can grow only while the session is idle.");
-        foreach (NativeChunkRecord chunk in view.Chunks)
+        foreach (ref readonly NativeChunkRecord chunk in view.Chunks)
         {
             if (chunk.State is NativeChunkState.MeshReady or NativeChunkState.PacketReady or NativeChunkState.Active)
                 throw new InvalidOperationException("Native packets must retire before storage grows.");

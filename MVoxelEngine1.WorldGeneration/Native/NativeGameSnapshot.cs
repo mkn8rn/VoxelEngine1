@@ -64,22 +64,19 @@ internal sealed class NativeGameSnapshot : IDisposable
     internal void Access(NativeLeaseAction<byte> action)
     {
         ArgumentNullException.ThrowIfNull(action);
-        if (storage is null)
-            throw new ObjectDisposedException(nameof(NativeGameSnapshot));
+        ObjectDisposedException.ThrowIf(storage is null, this);
         storage.Access(action);
     }
 
     internal NativeTerrainMaterialSet GetGeneratedMaterials()
     {
-        if (storage is null)
-            throw new ObjectDisposedException(nameof(NativeGameSnapshot));
+        ObjectDisposedException.ThrowIf(storage is null, this);
         return storage.Read(GeneratedMaterialsReader);
     }
 
     internal byte[] CopyBytes()
     {
-        if (storage is null)
-            throw new ObjectDisposedException(nameof(NativeGameSnapshot));
+        ObjectDisposedException.ThrowIf(storage is null, this);
         return storage.Read(SnapshotCopyReader);
     }
 
@@ -137,7 +134,7 @@ internal sealed class NativeGameSnapshot : IDisposable
                     throw new InvalidDataException($"Biome '{biome.name}' has an unsupported replacement rule.");
                 if (!blocks[rule.ReplacementId].HasFlag(NativeBlockFlags.Defined))
                     throw new InvalidDataException($"Replacement block '{rule.ReplacementId}' is undefined.");
-                foreach (ushort id in rule.SpecificIdsSorted)
+                foreach (ref readonly ushort id in rule.SpecificIdsSorted)
                     if (!blocks[id].HasFlag(NativeBlockFlags.Defined))
                         throw new InvalidDataException($"Replacement source '{id}' is undefined.");
                 int firstSpecificId = nativeSpecificIds.Count;

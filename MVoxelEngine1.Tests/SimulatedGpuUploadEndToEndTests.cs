@@ -83,7 +83,7 @@ namespace MVoxelEngine1.Tests
                 process.ExitCode == 0,
                 $"Application exited with code {process.ExitCode}. Output: {Tail(standardOutput)} Error: {Tail(standardError)}");
             Assert.False(windowObserved);
-            Assert.Contains("started without an OpenTK window", standardOutput);
+            Assert.Contains("started without an OpenTK window", standardOutput,StringComparison.Ordinal);
             Assert.True(File.Exists(outputPath), $"Simulated GPU output was not written to {outputPath}.");
 
             using JsonDocument document = JsonDocument.Parse(File.ReadAllText(outputPath));
@@ -104,7 +104,7 @@ namespace MVoxelEngine1.Tests
             JsonElement[] events = root.GetProperty("events").EnumerateArray().ToArray();
             SimulatedGpuUploadTestSupport.AssertCompleteOrderedStream(root);
             JsonElement[] snapshots = events
-                .Where(element => element.GetProperty("type").GetString() == "snapshot")
+                .Where(element => string.Equals(element.GetProperty("type").GetString(), "snapshot", StringComparison.Ordinal))
                 .ToArray();
             Assert.Equal(2, snapshots.Length);
             Assert.Equal("initial", snapshots[0].GetProperty("name").GetString());
@@ -115,7 +115,7 @@ namespace MVoxelEngine1.Tests
             Assert.Equal(-8, snapshots[1].GetProperty("playerChunk").GetProperty("z").GetInt32());
 
             JsonElement[] renderFrames = events
-                .Where(element => element.GetProperty("type").GetString() == "renderFrame")
+                .Where(element => string.Equals(element.GetProperty("type").GetString(), "renderFrame", StringComparison.Ordinal))
                 .ToArray();
             Assert.InRange(renderFrames.Length, 250, 301);
             Assert.All(
@@ -126,7 +126,7 @@ namespace MVoxelEngine1.Tests
             Assert.All(renderFrames, frame => Assert.Equal(0, frame.GetProperty("actualGpuUploadsThisFrame").GetInt32()));
 
             JsonElement[] uploads = events
-                .Where(element => element.GetProperty("type").GetString() == "simulatedGpuUpload")
+                .Where(element => string.Equals(element.GetProperty("type").GetString(), "simulatedGpuUpload", StringComparison.Ordinal))
                 .ToArray();
             Assert.NotEmpty(uploads);
             Assert.Contains(uploads, upload => upload.GetProperty("frameIndex").GetInt64() > 0);
@@ -140,7 +140,7 @@ namespace MVoxelEngine1.Tests
             Assert.True(face.TryGetProperty("neighborBlockIdAtUpload", out _));
             Assert.Contains(
                 face.GetProperty("renderPass").GetString(),
-                new[] { "opaque", "transparent" });
+                new[] { "opaque", "transparent" },StringComparer.Ordinal);
 
             foreach (JsonElement snapshot in snapshots)
             {
@@ -189,7 +189,7 @@ namespace MVoxelEngine1.Tests
         {
             return frame.GetProperty("inputKeys")
                 .EnumerateArray()
-                .Any(element => element.GetString() == key);
+                .Any(element => string.Equals(element.GetString(), key, StringComparison.Ordinal));
         }
 
         private static void AssertVector(

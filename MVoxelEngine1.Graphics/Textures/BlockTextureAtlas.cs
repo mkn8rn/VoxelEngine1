@@ -22,8 +22,8 @@ namespace MVoxelEngine1.Graphics.Textures
         public int tilesX { get; set; }
         public int tilesY { get; set; }
         //loading variables
-        private int currentX = 0;
-        private int currentY = 0;
+        private int currentX;
+        private int currentY;
         private ImageResult fallbackTexture;
         private string fallbackTextureName = "400";
         private ImageResult missingTexture;
@@ -44,7 +44,7 @@ namespace MVoxelEngine1.Graphics.Textures
 
         private static Task<List<RawImage>>? preloadTask; // file IO + decode (no GL)
         private static readonly object preloadLock = new();
-        private static volatile bool atlasBuilt = false;
+        private static volatile bool atlasBuilt;
         private static BlockTextureAtlas? instance; // lazy-built when GL upload occurs
         public static void BeginAsyncIOPreload()
         {
@@ -302,7 +302,7 @@ namespace MVoxelEngine1.Graphics.Textures
 
                 if (currentY + GameManager.settings.blockTileHeight > atlasHeight)
                 {
-                    throw new Exception("Texture atlas is too small to fit all textures.");
+                    throw new InvalidOperationException("Texture atlas is too small to fit all textures.");
                 }
 
                 int tileX = currentX / GameManager.settings.blockTileWidth;
@@ -320,14 +320,14 @@ namespace MVoxelEngine1.Graphics.Textures
             }
         }
 
-        private void InitializeBlockTypeUVCoordinates()
+        private static void InitializeBlockTypeUVCoordinates()
         {
             blockTypeUVCoordinates.Clear();
             // Initialize only existing block IDs to avoid mismatches; MapTextureCoordinates fills values
             foreach (var bt in TerrainLoader.allBlockTypeObjects)
             {
                 var dict = new Dictionary<Faces, ByteVector2>();
-                foreach (Faces f in Enum.GetValues(typeof(Faces)))
+                foreach (Faces f in Enum.GetValues<Faces>())
                     dict[f] = new ByteVector2();
                 blockTypeUVCoordinates[bt.ID] = dict;
             }
@@ -342,7 +342,7 @@ namespace MVoxelEngine1.Graphics.Textures
                 {
                     // Safety: initialize if missing
                     faceDict = new Dictionary<Faces, ByteVector2>();
-                    foreach (var faceInit in Enum.GetValues(typeof(Faces)).Cast<Faces>())
+                    foreach (var faceInit in Enum.GetValues<Faces>().Cast<Faces>())
                         faceDict[faceInit] = new ByteVector2();
                     blockTypeUVCoordinates[bt.ID] = faceDict;
                 }
@@ -393,7 +393,7 @@ namespace MVoxelEngine1.Graphics.Textures
                     y = (byte)miss.Y
                 };
                 blockCoords = new Dictionary<Faces, ByteVector2>();
-                foreach (Faces f in Enum.GetValues(typeof(Faces)))
+                foreach (Faces f in Enum.GetValues<Faces>())
                     blockCoords[f] = missByte;
                 blockTypeUVCoordinates[blockType] = blockCoords;
             }

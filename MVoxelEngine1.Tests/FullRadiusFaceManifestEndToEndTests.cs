@@ -45,7 +45,7 @@ namespace MVoxelEngine1.Tests
                 "face-manifests",
                 "full-radius");
             Directory.CreateDirectory(resultsDirectory);
-            string runId = DateTime.UtcNow.ToString("yyyyMMddTHHmmssfffZ");
+            string runId = DateTime.UtcNow.ToString("yyyyMMddTHHmmssfffZ",System.Globalization.CultureInfo.CurrentCulture);
             string optimizedPath = Path.Combine(
                 resultsDirectory,
                 $"optimized-seed-123456-{runId}.json");
@@ -96,7 +96,7 @@ namespace MVoxelEngine1.Tests
                 "face-manifests",
                 "full-radius");
             Directory.CreateDirectory(resultsDirectory);
-            string runId = DateTime.UtcNow.ToString("yyyyMMddTHHmmssfffZ");
+            string runId = DateTime.UtcNow.ToString("yyyyMMddTHHmmssfffZ",System.Globalization.CultureInfo.CurrentCulture);
             string referencePath = Path.Combine(
                 resultsDirectory,
                 $"reference-seed-123456-{runId}.json");
@@ -143,9 +143,9 @@ namespace MVoxelEngine1.Tests
             AssertMatchesRecordedReference(optimizedDocument.RootElement, WasdReferenceFileName);
             foreach (SimulatedGpuProcessResult result in new[] { optimizedResult, referenceResult })
             {
-                Assert.Contains("Player chunk position updated to: (-2, 0, -2)", result.StandardOutput);
-                Assert.Contains("Player chunk position updated to: (-1, 1, -1)", result.StandardOutput);
-                Assert.Contains("11.000000 simulated seconds", result.StandardOutput);
+                Assert.Contains("Player chunk position updated to: (-2, 0, -2)", result.StandardOutput,StringComparison.Ordinal);
+                Assert.Contains("Player chunk position updated to: (-1, 1, -1)", result.StandardOutput,StringComparison.Ordinal);
+                Assert.Contains("11.000000 simulated seconds", result.StandardOutput,StringComparison.Ordinal);
             }
             Console.WriteLine($"Full-radius WASD Optimized manifest: {optimizedPath}");
             Console.WriteLine($"Full-radius WASD Reference manifest: {referencePath}");
@@ -162,7 +162,7 @@ namespace MVoxelEngine1.Tests
                 "face-manifests",
                 "full-radius");
             Directory.CreateDirectory(resultsDirectory);
-            string runId = DateTime.UtcNow.ToString("yyyyMMddTHHmmssfffZ");
+            string runId = DateTime.UtcNow.ToString("yyyyMMddTHHmmssfffZ",System.Globalization.CultureInfo.CurrentCulture);
             string optimizedPath = Path.Combine(
                 resultsDirectory,
                 $"optimized-seed-123456-{runId}.json");

@@ -63,15 +63,15 @@ namespace MVoxelEngine1.Tests
             AddArgument(startInfo, "windowHeight", "240");
             AddArgument(startInfo, "simulatedGpuUploadOutput", outputPath);
             AddArgument(startInfo, "simulatedInput", inputScript);
-            AddArgument(startInfo, "simulatedFrameRate", frameRate.ToString());
+            AddArgument(startInfo, "simulatedFrameRate", frameRate.ToString(System.Globalization.CultureInfo.CurrentCulture));
             if (writerDelayMilliseconds > 0)
             {
-                AddArgument(startInfo, "simulatedGpuWriterDelayMilliseconds", writerDelayMilliseconds.ToString());
+                AddArgument(startInfo, "simulatedGpuWriterDelayMilliseconds", writerDelayMilliseconds.ToString(System.Globalization.CultureInfo.CurrentCulture));
             }
 
             if (writerFailAfterRecords.HasValue)
             {
-                AddArgument(startInfo, "simulatedGpuWriterFailAfterRecords", writerFailAfterRecords.Value.ToString());
+                AddArgument(startInfo, "simulatedGpuWriterFailAfterRecords", writerFailAfterRecords.Value.ToString(System.Globalization.CultureInfo.CurrentCulture));
             }
 
             return startInfo;
@@ -100,7 +100,7 @@ namespace MVoxelEngine1.Tests
             if (!string.IsNullOrWhiteSpace(inputScript))
                 AddArgument(startInfo, "simulatedInput", inputScript);
             if (frameRate.HasValue)
-                AddArgument(startInfo, "simulatedFrameRate", frameRate.Value.ToString());
+                AddArgument(startInfo, "simulatedFrameRate", frameRate.Value.ToString(System.Globalization.CultureInfo.CurrentCulture));
             return startInfo;
         }
 

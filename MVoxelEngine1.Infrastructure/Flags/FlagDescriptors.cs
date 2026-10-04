@@ -101,7 +101,7 @@ namespace MVoxelEngine1.Infrastructure.Flags
                 return null;
             // Existing environment files use a decimal comma. Treat it as a
             // decimal separator in every culture, never as a thousands separator.
-            string normalized = value.Contains(',') ? value.Replace(',', '.') : value;
+            string normalized = value.Contains(',',StringComparison.Ordinal) ? value.Replace(',', '.') : value;
             if (!float.TryParse(normalized, NumberStyles.Float, CultureInfo.InvariantCulture, out float result))
                 throw new FormatException("The worker multiplier must be a decimal number.");
             if (!float.IsFinite(result) || result < 0)

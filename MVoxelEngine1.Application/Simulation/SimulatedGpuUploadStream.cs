@@ -108,7 +108,7 @@ namespace MVoxelEngine1.Application.Simulation
             {
                 WorldFaceManifest reference = WorldFaceManifestBuilder.Capture(world, FlagManager.flags.game!, FlagManager.flags.seed!.Value, FaceGenerationMode.Reference);
                 WorldFaceManifest optimized = WorldFaceManifestBuilder.Capture(world, FlagManager.flags.game!, FlagManager.flags.seed!.Value, FaceGenerationMode.Optimized);
-                if (reference.Faces.Sha256 != optimized.Faces.Sha256)
+                if (!string.Equals(reference.Faces.Sha256, optimized.Faces.Sha256, StringComparison.Ordinal))
                     throw new InvalidDataException("Native streaming faces differ from the reference authority.");
                 validatedRevision = world.Revision;
             }
@@ -461,7 +461,7 @@ namespace MVoxelEngine1.Application.Simulation
         private CameraCapture CaptureCamera()
         {
             (int cx, int cy, int cz) = world.PlayerChunkPosition;
-            return new CameraCapture(player.camera.position, player.camera.front, player.camera.up, Matrix4.Identity, player.camera.GetViewMatrix(), player.camera.GetProjectionMatrix((float)windowWidth / windowHeight), cx, cy, cz);
+            return new CameraCapture(player.camera.position, player.camera.front, player.camera.up, Matrix4.Identity, player.camera.GetViewMatrix(), Camera.GetProjectionMatrix((float)windowWidth / windowHeight), cx, cy, cz);
         }
 
         private static ChunkIdentity CaptureChunkIdentity(NativeChunkRenderPacketDescriptor data) => new(data.ChunkWorldX / GameManager.settings.chunkMaxX, data.ChunkWorldY / GameManager.settings.chunkMaxY, data.ChunkWorldZ / GameManager.settings.chunkMaxZ, data.ChunkWorldX, data.ChunkWorldY, data.ChunkWorldZ);
@@ -658,11 +658,11 @@ namespace MVoxelEngine1.Application.Simulation
         {
             writer.WriteStartObject("uploadGeometry");
             writer.WriteStartArray("quadPositions");
-            foreach (byte value in ChunkRender.QuadPositionUploadData.Span)
+            foreach (ref readonly byte value in ChunkRender.QuadPositionUploadData.Span)
                 writer.WriteNumberValue(value);
             writer.WriteEndArray();
             writer.WriteStartArray("quadIndices");
-            foreach (ushort value in ChunkRender.QuadIndexUploadData.Span)
+            foreach (ref readonly ushort value in ChunkRender.QuadIndexUploadData.Span)
                 writer.WriteNumberValue(value);
             writer.WriteEndArray();
             WriteVector("shaderChunkPositionAdjustment", 1, 1, 1);

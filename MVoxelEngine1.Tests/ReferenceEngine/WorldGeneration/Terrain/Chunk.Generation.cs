@@ -11,7 +11,7 @@ using System.Numerics;
 
 namespace MVoxelEngine1.WorldGeneration.Terrain
 {
-    internal partial class Chunk
+    internal sealed partial class Chunk
     {
         /// Per (x,z) column material spans inside this chunk's vertical slab.
         /// Each column can contain at most one contiguous stone span and one contiguous soil span directly above it.

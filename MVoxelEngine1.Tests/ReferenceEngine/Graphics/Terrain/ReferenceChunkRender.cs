@@ -32,7 +32,7 @@ internal sealed class ReferenceChunkRender : IDisposable
         set => ChunkRender.terrainTextureAtlas = value;
     }
     public ChunkRenderUploadData UploadData => uploadData ?? throw new ObjectDisposedException(nameof(ReferenceChunkRender));
-    public bool IsOpenGlUploaded => false;
+    public static bool IsOpenGlUploaded => false;
         public ReferenceChunkRender(
             ChunkPrerenderData prerenderData,
             FaceGenerationMode faceGenerationMode,

@@ -10,7 +10,7 @@ using System.Runtime.CompilerServices;
 
 namespace MVoxelEngine1.Graphics.Terrain.Sections
 {
-    internal partial class SectionRender
+    internal sealed partial class SectionRender
     {
         private FaceRectangleMeshData BuildGeneratedSpanRectangles(PackedFaceStagingWorkspace stagingWorkspace)
         {
