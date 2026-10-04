@@ -3,6 +3,7 @@ using MVoxelEngine1.Graphics.Textures;
 using MVoxelEngine1.Infrastructure.Loaders;
 using MVoxelEngine1.Infrastructure.Managers;
 using MVoxelEngine1.Infrastructure.Models.Generation;
+using MVoxelEngine1.Infrastructure.Models.Terrain;
 using MVoxelEngine1.WorldGeneration.Native;
 using Supprocom.NativeAllocationManagement;
 
@@ -12,6 +13,65 @@ public sealed class NativeGeneratedMeshTests
 {
     private const ushort OtherTransparentBlockId = 256;
     private const ushort CustomTransparentBlockId = 257;
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TransparentProfileIntervalsMatchEveryNaiveVoxelFace(bool computeSummaries)
+    {
+        var materials = new NativeTerrainMaterialSet(
+            CreateTransparentMaterial(BaseBlockType.Stone),
+            CreateTransparentMaterial(BaseBlockType.Soil),
+            CreateTransparentMaterial(BaseBlockType.Water));
+        Assert.True(NativeTransparentProfileMesh.Supports(in materials));
+        var layout = new NativeGtrtSessionLayout(16, 16, 16, 0, materials,
+            generationWorkerCount: 1, meshWorkerCount: 1, packetWordCapacity: 65_536);
+        using NativeGtrtSession session = NativeGtrtSession.Create(layout);
+        session.PublishSeed(123456);
+        session.Access(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            PrepareTransparentProfiles(ref view, computeSummaries);
+            Assert.True(view.TryClaimMesh(out NativeWorkItem work));
+            Assert.True(NativeGeneratedMesh.TryBuild(ref view, in work, 0));
+            Assert.True(view.TryReadPacket(work.RecordIndex, out NativePacketReadView packet));
+            Assert.True(packet.OpaqueWords.IsEmpty);
+            AssertPacketMatchesNaiveFaces(ref view, work.RecordIndex, in packet);
+            Assert.Equal(0, view.State.FailureCode);
+        });
+    }
+
+    private static NativeBlockDescriptor CreateTransparentMaterial(BaseBlockType type) =>
+        new((byte)type, type, BlockStateOfMatter.Solid, NativeBlockFlags.Defined | NativeBlockFlags.Transparent,
+            (ushort)((byte)type * 6), (ushort)((byte)type * 6 + 1), (ushort)((byte)type * 6 + 2),
+            (ushort)((byte)type * 6 + 3), (ushort)((byte)type * 6 + 4), (ushort)((byte)type * 6 + 5));
+
+    private static void PrepareTransparentProfiles(scoped ref NativeGtrtSessionView view, bool computeSummaries)
+    {
+        while (view.TryClaimGeneration(out NativeWorkItem generation))
+        {
+            var summary = NativeColumnSummary.CreateEmpty();
+            int index = 0;
+            foreach (ref BlockColumnProfile profile in view.GetColumnProfiles(generation.RecordIndex))
+            {
+                int variation = index++ % 7;
+                profile = new BlockColumnProfile
+                {
+                    StoneStart = variation % 3,
+                    StoneEnd = 3 + variation % 4,
+                    SoilStart = 4 + variation % 4 + variation % 2,
+                    SoilEnd = 6 + variation % 4 + variation % 2,
+                    WaterStart = variation == 0 ? -1 : 11 + variation % 2,
+                    WaterEnd = variation == 0 ? -1 : 14
+                };
+                summary.Add(in profile);
+            }
+            view.ColumnSummaries[generation.RecordIndex] = summary;
+            view.Columns[generation.RecordIndex].SummaryComputed = computeSummaries ? 1 : 0;
+            view.Columns[generation.RecordIndex].GenerationEpoch = generation.Epoch;
+            Assert.True(view.TryCompleteGeneration(in generation));
+        }
+    }
 
     [Theory]
     [InlineData(6, 0, 1536)]

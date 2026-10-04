@@ -4,6 +4,7 @@ using MVoxelEngine1.Infrastructure.Models.Generation;
 namespace MVoxelEngine1.WorldGeneration.Native;
 internal static class NativeGeneratedMesh
 {
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     internal static bool TryBuild(scoped ref NativeGtrtSessionView session, scoped ref readonly NativeWorkItem claimedWork, int workerIndex)
     {
         if ((uint)(session.ChunkSizeX - 1) > byte.MaxValue || (uint)(session.ChunkSizeY - 1) > byte.MaxValue || (uint)(session.ChunkSizeZ - 1) > byte.MaxValue || claimedWork.Kind != NativeWorkKind.BuildChunkMesh || (uint)claimedWork.RecordIndex >= (uint)session.ChunkCount)
@@ -60,6 +61,7 @@ internal static class NativeGeneratedMesh
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     private static bool Emit(scoped ref NativeGtrtSessionView session, int chunkIndex, Span<int> negativeFaces, Span<int> positiveFaces, scoped ref NativeGeneratedFaceWriter writer)
     {
         if (!NativeUniformChunkMesh.TryEmit(ref session, chunkIndex, negativeFaces, ref writer, out bool handled))
@@ -82,19 +84,26 @@ internal static class NativeGeneratedMesh
         int horizontalFaceCount = checked(session.ChunkSizeX * session.ChunkSizeZ);
         Span<int> bottomFaces = negativeFaces.Slice(0, horizontalFaceCount);
         Span<int> topFaces = positiveFaces.Slice(0, horizontalFaceCount);
-        bool directInteriorSides = SupportsContiguousFastPath(materials);
-        if (directInteriorSides)
+        bool contiguousSides = SupportsContiguousFastPath(materials);
+        bool transparentSides = NativeTransparentProfileMesh.Supports(in materials);
+        bool directInteriorSides = contiguousSides || transparentSides;
+        if (contiguousSides)
         {
             EmitContiguousInteriorSideRectangles(columns, session.ChunkSizeX, session.ChunkSizeY, session.ChunkSizeZ, chunk.ChunkY * session.ChunkSizeY, ref writer);
+        }
+        else if (transparentSides)
+        {
+            NativeTransparentProfileMesh.EmitInteriorSides(columns, session.ChunkSizeX, session.ChunkSizeY,
+                session.ChunkSizeZ, chunk.ChunkY * session.ChunkSizeY, ref writer);
         }
 
         for (int material = 0; material < 3; material++)
         {
+            NativeBlockDescriptor descriptor = GetMaterial(materials, material);
+            if (descriptor.Id == 0 || !MaterialIntersectsChunk(ref session, chunk, material))
+                continue;
             bottomFaces.Fill(-1);
             topFaces.Fill(-1);
-            NativeBlockDescriptor descriptor = GetMaterial(materials, material);
-            if (descriptor.Id == 0)
-                continue;
             writer.SelectMaterial(material, IsOpaque(descriptor));
             if (!GenerateMaterial(ref session, chunkIndex, columns, material, descriptor.Id, IsOpaque(descriptor), !directInteriorSides, bottomFaces, topFaces, ref writer))
             {
@@ -106,6 +115,28 @@ internal static class NativeGeneratedMesh
         }
 
         return writer.Valid;
+    }
+
+    private static bool MaterialIntersectsChunk(scoped ref NativeGtrtSessionView session,
+        NativeChunkRecord chunk, int material)
+    {
+        if (session.Columns[chunk.ColumnIndex].SummaryComputed == 0)
+            return true;
+        ref readonly NativeColumnSummary summary = ref session.ColumnSummaries[chunk.ColumnIndex];
+        int start = material switch
+        {
+            0 => summary.StoneStartMinimum,
+            1 => summary.SoilStartMinimum,
+            _ => summary.WaterStartMinimum
+        };
+        int end = material switch
+        {
+            0 => summary.StoneEndMaximum,
+            1 => summary.SoilEndMaximum,
+            _ => summary.WaterEndMaximum
+        };
+        int bottom = chunk.ChunkY * session.ChunkSizeY;
+        return start <= bottom + session.ChunkSizeY - 1 && end >= bottom;
     }
 
     private static bool TryRequiresVoxelMesh(scoped ref NativeGtrtSessionView session, int chunkIndex, out bool required)
@@ -220,6 +251,7 @@ internal static class NativeGeneratedMesh
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool IsStorageKindValid(NativeChunkStorageKind kind) => kind == NativeChunkStorageKind.GeneratedProfile || kind == NativeChunkStorageKind.HybridSections || kind == NativeChunkStorageKind.MaterializedSections || kind == NativeChunkStorageKind.UniformSections;
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     private static bool GenerateMaterial(scoped ref NativeGtrtSessionView session, int chunkIndex, ReadOnlySpan<BlockColumnProfile> columns, int material, ushort blockId, bool blockOpaque, bool emitInteriorSides, Span<int> bottomFaces, Span<int> topFaces, scoped ref NativeGeneratedFaceWriter writer)
     {
         int width = session.ChunkSizeX;
@@ -263,6 +295,7 @@ internal static class NativeGeneratedMesh
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     private static bool GenerateIntervalRectangles(scoped ref NativeGtrtSessionView session, int chunkIndex, ReadOnlySpan<BlockColumnProfile> columns, scoped ref readonly BlockColumnProfile column, ushort blockId, bool blockOpaque, bool emitInteriorSides, int intervalStart, int intervalEnd, int x, int z, Span<int> bottomFaces, Span<int> topFaces, scoped ref NativeGeneratedFaceWriter writer)
     {
         if (intervalStart < 0 || intervalEnd < intervalStart)
@@ -311,6 +344,7 @@ internal static class NativeGeneratedMesh
         return true;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     private static bool EmitSide(scoped ref NativeGtrtSessionView session, int chunkIndex, ReadOnlySpan<BlockColumnProfile> columns, ushort blockId, bool blockOpaque, bool emitInteriorSides, byte direction, int x, int z, int worldStart, int worldEnd, scoped ref NativeGeneratedFaceWriter writer)
     {
         int neighborX = x;
@@ -513,6 +547,7 @@ internal static class NativeGeneratedMesh
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     private static void EmitHorizontalRectangles(byte direction, Span<int> faceHeights, int width, int depth, scoped ref NativeGeneratedFaceWriter writer)
     {
         for (int x = 0; x < width; x++)
@@ -559,6 +594,7 @@ internal static class NativeGeneratedMesh
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     private static void EmitColumnRange(NativeTerrainMaterialSet materials, scoped ref readonly BlockColumnProfile neighborColumn, ushort blockId, bool blockOpaque, byte direction, int x, int z, int worldStart, int worldEnd, int chunkStart, scoped ref NativeGeneratedFaceWriter writer)
     {
         int current = worldStart;
@@ -574,6 +610,7 @@ internal static class NativeGeneratedMesh
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     private static void GetNeighborRun(NativeTerrainMaterialSet materials, scoped ref readonly BlockColumnProfile column, int worldY, int maximumWorldY, out ushort blockId, out bool blockOpaque, out int runEnd)
     {
         if (HasRange(column.StoneStart, column.StoneEnd) && worldY >= column.StoneStart && worldY <= column.StoneEnd)
