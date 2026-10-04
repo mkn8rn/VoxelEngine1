@@ -8,16 +8,18 @@ namespace MVoxelEngine1.Infrastructure.Models.Generation.Biomes
     /// Built once at biome load time. Immutable after construction.
     public sealed class CompiledSimpleReplacementRule
     {
-        public readonly ushort ReplacementId;            // target block id
-        public readonly ushort[] SpecificIdsSorted;      // explicit block ids to match (sorted for binary search)
-        public readonly uint BaseTypeBitMask;            // bit per BaseBlockType enum value
-        public readonly int MinY;                        // inclusive world y (sentinel int.MinValue if unconstrained)
-        public readonly int MaxY;                        // inclusive world y (sentinel int.MaxValue if unconstrained)
-        public readonly int? MicroBiomeId;               // optional microbiome filter
-        public readonly int Priority;                    // priority ordering (ascending)
-        public readonly GenerationType GenerationType;
-        public readonly int RelativeMinDepth;
-        public readonly int RelativeMaxDepth;
+        public ushort ReplacementId { get; }            // target block id
+        private readonly ushort[] specificIdsSorted;      // explicit block ids to match (sorted for binary search)
+        public uint BaseTypeBitMask { get; }            // bit per BaseBlockType enum value
+        public int MinY { get; }                        // inclusive world y (sentinel int.MinValue if unconstrained)
+        public int MaxY { get; }                        // inclusive world y (sentinel int.MaxValue if unconstrained)
+        public int? MicroBiomeId { get; }               // optional microbiome filter
+        public int Priority { get; }                    // priority ordering (ascending)
+        public GenerationType GenerationType { get; }
+        public int RelativeMinDepth { get; }
+        public int RelativeMaxDepth { get; }
+
+        public ReadOnlySpan<ushort> SpecificIdsSorted => specificIdsSorted;
 
         public CompiledSimpleReplacementRule(ushort replacementId,
                                              ushort[] specificIdsSorted,
@@ -31,7 +33,7 @@ namespace MVoxelEngine1.Infrastructure.Models.Generation.Biomes
                                              int relativeMaxDepth = int.MaxValue)
         {
             ReplacementId = replacementId;
-            SpecificIdsSorted = specificIdsSorted ?? Array.Empty<ushort>();
+            this.specificIdsSorted = specificIdsSorted ?? Array.Empty<ushort>();
             BaseTypeBitMask = baseTypeBitMask;
             MinY = minY;
             MaxY = maxY;
@@ -52,7 +54,7 @@ namespace MVoxelEngine1.Infrastructure.Models.Generation.Biomes
         {
             if ((BaseTypeBitMask >> (int)bt & 1u) != 0u) return true;
             if (SpecificIdsSorted.Length == 0) return false;
-            return Array.BinarySearch(SpecificIdsSorted, id) >= 0;
+            return Array.BinarySearch(specificIdsSorted, id) >= 0;
         }
     }
 }

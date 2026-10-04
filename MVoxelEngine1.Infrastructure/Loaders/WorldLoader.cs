@@ -4,13 +4,13 @@ namespace MVoxelEngine1.Infrastructure.Loaders
 {
     public class WorldLoader
     {
-        public Guid ID;
-        public Guid RegionID;
-        public string worldName = string.Empty;
-        public int seed;
-        public string currentWorldSaveDirectory = string.Empty;
-        public string currentWorldDataFile = "world.txt";
-        public string currentWorldSavedChunksSubDirectory = "chunks";
+        public Guid ID { get; set; }
+        public Guid RegionID { get; set; }
+        public string worldName { get; set; } = string.Empty;
+        public int seed { get; set; }
+        public string currentWorldSaveDirectory { get; set; } = string.Empty;
+        public string currentWorldDataFile { get; set; } = "world.txt";
+        public string currentWorldSavedChunksSubDirectory { get; set; } = "chunks";
 
         private readonly Dictionary<Guid, string> worldSaves = new();
 
@@ -154,12 +154,15 @@ namespace MVoxelEngine1.Infrastructure.Loaders
         {
             Console.WriteLine("Please enter a world seed:");
             string? input = Console.ReadLine();
+            int parsedSeed;
 
-            while (!int.TryParse(input, out seed))
+            while (!int.TryParse(input, out parsedSeed))
             {
                 Console.WriteLine("The world seed must be an integer.");
                 input = Console.ReadLine();
             }
+
+            seed = parsedSeed;
         }
 
         public bool IsLatinAlphabet(string? input)

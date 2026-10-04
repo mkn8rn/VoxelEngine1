@@ -8,42 +8,42 @@ namespace MVoxelEngine1.Infrastructure.Models
 {
     public class ProgramFlags
     {
-        public string? game;
-        public string? gameDataDirectory;
-        public string? worldName;
-        public int? seed;
-        public string? benchmarkOutput;
-        public string? allocationValidationOutput;
-        public string? graphicsBenchmarkOutput;
-        public string? faceManifestOutput;
-        public string? simulatedGpuUploadOutput;
-        public string? simulatedInput;
-        public int? simulatedFrameRate;
-        public int? simulatedGpuWriterDelayMilliseconds;
-        public int? simulatedGpuWriterFailAfterRecords;
-        public FaceGenerationMode? faceGenerationMode;
+        public string? game { get; set; }
+        public string? gameDataDirectory { get; set; }
+        public string? worldName { get; set; }
+        public int? seed { get; set; }
+        public string? benchmarkOutput { get; set; }
+        public string? allocationValidationOutput { get; set; }
+        public string? graphicsBenchmarkOutput { get; set; }
+        public string? faceManifestOutput { get; set; }
+        public string? simulatedGpuUploadOutput { get; set; }
+        public string? simulatedInput { get; set; }
+        public int? simulatedFrameRate { get; set; }
+        public int? simulatedGpuWriterDelayMilliseconds { get; set; }
+        public int? simulatedGpuWriterFailAfterRecords { get; set; }
+        public FaceGenerationMode? faceGenerationMode { get; set; }
         // Window settings
-        public int? windowWidth;
-        public int? windowHeight;
+        public int? windowWidth { get; set; }
+        public int? windowHeight { get; set; }
         // Render settings
-        public bool? useFacePooling;
-        public int? faceAmountToPool;
-        public float? worldGenWorkersPerCore;
-        public float? worldGenWorkersPerCoreInitial;
-        public float? meshRenderWorkersPerCore;
-        public float? meshRenderWorkersPerCoreInitial;
-        public bool? renderStreamingIfAllowed;
+        public bool? useFacePooling { get; set; }
+        public int? faceAmountToPool { get; set; }
+        public float? worldGenWorkersPerCore { get; set; }
+        public float? worldGenWorkersPerCoreInitial { get; set; }
+        public float? meshRenderWorkersPerCore { get; set; }
+        public float? meshRenderWorkersPerCoreInitial { get; set; }
+        public bool? renderStreamingIfAllowed { get; set; }
         // GC settings
-        public GCConcurrent? GCConcurrent;
-        public GCLatencyMode? GCLatencyMode;
-        public string? GCHeapHardLimit;
-        public string? GCHeapAffinitizeMask;
-        public GCLargeObjectHeapCompactionMode? GCLargeObjectHeapCompactionMode;
-        public string? GCHeapSegmentSize;
-        public string? GCStress;
-        public GCLogEnabled? GCLogEnabled;
-        public string? GCLogFile;
-        public string? GCHeapCount;
-        public GCMode? GCMode;
+        public GCConcurrent? GCConcurrent { get; set; }
+        public GCLatencyMode? GCLatencyMode { get; set; }
+        public string? GCHeapHardLimit { get; set; }
+        public string? GCHeapAffinitizeMask { get; set; }
+        public GCLargeObjectHeapCompactionMode? GCLargeObjectHeapCompactionMode { get; set; }
+        public string? GCHeapSegmentSize { get; set; }
+        public string? GCStress { get; set; }
+        public GCLogEnabled? GCLogEnabled { get; set; }
+        public string? GCLogFile { get; set; }
+        public string? GCHeapCount { get; set; }
+        public GCMode? GCMode { get; set; }
     }
 }

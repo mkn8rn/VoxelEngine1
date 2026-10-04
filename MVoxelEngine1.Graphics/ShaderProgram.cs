@@ -1,4 +1,4 @@
-﻿using OpenTK.Graphics.OpenGL4;
+using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 using System;
 using System.Collections.Generic;
@@ -10,7 +10,7 @@ namespace MVoxelEngine1.Graphics
 {
     public class ShaderProgram
     {
-        public int ID;
+        public int ID { get; set; }
         public ShaderProgram(string vertexShaderFilePath, string fragmentShaderFilePath)
         {
             ID = GL.CreateProgram();

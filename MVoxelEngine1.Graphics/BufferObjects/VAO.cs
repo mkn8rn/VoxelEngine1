@@ -1,4 +1,4 @@
-﻿using OpenTK.Graphics.OpenGL4;
+using OpenTK.Graphics.OpenGL4;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -10,7 +10,7 @@ namespace MVoxelEngine1.Graphics.BufferObjects
     public class VAO
     {
         // OpenGL vertex array object id
-        public int ID;
+        public int ID { get; set; }
         public VAO()
         {
             ID = GL.GenVertexArray();

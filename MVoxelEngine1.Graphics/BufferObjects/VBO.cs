@@ -12,7 +12,7 @@ namespace MVoxelEngine1.Graphics.BufferObjects
     public class VBO
     {
         // OpenGL buffer object id (immutable after creation)
-        public int ID;
+        public int ID { get; set; }
         // Pass this buffer logically belongs to (helps higher layers organize attribute sets per pass).
         public RenderPass Pass { get; }
 

@@ -6,7 +6,7 @@ namespace MVoxelEngine1.Graphics.BufferObjects
     public class IBO
     {
         // OpenGL element buffer id and element count
-        public int ID;
+        public int ID { get; set; }
         public int Count { get; }
         // Pass this index buffer is associated with.
         public IndexRenderPass Pass { get; }

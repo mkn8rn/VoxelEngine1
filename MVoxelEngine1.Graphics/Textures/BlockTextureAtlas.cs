@@ -15,11 +15,11 @@ namespace MVoxelEngine1.Graphics.Textures
 {
     public class BlockTextureAtlas
     {
-        public int ID;
-        public int atlasWidth;
-        public int atlasHeight;
-        public int tilesX;
-        public int tilesY;
+        public int ID { get; set; }
+        public int atlasWidth { get; set; }
+        public int atlasHeight { get; set; }
+        public int tilesX { get; set; }
+        public int tilesY { get; set; }
         //loading variables
         private int currentX = 0;
         private int currentY = 0;
@@ -35,10 +35,10 @@ namespace MVoxelEngine1.Graphics.Textures
         // --- Async IO preload support ---
         private struct RawImage
         {
-            public string Name;
+            public string Name { get; set; }
             public byte[] Data; // RGBA
-            public int Width;
-            public int Height;
+            public int Width { get; set; }
+            public int Height { get; set; }
         }
 
         private static Task<List<RawImage>> preloadTask; // file IO + decode (no GL)
@@ -121,8 +121,8 @@ namespace MVoxelEngine1.Graphics.Textures
             string baseDir = GameManager.settings.assetsBaseBlockTexturesDirectory;
             string ext = GameManager.settings.textureFileExtension;
             StbImage.stbi_set_flip_vertically_on_load(1);
-            fallbackTexture = ImageResult.FromStream(File.OpenRead(Path.Combine(baseDir, fallbackTextureName + ext)), ColorComponents.RedGreenBlueAlpha);
-            missingTexture = ImageResult.FromStream(File.OpenRead(Path.Combine(baseDir, missingTextureName + ext)), ColorComponents.RedGreenBlueAlpha);
+            fallbackTexture = LoadImage(Path.Combine(baseDir, fallbackTextureName + ext));
+            missingTexture = LoadImage(Path.Combine(baseDir, missingTextureName + ext));
             if (preloaded == null || preloaded.Count == 0)
             {
                 // Re-execute blocking path inline (same as original ctor without duplication)
@@ -250,8 +250,8 @@ namespace MVoxelEngine1.Graphics.Textures
             }
 
             StbImage.stbi_set_flip_vertically_on_load(1);
-            fallbackTexture = ImageResult.FromStream(File.OpenRead(GameManager.settings.assetsBaseBlockTexturesDirectory + fallbackTextureName + GameManager.settings.textureFileExtension), ColorComponents.RedGreenBlueAlpha);
-            missingTexture = ImageResult.FromStream(File.OpenRead(GameManager.settings.assetsBaseBlockTexturesDirectory + missingTextureName + GameManager.settings.textureFileExtension), ColorComponents.RedGreenBlueAlpha);
+            fallbackTexture = LoadImage(GameManager.settings.assetsBaseBlockTexturesDirectory + fallbackTextureName + GameManager.settings.textureFileExtension);
+            missingTexture = LoadImage(GameManager.settings.assetsBaseBlockTexturesDirectory + missingTextureName + GameManager.settings.textureFileExtension);
             Console.WriteLine($"Loading base textures to atlas.");
             LoadTextureIntoAtlas(baseTextureFiles);
             Console.WriteLine($"Loading other textures to atlas.");
@@ -275,12 +275,18 @@ namespace MVoxelEngine1.Graphics.Textures
             }
         }
 
+        private static ImageResult LoadImage(string path)
+        {
+            using FileStream stream = File.OpenRead(path);
+            return ImageResult.FromStream(stream, ColorComponents.RedGreenBlueAlpha);
+        }
+
         private void LoadTextureIntoAtlas(string[] texturesToLoad)
         {
             foreach (var texture in texturesToLoad)
             {
                 var textureName = Path.GetFileNameWithoutExtension(texture);
-                var loadedTexture = ImageResult.FromStream(File.OpenRead(texture), ColorComponents.RedGreenBlueAlpha);
+                var loadedTexture = LoadImage(texture);
                 if (loadedTexture.Width != GameManager.settings.blockTileWidth || loadedTexture.Height != GameManager.settings.blockTileHeight || loadedTexture.Data == null || loadedTexture.Data.Length == 0)
                 {
                     Console.WriteLine($"Fallback texture applied for: {textureName}");

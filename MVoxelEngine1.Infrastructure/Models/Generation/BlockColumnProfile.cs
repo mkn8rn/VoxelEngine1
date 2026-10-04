@@ -1,13 +1,14 @@
 namespace MVoxelEngine1.Infrastructure.Models.Generation
 {
-    public struct BlockColumnProfile
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    public record struct BlockColumnProfile
     {
-        public int StoneStart;
-        public int StoneEnd;
-        public int SoilStart;
-        public int SoilEnd;
-        public int WaterStart;
-        public int WaterEnd;
+        public int StoneStart { readonly get; set; }
+        public int StoneEnd { readonly get; set; }
+        public int SoilStart { readonly get; set; }
+        public int SoilEnd { readonly get; set; }
+        public int WaterStart { readonly get; set; }
+        public int WaterEnd { readonly get; set; }
     }
 
 }

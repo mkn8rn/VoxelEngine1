@@ -88,6 +88,7 @@ public sealed class NativeColumnProfileGeneratorTests
         Assert.Equal(729, columnCount);
         Assert.Equal(18_662_400, profileCount);
         Assert.Equal(referenceHash, nativeHash);
+        Assert.Equal("6CE51114DDC88E9ED52501806A5A6F7BE3174C4B197ACF9CE352D71713A86286", nativeHash);
         string output = Path.Combine(TestPaths.ResultsRoot, "default-full-profiles.json");
         Directory.CreateDirectory(TestPaths.ResultsRoot);
         File.WriteAllText(output, JsonSerializer.Serialize(new
