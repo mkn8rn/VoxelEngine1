@@ -16,7 +16,7 @@ internal sealed class NativeReferenceFaceGenerator
         var game = view.GameSnapshot;
         opaque = new bool[game.Blocks.Length];
         for (int i = 0; i < opaque.Length; i++)
-            opaque[i] = (game.Blocks[i].Flags & NativeBlockFlags.Opaque) != 0;
+            opaque[i] = game.Blocks[i].HasFlag(NativeBlockFlags.Opaque);
         columns = new ReferenceColumn[view.Columns.Length];
         for (int i = 0; i < columns.Length; i++)
         {

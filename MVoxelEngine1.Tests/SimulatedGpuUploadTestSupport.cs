@@ -138,22 +138,22 @@ namespace MVoxelEngine1.Tests
                     if (maximumWorkingSetBytes.HasValue && peakWorkingSetBytes > maximumWorkingSetBytes.Value)
                     {
                         process.Kill(entireProcessTree: true);
-                        await process.WaitForExitAsync(testCancellation);
-                        string limitOutput = await standardOutputTask;
-                        string limitError = await standardErrorTask;
+                        await process.WaitForExitAsync(testCancellation).ConfigureAwait(true);
+                        string limitOutput = await standardOutputTask.ConfigureAwait(true);
+                        string limitError = await standardErrorTask.ConfigureAwait(true);
                         throw new InvalidOperationException($"Application process exceeded the {maximumWorkingSetBytes.Value}-byte memory limit. " + $"Peak working set: {peakWorkingSetBytes} bytes. " + $"Output: {Tail(limitOutput)} Error: {Tail(limitError)}");
                     }
 
-                    await Task.Delay(10, combinedCancellation.Token);
+                    await Task.Delay(10, combinedCancellation.Token).ConfigureAwait(true);
                 }
             }
             catch (OperationCanceledException)when (timeoutSource.IsCancellationRequested)
             {
                 if (!process.HasExited)
                     process.Kill(entireProcessTree: true);
-                await process.WaitForExitAsync(testCancellation);
-                string timeoutOutput = await standardOutputTask;
-                string timeoutError = await standardErrorTask;
+                await process.WaitForExitAsync(testCancellation).ConfigureAwait(true);
+                string timeoutOutput = await standardOutputTask.ConfigureAwait(true);
+                string timeoutError = await standardErrorTask.ConfigureAwait(true);
                 throw new TimeoutException($"Application process exceeded {timeout.TotalSeconds:0} seconds. " + $"Output: {Tail(timeoutOutput)} Error: {Tail(timeoutError)}");
             }
 
@@ -166,7 +166,7 @@ namespace MVoxelEngine1.Tests
             {
             }
 
-            return new SimulatedGpuProcessResult(process.ExitCode, await standardOutputTask, await standardErrorTask, windowObserved, peakWorkingSetBytes);
+            return new SimulatedGpuProcessResult(process.ExitCode, await standardOutputTask.ConfigureAwait(true), await standardErrorTask.ConfigureAwait(true), windowObserved, peakWorkingSetBytes);
         }
 
         public static string[] FindIncompleteFiles(string outputPath)

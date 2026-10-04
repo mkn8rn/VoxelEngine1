@@ -35,7 +35,7 @@ namespace MVoxelEngine1.Tests
             gate.NotifyCompleted();
             await waitTask.WaitAsync(
                 TimeSpan.FromSeconds(1),
-                cancellationToken);
+                cancellationToken).ConfigureAwait(true);
         }
     }
 }

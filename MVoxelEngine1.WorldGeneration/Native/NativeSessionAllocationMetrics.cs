@@ -2,6 +2,7 @@ using System.Runtime;
 using Supprocom.NativeAllocationManagement;
 
 namespace MVoxelEngine1.WorldGeneration.Native;
+[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
 public readonly record struct NativeSessionAllocationMetrics(long OwnerLengthBytes, long OwnerCapacityBytes, int ResidentColumns, int RequiredChunks, int ProfileCount, int PacketWordCapacity, int PacketWordHighWaterCount, int MaterializedChunks, int MaterializedSections, int MaterializedRawSections, int MaterializedPaletteEntries, int MaterializedPackedWords)
 {
     internal static NativeSessionAllocationMetrics Capture(NativeGtrtSession session)

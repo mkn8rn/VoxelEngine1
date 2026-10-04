@@ -9,7 +9,8 @@ using MVoxelEngine1.WorldGeneration.Terrain;
 using Supprocom.NativeAllocationManagement;
 
 namespace MVoxelEngine1.WorldGeneration.Native;
-public readonly struct NativePreUploadPacket
+[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+public readonly record struct NativePreUploadPacket
 {
     internal NativePreUploadPacket(long renderDataId, int chunkX, int chunkY, int chunkZ, int opaqueFaceCount, int opaqueWordCount, int transparentFaceCount, int transparentWordCount)
     {

@@ -14,6 +14,7 @@ namespace MVoxelEngine1.WorldGeneration
 {
     public static class WorldFaceManifestBuilder
     {
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
         private readonly record struct ManifestChunk(int Index, int X, int Y, int Z);
         public static WorldFaceManifest Capture(NativeWorld world, string game, int seed, FaceGenerationMode faceGenerationMode)
         {

@@ -30,7 +30,7 @@ namespace MVoxelEngine1.Tests
             SimulatedGpuProcessResult result = await SimulatedGpuUploadTestSupport.RunAsync(
                 startInfo,
                 TimeSpan.FromSeconds(75),
-                TestContext.Current.CancellationToken);
+                TestContext.Current.CancellationToken).ConfigureAwait(true);
             Assert.True(
                 result.ExitCode == 0,
                 $"Application exited with code {result.ExitCode}. " +
@@ -111,7 +111,7 @@ namespace MVoxelEngine1.Tests
             SimulatedGpuProcessResult result = await SimulatedGpuUploadTestSupport.RunAsync(
                 startInfo,
                 TimeSpan.FromSeconds(135),
-                TestContext.Current.CancellationToken);
+                TestContext.Current.CancellationToken).ConfigureAwait(true);
             Assert.True(
                 result.ExitCode == 0,
                 $"Application exited with code {result.ExitCode}. " +
@@ -211,7 +211,7 @@ namespace MVoxelEngine1.Tests
             SimulatedGpuProcessResult result = await SimulatedGpuUploadTestSupport.RunAsync(
                 startInfo,
                 TimeSpan.FromSeconds(30),
-                TestContext.Current.CancellationToken);
+                TestContext.Current.CancellationToken).ConfigureAwait(true);
             Assert.NotEqual(0, result.ExitCode);
             Assert.False(result.WindowObserved);
             Assert.False(File.Exists(outputPath));
@@ -256,7 +256,7 @@ namespace MVoxelEngine1.Tests
                     if (incompleteFiles.Length > 0 && new FileInfo(incompleteFiles[0]).Length > 0)
                         break;
 
-                    await Task.Delay(20, testCancellation);
+                    await Task.Delay(20, testCancellation).ConfigureAwait(true);
                 }
 
                 Assert.False(process.HasExited);
@@ -269,9 +269,9 @@ namespace MVoxelEngine1.Tests
                 if (!process.HasExited)
                     process.Kill(entireProcessTree: true);
 
-                await process.WaitForExitAsync(testCancellation);
-                await standardOutputTask;
-                await standardErrorTask;
+                await process.WaitForExitAsync(testCancellation).ConfigureAwait(true);
+                await standardOutputTask.ConfigureAwait(true);
+                await standardErrorTask.ConfigureAwait(true);
             }
 
             Assert.False(File.Exists(outputPath));

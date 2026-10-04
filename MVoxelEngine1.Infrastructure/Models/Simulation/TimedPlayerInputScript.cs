@@ -43,7 +43,7 @@ namespace MVoxelEngine1.Infrastructure.Models.Simulation
             var names = new List<string>(knownKeys.Length);
             foreach ((string name, PlayerInputKeys key)in knownKeys)
             {
-                if ((keys & key) != 0)
+                if ((keys & key) != PlayerInputKeys.None)
                     names.Add(name);
             }
 
@@ -70,7 +70,7 @@ namespace MVoxelEngine1.Infrastructure.Models.Simulation
 
                 if (key == PlayerInputKeys.None)
                     throw new FormatException($"Input step '{token}' contains unknown key '{name}'.");
-                if ((keys & key) != 0)
+                if ((keys & key) != PlayerInputKeys.None)
                     throw new FormatException($"Input step '{token}' contains key '{name}' more than once.");
                 keys |= key;
             }

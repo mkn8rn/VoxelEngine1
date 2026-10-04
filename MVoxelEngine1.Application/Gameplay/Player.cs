@@ -94,24 +94,26 @@ namespace MVoxelEngine1.Application.Gameplay
             direction = camera.front;
         }
 
+        // Avoid .NET 10 Tier0 Enum.HasFlag boxing on the first movement frame.
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveOptimization)]
         private void ApplyMovement(PlayerInputKeys input, double elapsedSeconds)
         {
             if (!double.IsFinite(elapsedSeconds) || elapsedSeconds < 0)
                 throw new ArgumentOutOfRangeException(nameof(elapsedSeconds));
             float cameraSpeed = MovementSpeed * (float)elapsedSeconds;
             Vector3 moveDirection = Vector3.Zero;
-            if ((input & PlayerInputKeys.W) != 0)
+            if (input.HasFlag(PlayerInputKeys.W))
                 moveDirection += camera.front;
-            if ((input & PlayerInputKeys.S) != 0)
+            if (input.HasFlag(PlayerInputKeys.S))
                 moveDirection -= camera.front;
             Vector3 right = Vector3.Normalize(Vector3.Cross(camera.front, camera.up));
-            if ((input & PlayerInputKeys.A) != 0)
+            if (input.HasFlag(PlayerInputKeys.A))
                 moveDirection -= right;
-            if ((input & PlayerInputKeys.D) != 0)
+            if (input.HasFlag(PlayerInputKeys.D))
                 moveDirection += right;
-            if ((input & PlayerInputKeys.Space) != 0)
+            if (input.HasFlag(PlayerInputKeys.Space))
                 moveDirection += camera.up;
-            if ((input & PlayerInputKeys.LeftShift) != 0)
+            if (input.HasFlag(PlayerInputKeys.LeftShift))
                 moveDirection -= camera.up;
             if (moveDirection.LengthSquared > 0)
                 moveDirection = Vector3.Normalize(moveDirection);

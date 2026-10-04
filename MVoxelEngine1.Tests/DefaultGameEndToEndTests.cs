@@ -57,21 +57,21 @@ namespace MVoxelEngine1.Tests
                 testCancellation);
             try
             {
-                await process.WaitForExitAsync(combinedCancellation.Token);
+                await process.WaitForExitAsync(combinedCancellation.Token).ConfigureAwait(true);
             }
             catch (OperationCanceledException) when (timeout.IsCancellationRequested)
             {
                 if (!process.HasExited)
                     process.Kill(entireProcessTree: true);
 
-                await process.WaitForExitAsync(testCancellation);
-                string timeoutOutput = await standardOutputTask;
-                string timeoutError = await standardErrorTask;
+                await process.WaitForExitAsync(testCancellation).ConfigureAwait(true);
+                string timeoutOutput = await standardOutputTask.ConfigureAwait(true);
+                string timeoutError = await standardErrorTask.ConfigureAwait(true);
                 throw new TimeoutException($"Application benchmark exceeded 120 seconds. Output: {Tail(timeoutOutput)} Error: {Tail(timeoutError)}");
             }
 
-            string standardOutput = await standardOutputTask;
-            string standardError = await standardErrorTask;
+            string standardOutput = await standardOutputTask.ConfigureAwait(true);
+            string standardError = await standardErrorTask.ConfigureAwait(true);
             Assert.True(
                 process.ExitCode == 0,
                 $"Application exited with code {process.ExitCode}. Output: {Tail(standardOutput)} Error: {Tail(standardError)}");
@@ -263,7 +263,7 @@ namespace MVoxelEngine1.Tests
                     testCancellation);
             try
             {
-                await process.WaitForExitAsync(combinedCancellation.Token);
+                await process.WaitForExitAsync(combinedCancellation.Token).ConfigureAwait(true);
             }
             catch (OperationCanceledException)
                 when (timeout.IsCancellationRequested)
@@ -271,17 +271,17 @@ namespace MVoxelEngine1.Tests
                 if (!process.HasExited)
                     process.Kill(entireProcessTree: true);
 
-                await process.WaitForExitAsync(testCancellation);
-                string timeoutOutput = await standardOutputTask;
-                string timeoutError = await standardErrorTask;
+                await process.WaitForExitAsync(testCancellation).ConfigureAwait(true);
+                string timeoutOutput = await standardOutputTask.ConfigureAwait(true);
+                string timeoutError = await standardErrorTask.ConfigureAwait(true);
                 throw new TimeoutException(
                     $"Graphics benchmark exceeded 120 seconds. " +
                     $"Output: {Tail(timeoutOutput)} " +
                     $"Error: {Tail(timeoutError)}");
             }
 
-            string standardOutput = await standardOutputTask;
-            string standardError = await standardErrorTask;
+            string standardOutput = await standardOutputTask.ConfigureAwait(true);
+            string standardError = await standardErrorTask.ConfigureAwait(true);
             Assert.True(
                 process.ExitCode == 0,
                 $"Application exited with code {process.ExitCode}. " +

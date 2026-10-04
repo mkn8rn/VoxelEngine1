@@ -135,10 +135,10 @@ internal sealed class NativeGameSnapshot : IDisposable
             {
                 if (rule.GenerationType is not (GenerationType.InlineReplacement or GenerationType.SimpleReplacement) || rule.MicroBiomeId is not null || rule.MinY > rule.MaxY || rule.RelativeMinDepth > rule.RelativeMaxDepth)
                     throw new InvalidDataException($"Biome '{biome.name}' has an unsupported replacement rule.");
-                if ((blocks[rule.ReplacementId].Flags & NativeBlockFlags.Defined) == 0)
+                if (!blocks[rule.ReplacementId].HasFlag(NativeBlockFlags.Defined))
                     throw new InvalidDataException($"Replacement block '{rule.ReplacementId}' is undefined.");
                 foreach (ushort id in rule.SpecificIdsSorted)
-                    if ((blocks[id].Flags & NativeBlockFlags.Defined) == 0)
+                    if (!blocks[id].HasFlag(NativeBlockFlags.Defined))
                         throw new InvalidDataException($"Replacement source '{id}' is undefined.");
                 int firstSpecificId = nativeSpecificIds.Count;
                 nativeSpecificIds.AddRange(rule.SpecificIdsSorted);

@@ -416,7 +416,7 @@ public sealed class NativeGeneratedMeshTests
                         blockId,
                         out NativeBlockDescriptor descriptor));
                     List<ulong> destination =
-                        (descriptor.Flags & NativeBlockFlags.Opaque) != 0
+                        descriptor.Flags.HasFlag(NativeBlockFlags.Opaque)
                             ? expectedOpaque
                             : expectedTransparent;
                     for (byte direction = 0;

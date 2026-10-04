@@ -40,7 +40,7 @@ namespace MVoxelEngine1.Tests
             SimulatedGpuProcessResult result = await SimulatedGpuUploadTestSupport.RunAsync(
                 startInfo,
                 TimeSpan.FromSeconds(75),
-                TestContext.Current.CancellationToken);
+                TestContext.Current.CancellationToken).ConfigureAwait(true);
 
             Assert.Equal(0, result.ExitCode);
             Assert.False(result.WindowObserved);

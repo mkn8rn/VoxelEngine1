@@ -48,7 +48,7 @@ internal static class NativeUniformChunkMesh
             return true;
         if (!session.TryGetBlockDescriptor(source, out NativeBlockDescriptor descriptor))
             return false;
-        bool opaque = (descriptor.Flags & NativeBlockFlags.Opaque) != 0;
+        bool opaque = descriptor.HasFlag(NativeBlockFlags.Opaque);
         for (byte direction = 0; direction < 6; direction++)
         {
             int axis = direction / 2;

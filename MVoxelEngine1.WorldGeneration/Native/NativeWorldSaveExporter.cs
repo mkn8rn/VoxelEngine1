@@ -869,7 +869,7 @@ internal sealed class NativeWorldSaveExporter
             throw new InvalidDataException(
                 "A native saved block is not defined.");
         }
-        return (descriptor.Flags & NativeBlockFlags.Opaque) != 0;
+        return descriptor.HasFlag(NativeBlockFlags.Opaque);
     }
 
     private static bool IsTransparent(

@@ -69,7 +69,7 @@ internal ref struct NativeGeneratedFaceWriter
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void EmitYRange(byte direction, int x, int startY, int endY, int z) => EmitRectangle(direction, x, startY, z, extentU: 1, extentV: endY - startY + 1);
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void EmitBlockRectangle(scoped in NativeBlockDescriptor descriptor, byte direction, int x, int y, int z, int extentU, int extentV) => EmitDescriptor(in descriptor, (descriptor.Flags & NativeBlockFlags.Opaque) != 0, direction, x, y, z, extentU, extentV);
+    internal void EmitBlockRectangle(scoped in NativeBlockDescriptor descriptor, byte direction, int x, int y, int z, int extentU, int extentV) => EmitDescriptor(in descriptor, descriptor.HasFlag(NativeBlockFlags.Opaque), direction, x, y, z, extentU, extentV);
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void Emit(int material, bool opaque, byte direction, int x, int y, int z, int extentU, int extentV)
     {
@@ -92,7 +92,7 @@ internal ref struct NativeGeneratedFaceWriter
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void EmitDescriptor(scoped in NativeBlockDescriptor descriptor, bool opaque, byte direction, int x, int y, int z, int extentU, int extentV)
     {
-        if (!Valid || descriptor.Id == 0 || (descriptor.Flags & NativeBlockFlags.Defined) == 0 || direction >= 6 || (uint)x > byte.MaxValue || (uint)y > byte.MaxValue || (uint)z > byte.MaxValue || (uint)(extentU - 1) > byte.MaxValue || (uint)(extentV - 1) > byte.MaxValue)
+        if (!Valid || descriptor.Id == 0 || !descriptor.HasFlag(NativeBlockFlags.Defined) || direction >= 6 || (uint)x > byte.MaxValue || (uint)y > byte.MaxValue || (uint)z > byte.MaxValue || (uint)(extentU - 1) > byte.MaxValue || (uint)(extentV - 1) > byte.MaxValue)
         {
             Valid = false;
             return;

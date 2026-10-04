@@ -95,7 +95,7 @@ internal readonly struct NativeTerrainMaterialSet
     private static void Validate(scoped in NativeBlockDescriptor descriptor, BaseBlockType baseType)
     {
         ushort requiredId = (byte)baseType;
-        if (descriptor.Id != requiredId || descriptor.BaseType != requiredId || (descriptor.Flags & NativeBlockFlags.Defined) == 0)
+        if (descriptor.Id != requiredId || descriptor.BaseType != requiredId || !descriptor.HasFlag(NativeBlockFlags.Defined))
         {
             throw new InvalidDataException($"The runtime {baseType} block does not match id {requiredId}.");
         }
@@ -103,5 +103,5 @@ internal readonly struct NativeTerrainMaterialSet
 
     private static NativeBlockDescriptor CreateConventionalDescriptor(BaseBlockType baseType, BlockStateOfMatter state, NativeBlockFlags flags) => new((byte)baseType, baseType, state, NativeBlockFlags.Defined | flags, 0, 0, 0, 0, 0, 0);
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool IsOpaque(NativeBlockDescriptor descriptor) => (descriptor.Flags & NativeBlockFlags.Opaque) != 0;
+    private static bool IsOpaque(NativeBlockDescriptor descriptor) => descriptor.HasFlag(NativeBlockFlags.Opaque);
 }

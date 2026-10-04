@@ -43,17 +43,17 @@ namespace MVoxelEngine1.Tests
                 workspace,
                 referencePath,
                 "ReferenceManifestWorld",
-                "Reference");
+                "Reference").ConfigureAwait(true);
             SimulatedGpuProcessResult optimizedResult = await RunManifestAsync(
                 workspace,
                 optimizedPath,
                 "OptimizedManifestWorld",
-                "Optimized");
+                "Optimized").ConfigureAwait(true);
             SimulatedGpuProcessResult referenceRepeatResult = await RunManifestAsync(
                 workspace,
                 referenceRepeatPath,
                 "ReferenceRepeatManifestWorld",
-                "Reference");
+                "Reference").ConfigureAwait(true);
 
             AssertManifestProcess(referenceResult, referencePath, "Reference");
             AssertManifestProcess(optimizedResult, optimizedPath, "Optimized");
@@ -158,14 +158,14 @@ namespace MVoxelEngine1.Tests
                 "ReferenceMovementManifestWorld",
                 "Reference",
                 inputScript,
-                10);
+                10).ConfigureAwait(true);
             SimulatedGpuProcessResult optimizedResult = await RunManifestAsync(
                 workspace,
                 optimizedPath,
                 "OptimizedMovementManifestWorld",
                 "Optimized",
                 inputScript,
-                10);
+                10).ConfigureAwait(true);
 
             AssertManifestProcess(referenceResult, referencePath, "Reference movement");
             AssertManifestProcess(optimizedResult, optimizedPath, "Optimized movement");
@@ -229,7 +229,7 @@ namespace MVoxelEngine1.Tests
             return await SimulatedGpuUploadTestSupport.RunAsync(
                 startInfo,
                 TimeSpan.FromSeconds(inputScript is null ? 75 : 100),
-                TestContext.Current.CancellationToken);
+                TestContext.Current.CancellationToken).ConfigureAwait(true);
         }
 
         private static void AssertManifestProcess(

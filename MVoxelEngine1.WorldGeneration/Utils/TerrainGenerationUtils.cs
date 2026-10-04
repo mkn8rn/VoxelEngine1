@@ -11,6 +11,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
 {
     internal static class TerrainGenerationUtils
     {
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
         internal readonly struct NoiseAxisSample
         {
             internal NoiseAxisSample(int grid, float smooth)

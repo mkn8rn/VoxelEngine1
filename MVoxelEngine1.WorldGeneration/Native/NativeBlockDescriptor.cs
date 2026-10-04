@@ -37,6 +37,11 @@ internal readonly struct NativeBlockDescriptor
     internal ushort BackTile { get; }
     internal ushort FrontTile { get; }
 
+    // .NET 10 Tier0 boxes both Enum.HasFlag operands. Compile this small
+    // predicate optimized on its first call to preserve the cold GTRT boundary.
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    internal bool HasFlag(NativeBlockFlags flag) => Flags.HasFlag(flag);
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ushort GetTile(byte direction) => direction switch
     {

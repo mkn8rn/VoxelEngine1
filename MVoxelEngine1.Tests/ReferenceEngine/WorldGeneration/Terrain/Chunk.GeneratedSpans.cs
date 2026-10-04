@@ -35,15 +35,15 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                 {
                     ref readonly BlockColumnProfile column = ref source.Columns[x * dimZ + z];
                     int index = x * dimZ + z;
-                    WriteGeneratedBoundaryCell(source.GetBlockWorld(column, source.ChunkBaseY), PlaneNegY, ref TransparentPlaneNegY, index);
-                    WriteGeneratedBoundaryCell(source.GetBlockWorld(column, source.ChunkBaseY + source.Height - 1), PlanePosY, ref TransparentPlanePosY, index);
+                    WriteGeneratedBoundaryCell(source.GetBlockWorld(in column, source.ChunkBaseY), PlaneNegY, ref TransparentPlaneNegY, index);
+                    WriteGeneratedBoundaryCell(source.GetBlockWorld(in column, source.ChunkBaseY + source.Height - 1), PlanePosY, ref TransparentPlanePosY, index);
                 }
             }
 
             SetFaceSolidFromPlanes();
         }
 
-        private void WriteGeneratedBoundaryColumn(GeneratedChunkSpanData source, in BlockColumnProfile column, ulong[] opaquePlane, ref ushort[] transparentPlane, int localBaseIndex)
+        private void WriteGeneratedBoundaryColumn(GeneratedChunkSpanData source, ref readonly BlockColumnProfile column, ulong[] opaquePlane, ref ushort[] transparentPlane, int localBaseIndex)
         {
             WriteGeneratedBoundaryRange(source, column.StoneStart, column.StoneEnd, source.StoneBlockId, opaquePlane, ref transparentPlane, localBaseIndex);
             WriteGeneratedBoundaryRange(source, column.SoilStart, column.SoilEnd, source.SoilBlockId, opaquePlane, ref transparentPlane, localBaseIndex);

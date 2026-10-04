@@ -983,6 +983,7 @@ internal sealed partial class NativeWorldSaveImportPlan
         Packed
     }
 
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
     private readonly record struct SavedSection(
         SavedSectionKind Kind,
         ushort UniformBlockId,
@@ -1009,8 +1010,10 @@ internal sealed partial class NativeWorldSaveImportPlan
         internal float Humidity;
     }
 
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
     private readonly record struct SavedChunkDescriptor(int X, int Y, int Z, float Temperature, float Humidity, NativeSavedChunkSource Source);
 
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
     private struct ImportTotals
     {
         internal int ChunkCount;

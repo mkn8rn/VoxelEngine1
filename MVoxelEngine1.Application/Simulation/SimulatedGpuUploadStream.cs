@@ -18,6 +18,7 @@ namespace MVoxelEngine1.Application.Simulation
     internal sealed class SimulatedGpuUploadStream : IAsyncDisposable
     {
         private const int RecordQueueCapacity = 4;
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
         private readonly record struct ChunkIdentity(int ChunkX, int ChunkY, int ChunkZ, float WorldOriginX, float WorldOriginY, float WorldOriginZ);
         private readonly record struct ActiveChunkCapture(ChunkIdentity Chunk, long? RenderDataId, bool OpenGlUploaded);
         private sealed record CameraCapture(Vector3 Position, Vector3 Front, Vector3 Up, Matrix4 Model, Matrix4 View, Matrix4 Projection, int PlayerChunkX, int PlayerChunkY, int PlayerChunkZ);

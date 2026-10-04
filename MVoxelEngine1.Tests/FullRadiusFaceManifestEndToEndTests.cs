@@ -58,7 +58,7 @@ namespace MVoxelEngine1.Tests
                 optimizedPath,
                 SharedWorldName,
                 "Optimized",
-                OptimizedCaptureTimeout);
+                OptimizedCaptureTimeout).ConfigureAwait(true);
             WriteMetrics(optimizedPath, "Optimized", optimizedResult);
             AssertProcess(optimizedPath, optimizedResult, "Optimized");
 
@@ -67,7 +67,7 @@ namespace MVoxelEngine1.Tests
                 referencePath,
                 SharedWorldName,
                 "Reference",
-                ReferenceCaptureTimeout);
+                ReferenceCaptureTimeout).ConfigureAwait(true);
             WriteMetrics(referencePath, "Reference", referenceResult);
             AssertProcess(referencePath, referenceResult, "Reference");
 
@@ -106,7 +106,7 @@ namespace MVoxelEngine1.Tests
                 referencePath,
                 "FullRadiusReferenceOracleWorld",
                 "Reference",
-                ReferenceCaptureTimeout);
+                ReferenceCaptureTimeout).ConfigureAwait(true);
             WriteMetrics(referencePath, "Reference", result);
             AssertProcess(referencePath, result, "Reference");
 
@@ -128,11 +128,11 @@ namespace MVoxelEngine1.Tests
             string referencePath = Path.Combine(resultsDirectory, "reference-seed-123456.json");
             string optimizedPath = Path.Combine(resultsDirectory, "optimized-seed-123456.json");
             SimulatedGpuProcessResult optimizedResult = await RunAsync(workspace, optimizedPath,
-                "FullRadiusWasdManifestWorld", "Optimized", OptimizedCaptureTimeout, inputScript, 60);
+                "FullRadiusWasdManifestWorld", "Optimized", OptimizedCaptureTimeout, inputScript, 60).ConfigureAwait(true);
             WriteMetrics(optimizedPath, "Optimized", optimizedResult);
             AssertProcess(optimizedPath, optimizedResult, "Optimized");
             SimulatedGpuProcessResult referenceResult = await RunAsync(workspace, referencePath,
-                "FullRadiusWasdManifestWorld", "Reference", ReferenceCaptureTimeout, inputScript, 60);
+                "FullRadiusWasdManifestWorld", "Reference", ReferenceCaptureTimeout, inputScript, 60).ConfigureAwait(true);
             WriteMetrics(referencePath, "Reference", referenceResult);
             AssertProcess(referencePath, referenceResult, "Reference");
             using JsonDocument optimizedDocument = JsonDocument.Parse(File.ReadAllText(optimizedPath));
@@ -172,7 +172,7 @@ namespace MVoxelEngine1.Tests
                 optimizedPath,
                 "FullRadiusOptimizedRepeatWorld",
                 "Optimized",
-                OptimizedCaptureTimeout);
+                OptimizedCaptureTimeout).ConfigureAwait(true);
             WriteMetrics(optimizedPath, "Optimized", result);
             AssertProcess(optimizedPath, result, "Optimized");
 
@@ -204,7 +204,7 @@ namespace MVoxelEngine1.Tests
                 startInfo,
                 timeout,
                 TestContext.Current.CancellationToken,
-                MaximumWorkingSetBytes);
+                MaximumWorkingSetBytes).ConfigureAwait(true);
         }
 
         private static void AssertProcess(

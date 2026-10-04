@@ -96,7 +96,7 @@ internal readonly ref partial struct NativeGtrtSessionView
             }
 
             descriptor = blocks[blockId];
-            return descriptor.Id == blockId && (descriptor.Flags & NativeBlockFlags.Defined) != 0;
+            return descriptor.Id == blockId && descriptor.HasFlag(NativeBlockFlags.Defined);
         }
 
         if (blockId == Materials.Stone.Id)
@@ -122,7 +122,7 @@ internal readonly ref partial struct NativeGtrtSessionView
             return false;
         }
 
-        opaque = blockId != 0 && (block.Flags & NativeBlockFlags.Opaque) != 0;
+        opaque = blockId != 0 && block.HasFlag(NativeBlockFlags.Opaque);
         return true;
     }
 

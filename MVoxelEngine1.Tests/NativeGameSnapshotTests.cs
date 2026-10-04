@@ -49,16 +49,16 @@ public sealed class NativeGameSnapshotTests
                 Assert.Equal(block.ID, descriptor.Id);
                 Assert.Equal((ushort)block.BaseType, descriptor.BaseType);
                 Assert.Equal((byte)block.StateOfMatter, descriptor.StateOfMatter);
-                Assert.True((descriptor.Flags & NativeBlockFlags.Defined) != 0);
+                Assert.True(descriptor.Flags.HasFlag(NativeBlockFlags.Defined));
                 Assert.Equal(
                     TerrainLoader.IsOpaque(block.ID),
-                    (descriptor.Flags & NativeBlockFlags.Opaque) != 0);
+                    descriptor.Flags.HasFlag(NativeBlockFlags.Opaque));
                 Assert.Equal(
                     block.IsTransparent,
-                    (descriptor.Flags & NativeBlockFlags.Transparent) != 0);
+                    descriptor.Flags.HasFlag(NativeBlockFlags.Transparent));
                 Assert.Equal(
                     TerrainLoader.IsLiquid(block.ID),
-                    (descriptor.Flags & NativeBlockFlags.Liquid) != 0);
+                    descriptor.Flags.HasFlag(NativeBlockFlags.Liquid));
 
                 IReadOnlyDictionary<Faces, ByteVector2> faces =
                     BlockTextureAtlas.blockTypeUVCoordinates[block.ID];

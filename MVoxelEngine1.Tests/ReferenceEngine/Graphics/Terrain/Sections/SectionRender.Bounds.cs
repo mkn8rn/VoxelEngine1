@@ -50,7 +50,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
         // Bounds helper (world-base-clamped 0..15 local bounds)
         // ------------------------------------------------------------------------------------
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static void ResolveLocalBounds(in SectionPrerenderDesc desc, int S, out int lxMin, out int lxMax, out int lyMin, out int lyMax, out int lzMin, out int lzMax)
+        internal static void ResolveLocalBounds(ref readonly SectionPrerenderDesc desc, int S, out int lxMin, out int lxMax, out int lyMin, out int lyMax, out int lzMin, out int lzMax)
         {
             if (desc.HasBounds)
             {

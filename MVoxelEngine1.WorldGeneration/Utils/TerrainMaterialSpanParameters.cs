@@ -9,6 +9,7 @@ using MVoxelEngine1.Infrastructure.Models.Terrain;
 
 namespace MVoxelEngine1.WorldGeneration.Terrain
 {
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
     internal readonly struct TerrainMaterialSpanParameters
     {
         internal TerrainMaterialSpanParameters(int stoneMinY, int stoneMaxY, int stoneMinDepth, int stoneMaxDepth, int soilMinY, int soilMaxY, int soilMinDepth, int soilMaxDepth, int waterLevel)

@@ -18,6 +18,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
         /// Each column can contain at most one contiguous stone span and one contiguous soil span directly above it.
         /// Section indices (first/last) are cached for emission & coverage calculations.
         /// Presence is indicated via bit flags; default field values are ignored when the span is absent.
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
         private struct ColumnSpans
         {
             public short stoneStart; // inclusive local Y

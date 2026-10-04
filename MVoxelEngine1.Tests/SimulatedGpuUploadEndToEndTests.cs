@@ -63,7 +63,7 @@ namespace MVoxelEngine1.Tests
                         windowObserved |= process.MainWindowHandle != IntPtr.Zero;
                     }
 
-                    await Task.Delay(20, combinedCancellation.Token);
+                    await Task.Delay(20, combinedCancellation.Token).ConfigureAwait(true);
                 }
             }
             catch (OperationCanceledException) when (timeout.IsCancellationRequested)
@@ -71,14 +71,14 @@ namespace MVoxelEngine1.Tests
                 if (!process.HasExited)
                     process.Kill(entireProcessTree: true);
 
-                await process.WaitForExitAsync(testCancellation);
-                string timeoutOutput = await standardOutputTask;
-                string timeoutError = await standardErrorTask;
+                await process.WaitForExitAsync(testCancellation).ConfigureAwait(true);
+                string timeoutOutput = await standardOutputTask.ConfigureAwait(true);
+                string timeoutError = await standardErrorTask.ConfigureAwait(true);
                 throw new TimeoutException($"Simulated GPU upload exceeded 75 seconds. Output: {Tail(timeoutOutput)} Error: {Tail(timeoutError)}");
             }
 
-            string standardOutput = await standardOutputTask;
-            string standardError = await standardErrorTask;
+            string standardOutput = await standardOutputTask.ConfigureAwait(true);
+            string standardError = await standardErrorTask.ConfigureAwait(true);
             Assert.True(
                 process.ExitCode == 0,
                 $"Application exited with code {process.ExitCode}. Output: {Tail(standardOutput)} Error: {Tail(standardError)}");

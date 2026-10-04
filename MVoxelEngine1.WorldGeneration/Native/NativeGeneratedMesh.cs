@@ -621,7 +621,7 @@ internal static class NativeGeneratedMesh
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool SupportsContiguousFastPath(NativeTerrainMaterialSet materials) => materials.Stone.Id != 0 && materials.Soil.Id != 0 && materials.Water.Id != 0 && IsOpaque(materials.Stone) && IsOpaque(materials.Soil) && !IsOpaque(materials.Water);
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool IsOpaque(NativeBlockDescriptor descriptor) => (descriptor.Flags & NativeBlockFlags.Opaque) != 0;
+    private static bool IsOpaque(NativeBlockDescriptor descriptor) => descriptor.HasFlag(NativeBlockFlags.Opaque);
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool HasRange(int start, int end) => start >= 0 && end >= start;
 }

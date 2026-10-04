@@ -334,7 +334,7 @@ public sealed class NativeColumnProfileGeneratorTests
 
     private static void AddToSummary(
         ref ColumnUniformRanges summary,
-        scoped in BlockColumnProfile profile)
+        scoped ref readonly BlockColumnProfile profile)
     {
         bool hasStone =
             profile.StoneStart >= 0 &&

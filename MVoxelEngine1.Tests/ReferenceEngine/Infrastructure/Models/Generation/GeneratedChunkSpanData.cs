@@ -70,7 +70,7 @@ namespace MVoxelEngine1.Infrastructure.Models.Generation
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public ushort GetBlockWorld(in BlockColumnProfile column, int worldY)
+        public ushort GetBlockWorld(ref readonly BlockColumnProfile column, int worldY)
         {
             if (column.StoneStart >= 0 &&
                 column.StoneEnd >= column.StoneStart &&

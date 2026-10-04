@@ -73,15 +73,15 @@ namespace MVoxelEngine1.Tests
                 cancellationToken));
             try
             {
-                await Task.Delay(50, cancellationToken);
+                await Task.Delay(50, cancellationToken).ConfigureAwait(true);
                 Assert.False(writer.IsCompleted);
                 releaseReader.Set();
                 Assert.True(await reader.WaitAsync(
                     TimeSpan.FromSeconds(1),
-                    cancellationToken));
+                    cancellationToken).ConfigureAwait(true));
                 await writer.WaitAsync(
                     TimeSpan.FromSeconds(1),
-                    cancellationToken);
+                    cancellationToken).ConfigureAwait(true);
             }
             finally
             {

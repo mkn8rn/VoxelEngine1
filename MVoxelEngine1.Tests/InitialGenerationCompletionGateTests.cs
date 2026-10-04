@@ -55,7 +55,7 @@ namespace MVoxelEngine1.Tests
 
             await waitTask.WaitAsync(
                 TimeSpan.FromSeconds(1),
-                cancellationToken);
+                cancellationToken).ConfigureAwait(true);
             Assert.Equal(2, Volatile.Read(ref predicateCalls));
         }
 
@@ -95,7 +95,7 @@ namespace MVoxelEngine1.Tests
             gate.NotifyCollectionBecameEmpty();
             await waitTask.WaitAsync(
                 TimeSpan.FromSeconds(1),
-                cancellationToken);
+                cancellationToken).ConfigureAwait(true);
         }
 
         [Fact]
@@ -164,7 +164,7 @@ namespace MVoxelEngine1.Tests
 
             await waitTask.WaitAsync(
                 TimeSpan.FromSeconds(1),
-                cancellationToken);
+                cancellationToken).ConfigureAwait(true);
         }
     }
 }

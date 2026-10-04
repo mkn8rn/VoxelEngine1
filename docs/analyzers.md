@@ -51,3 +51,11 @@ Any necessary suppression belongs on the smallest affected member or type and
 must explain its technical reason. Validation reports record its evidence.
 The Release review gate requires zero unresolved enabled warnings or errors,
 followed by the applicable headless correctness and allocation checks.
+
+Native enum predicates retain MA0192's `HasFlag` form. On the pinned .NET 10
+runtime, Tier0 boxes its enum operands; a small native descriptor predicate uses
+`AggressiveOptimization` to avoid those cold allocations. Player movement uses
+the same compilation policy. The allocation control and full production gate
+verify this choice; no analyzer rule is suppressed for it. The runtime's
+[Tier0 box-elision fix](https://github.com/dotnet/runtime/pull/130590) is tracked
+for a future runtime upgrade.

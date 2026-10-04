@@ -1,5 +1,6 @@
 namespace MVoxelEngine1.Graphics.Terrain;
-public readonly struct NativeChunkRenderPacketDescriptor
+[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+public readonly record struct NativeChunkRenderPacketDescriptor
 {
     public NativeChunkRenderPacketDescriptor(long renderDataId, int chunkWorldX, int chunkWorldY, int chunkWorldZ, int registryEpoch, int publicationEpoch, int opaqueFaceCount, int opaqueWordCount, int transparentFaceCount, int transparentWordCount)
     {

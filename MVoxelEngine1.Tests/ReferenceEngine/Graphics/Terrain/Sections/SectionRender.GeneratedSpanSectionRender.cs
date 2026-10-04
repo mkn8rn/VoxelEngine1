@@ -95,13 +95,13 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                 for (int z = 0; z < source.Depth; z++)
                 {
                     ref readonly BlockColumnProfile column = ref source.Columns[x * source.Depth + z];
-                    GetGeneratedMaterialInterval(column, material, out int intervalStart, out int intervalEnd);
-                    GenerateGeneratedIntervalRectangles(source, materials, column, blockId, blockOpaque, emitInteriorSides, intervalStart, intervalEnd, x, z, bottomFaces, topFaces, ref writer);
+                    GetGeneratedMaterialInterval(in column, material, out int intervalStart, out int intervalEnd);
+                    GenerateGeneratedIntervalRectangles(source, materials, in column, blockId, blockOpaque, emitInteriorSides, intervalStart, intervalEnd, x, z, bottomFaces, topFaces, ref writer);
                 }
             }
         }
 
-        private static void GetGeneratedMaterialInterval(in BlockColumnProfile column, int material, out int intervalStart, out int intervalEnd)
+        private static void GetGeneratedMaterialInterval(ref readonly BlockColumnProfile column, int material, out int intervalStart, out int intervalEnd)
         {
             switch (material)
             {
@@ -122,7 +122,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             }
         }
 
-        private void GenerateGeneratedIntervalRectangles(GeneratedChunkSpanData source, in GeneratedMaterialRuntime materials, in BlockColumnProfile column, ushort blockId, bool blockOpaque, bool emitInteriorSides, int intervalStart, int intervalEnd, int x, int z, int[] bottomFaces, int[] topFaces, ref GeneratedFaceRectangleWriter writer)
+        private void GenerateGeneratedIntervalRectangles(GeneratedChunkSpanData source, in GeneratedMaterialRuntime materials, ref readonly BlockColumnProfile column, ushort blockId, bool blockOpaque, bool emitInteriorSides, int intervalStart, int intervalEnd, int x, int z, int[] bottomFaces, int[] topFaces, ref GeneratedFaceRectangleWriter writer)
         {
             if (intervalStart < 0 || intervalEnd < intervalStart)
                 return;
@@ -143,7 +143,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             }
             else
             {
-                GetGeneratedBlock(materials, column, worldStart - 1, out ushort neighborId, out bool neighborOpaque);
+                GetGeneratedBlock(materials, in column, worldStart - 1, out ushort neighborId, out bool neighborOpaque);
                 if (FaceVisible(blockOpaque, blockId, neighborOpaque, neighborId))
                 {
                     bottomFaces[horizontalIndex] = localStart;
@@ -158,7 +158,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             }
             else
             {
-                GetGeneratedBlock(materials, column, worldEnd + 1, out ushort neighborId, out bool neighborOpaque);
+                GetGeneratedBlock(materials, in column, worldEnd + 1, out ushort neighborId, out bool neighborOpaque);
                 if (FaceVisible(blockOpaque, blockId, neighborOpaque, neighborId))
                 {
                     topFaces[horizontalIndex] = localEnd;
@@ -212,7 +212,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                 {
                     ref readonly BlockColumnProfile left = ref source.Columns[leftBase + z];
                     ref readonly BlockColumnProfile right = ref source.Columns[rightBase + z];
-                    EmitContiguousColumnPair(source, left, right, 1, x, z, 0, x + 1, z, ref writer);
+                    EmitContiguousColumnPair(source, in left, in right, 1, x, z, 0, x + 1, z, ref writer);
                 }
             }
 
@@ -223,18 +223,18 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                 {
                     ref readonly BlockColumnProfile negative = ref source.Columns[columnBase + z];
                     ref readonly BlockColumnProfile positive = ref source.Columns[columnBase + z + 1];
-                    EmitContiguousColumnPair(source, negative, positive, 5, x, z, 4, x, z + 1, ref writer);
+                    EmitContiguousColumnPair(source, in negative, in positive, 5, x, z, 4, x, z + 1, ref writer);
                 }
             }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void EmitContiguousColumnPair(GeneratedChunkSpanData source, in BlockColumnProfile firstColumn, in BlockColumnProfile secondColumn, byte firstDirection, int firstX, int firstZ, byte secondDirection, int secondX, int secondZ, ref GeneratedFaceRectangleWriter writer)
+        private static void EmitContiguousColumnPair(GeneratedChunkSpanData source, ref readonly BlockColumnProfile firstColumn, ref readonly BlockColumnProfile secondColumn, byte firstDirection, int firstX, int firstZ, byte secondDirection, int secondX, int secondZ, ref GeneratedFaceRectangleWriter writer)
         {
             int chunkStart = source.ChunkBaseY;
             int chunkEnd = chunkStart + source.Height - 1;
-            bool firstHasGround = TryGetGroundRange(firstColumn, out int firstGroundStart, out int firstGroundEnd);
-            bool secondHasGround = TryGetGroundRange(secondColumn, out int secondGroundStart, out int secondGroundEnd);
+            bool firstHasGround = TryGetGroundRange(in firstColumn, out int firstGroundStart, out int firstGroundEnd);
+            bool secondHasGround = TryGetGroundRange(in secondColumn, out int secondGroundStart, out int secondGroundEnd);
             if ((source.MaterialMask & 0b011) != 0)
             {
                 if (firstHasGround && secondHasGround && firstGroundStart == secondGroundStart)
@@ -245,7 +245,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                         int end = Math.Min(firstGroundEnd, chunkEnd);
                         if (start <= end)
                         {
-                            EmitGroundSegment(source, firstColumn, start, end, firstDirection, firstX, firstZ, ref writer);
+                            EmitGroundSegment(source, in firstColumn, start, end, firstDirection, firstX, firstZ, ref writer);
                         }
                     }
                     else if (secondGroundEnd > firstGroundEnd)
@@ -254,7 +254,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                         int end = Math.Min(secondGroundEnd, chunkEnd);
                         if (start <= end)
                         {
-                            EmitGroundSegment(source, secondColumn, start, end, secondDirection, secondX, secondZ, ref writer);
+                            EmitGroundSegment(source, in secondColumn, start, end, secondDirection, secondX, secondZ, ref writer);
                         }
                     }
                 }
@@ -266,7 +266,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                         int firstEnd = Math.Min(firstGroundEnd, chunkEnd);
                         if (firstStart <= firstEnd)
                         {
-                            EmitGroundDifference(source, firstColumn, firstStart, firstEnd, secondHasGround, secondGroundStart, secondGroundEnd, firstDirection, firstX, firstZ, ref writer);
+                            EmitGroundDifference(source, in firstColumn, firstStart, firstEnd, secondHasGround, secondGroundStart, secondGroundEnd, firstDirection, firstX, firstZ, ref writer);
                         }
                     }
 
@@ -276,7 +276,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
                         int secondEnd = Math.Min(secondGroundEnd, chunkEnd);
                         if (secondStart <= secondEnd)
                         {
-                            EmitGroundDifference(source, secondColumn, secondStart, secondEnd, firstHasGround, firstGroundStart, firstGroundEnd, secondDirection, secondX, secondZ, ref writer);
+                            EmitGroundDifference(source, in secondColumn, secondStart, secondEnd, firstHasGround, firstGroundStart, firstGroundEnd, secondDirection, secondX, secondZ, ref writer);
                         }
                     }
                 }
@@ -315,7 +315,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool TryGetGroundRange(in BlockColumnProfile column, out int start, out int end)
+        private static bool TryGetGroundRange(ref readonly BlockColumnProfile column, out int start, out int end)
         {
             bool hasStone = column.StoneStart >= 0 && column.StoneEnd >= column.StoneStart;
             bool hasSoil = column.SoilStart >= 0 && column.SoilEnd >= column.SoilStart;
@@ -332,27 +332,27 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void EmitGroundDifference(GeneratedChunkSpanData source, in BlockColumnProfile sourceColumn, int sourceStart, int sourceEnd, bool neighborPresent, int neighborStart, int neighborEnd, byte direction, int x, int z, ref GeneratedFaceRectangleWriter writer)
+        private static void EmitGroundDifference(GeneratedChunkSpanData source, ref readonly BlockColumnProfile sourceColumn, int sourceStart, int sourceEnd, bool neighborPresent, int neighborStart, int neighborEnd, byte direction, int x, int z, ref GeneratedFaceRectangleWriter writer)
         {
             if (!neighborPresent || neighborEnd < sourceStart || neighborStart > sourceEnd)
             {
-                EmitGroundSegment(source, sourceColumn, sourceStart, sourceEnd, direction, x, z, ref writer);
+                EmitGroundSegment(source, in sourceColumn, sourceStart, sourceEnd, direction, x, z, ref writer);
                 return;
             }
 
             if (sourceStart < neighborStart)
             {
-                EmitGroundSegment(source, sourceColumn, sourceStart, neighborStart - 1, direction, x, z, ref writer);
+                EmitGroundSegment(source, in sourceColumn, sourceStart, neighborStart - 1, direction, x, z, ref writer);
             }
 
             if (sourceEnd > neighborEnd)
             {
-                EmitGroundSegment(source, sourceColumn, neighborEnd + 1, sourceEnd, direction, x, z, ref writer);
+                EmitGroundSegment(source, in sourceColumn, neighborEnd + 1, sourceEnd, direction, x, z, ref writer);
             }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void EmitGroundSegment(GeneratedChunkSpanData source, in BlockColumnProfile column, int segmentStart, int segmentEnd, byte direction, int x, int z, ref GeneratedFaceRectangleWriter writer)
+        private static void EmitGroundSegment(GeneratedChunkSpanData source, ref readonly BlockColumnProfile column, int segmentStart, int segmentEnd, byte direction, int x, int z, ref GeneratedFaceRectangleWriter writer)
         {
             if ((source.MaterialMask & 0b001) != 0)
             {
@@ -440,12 +440,12 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             }
         }
 
-        private static void EmitGeneratedColumnRange(GeneratedChunkSpanData source, in GeneratedMaterialRuntime materials, in BlockColumnProfile neighborColumn, ushort blockId, bool blockOpaque, byte direction, int x, int z, int worldStart, int worldEnd, ref GeneratedFaceRectangleWriter writer)
+        private static void EmitGeneratedColumnRange(GeneratedChunkSpanData source, in GeneratedMaterialRuntime materials, ref readonly BlockColumnProfile neighborColumn, ushort blockId, bool blockOpaque, byte direction, int x, int z, int worldStart, int worldEnd, ref GeneratedFaceRectangleWriter writer)
         {
             int current = worldStart;
             while (current <= worldEnd)
             {
-                GetGeneratedNeighborRun(materials, neighborColumn, current, worldEnd, out ushort neighborId, out bool neighborOpaque, out int runEnd);
+                GetGeneratedNeighborRun(materials, in neighborColumn, current, worldEnd, out ushort neighborId, out bool neighborOpaque, out int runEnd);
                 if (FaceVisible(blockOpaque, blockId, neighborOpaque, neighborId))
                 {
                     writer.EmitYRange(direction, x, current - source.ChunkBaseY, runEnd - source.ChunkBaseY, z);
@@ -479,7 +479,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
             }
         }
 
-        private static void GetGeneratedNeighborRun(in GeneratedMaterialRuntime materials, in BlockColumnProfile column, int worldY, int maximumWorldY, out ushort blockId, out bool blockOpaque, out int runEnd)
+        private static void GetGeneratedNeighborRun(in GeneratedMaterialRuntime materials, ref readonly BlockColumnProfile column, int worldY, int maximumWorldY, out ushort blockId, out bool blockOpaque, out int runEnd)
         {
             if (column.StoneStart >= 0 && column.StoneEnd >= column.StoneStart && worldY >= column.StoneStart && worldY <= column.StoneEnd)
             {
@@ -517,7 +517,7 @@ namespace MVoxelEngine1.Graphics.Terrain.Sections
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void GetGeneratedBlock(in GeneratedMaterialRuntime materials, in BlockColumnProfile column, int worldY, out ushort blockId, out bool blockOpaque)
+        private static void GetGeneratedBlock(in GeneratedMaterialRuntime materials, ref readonly BlockColumnProfile column, int worldY, out ushort blockId, out bool blockOpaque)
         {
             if (column.StoneStart >= 0 && column.StoneEnd >= column.StoneStart && worldY >= column.StoneStart && worldY <= column.StoneEnd)
             {

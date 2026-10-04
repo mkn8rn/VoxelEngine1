@@ -12,5 +12,6 @@ using MVoxelEngine1.Infrastructure.Models.Terrain;
 
 namespace MVoxelEngine1.WorldGeneration
 {
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
     public readonly record struct CanonicalRenderFace(int WorldX, int WorldY, int WorldZ, byte Direction, CanonicalRenderPass RenderPass, ushort BlockId, ushort NeighborBlockId);
 }
