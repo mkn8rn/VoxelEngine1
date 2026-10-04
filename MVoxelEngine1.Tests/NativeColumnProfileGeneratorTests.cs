@@ -155,57 +155,7 @@ public sealed class NativeColumnProfileGeneratorTests
             size,
             size,
             heights);
-        TerrainGenerationUtils.FillSmoothValueNoise01(
-            baseX,
-            baseZ,
-            size,
-            size,
-            seed,
-            noiseValues);
-        summary = CreateEmptySummary();
-
-        for (int x = 0; x < size; x++)
-        {
-            int rowOffset = x * size;
-            int previousXOffset = x == 0
-                ? rowOffset
-                : rowOffset - size;
-            int nextXOffset = x == size - 1
-                ? rowOffset
-                : rowOffset + size;
-            for (int z = 0; z < size; z++)
-            {
-                int profileIndex = rowOffset + z;
-                int previousZ = z == 0 ? 0 : z - 1;
-                int nextZ = z == size - 1 ? z : z + 1;
-                int surface = (int)heights[profileIndex];
-                float dx = heights[nextXOffset + z] -
-                    heights[previousXOffset + z];
-                float dz = heights[rowOffset + nextZ] -
-                    heights[rowOffset + previousZ];
-                float gradient = MathF.Sqrt(dx * dx + dz * dz);
-                float slope = MathF.Min(1f, gradient / 6f);
-                var spans =
-                    TerrainGenerationUtils.DeriveWorldStoneSoilSpansFromNoise(
-                        surface,
-                        biome,
-                        slope,
-                        noiseValues[profileIndex]);
-                BlockColumnProfile profile = new()
-                {
-                    StoneStart = spans.stoneStart,
-                    StoneEnd = spans.stoneEnd,
-                    SoilStart = spans.soilStart,
-                    SoilEnd = spans.soilEnd,
-                    WaterStart = spans.waterStart,
-                    WaterEnd = spans.waterEnd
-                };
-                profiles[profileIndex] = profile;
-                AddToSummary(ref summary, in profile);
-            }
-        }
-
-        return profiles;
+        return FinishBuildReferenceProfilesPhase(size, seed, biome, out summary, baseX, baseZ, heights, noiseValues, profiles);
     }
 
     private static ColumnUniformRanges CreateEmptySummary() => new()
@@ -268,60 +218,7 @@ public sealed class NativeColumnProfileGeneratorTests
         {
             summary.AllColumnsHaveStone = false;
         }
-
-        if (hasSoil)
-        {
-            summary.HasMaterial = true;
-            summary.MinimumMaterialStart = Math.Min(
-                summary.MinimumMaterialStart,
-                profile.SoilStart);
-            summary.MaximumMaterialEnd = Math.Max(
-                summary.MaximumMaterialEnd,
-                profile.SoilEnd);
-            summary.SoilStartMinimum = Math.Min(
-                summary.SoilStartMinimum,
-                profile.SoilStart);
-            summary.SoilStartMaximum = Math.Max(
-                summary.SoilStartMaximum,
-                profile.SoilStart);
-            summary.SoilEndMinimum = Math.Min(
-                summary.SoilEndMinimum,
-                profile.SoilEnd);
-            summary.SoilEndMaximum = Math.Max(
-                summary.SoilEndMaximum,
-                profile.SoilEnd);
-        }
-        else
-        {
-            summary.AllColumnsHaveSoil = false;
-        }
-
-        if (hasWater)
-        {
-            summary.HasMaterial = true;
-            summary.MinimumMaterialStart = Math.Min(
-                summary.MinimumMaterialStart,
-                profile.WaterStart);
-            summary.MaximumMaterialEnd = Math.Max(
-                summary.MaximumMaterialEnd,
-                profile.WaterEnd);
-            summary.WaterStartMinimum = Math.Min(
-                summary.WaterStartMinimum,
-                profile.WaterStart);
-            summary.WaterStartMaximum = Math.Max(
-                summary.WaterStartMaximum,
-                profile.WaterStart);
-            summary.WaterEndMinimum = Math.Min(
-                summary.WaterEndMinimum,
-                profile.WaterEnd);
-            summary.WaterEndMaximum = Math.Max(
-                summary.WaterEndMaximum,
-                profile.WaterEnd);
-        }
-        else
-        {
-            summary.AllColumnsHaveWater = false;
-        }
+        FinishAddToSummaryPhase(ref summary, in profile, hasSoil, hasWater);
     }
 
     private static void AssertProfileEqual(
@@ -537,6 +434,121 @@ public sealed class NativeColumnProfileGeneratorTests
             referenceHash = Convert.ToHexString(reference.GetHashAndReset());
         });
         ValidateEveryProductionAndHaloProfileMatchesTheManagedHeightAuthorityEvidence(seed, profileCount, columnCount, nativeHash, referenceHash);
+
+    }
+
+    private static BlockColumnProfile[] FinishBuildReferenceProfilesPhase(int size, long seed, global::MVoxelEngine1.Infrastructure.Models.Generation.Biomes.Biome biome, scoped out global::MVoxelEngine1.WorldGeneration.Terrain.ColumnUniformRanges summary, int baseX, int baseZ, float[] heights, float[] noiseValues, global::MVoxelEngine1.Infrastructure.Models.Generation.BlockColumnProfile[] profiles)
+    {
+        TerrainGenerationUtils.FillSmoothValueNoise01(
+            baseX,
+            baseZ,
+            size,
+            size,
+            seed,
+            noiseValues);
+        summary = CreateEmptySummary();
+
+        for (int x = 0; x < size; x++)
+        {
+            int rowOffset = x * size;
+            int previousXOffset = x == 0
+                ? rowOffset
+                : rowOffset - size;
+            int nextXOffset = x == size - 1
+                ? rowOffset
+                : rowOffset + size;
+            for (int z = 0; z < size; z++)
+            {
+                int profileIndex = rowOffset + z;
+                int previousZ = z == 0 ? 0 : z - 1;
+                int nextZ = z == size - 1 ? z : z + 1;
+                int surface = (int)heights[profileIndex];
+                float dx = heights[nextXOffset + z] -
+                    heights[previousXOffset + z];
+                float dz = heights[rowOffset + nextZ] -
+                    heights[rowOffset + previousZ];
+                float gradient = MathF.Sqrt(dx * dx + dz * dz);
+                float slope = MathF.Min(1f, gradient / 6f);
+                var spans =
+                    TerrainGenerationUtils.DeriveWorldStoneSoilSpansFromNoise(
+                        surface,
+                        biome,
+                        slope,
+                        noiseValues[profileIndex]);
+                BlockColumnProfile profile = new()
+                {
+                    StoneStart = spans.stoneStart,
+                    StoneEnd = spans.stoneEnd,
+                    SoilStart = spans.soilStart,
+                    SoilEnd = spans.soilEnd,
+                    WaterStart = spans.waterStart,
+                    WaterEnd = spans.waterEnd
+                };
+                profiles[profileIndex] = profile;
+                AddToSummary(ref summary, in profile);
+            }
+        }
+
+        return profiles;
+
+    }
+
+    private static void FinishAddToSummaryPhase(ref global::MVoxelEngine1.WorldGeneration.Terrain.ColumnUniformRanges summary, scoped in global::MVoxelEngine1.Infrastructure.Models.Generation.BlockColumnProfile profile, bool hasSoil, bool hasWater)
+    {
+
+        if (hasSoil)
+        {
+            summary.HasMaterial = true;
+            summary.MinimumMaterialStart = Math.Min(
+                summary.MinimumMaterialStart,
+                profile.SoilStart);
+            summary.MaximumMaterialEnd = Math.Max(
+                summary.MaximumMaterialEnd,
+                profile.SoilEnd);
+            summary.SoilStartMinimum = Math.Min(
+                summary.SoilStartMinimum,
+                profile.SoilStart);
+            summary.SoilStartMaximum = Math.Max(
+                summary.SoilStartMaximum,
+                profile.SoilStart);
+            summary.SoilEndMinimum = Math.Min(
+                summary.SoilEndMinimum,
+                profile.SoilEnd);
+            summary.SoilEndMaximum = Math.Max(
+                summary.SoilEndMaximum,
+                profile.SoilEnd);
+        }
+        else
+        {
+            summary.AllColumnsHaveSoil = false;
+        }
+
+        if (hasWater)
+        {
+            summary.HasMaterial = true;
+            summary.MinimumMaterialStart = Math.Min(
+                summary.MinimumMaterialStart,
+                profile.WaterStart);
+            summary.MaximumMaterialEnd = Math.Max(
+                summary.MaximumMaterialEnd,
+                profile.WaterEnd);
+            summary.WaterStartMinimum = Math.Min(
+                summary.WaterStartMinimum,
+                profile.WaterStart);
+            summary.WaterStartMaximum = Math.Max(
+                summary.WaterStartMaximum,
+                profile.WaterStart);
+            summary.WaterEndMinimum = Math.Min(
+                summary.WaterEndMinimum,
+                profile.WaterEnd);
+            summary.WaterEndMaximum = Math.Max(
+                summary.WaterEndMaximum,
+                profile.WaterEnd);
+        }
+        else
+        {
+            summary.AllColumnsHaveWater = false;
+        }
 
     }
 }

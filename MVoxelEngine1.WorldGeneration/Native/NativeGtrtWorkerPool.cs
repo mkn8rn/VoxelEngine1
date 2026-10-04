@@ -134,54 +134,7 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
         }
 
         completionFailure = NativeGtrtFailureCode.None;
-        completionCanceled = false;
-        foreach (NativeGtrtWorker worker in workers)
-        {
-            if (worker.Fault is not null)
-            {
-                Volatile.Write(ref runState, 3);
-                throw new InvalidOperationException("A native GTRT worker is not available.", worker.Fault);
-            }
-        }
-
-        armedGate.Reset();
-        publicationGate.Reset();
-        generationCompletionGate.Reset();
-        completionGate.Reset();
-        Volatile.Write(ref startupPerformanceEnabled, 0);
-        activeGenerationWorkerCount = priorState == 0 ? generationWorkerCount : runtimeGenerationWorkerCount;
-        activeMeshWorkerCount = priorState == 0 ? meshWorkerCount : runtimeMeshWorkerCount;
-        remainingWorkerCount = checked(activeGenerationWorkerCount + activeMeshWorkerCount);
-        remainingArmWorkerCount = remainingWorkerCount;
-        remainingGenerationWorkerCount = activeGenerationWorkerCount;
-        remainingMeshWorkerCount = activeMeshWorkerCount;
-        runEpoch = checked(runEpoch + 1);
-        try
-        {
-            foreach (NativeGtrtWorker worker in workers)
-                if (worker.ActiveForRun)
-                    worker.Signal();
-            if (!armedGate.WaitOne(WorkerStartTimeout))
-                throw new TimeoutException("The native GTRT workers did not arm before seed publication.");
-            session.PrepareRun(seed, centerChunkX, centerChunkY, centerChunkZ);
-            if (priorState == 0 && StartupPerformanceRecorder.IsRunning)
-            {
-                Volatile.Write(ref startupPerformanceEnabled, 1);
-                StartupPerformanceRecorder.BeginInitialGeneration();
-                if (streamGeneration)
-                    StartupPerformanceRecorder.BeginInitialChunkMeshBuild();
-            }
-        }
-        catch
-        {
-            Volatile.Write(ref shutdownRequested, 1);
-            Volatile.Write(ref runState, 3);
-            publicationGate.Set();
-            generationCompletionGate.Set();
-            SignalWorkers();
-            throw;
-        }
-        CompleteRunPhase();
+        FinishRunPhase(seed, centerChunkX, centerChunkY, centerChunkZ, priorState);
     }
 
     public void Dispose()
@@ -464,6 +417,59 @@ internal sealed class NativeGtrtWorkerPool : IDisposable
         }
 
         Volatile.Write(ref runState, 2);
+
+    }
+
+    private void FinishRunPhase(long seed, int centerChunkX, int centerChunkY, int centerChunkZ, int priorState)
+    {
+        completionCanceled = false;
+        foreach (NativeGtrtWorker worker in workers)
+        {
+            if (worker.Fault is not null)
+            {
+                Volatile.Write(ref runState, 3);
+                throw new InvalidOperationException("A native GTRT worker is not available.", worker.Fault);
+            }
+        }
+
+        armedGate.Reset();
+        publicationGate.Reset();
+        generationCompletionGate.Reset();
+        completionGate.Reset();
+        Volatile.Write(ref startupPerformanceEnabled, 0);
+        activeGenerationWorkerCount = priorState == 0 ? generationWorkerCount : runtimeGenerationWorkerCount;
+        activeMeshWorkerCount = priorState == 0 ? meshWorkerCount : runtimeMeshWorkerCount;
+        remainingWorkerCount = checked(activeGenerationWorkerCount + activeMeshWorkerCount);
+        remainingArmWorkerCount = remainingWorkerCount;
+        remainingGenerationWorkerCount = activeGenerationWorkerCount;
+        remainingMeshWorkerCount = activeMeshWorkerCount;
+        runEpoch = checked(runEpoch + 1);
+        try
+        {
+            foreach (NativeGtrtWorker worker in workers)
+                if (worker.ActiveForRun)
+                    worker.Signal();
+            if (!armedGate.WaitOne(WorkerStartTimeout))
+                throw new TimeoutException("The native GTRT workers did not arm before seed publication.");
+            session.PrepareRun(seed, centerChunkX, centerChunkY, centerChunkZ);
+            if (priorState == 0 && StartupPerformanceRecorder.IsRunning)
+            {
+                Volatile.Write(ref startupPerformanceEnabled, 1);
+                StartupPerformanceRecorder.BeginInitialGeneration();
+                if (streamGeneration)
+                    StartupPerformanceRecorder.BeginInitialChunkMeshBuild();
+            }
+        }
+        catch
+        {
+            Volatile.Write(ref shutdownRequested, 1);
+            Volatile.Write(ref runState, 3);
+            publicationGate.Set();
+            generationCompletionGate.Set();
+            SignalWorkers();
+            throw;
+        }
+        CompleteRunPhase();
 
     }
 }

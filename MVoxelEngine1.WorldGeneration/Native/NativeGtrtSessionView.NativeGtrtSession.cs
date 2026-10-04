@@ -610,34 +610,7 @@ internal readonly ref partial struct NativeGtrtSessionView
                 }
             }
         }
-
-        for (int index = 0; index < readySlots.Length; index++)
-        {
-            readySlots[index] = new NativeReadySlot
-            {
-                Sequence = index
-            };
-        }
-
-        state.SessionEpoch = epoch;
-        state.GenerationCursor = 0;
-        state.RemainingColumns = header.ColumnCount;
-        state.MeshCursor = 0;
-        state.RemainingChunks = header.RequiredChunkCount;
-        state.PlannedColumns = header.ColumnCount;
-        state.PlannedMeshes = header.RequiredChunkCount;
-        state.RetainedColumns = 0;
-        state.RetainedPackets = 0;
-        state.ReadyPacketCount = 0;
-        state.FailureCode = 0;
-        state.CancellationState = 0;
-        state.MeshEnqueuePosition = 0;
-        state.MeshDequeuePosition = 0;
-        state.PacketWordCursor = 0;
-        state.ClaimedMeshCount = 0;
-        state.PacketRecycleState = 0;
-        state.ClaimedGenerationCount = 0;
-        state.PacketConsumerCount = 0;
+        FinishResetRunRecordsPhase(epoch, ref state, readySlots);
     }
 
     internal bool TryPrepareForDisposal()
@@ -1232,5 +1205,38 @@ internal readonly ref partial struct NativeGtrtSessionView
         {
             throw new InvalidDataException("A native GTRT range is outside its owner.");
         }
+    }
+
+    private void FinishResetRunRecordsPhase(int epoch, ref global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionState state, global::System.Span<global::MVoxelEngine1.WorldGeneration.Native.NativeReadySlot> readySlots)
+    {
+
+        for (int index = 0; index < readySlots.Length; index++)
+        {
+            readySlots[index] = new NativeReadySlot
+            {
+                Sequence = index
+            };
+        }
+
+        state.SessionEpoch = epoch;
+        state.GenerationCursor = 0;
+        state.RemainingColumns = header.ColumnCount;
+        state.MeshCursor = 0;
+        state.RemainingChunks = header.RequiredChunkCount;
+        state.PlannedColumns = header.ColumnCount;
+        state.PlannedMeshes = header.RequiredChunkCount;
+        state.RetainedColumns = 0;
+        state.RetainedPackets = 0;
+        state.ReadyPacketCount = 0;
+        state.FailureCode = 0;
+        state.CancellationState = 0;
+        state.MeshEnqueuePosition = 0;
+        state.MeshDequeuePosition = 0;
+        state.PacketWordCursor = 0;
+        state.ClaimedMeshCount = 0;
+        state.PacketRecycleState = 0;
+        state.ClaimedGenerationCount = 0;
+        state.PacketConsumerCount = 0;
+
     }
 }

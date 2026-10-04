@@ -514,58 +514,7 @@ public sealed class NativeWorldTests
         string quadPath = Directory.GetFiles(
             workspace.QuadsDirectory,
             "quad*x*.bin").Single();
-        byte[] firstHash = SHA256.HashData(File.ReadAllBytes(quadPath));
-        ushort secondPrevious = world.GetBlock(1, 0, 0);
-        ushort secondBlock = secondPrevious == 0
-            ? SoilId
-            : (ushort)0;
-        Assert.True(world.SetBlock(1, 0, 0, secondBlock));
-
-        failPublication = true;
-        try
-        {
-            Assert.ThrowsAny<IOException>(() => world.Save());
-        }
-        finally
-        {
-            failPublication = false;
-        }
-
-        Assert.True(firstHash.AsSpan().SequenceEqual(
-            SHA256.HashData(File.ReadAllBytes(quadPath))));
-        Assert.Empty(Directory.GetFiles(
-            workspace.QuadsDirectory,
-            ".*.tmp"));
-        Assert.Equal(1, world.Save());
-        Assert.False(firstHash.AsSpan().SequenceEqual(
-            SHA256.HashData(File.ReadAllBytes(quadPath))));
-        Assert.Equal(0, world.Save());
-        world.Dispose();
-
-        NativeWorldSaveImportPlan plan =
-            NativeWorldSaveImportPlan.Create(
-                workspace.QuadsDirectory,
-                settings);
-        Assert.Equal(2, plan.ChunkCount);
-        var reloadAtlas = new BlockTextureAtlas(
-            BlockTextureAtlasUploadMode.SimulatedGpuUpload);
-        using NativeGtrtPipeline ownedPipeline13 = NativeGtrtPipeline.Create(
-                reloadAtlas,
-                settings,
-                generationWorkerCount: 2,
-                meshWorkerCount: 2,
-                savePlan: plan);
-        using NativeWorld reloaded = NativeWorld.CreateForTesting(
-            ownedPipeline13,
-            seed: 123456,
-            new TrackingRendererFactory().Create);
-        Assert.Equal(
-            CustomTransparentBlockId,
-            reloaded.GetBlock(0, 0, 0));
-        Assert.Equal(
-            CustomTransparentBlockId,
-            reloaded.GetBlock(4, 0, 0));
-        Assert.Equal(secondBlock, reloaded.GetBlock(1, 0, 0));
+        FinishFailedAtomicSaveKeepsThePriorQuadAndDirtyEditPhase(settings, workspace, out failPublication, world, quadPath);
     }
 
     private static void LoadDefaultGame()
@@ -842,6 +791,63 @@ public sealed class NativeWorldTests
         Assert.Equal(
             CustomTransparentBlockId,
             secondWorld.GetBlock(-1, 0, -1));
+
+    }
+
+    private static void FinishFailedAtomicSaveKeepsThePriorQuadAndDirtyEditPhase(global::MVoxelEngine1.Infrastructure.Models.GameSettings settings, global::MVoxelEngine1.Tests.NativeWorldTests.SaveWorkspace workspace, out bool failPublication, global::MVoxelEngine1.WorldGeneration.Native.NativeWorld world, string quadPath)
+    {
+        byte[] firstHash = SHA256.HashData(File.ReadAllBytes(quadPath));
+        ushort secondPrevious = world.GetBlock(1, 0, 0);
+        ushort secondBlock = secondPrevious == 0
+            ? SoilId
+            : (ushort)0;
+        Assert.True(world.SetBlock(1, 0, 0, secondBlock));
+
+        failPublication = true;
+        try
+        {
+            Assert.ThrowsAny<IOException>(() => world.Save());
+        }
+        finally
+        {
+            failPublication = false;
+        }
+
+        Assert.True(firstHash.AsSpan().SequenceEqual(
+            SHA256.HashData(File.ReadAllBytes(quadPath))));
+        Assert.Empty(Directory.GetFiles(
+            workspace.QuadsDirectory,
+            ".*.tmp"));
+        Assert.Equal(1, world.Save());
+        Assert.False(firstHash.AsSpan().SequenceEqual(
+            SHA256.HashData(File.ReadAllBytes(quadPath))));
+        Assert.Equal(0, world.Save());
+        world.Dispose();
+
+        NativeWorldSaveImportPlan plan =
+            NativeWorldSaveImportPlan.Create(
+                workspace.QuadsDirectory,
+                settings);
+        Assert.Equal(2, plan.ChunkCount);
+        var reloadAtlas = new BlockTextureAtlas(
+            BlockTextureAtlasUploadMode.SimulatedGpuUpload);
+        using NativeGtrtPipeline ownedPipeline13 = NativeGtrtPipeline.Create(
+                reloadAtlas,
+                settings,
+                generationWorkerCount: 2,
+                meshWorkerCount: 2,
+                savePlan: plan);
+        using NativeWorld reloaded = NativeWorld.CreateForTesting(
+            ownedPipeline13,
+            seed: 123456,
+            new TrackingRendererFactory().Create);
+        Assert.Equal(
+            CustomTransparentBlockId,
+            reloaded.GetBlock(0, 0, 0));
+        Assert.Equal(
+            CustomTransparentBlockId,
+            reloaded.GetBlock(4, 0, 0));
+        Assert.Equal(secondBlock, reloaded.GetBlock(1, 0, 0));
 
     }
 }

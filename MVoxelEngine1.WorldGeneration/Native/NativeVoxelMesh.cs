@@ -49,56 +49,7 @@ internal static class NativeVoxelMesh
             session.Fail(NativeGtrtFailureCode.InvalidMeshWorkspace);
             return false;
         }
-
-        Span<int> negativeFaces = negativeFaceScratch.Slice(
-            0,
-            planeCellCount);
-        Span<int> positiveFaces = positiveFaceScratch.Slice(
-            0,
-            planeCellCount);
-        for (int boundary = 0; boundary <= normalSize; boundary++)
-        {
-            if (!TryFillMasks(
-                    ref session,
-                    chunkIndex,
-                    axis,
-                    boundary,
-                    normalSize,
-                    uSize,
-                    vSize,
-                    negativeFaces,
-                    positiveFaces))
-            {
-                return false;
-            }
-
-            if (boundary < normalSize &&
-                !TryEmitMask(
-                    ref session,
-                    negativeFaces,
-                    uSize,
-                    vSize,
-                    negativeDirection,
-                    boundary,
-                    ref writer))
-            {
-                return false;
-            }
-            if (boundary > 0 &&
-                !TryEmitMask(
-                    ref session,
-                    positiveFaces,
-                    uSize,
-                    vSize,
-                    positiveDirection,
-                    boundary - 1,
-                    ref writer))
-            {
-                return false;
-            }
-        }
-
-        return true;
+        return FinishTryEmitAxisPhase(ref session, chunkIndex, axis, negativeFaceScratch, positiveFaceScratch, ref writer, normalSize, uSize, vSize, negativeDirection, positiveDirection, planeCellCount);
     }
 
     private static bool TryFillMasks(
@@ -407,5 +358,60 @@ internal static class NativeVoxelMesh
                 z = normalCoordinate;
                 return;
         }
+    }
+
+    private static bool FinishTryEmitAxisPhase(scoped ref global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionView session, int chunkIndex, int axis, global::System.Span<int> negativeFaceScratch, global::System.Span<int> positiveFaceScratch, scoped ref global::MVoxelEngine1.WorldGeneration.Native.NativeGeneratedFaceWriter writer, int normalSize, int uSize, int vSize, byte negativeDirection, byte positiveDirection, int planeCellCount)
+    {
+
+        Span<int> negativeFaces = negativeFaceScratch.Slice(
+            0,
+            planeCellCount);
+        Span<int> positiveFaces = positiveFaceScratch.Slice(
+            0,
+            planeCellCount);
+        for (int boundary = 0; boundary <= normalSize; boundary++)
+        {
+            if (!TryFillMasks(
+                    ref session,
+                    chunkIndex,
+                    axis,
+                    boundary,
+                    normalSize,
+                    uSize,
+                    vSize,
+                    negativeFaces,
+                    positiveFaces))
+            {
+                return false;
+            }
+
+            if (boundary < normalSize &&
+                !TryEmitMask(
+                    ref session,
+                    negativeFaces,
+                    uSize,
+                    vSize,
+                    negativeDirection,
+                    boundary,
+                    ref writer))
+            {
+                return false;
+            }
+            if (boundary > 0 &&
+                !TryEmitMask(
+                    ref session,
+                    positiveFaces,
+                    uSize,
+                    vSize,
+                    positiveDirection,
+                    boundary - 1,
+                    ref writer))
+            {
+                return false;
+            }
+        }
+
+        return true;
+
     }
 }

@@ -71,6 +71,11 @@ internal struct NativeColumnSummary
         {
             AllColumnsHaveStone = 0;
         }
+        FinishAddPhase(in profile, hasSoil, hasWater);
+    }
+
+    private void FinishAddPhase(scoped in global::MVoxelEngine1.Infrastructure.Models.Generation.BlockColumnProfile profile, bool hasSoil, bool hasWater)
+    {
 
         if (hasSoil)
         {
@@ -113,5 +118,6 @@ internal struct NativeColumnSummary
         {
             AllColumnsHaveWater = 0;
         }
+
     }
 }

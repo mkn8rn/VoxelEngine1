@@ -92,6 +92,11 @@ internal ref struct NativeGtrtSessionInitializer
                 }
             }
         }
+        FinishInitializePhase(in layout);
+    }
+
+    private void FinishInitializePhase(scoped in global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionLayout layout)
+    {
 
         int readySlotSize = Unsafe.SizeOf<NativeReadySlot>();
         for (int index = 0; index < layout.RequiredChunkCount; index++)
@@ -108,5 +113,6 @@ internal ref struct NativeGtrtSessionInitializer
             Count = layout.PacketWordCapacity
         };
         MemoryMarshal.Write(bytes.Slice(layout.Streaming.FreeRanges), in freeRange);
+
     }
 }

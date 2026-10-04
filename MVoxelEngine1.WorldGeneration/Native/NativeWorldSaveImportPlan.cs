@@ -693,24 +693,7 @@ internal sealed partial class NativeWorldSaveImportPlan
                     break;
             }
         }
-
-        if (recordsEnd < payload.Length)
-        {
-            ReadOnlySpan<byte> footer = payload[recordsEnd..];
-            if (footer.Length < 20 || !footer[..3].SequenceEqual("CMD"u8))
-                throw new InvalidDataException("The saved chunk metadata footer is invalid.");
-            shape.Temperature = BinaryPrimitives.ReadSingleLittleEndian(footer[3..]);
-            shape.Humidity = BinaryPrimitives.ReadSingleLittleEndian(footer[7..]);
-        }
-
-        if (shape.IsUniform)
-        {
-            shape.SectionCount = 0;
-            shape.RawSectionCount = 0;
-            shape.PaletteCount = 0;
-            shape.PackedWordCount = 0;
-        }
-        return shape;
+        return FinishAnalyzeChunkPhase(payload, ref shape, recordsEnd);
     }
 
     private static SavedSection ParseSection(
@@ -828,8 +811,7 @@ internal sealed partial class NativeWorldSaveImportPlan
                 throw new InvalidDataException(
                     "A saved section kind is invalid.");
         }
-        reader.RequireEnd();
-        return section;
+        return FinishParseSectionPhase(ref reader, section);
     }
 
     private static int ReadQuadHeader(
@@ -1104,6 +1086,36 @@ internal sealed partial class NativeWorldSaveImportPlan
             totals.PaletteCount,
             totals.PackedWordCount,
             preparedSavedChunks.ToArray());
+
+    }
+
+    private static ChunkShape FinishAnalyzeChunkPhase(global::System.ReadOnlySpan<byte> payload, ref global::MVoxelEngine1.WorldGeneration.Native.NativeWorldSaveImportPlan.ChunkShape shape, int recordsEnd)
+    {
+
+        if (recordsEnd < payload.Length)
+        {
+            ReadOnlySpan<byte> footer = payload[recordsEnd..];
+            if (footer.Length < 20 || !footer[..3].SequenceEqual("CMD"u8))
+                throw new InvalidDataException("The saved chunk metadata footer is invalid.");
+            shape.Temperature = BinaryPrimitives.ReadSingleLittleEndian(footer[3..]);
+            shape.Humidity = BinaryPrimitives.ReadSingleLittleEndian(footer[7..]);
+        }
+
+        if (shape.IsUniform)
+        {
+            shape.SectionCount = 0;
+            shape.RawSectionCount = 0;
+            shape.PaletteCount = 0;
+            shape.PackedWordCount = 0;
+        }
+        return shape;
+
+    }
+
+    private static SavedSection FinishParseSectionPhase(ref global::MVoxelEngine1.WorldGeneration.Native.NativeWorldSaveImportPlan.SpanReader reader, global::MVoxelEngine1.WorldGeneration.Native.NativeWorldSaveImportPlan.SavedSection section)
+    {
+        reader.RequireEnd();
+        return section;
 
     }
 }

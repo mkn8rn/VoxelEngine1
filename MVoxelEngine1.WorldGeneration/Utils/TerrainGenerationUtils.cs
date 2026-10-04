@@ -143,32 +143,7 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                     }
                 }
             }
-
-            // ---- Water span (fill from actual top solid up to biome water level) ----
-            // If soil lowering created air under the analytic surface and the column is underwater,
-            // we must start water right above the true top solid, not at surfaceY+1.
-            int waterStart = -1, waterEnd = -1;
-            {
-                int topSolidForWater;
-                if (soilEnd >= 0 || stoneEnd >= 0)
-                {
-                    // Pick the highest existing solid in this column
-                    topSolidForWater = Math.Max(soilEnd, stoneEnd);
-                }
-                else
-                {
-                    // No solids produced by spans; fall back to the analytic surface
-                    topSolidForWater = surfaceY;
-                }
-
-                if (parameters.WaterLevel > topSolidForWater)
-                {
-                    waterStart = topSolidForWater + 1; // starts immediately above the actual top solid (or surface fallback)
-                    waterEnd = parameters.WaterLevel; // inclusive
-                }
-            }
-
-            return (stoneStart, stoneEnd, soilStart, soilEnd, waterStart, waterEnd);
+            return FinishDeriveWorldStoneSoilSpansFromNoisePhase(surfaceY, in parameters, stoneStart, stoneEnd, soilStart, soilEnd);
         }
 
         internal static void FillSmoothValueNoise01(int baseX, int baseZ, int sizeX, int sizeZ, long seed, Span<float> destination)
@@ -365,6 +340,37 @@ namespace MVoxelEngine1.WorldGeneration.Terrain
                     destination[destinationRow + z] = Lerp(valueX0, valueX1, zSample.Smooth);
                 }
             }
+
+        }
+
+        private static (int stoneStart, int stoneEnd, int soilStart, int soilEnd, int waterStart, int waterEnd) FinishDeriveWorldStoneSoilSpansFromNoisePhase(int surfaceY, scoped in global::MVoxelEngine1.WorldGeneration.Terrain.TerrainMaterialSpanParameters parameters, int stoneStart, int stoneEnd, int soilStart, int soilEnd)
+        {
+
+            // ---- Water span (fill from actual top solid up to biome water level) ----
+            // If soil lowering created air under the analytic surface and the column is underwater,
+            // we must start water right above the true top solid, not at surfaceY+1.
+            int waterStart = -1, waterEnd = -1;
+            {
+                int topSolidForWater;
+                if (soilEnd >= 0 || stoneEnd >= 0)
+                {
+                    // Pick the highest existing solid in this column
+                    topSolidForWater = Math.Max(soilEnd, stoneEnd);
+                }
+                else
+                {
+                    // No solids produced by spans; fall back to the analytic surface
+                    topSolidForWater = surfaceY;
+                }
+
+                if (parameters.WaterLevel > topSolidForWater)
+                {
+                    waterStart = topSolidForWater + 1; // starts immediately above the actual top solid (or surface fallback)
+                    waterEnd = parameters.WaterLevel; // inclusive
+                }
+            }
+
+            return (stoneStart, stoneEnd, soilStart, soilEnd, waterStart, waterEnd);
 
         }
     }

@@ -72,60 +72,7 @@ internal sealed class NativeWorldSaveExporter
         }
 
         int chunkCount = state.MaterializedChunkCount;
-        if ((uint)chunkCount > (uint)view.MaterializedChunks.Length)
-        {
-            throw new InvalidDataException(
-                "Native materialized chunk storage is invalid.");
-        }
-
-        for (int chunkIndex = 0; chunkIndex < chunkCount; chunkIndex++)
-        {
-            NativeMaterializedChunkRecord chunk =
-                view.MaterializedChunks[chunkIndex];
-            if (chunk.State != ActiveRecord ||
-                chunk.Revision == chunk.PersistedRevision)
-            {
-                continue;
-            }
-
-            (int batchX, int batchZ) = NativeSavePartition.GetBatchIndices(
-                chunk.ChunkX,
-                chunk.ChunkZ);
-            bool handled = false;
-            for (int earlierIndex = 0;
-                 earlierIndex < chunkIndex;
-                 earlierIndex++)
-            {
-                NativeMaterializedChunkRecord earlier =
-                    view.MaterializedChunks[earlierIndex];
-                if (earlier.State != ActiveRecord ||
-                    earlier.Revision == earlier.PersistedRevision)
-                {
-                    continue;
-                }
-
-                (int earlierBatchX, int earlierBatchZ) =
-                    NativeSavePartition.GetBatchIndices(
-                        earlier.ChunkX,
-                        earlier.ChunkZ);
-                if (earlierBatchX == batchX &&
-                    earlierBatchZ == batchZ)
-                {
-                    handled = true;
-                    break;
-                }
-            }
-
-            if (handled)
-                continue;
-
-            WriteBatch(
-                ref view,
-                quadsDirectory,
-                batchX,
-                batchZ);
-            savedBatchCount++;
-        }
+        FinishSaveCorePhase(quadsDirectory, ref view, chunkCount);
     }
 
     private void WriteBatch(
@@ -397,60 +344,7 @@ internal sealed class NativeWorldSaveExporter
             throw new InvalidDataException(
                 "A native materialized section map is invalid.");
         }
-
-        int recordIndex = view.MaterializedSectionMaps[mapIndex];
-        if (recordIndex < 0)
-        {
-            if (chunk.StorageKind ==
-                NativeChunkStorageKind.MaterializedSections)
-            {
-                return false;
-            }
-            if (chunk.StorageKind != NativeChunkStorageKind.UniformSections)
-            {
-                throw new InvalidDataException(
-                    "A native materialized chunk has incomplete storage.");
-            }
-            if (chunk.UniformBlockId == 0)
-                return false;
-
-            return WriteUniformSection(
-                ref view,
-                writer,
-                chunk.UniformBlockId);
-        }
-
-        if ((uint)recordIndex >=
-            (uint)view.State.MaterializedSectionCount)
-        {
-            throw new InvalidDataException(
-                "A native materialized section index is invalid.");
-        }
-        NativeMaterializedSectionRecord section =
-            view.MaterializedSections[recordIndex];
-        if (section.OwnerChunkIndex != materializedChunkIndex ||
-            section.SectionIndex != sectionIndex)
-        {
-            throw new InvalidDataException(
-                "A native materialized section owner is invalid.");
-        }
-
-        return section.StorageKind switch
-        {
-            NativeSectionStorageKind.Uniform =>
-                section.UniformBlockId == 0
-                    ? false
-                    : WriteUniformSection(
-                        ref view,
-                        writer,
-                        section.UniformBlockId),
-            NativeSectionStorageKind.Raw =>
-                WriteRawSection(ref view, writer, in section),
-            NativeSectionStorageKind.Packed =>
-                WritePackedSection(ref view, writer, in section),
-            _ => throw new InvalidDataException(
-                "A native materialized section kind is invalid.")
-        };
+        return FinishWriteSectionPhase(ref view, writer, materializedChunkIndex, in chunk, sectionIndex, mapIndex);
     }
 
     private static bool WriteUniformSection(
@@ -533,60 +427,7 @@ internal sealed class NativeWorldSaveExporter
             throw new InvalidDataException(
                 "A native packed section range is invalid.");
         }
-
-        ReadOnlySpan<ushort> palette = view.MaterializedPalette.Slice(
-            section.PaletteOffset,
-            section.PaletteCount);
-        ReadOnlySpan<uint> words = view.MaterializedPackedWords.Slice(
-            section.PackedWordOffset,
-            section.PackedWordCount);
-        int opaque = 0;
-        int transparent = 0;
-        int empty = 0;
-        for (int voxelIndex = 0;
-             voxelIndex < VoxelSection.VoxelCount;
-             voxelIndex++)
-        {
-            int paletteIndex = ReadPackedIndex(
-                words,
-                section.BitsPerIndex,
-                voxelIndex);
-            if ((uint)paletteIndex >= (uint)palette.Length)
-            {
-                throw new InvalidDataException(
-                    "A native packed section has an invalid palette index.");
-            }
-            CountBlock(
-                ref view,
-                palette[paletteIndex],
-                1,
-                ref opaque,
-                ref transparent,
-                ref empty);
-        }
-        if (empty == VoxelSection.VoxelCount)
-            return false;
-
-        int payloadLength = checked(
-            11 +
-            sizeof(byte) +
-            sizeof(ushort) +
-            palette.Length * sizeof(ushort) +
-            sizeof(int) +
-            words.Length * sizeof(uint));
-        WriteSectionHeader(
-            writer,
-            kind: 4,
-            checked((ushort)payloadLength),
-            checked((ushort)opaque),
-            checked((ushort)transparent),
-            checked((ushort)empty));
-        writer.Write(section.BitsPerIndex);
-        writer.Write(section.PaletteCount);
-        writer.Write(MemoryMarshal.AsBytes(palette));
-        writer.Write(words.Length);
-        writer.Write(MemoryMarshal.AsBytes(words));
-        return true;
+        return FinishWritePackedSectionPhase(ref view, writer, in section);
     }
 
     private static void WriteSectionHeader(
@@ -650,40 +491,7 @@ internal sealed class NativeWorldSaveExporter
                     flags |= 1u << 6;
             }
         }
-        writer.Write(flags);
-
-        byte faceFlags = 0;
-        for (byte direction = 0; direction < 6; direction++)
-        {
-            if (IsOpaqueFace(
-                    ref view,
-                    materializedChunkIndex,
-                    direction))
-            {
-                faceFlags |= checked((byte)(1 << direction));
-            }
-        }
-        writer.Write(faceFlags);
-        writer.Write((byte)0);
-        writer.Write((byte)0);
-        writer.Write(allOneBlockId);
-
-        for (byte direction = 0; direction < 6; direction++)
-        {
-            WriteOpaquePlane(
-                ref view,
-                writer,
-                materializedChunkIndex,
-                direction);
-        }
-        for (byte direction = 0; direction < 6; direction++)
-        {
-            WriteTransparentPlane(
-                ref view,
-                writer,
-                materializedChunkIndex,
-                direction);
-        }
+        FinishWriteFooterPhase(ref view, writer, materializedChunkIndex, flags, allOneBlockId);
     }
 
     private static bool HasNoSectionOverrides(
@@ -969,5 +777,221 @@ internal sealed class NativeWorldSaveExporter
         }
         uint mask = (1u << bitsPerIndex) - 1u;
         return (int)(value & mask);
+    }
+
+    private void FinishSaveCorePhase(string quadsDirectory, ref global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionView view, int chunkCount)
+    {
+        if ((uint)chunkCount > (uint)view.MaterializedChunks.Length)
+        {
+            throw new InvalidDataException(
+                "Native materialized chunk storage is invalid.");
+        }
+
+        for (int chunkIndex = 0; chunkIndex < chunkCount; chunkIndex++)
+        {
+            NativeMaterializedChunkRecord chunk =
+                view.MaterializedChunks[chunkIndex];
+            if (chunk.State != ActiveRecord ||
+                chunk.Revision == chunk.PersistedRevision)
+            {
+                continue;
+            }
+
+            (int batchX, int batchZ) = NativeSavePartition.GetBatchIndices(
+                chunk.ChunkX,
+                chunk.ChunkZ);
+            bool handled = false;
+            for (int earlierIndex = 0;
+                 earlierIndex < chunkIndex;
+                 earlierIndex++)
+            {
+                NativeMaterializedChunkRecord earlier =
+                    view.MaterializedChunks[earlierIndex];
+                if (earlier.State != ActiveRecord ||
+                    earlier.Revision == earlier.PersistedRevision)
+                {
+                    continue;
+                }
+
+                (int earlierBatchX, int earlierBatchZ) =
+                    NativeSavePartition.GetBatchIndices(
+                        earlier.ChunkX,
+                        earlier.ChunkZ);
+                if (earlierBatchX == batchX &&
+                    earlierBatchZ == batchZ)
+                {
+                    handled = true;
+                    break;
+                }
+            }
+
+            if (handled)
+                continue;
+
+            WriteBatch(
+                ref view,
+                quadsDirectory,
+                batchX,
+                batchZ);
+            savedBatchCount++;
+        }
+
+    }
+
+    private static bool FinishWriteSectionPhase(scoped ref global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionView view, global::System.IO.BinaryWriter writer, int materializedChunkIndex, scoped in global::MVoxelEngine1.WorldGeneration.Native.NativeMaterializedChunkRecord chunk, int sectionIndex, int mapIndex)
+    {
+
+        int recordIndex = view.MaterializedSectionMaps[mapIndex];
+        if (recordIndex < 0)
+        {
+            if (chunk.StorageKind ==
+                NativeChunkStorageKind.MaterializedSections)
+            {
+                return false;
+            }
+            if (chunk.StorageKind != NativeChunkStorageKind.UniformSections)
+            {
+                throw new InvalidDataException(
+                    "A native materialized chunk has incomplete storage.");
+            }
+            if (chunk.UniformBlockId == 0)
+                return false;
+
+            return WriteUniformSection(
+                ref view,
+                writer,
+                chunk.UniformBlockId);
+        }
+
+        if ((uint)recordIndex >=
+            (uint)view.State.MaterializedSectionCount)
+        {
+            throw new InvalidDataException(
+                "A native materialized section index is invalid.");
+        }
+        NativeMaterializedSectionRecord section =
+            view.MaterializedSections[recordIndex];
+        if (section.OwnerChunkIndex != materializedChunkIndex ||
+            section.SectionIndex != sectionIndex)
+        {
+            throw new InvalidDataException(
+                "A native materialized section owner is invalid.");
+        }
+
+        return section.StorageKind switch
+        {
+            NativeSectionStorageKind.Uniform =>
+                section.UniformBlockId == 0
+                    ? false
+                    : WriteUniformSection(
+                        ref view,
+                        writer,
+                        section.UniformBlockId),
+            NativeSectionStorageKind.Raw =>
+                WriteRawSection(ref view, writer, in section),
+            NativeSectionStorageKind.Packed =>
+                WritePackedSection(ref view, writer, in section),
+            _ => throw new InvalidDataException(
+                "A native materialized section kind is invalid.")
+        };
+
+    }
+
+    private static bool FinishWritePackedSectionPhase(scoped ref global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionView view, global::System.IO.BinaryWriter writer, scoped in global::MVoxelEngine1.WorldGeneration.Native.NativeMaterializedSectionRecord section)
+    {
+
+        ReadOnlySpan<ushort> palette = view.MaterializedPalette.Slice(
+            section.PaletteOffset,
+            section.PaletteCount);
+        ReadOnlySpan<uint> words = view.MaterializedPackedWords.Slice(
+            section.PackedWordOffset,
+            section.PackedWordCount);
+        int opaque = 0;
+        int transparent = 0;
+        int empty = 0;
+        for (int voxelIndex = 0;
+             voxelIndex < VoxelSection.VoxelCount;
+             voxelIndex++)
+        {
+            int paletteIndex = ReadPackedIndex(
+                words,
+                section.BitsPerIndex,
+                voxelIndex);
+            if ((uint)paletteIndex >= (uint)palette.Length)
+            {
+                throw new InvalidDataException(
+                    "A native packed section has an invalid palette index.");
+            }
+            CountBlock(
+                ref view,
+                palette[paletteIndex],
+                1,
+                ref opaque,
+                ref transparent,
+                ref empty);
+        }
+        if (empty == VoxelSection.VoxelCount)
+            return false;
+
+        int payloadLength = checked(
+            11 +
+            sizeof(byte) +
+            sizeof(ushort) +
+            palette.Length * sizeof(ushort) +
+            sizeof(int) +
+            words.Length * sizeof(uint));
+        WriteSectionHeader(
+            writer,
+            kind: 4,
+            checked((ushort)payloadLength),
+            checked((ushort)opaque),
+            checked((ushort)transparent),
+            checked((ushort)empty));
+        writer.Write(section.BitsPerIndex);
+        writer.Write(section.PaletteCount);
+        writer.Write(MemoryMarshal.AsBytes(palette));
+        writer.Write(words.Length);
+        writer.Write(MemoryMarshal.AsBytes(words));
+        return true;
+
+    }
+
+    private static void FinishWriteFooterPhase(scoped ref global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionView view, global::System.IO.BinaryWriter writer, int materializedChunkIndex, uint flags, ushort allOneBlockId)
+    {
+        writer.Write(flags);
+
+        byte faceFlags = 0;
+        for (byte direction = 0; direction < 6; direction++)
+        {
+            if (IsOpaqueFace(
+                    ref view,
+                    materializedChunkIndex,
+                    direction))
+            {
+                faceFlags |= checked((byte)(1 << direction));
+            }
+        }
+        writer.Write(faceFlags);
+        writer.Write((byte)0);
+        writer.Write((byte)0);
+        writer.Write(allOneBlockId);
+
+        for (byte direction = 0; direction < 6; direction++)
+        {
+            WriteOpaquePlane(
+                ref view,
+                writer,
+                materializedChunkIndex,
+                direction);
+        }
+        for (byte direction = 0; direction < 6; direction++)
+        {
+            WriteTransparentPlane(
+                ref view,
+                writer,
+                materializedChunkIndex,
+                direction);
+        }
+
     }
 }

@@ -155,10 +155,7 @@ internal readonly ref partial struct NativeGtrtSessionView
                 }
             }
         }
-
-        state.RemainingColumns = state.PlannedColumns;
-        state.RemainingChunks = state.PlannedMeshes;
-        return true;
+        return FinishTryPrepareStreamingRunPhase(ref state);
     }
 
     private int CountPendingColumns(int chunkX, int chunkZ) => PendingColumn(chunkX, chunkZ) + PendingColumn(chunkX - 1, chunkZ) + PendingColumn(chunkX + 1, chunkZ) + PendingColumn(chunkX, chunkZ - 1) + PendingColumn(chunkX, chunkZ + 1);
@@ -319,5 +316,14 @@ internal readonly ref partial struct NativeGtrtSessionView
     {
         FreeRanges.Slice(index + 1, State.FreeRangeCount - index - 1).CopyTo(FreeRanges.Slice(index));
         State.FreeRangeCount--;
+    }
+
+    private bool FinishTryPrepareStreamingRunPhase(ref global::MVoxelEngine1.WorldGeneration.Native.NativeGtrtSessionState state)
+    {
+
+        state.RemainingColumns = state.PlannedColumns;
+        state.RemainingChunks = state.PlannedMeshes;
+        return true;
+
     }
 }

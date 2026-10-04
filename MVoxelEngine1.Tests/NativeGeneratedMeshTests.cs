@@ -400,21 +400,7 @@ public sealed class NativeGeneratedMeshTests
                 }
             }
         }
-
-        var actualOpaque = new List<ulong>();
-        var actualTransparent = new List<ulong>();
-        AddPacketFaces(packet.OpaqueWords, actualOpaque);
-        AddPacketFaces(packet.TransparentWords, actualTransparent);
-        expectedOpaque.Sort();
-        expectedTransparent.Sort();
-        actualOpaque.Sort();
-        actualTransparent.Sort();
-        Assert.Equal(expectedOpaque, actualOpaque);
-        Assert.Equal(expectedTransparent, actualTransparent);
-        Assert.Equal(expectedOpaque.Count, packet.Record.OpaqueFaceCount);
-        Assert.Equal(
-            expectedTransparent.Count,
-            packet.Record.TransparentFaceCount);
+        FinishAssertPacketMatchesNaiveFacesPhase(in packet, expectedOpaque, expectedTransparent);
     }
 
     private static void AddPacketFaces(
@@ -706,6 +692,26 @@ public sealed class NativeGeneratedMeshTests
             }
             Assert.Equal(0, view.State.FailureCode);
         });
+
+    }
+
+    private static void FinishAssertPacketMatchesNaiveFacesPhase(scoped in global::MVoxelEngine1.WorldGeneration.Native.NativePacketReadView packet, global::System.Collections.Generic.List<ulong> expectedOpaque, global::System.Collections.Generic.List<ulong> expectedTransparent)
+    {
+
+        var actualOpaque = new List<ulong>();
+        var actualTransparent = new List<ulong>();
+        AddPacketFaces(packet.OpaqueWords, actualOpaque);
+        AddPacketFaces(packet.TransparentWords, actualTransparent);
+        expectedOpaque.Sort();
+        expectedTransparent.Sort();
+        actualOpaque.Sort();
+        actualTransparent.Sort();
+        Assert.Equal(expectedOpaque, actualOpaque);
+        Assert.Equal(expectedTransparent, actualTransparent);
+        Assert.Equal(expectedOpaque.Count, packet.Record.OpaqueFaceCount);
+        Assert.Equal(
+            expectedTransparent.Count,
+            packet.Record.TransparentFaceCount);
 
     }
 }

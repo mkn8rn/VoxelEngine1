@@ -275,47 +275,7 @@ public sealed class NativeWorldSaveImportTests
             SectionFixture.Raw(coercedExpanded, kind: 2),
             SectionFixture.Uniform(WaterId)
         ];
-        WriteQuads(
-            workspace.QuadsDirectory,
-            [new ChunkFixture(0, 0, 0, sections)],
-            sectionCountX: 2,
-            sectionCountY: 2,
-            sectionCountZ: 2);
-
-        NativeWorldSaveImportPlan plan =
-            NativeWorldSaveImportPlan.Create(
-                workspace.QuadsDirectory,
-                settings);
-        Assert.Equal(1, plan.ChunkCount);
-        Assert.Equal(6, plan.SectionCount);
-        Assert.Equal(2, plan.RawSectionCount);
-        Assert.Equal(6, plan.PaletteCount);
-        Assert.Equal(384, plan.PackedWordCount);
-
-        using NativeGameSnapshot game = CreateGameSnapshot();
-        using NativeGtrtSession session = CreateSession(settings, game, plan);
-        plan.Import(session);
-        session.Access(owner =>
-        {
-            var view = new NativeGtrtSessionView(owner.AsSpan());
-            Assert.Equal(0, view.State.PublicationState);
-            Assert.Equal(1, view.State.MaterializedChunkCount);
-            Assert.Equal(6, view.State.MaterializedSectionCount);
-            Assert.Equal(2, view.State.MaterializedRawSectionCount);
-            Assert.Equal(0, view.MaterializedChunks[0].Temperature);
-            Assert.Equal(0, view.MaterializedChunks[0].Humidity);
-            Assert.Equal(6, view.State.MaterializedPaletteCursor);
-            Assert.Equal(384, view.State.MaterializedPackedWordCursor);
-            int packedSectionCount = 0;
-            foreach (ref readonly NativeMaterializedSectionRecord section in
-                     view.MaterializedSections)
-            {
-                if (section.StorageKind == NativeSectionStorageKind.Packed)
-                    packedSectionCount++;
-            }
-            Assert.Equal(2, packedSectionCount);
-        });
-        CompleteLegacyRepresentationsEnterCompactNativeStorageBeforeSeedPhase(settings, workspace, session);
+        FinishLegacyRepresentationsEnterCompactNativeStorageBeforeSeedPhase(settings, workspace, sections);
     }
 
     [Fact]
@@ -1215,6 +1175,52 @@ public sealed class NativeWorldSaveImportTests
                 writer.Write(0);
         }
         return stream.ToArray();
+
+    }
+
+    private static void FinishLegacyRepresentationsEnterCompactNativeStorageBeforeSeedPhase(global::MVoxelEngine1.Infrastructure.Models.GameSettings settings, global::MVoxelEngine1.Tests.NativeWorldSaveImportTests.SaveWorkspace workspace, global::MVoxelEngine1.Tests.NativeWorldSaveImportTests.SectionFixture?[] sections)
+    {
+        WriteQuads(
+            workspace.QuadsDirectory,
+            [new ChunkFixture(0, 0, 0, sections)],
+            sectionCountX: 2,
+            sectionCountY: 2,
+            sectionCountZ: 2);
+
+        NativeWorldSaveImportPlan plan =
+            NativeWorldSaveImportPlan.Create(
+                workspace.QuadsDirectory,
+                settings);
+        Assert.Equal(1, plan.ChunkCount);
+        Assert.Equal(6, plan.SectionCount);
+        Assert.Equal(2, plan.RawSectionCount);
+        Assert.Equal(6, plan.PaletteCount);
+        Assert.Equal(384, plan.PackedWordCount);
+
+        using NativeGameSnapshot game = CreateGameSnapshot();
+        using NativeGtrtSession session = CreateSession(settings, game, plan);
+        plan.Import(session);
+        session.Access(owner =>
+        {
+            var view = new NativeGtrtSessionView(owner.AsSpan());
+            Assert.Equal(0, view.State.PublicationState);
+            Assert.Equal(1, view.State.MaterializedChunkCount);
+            Assert.Equal(6, view.State.MaterializedSectionCount);
+            Assert.Equal(2, view.State.MaterializedRawSectionCount);
+            Assert.Equal(0, view.MaterializedChunks[0].Temperature);
+            Assert.Equal(0, view.MaterializedChunks[0].Humidity);
+            Assert.Equal(6, view.State.MaterializedPaletteCursor);
+            Assert.Equal(384, view.State.MaterializedPackedWordCursor);
+            int packedSectionCount = 0;
+            foreach (ref readonly NativeMaterializedSectionRecord section in
+                     view.MaterializedSections)
+            {
+                if (section.StorageKind == NativeSectionStorageKind.Packed)
+                    packedSectionCount++;
+            }
+            Assert.Equal(2, packedSectionCount);
+        });
+        CompleteLegacyRepresentationsEnterCompactNativeStorageBeforeSeedPhase(settings, workspace, session);
 
     }
 }

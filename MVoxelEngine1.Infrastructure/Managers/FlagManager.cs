@@ -84,41 +84,7 @@ namespace MVoxelEngine1.Infrastructure.Managers
                 Console.WriteLine($"Set simulatedInput: {preparedFlags.simulatedInput}");
             if (preparedFlags.simulatedFrameRate.HasValue)
                 Console.WriteLine($"Set simulatedFrameRate: {preparedFlags.simulatedFrameRate.Value}");
-            if (preparedFlags.simulatedGpuWriterDelayMilliseconds.HasValue)
-                Console.WriteLine($"Set simulatedGpuWriterDelayMilliseconds: {preparedFlags.simulatedGpuWriterDelayMilliseconds.Value}");
-            if (preparedFlags.simulatedGpuWriterFailAfterRecords.HasValue)
-                Console.WriteLine($"Set simulatedGpuWriterFailAfterRecords: {preparedFlags.simulatedGpuWriterFailAfterRecords.Value}");
-            if (preparedFlags.faceGenerationMode.HasValue)
-                Console.WriteLine($"Set faceGenerationMode: {preparedFlags.faceGenerationMode.Value}");
-            if (preparedFlags.windowWidth.HasValue)
-                Console.WriteLine($"Set windowWidth: {preparedFlags.windowWidth.Value}");
-            if (preparedFlags.windowHeight.HasValue)
-                Console.WriteLine($"Set windowHeight: {preparedFlags.windowHeight.Value}");
-            if (preparedFlags.useFacePooling.HasValue)
-                Console.WriteLine($"Set useFacePooling: {preparedFlags.useFacePooling.Value}");
-            if (preparedFlags.faceAmountToPool.HasValue)
-                Console.WriteLine($"Set faceAmountToPool: {preparedFlags.faceAmountToPool.Value}");
-            if (preparedFlags.worldGenWorkersPerCore.HasValue)
-                Console.WriteLine($"Set worldGenWorkersPerCore: {preparedFlags.worldGenWorkersPerCore.Value}");
-            if (preparedFlags.worldGenWorkersPerCoreInitial.HasValue)
-                Console.WriteLine($"Set worldGenWorkersPerCoreInitial: {preparedFlags.worldGenWorkersPerCoreInitial.Value}");
-            if (preparedFlags.meshRenderWorkersPerCore.HasValue)
-                Console.WriteLine($"Set meshRenderWorkersPerCore: {preparedFlags.meshRenderWorkersPerCore.Value}");
-            if (preparedFlags.meshRenderWorkersPerCoreInitial.HasValue)
-                Console.WriteLine($"Set meshRenderWorkersPerCoreInitial: {preparedFlags.meshRenderWorkersPerCoreInitial.Value}");
-            if (preparedFlags.renderStreamingIfAllowed.HasValue)
-                Console.WriteLine($"Set renderStreamingIfAllowed: {preparedFlags.renderStreamingIfAllowed.Value}");
-            if (preparedFlags.GCConcurrent.HasValue)
-                Console.WriteLine($"Set GCConcurrent: {preparedFlags.GCConcurrent.Value}");
-            if (preparedFlags.GCLatencyMode.HasValue)
-                Console.WriteLine($"Set GCLatencyMode: {preparedFlags.GCLatencyMode.Value}");
-            if (!string.IsNullOrEmpty(preparedFlags.GCHeapHardLimit))
-                Console.WriteLine($"Set GCHeapHardLimit: {preparedFlags.GCHeapHardLimit}");
-            if (!string.IsNullOrEmpty(preparedFlags.GCHeapAffinitizeMask))
-                Console.WriteLine($"Set GCHeapAffinitizeMask: {preparedFlags.GCHeapAffinitizeMask}");
-            if (preparedFlags.GCLargeObjectHeapCompactionMode.HasValue)
-                Console.WriteLine($"Set GCLargeObjectHeapCompactionMode: {preparedFlags.GCLargeObjectHeapCompactionMode.Value}");
-            CompleteApplyFlagsPhase(preparedFlags);
+            FinishApplyFlagsPhase(preparedFlags);
         }
 
         private static void CompleteApplyFlagsPhase(global::MVoxelEngine1.Infrastructure.Models.ProgramFlags preparedFlags)
@@ -170,6 +136,46 @@ namespace MVoxelEngine1.Infrastructure.Managers
                 Environment.SetEnvironmentVariable("COMPlus_GCHeapCount", preparedFlags.GCHeapCount);
 
             FlagManager.flags = preparedFlags;
+
+        }
+
+        private static void FinishApplyFlagsPhase(global::MVoxelEngine1.Infrastructure.Models.ProgramFlags preparedFlags)
+        {
+            if (preparedFlags.simulatedGpuWriterDelayMilliseconds.HasValue)
+                Console.WriteLine($"Set simulatedGpuWriterDelayMilliseconds: {preparedFlags.simulatedGpuWriterDelayMilliseconds.Value}");
+            if (preparedFlags.simulatedGpuWriterFailAfterRecords.HasValue)
+                Console.WriteLine($"Set simulatedGpuWriterFailAfterRecords: {preparedFlags.simulatedGpuWriterFailAfterRecords.Value}");
+            if (preparedFlags.faceGenerationMode.HasValue)
+                Console.WriteLine($"Set faceGenerationMode: {preparedFlags.faceGenerationMode.Value}");
+            if (preparedFlags.windowWidth.HasValue)
+                Console.WriteLine($"Set windowWidth: {preparedFlags.windowWidth.Value}");
+            if (preparedFlags.windowHeight.HasValue)
+                Console.WriteLine($"Set windowHeight: {preparedFlags.windowHeight.Value}");
+            if (preparedFlags.useFacePooling.HasValue)
+                Console.WriteLine($"Set useFacePooling: {preparedFlags.useFacePooling.Value}");
+            if (preparedFlags.faceAmountToPool.HasValue)
+                Console.WriteLine($"Set faceAmountToPool: {preparedFlags.faceAmountToPool.Value}");
+            if (preparedFlags.worldGenWorkersPerCore.HasValue)
+                Console.WriteLine($"Set worldGenWorkersPerCore: {preparedFlags.worldGenWorkersPerCore.Value}");
+            if (preparedFlags.worldGenWorkersPerCoreInitial.HasValue)
+                Console.WriteLine($"Set worldGenWorkersPerCoreInitial: {preparedFlags.worldGenWorkersPerCoreInitial.Value}");
+            if (preparedFlags.meshRenderWorkersPerCore.HasValue)
+                Console.WriteLine($"Set meshRenderWorkersPerCore: {preparedFlags.meshRenderWorkersPerCore.Value}");
+            if (preparedFlags.meshRenderWorkersPerCoreInitial.HasValue)
+                Console.WriteLine($"Set meshRenderWorkersPerCoreInitial: {preparedFlags.meshRenderWorkersPerCoreInitial.Value}");
+            if (preparedFlags.renderStreamingIfAllowed.HasValue)
+                Console.WriteLine($"Set renderStreamingIfAllowed: {preparedFlags.renderStreamingIfAllowed.Value}");
+            if (preparedFlags.GCConcurrent.HasValue)
+                Console.WriteLine($"Set GCConcurrent: {preparedFlags.GCConcurrent.Value}");
+            if (preparedFlags.GCLatencyMode.HasValue)
+                Console.WriteLine($"Set GCLatencyMode: {preparedFlags.GCLatencyMode.Value}");
+            if (!string.IsNullOrEmpty(preparedFlags.GCHeapHardLimit))
+                Console.WriteLine($"Set GCHeapHardLimit: {preparedFlags.GCHeapHardLimit}");
+            if (!string.IsNullOrEmpty(preparedFlags.GCHeapAffinitizeMask))
+                Console.WriteLine($"Set GCHeapAffinitizeMask: {preparedFlags.GCHeapAffinitizeMask}");
+            if (preparedFlags.GCLargeObjectHeapCompactionMode.HasValue)
+                Console.WriteLine($"Set GCLargeObjectHeapCompactionMode: {preparedFlags.GCLargeObjectHeapCompactionMode.Value}");
+            CompleteApplyFlagsPhase(preparedFlags);
 
         }
     }
